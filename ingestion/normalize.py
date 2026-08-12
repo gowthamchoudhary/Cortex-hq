@@ -259,7 +259,7 @@ ADAPTERS: dict[str, Callable[[dict[str, Any]], RawDocument]] = {
 
 
 def load_records(path: Path) -> list[dict[str, Any]]:
-    text = path.read_text(encoding="utf-8")
+    text = path.read_text(encoding="utf-8-sig")
     if path.suffix.lower() == ".jsonl":
         return [json.loads(line) for line in text.splitlines() if line.strip()]
 

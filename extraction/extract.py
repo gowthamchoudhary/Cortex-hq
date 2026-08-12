@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -20,9 +21,10 @@ if str(PROJECT_ROOT) not in sys.path:
 from ingestion.normalize import ADAPTERS, RawDocument, infer_source_type, load_records
 
 
-DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
+DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
-MAX_CONTENT_CHARS = 12_000
+DEFAULT_MAX_CONTENT_CHARS = 300
+GROQ_MODELS_ENDPOINT = "https://api.groq.com/openai/v1/models"
 
 
 EXTRACTION_SCHEMA: dict[str, Any] = {
@@ -33,16 +35,14 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "record_type": {"type": "string", "enum": ["Entity"]},
-                    "source_doc_id": {"type": "string"},
                     "name": {"type": "string"},
-                    "entity_type": {"type": "string"},
+                    "type": {"type": "string"},
                     "aliases_hint": {
                         "type": "array",
                         "items": {"type": "string"},
                     },
                 },
-                "required": ["record_type", "source_doc_id", "name", "entity_type", "aliases_hint"],
+                "required": ["name", "type", "aliases_hint"],
                 "additionalProperties": False,
             },
         },
@@ -51,19 +51,11 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "record_type": {"type": "string", "enum": ["Relation"]},
-                    "source_doc_id": {"type": "string"},
                     "source_entity": {"type": "string"},
                     "predicate": {"type": "string"},
                     "target_entity": {"type": "string"},
                 },
-                "required": [
-                    "record_type",
-                    "source_doc_id",
-                    "source_entity",
-                    "predicate",
-                    "target_entity",
-                ],
+                "required": ["source_entity", "predicate", "target_entity"],
                 "additionalProperties": False,
             },
         },
@@ -72,21 +64,12 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
             "items": {
                 "type": "object",
                 "properties": {
-                    "record_type": {"type": "string", "enum": ["FactState"]},
-                    "source_doc_id": {"type": "string"},
                     "subject_entity": {"type": "string"},
                     "predicate": {"type": "string"},
                     "value": {"type": "string"},
                     "stated_at": {"type": "string"},
                 },
-                "required": [
-                    "record_type",
-                    "source_doc_id",
-                    "subject_entity",
-                    "predicate",
-                    "value",
-                    "stated_at",
-                ],
+                "required": ["subject_entity", "predicate", "value", "stated_at"],
                 "additionalProperties": False,
             },
         },
@@ -128,7 +111,7 @@ def provider_config(provider: str) -> tuple[str, str, str]:
         return (
             "https://api.groq.com/openai/v1/chat/completions",
             api_key,
-            os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL),
+            get_groq_model(),
         )
 
     if provider == "openai":
@@ -144,7 +127,29 @@ def provider_config(provider: str) -> tuple[str, str, str]:
     raise ValueError(f"Unsupported provider: {provider}")
 
 
-def build_messages(document: RawDocument) -> list[dict[str, str]]:
+def get_groq_model() -> str:
+    return os.environ.get("GROQ_MODEL", DEFAULT_GROQ_MODEL)
+
+
+def list_groq_models(timeout_seconds: int = 30) -> list[str]:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise RuntimeError("GROQ_API_KEY is required to list Groq models.")
+
+    response = httpx.get(
+        GROQ_MODELS_ENDPOINT,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "User-Agent": "cortex-hydradb-extractor/0.1",
+        },
+        timeout=timeout_seconds,
+    )
+    response.raise_for_status()
+    data = response.json().get("data", [])
+    return sorted(model["id"] for model in data if "id" in model)
+
+
+def build_messages(document: RawDocument, max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS) -> list[dict[str, str]]:
     payload = {
         "source": document.source,
         "source_id": document.source_id,
@@ -152,7 +157,7 @@ def build_messages(document: RawDocument) -> list[dict[str, str]]:
         "timestamp": document.timestamp,
         "container_id": document.container_id,
         "metadata": document.metadata,
-        "content": document.content[:MAX_CONTENT_CHARS],
+        "content": document.content[:max_content_chars],
     }
     return [
         {
@@ -163,7 +168,11 @@ def build_messages(document: RawDocument) -> list[dict[str, str]]:
                 "ORG, PROJECT, ACCOUNT, TICKET, REPOSITORY, DOCUMENT, FEATURE, or SYSTEM, "
                 "and stable snake_case predicates. Only extract claims supported by the "
                 "document. Use the document timestamp when no better stated_at date is in "
-                "the content. Every item must use the provided source_doc_id exactly."
+                "the content. Return one JSON object with candidate_entities, "
+                "candidate_relations, and candidate_facts arrays. Entity objects contain "
+                "name, type, aliases_hint. Relation objects contain source_entity, "
+                "predicate, target_entity. Fact objects contain subject_entity, predicate, "
+                "value, stated_at."
             ),
         },
         {
@@ -179,6 +188,7 @@ def chat_completion_json(
     timeout_seconds: int,
     strict_schema: bool = True,
     mode: str = "json_schema",
+    retries: int = 1,
 ) -> dict[str, Any]:
     endpoint, api_key, model = provider_config(provider)
     request_body = {
@@ -211,6 +221,8 @@ def chat_completion_json(
             "type": "function",
             "function": {"name": "submit_extraction"},
         }
+    elif mode == "json_object":
+        request_body["response_format"] = {"type": "json_object"}
     else:
         raise ValueError(f"Unsupported structured output mode: {mode}")
     try:
@@ -226,6 +238,16 @@ def chat_completion_json(
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 429 and retries > 0:
+            time.sleep(3)
+            return chat_completion_json(
+                provider=provider,
+                messages=messages,
+                timeout_seconds=timeout_seconds,
+                strict_schema=strict_schema,
+                mode=mode,
+                retries=retries - 1,
+            )
         if mode == "json_schema" and strict_schema and provider == "groq" and exc.response.status_code == 400:
             return chat_completion_json(
                 provider=provider,
@@ -233,6 +255,7 @@ def chat_completion_json(
                 timeout_seconds=timeout_seconds,
                 strict_schema=False,
                 mode="json_schema",
+                retries=retries,
             )
         if mode == "json_schema" and provider == "groq" and exc.response.status_code == 400:
             return chat_completion_json(
@@ -240,6 +263,15 @@ def chat_completion_json(
                 messages=messages,
                 timeout_seconds=timeout_seconds,
                 mode="tool_call",
+                retries=retries,
+            )
+        if mode == "tool_call" and provider == "groq" and exc.response.status_code == 400:
+            return chat_completion_json(
+                provider=provider,
+                messages=messages,
+                timeout_seconds=timeout_seconds,
+                mode="json_object",
+                retries=retries,
             )
         raise RuntimeError(
             f"{provider} API returned HTTP {exc.response.status_code}: {exc.response.text}"
@@ -261,6 +293,7 @@ def tag_source_doc_id(extraction: dict[str, Any], source_doc_id: str) -> dict[st
         "candidate_facts": "FactState",
     }
     for collection, record_type in record_types.items():
+        extraction.setdefault(collection, [])
         for item in extraction.get(collection, []):
             item["record_type"] = record_type
             item["source_doc_id"] = source_doc_id
@@ -271,12 +304,13 @@ def extract_from_document(
     document: RawDocument,
     provider: str = "auto",
     timeout_seconds: int = 60,
+    max_content_chars: int = DEFAULT_MAX_CONTENT_CHARS,
 ) -> dict[str, Any]:
     load_dotenv(PROJECT_ROOT / ".env")
     chosen_provider = choose_provider(provider)
     extraction = chat_completion_json(
         provider=chosen_provider,
-        messages=build_messages(document),
+        messages=build_messages(document, max_content_chars=max_content_chars),
         timeout_seconds=timeout_seconds,
     )
     return tag_source_doc_id(extraction, document.source_id)
@@ -327,11 +361,34 @@ def main() -> None:
         help="Treat sample_file records as already-normalized RawDocument JSON.",
     )
     parser.add_argument("--provider", choices=("auto", "groq", "openai"), default="auto")
+    parser.add_argument(
+        "--list-groq-models",
+        action="store_true",
+        help="Print Groq model IDs available to the configured GROQ_API_KEY and exit.",
+    )
+    parser.add_argument(
+        "--groq-model",
+        default=None,
+        help=f"Groq model ID. Defaults to GROQ_MODEL or {DEFAULT_GROQ_MODEL}.",
+    )
     parser.add_argument("--limit", type=int, default=3, help="Number of documents to extract.")
+    parser.add_argument(
+        "--max-content-chars",
+        type=int,
+        default=DEFAULT_MAX_CONTENT_CHARS,
+        help="Maximum document content characters sent to the LLM per sample.",
+    )
     parser.add_argument("--timeout-seconds", type=int, default=60)
     args = parser.parse_args()
 
     load_dotenv(PROJECT_ROOT / ".env")
+    if args.groq_model:
+        os.environ["GROQ_MODEL"] = args.groq_model
+
+    if args.list_groq_models:
+        print(json.dumps(list_groq_models(args.timeout_seconds), indent=2))
+        return
+
     docs = normalize_sample_docs(
         sample_file=args.sample_file,
         source_type=args.source_type,
@@ -348,6 +405,7 @@ def main() -> None:
             document,
             provider=args.provider,
             timeout_seconds=args.timeout_seconds,
+            max_content_chars=args.max_content_chars,
         )
         results.append(
             {
