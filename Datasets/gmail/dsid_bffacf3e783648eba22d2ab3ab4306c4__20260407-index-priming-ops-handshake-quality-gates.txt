@@ -1,0 +1,142 @@
+Index priming ops handshake + quality gates
+
+From: Alex Zhou <alex.zhou@searchplus.com>
+To: jasmine_liu@redwood.ai
+Cc: marissa_cole@redwood.ai
+Date: 2026-04-01T09:12:00-07:00
+Subject: Re: Index priming ops handshake + quality gates
+
+Hi Jasmine / Marissa,
+
+Thanks again for the demo last week. We want to accelerate the embeddings / rerank migration for SearchPlus search results — goal is to replace our legacy BM25 + limited learning-to-rank pipeline with a dense re-ranker over a seeded vector index. High level constraints:
+- Corpus: ~120M documents, avg doc size ~1.2k chars.
+- SLO: search tail p95 latency budget must remain <= 350ms for user queries.
+- We need a staged backfill so we can validate quality and rollback quickly if lift is negative.
+
+Can you send a proposed implementation plan and a template for rerank evals (A/B and offline metrics)? Attaching a small sample (dataset_sample.csv) and our current relevance labels export.
+
+Also: who will own runbooks for fallback (index freeze + fallback to BM25) during cutover? Security will want to review data flows — I'll loop them in once we have an outline.
+
+Appreciate a tight timeline — target pilot in 6 weeks.
+
+— Alex
+Head of Search Engineering
+SearchPlus, Inc.
+
+Attachments: dataset_sample.csv
+
+From: jasmine_liu@redwood.ai
+To: Alex Zhou <alex.zhou@searchplus.com>
+Cc: marissa_cole@redwood.ai
+Date: 2026-04-01T11:05:00-07:00
+Subject: Re: Index priming ops handshake + quality gates
+
+Alex — thanks for the clear constraints, this is actionable. High-level response below and a short next-steps list.
+
+Summary plan (three phases):
+1) Pilot (week 0–2): small corpus seed (1–2M docs) + rerank eval harness to measure relative MAP / NDCG + latency baseline at production QPS.
+2) Staged backfill (week 2–4): wave-based indexing with monitoring hooks (per-shard metrics, cold-start KPIs).
+3) Cutover and stabilization (week 4–6): traffic ramp, canary A/B, rollback plan and runbook.
+
+Immediate asks from SearchPlus: sample dataset access (you attached), expected QPS distribution, and current infra for feature storage. We'll produce a mutually agreed MAP target and evaluation template.
+
+I've attached a draft mutual-action-plan (MAP_draft.pdf) that maps owners and dates. Marissa will run the implementation checklist and own the backfill config. I'll coordinate the evals and CSM touches.
+
+Proposed timings: technical kickoff tomorrow 10:30am PT (30m) — if that works, I'll send an invite.
+
+Thanks,
+Jasmine Liu
+Customer Success Manager, Redwood Inference
+
+Attachments: MAP_draft.pdf
+
+From: marissa_cole@redwood.ai
+To: jasmine_liu@redwood.ai, Alex Zhou <alex.zhou@searchplus.com>
+Cc: monica_patel@redwood.ai
+Date: 2026-04-01T14:25:00-07:00
+Subject: Re: Index priming ops handshake + quality gates
+
+Alex / Jasmine — jumping in with the implementation checklist and tech notes. Below are the concrete items we'll need to validate before pilot and the files I'm attaching for our template-based approach.
+
+Technical checklist (pilot-ready):
+- Vector DB selection: confirm target (you mentioned Milvus in the notes) — we support Milvus, FAISS (self-host), and managed options (Pinecone). We'll include a tradeoff doc.
+- Index schema: id, text, embedding vector (float32/float16), metadata (doc_type, created_at, shard_id). Decide on stored fields to keep tokenization small.
+- Backfill throughput: target 10–20k docs/min for staged waves; parallel workers per shard; snapshot-based checkpoints.
+- KV cache priming: prefix-cache popular queries to reduce cold-start tail.
+- Rerank eval harness: include offline script, sample queries (we'll use your labels + synthetic perturbations), compute MAP@10, NDCG@10, and precision@1.
+- Smoke tests: correctness (nearest neighbors sanity), latency (p95 under pilot QPS), and fallbacks (BM25 path test).
+
+Attached: backfill-config.yaml (example parameters) and rerank-eval-template.csv (query + relevance schema).
+
+Operational notes:
+- We'll run pilot in a staging VPC with telemetry exported to your Splunk account (need write access).
+- For cutover: plan 25/25/50 traffic ramp with automated rollback if MAP delta < target or error rate spikes.
+
+Open questions for SearchPlus:
+1) Do you have a preferred vector storage? Any vendor constraints (procurement)?
+2) Can you provide a 7-day qps histogram and a list of top 100 slow queries?
+3) Which team will be the final owner of the rollback runbook? (we can draft, you sign off)
+
+I'll be on the kickoff and will own the backfill orchestration. Monica will coordinate post-cutover CS handoff.
+
+— Marissa Cole
+Implementation Manager, Redwood Inference
+
+Attachments: backfill-config.yaml, rerank-eval-template.csv
+
+From: Alex Zhou <alex.zhou@searchplus.com>
+To: marissa_cole@redwood.ai, jasmine_liu@redwood.ai
+Cc: security@searchplus.com
+Date: 2026-04-02T08:40:00-07:00
+Subject: Re: Index priming ops handshake + quality gates
+
+On Thu, Apr 1, 2026 at 2:25 PM Marissa Cole <marissa_cole@redwood.ai> wrote:
+> Alex / Jasmine — jumping in with the implementation checklist and tech notes. Below are the concrete items we'll need to validate before pilot and the files I'm attaching for our template-based approach.
+> 
+> Technical checklist (pilot-ready):
+> - Vector DB selection: confirm target (you mentioned Milvus in the notes) — we support Milvus, FAISS (self-host), and managed options (Pinecone). We'll include a tradeoff doc.
+> - Index schema: id, text, embedding vector (float32/float16), metadata (doc_type, created_at, shard_id). Decide on stored fields to keep tokenization small.
+
+Yep — Milvus is preferred for now but Procurement is evaluating a managed offering; we'll let you know by EOW.
+
+Answers: QPS histogram attached (we're good for the 10–20k docs/min backfill); top slow queries list attached. Security is cc'd — their primary asks: data retention for intermediate embeddings, KMS usage for vector storage encryption-at-rest, and audit log access. They'll want the data flow diagram before pilot.
+
+Fallback ownership: Search infra (me) will own the runbook; happy for Redwood to draft a canonical runbook we review.
+
+We'll take the MAP targets in your MAP_draft.pdf as a starting point. Kickoff at 10:30am PT works for me.
+
+— Alex
+
+From: jasmine_liu@redwood.ai
+To: Alex Zhou <alex.zhou@searchplus.com>
+Cc: marissa_cole@redwood.ai, monica_patel@redwood.ai
+Date: 2026-04-02T16:00:00-07:00
+Subject: Re: Index priming ops handshake + quality gates
+
+Alex / team — quick alignment and next steps post-kickoff. Thanks for the clarifications.
+
+Agreed immediate milestones:
+- 2026-04-03: Technical kickoff (10:30am PT) — agenda: index schema, backfill windowing, monitoring hooks, security checklist. Invite sent.
+- 2026-04-07: Pilot seed complete (1–2M docs) + rerank eval run (Marissa owns).
+- 2026-04-14: Staged backfill begins (wave 1).
+- 2026-04-28: Cutover A/B begins if MAP lift >= agreed threshold.
+
+Deliverables Redwood will produce this week:
+- Draft runbook (rollback + freeze) — in Drive: https://drive.google.com/drive/folders/1a2b3cSP-searchplus-embeddings
+- Rerank eval template and baseline report (attached in pilot run)
+- Backfill config and orchestration plan (backfill-config.yaml)
+
+Action items for SearchPlus:
+- Share 7-day QPS histogram and list of top 100 slow queries (Alex) — received.
+- Confirm vetting timeline for Milvus vs managed vendor (Procurement) — by 2026-04-04.
+- Security: please review the Drive runbook and send first-pass feedback (security@searchplus.com).
+
+I'll open a HubSpot ticket and link to the Drive folder: https://app.hubspot.com/contacts/12345/deal/SP-2026-1387. Monica will track CS handoff and post-cutover OKRs.
+
+If anything changes before kickoff ping me directly. Looking forward to a clean pilot.
+
+Best,
+Jasmine Liu
+Customer Success Manager, Redwood Inference
+
+Attachments: none

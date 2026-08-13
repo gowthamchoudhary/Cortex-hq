@@ -1,0 +1,73 @@
+On-prem VPC setup + latency surgery — Arcadia HealthTech
+
+Deep technical session to diagnose high 99p latency in Arcadia's private VPC deployment. Covered PrivateLink vs TGW routing, split-horizon DNS with on-prem resolvers, NAT design for egress, KV cache warmup/placement, batching tradeoffs, and quantization effects on throughput. Agreed pilot tests and security doc handoff.
+PrivateLink vs Transit Gateway routing decisions
+DNS resolution and split-horizon approach for on-prem resolvers
+Designing NAT/proxy egress (hairpinning, source IP, connection tracking)
+KV cache placement, warm starts, and cross-AZ latency
+Batching and tokenization interactions with short vs long-tail requests
+Quantization tradeoffs: int8 vs fp16 for throughput/latency
+Autoscaling behaviors under bursty synchronous traffic
+Security controls: KMS, HSM, SSO, audit logs for private deployments
+Ravi Menon: Run KV cache cold-start benchmark on Arcadia staging (3 AZs) and share latency histogram by 2026-10-19
+Samir Patel: Provide VPC route table + NAT gateway metrics and per-AZ egress stats by 2026-10-14
+Tara Singh: Share Redwood Private network runbook and Privatelink config snippets (obfuscated) by 2026-10-13
+Maya Lopez: Confirm compliance contact and provide SOC2 scope questions by 2026-10-16
+Redwood to send security whitepaper + audit checklist
+Schedule 1-hour pilot kickoff for KV cache + batching experiments (week of 10/19)
+Customer to open ticket with cloud provider for suspected NAT conntrack saturation
+Exchange a small sample of production trace logs (sanitized) for root-cause analysis
+[00:00] Jules Carter: Hey everybody, thanks for joining. uh, we got about an hour, and the goal is, uh, to — to go through the networking, the KV cache behaviour, and then layering in batching and quantization, um, to try and find the cause of the 99p spikes you saw.
+[00:18] Maya Lopez: Yep thanks Jules. Quick context — we run Redwood Private in our VPC, two compute AZs, a third for standby. Most traffic to the model is internal via privatelink endpoints but some egress goes through a NAT proxy in az-3. We see normal p50 but 99s jump to 2–3s.
+[00:36] Ravi Menon: Okay, good. First quick question: when that 99th spike happens, is the traffic pattern short prompts, lots of small requests, or big tokens?
+[00:45] Samir Patel: Mostly short prompts, like 10–30 tokens, but bursts of concurrent sessions — chat UI users, and some internal batch jobs at lunchtime that are synchronous.
+[00:58] Tara Singh: That's interesting because batching favors long requests for amortization. With short prompts, you can end up with tiny batches which hurts throughput and increases scheduling overhead.
+[01:12] Oliver Reed: Also want to note we saw connection resets on the NAT side during peaks, so maybe conntrack or ephemeral port exhaustion.
+[01:22] Lina Chen: And from SecOps we saw DNS resolution sometimes goes to the on-prem resolver that has a 200–300ms tail at times. Might be split-horizon configuration.
+[01:33] Jules Carter: Cool, thanks. Let's walk through the stack. First, PrivateLink: are you routing via interface endpoints inside the VPC or using TGW and an interconnect?
+[01:45] Maya Lopez: We're using interface endpoints (AWS PrivateLink style), one per AZ, and we do cross-AZ failover by route tables. There's also a transit VPC that talks to on-prem via a managed VPN.
+[01:58] Ravi Menon: Alright. Two immediate flags: (1) cross-AZ failover may cause requests to hit a different AZ if endpoint health checks flip, adding inter-AZ latency; (2) DNS split-horizon — if your resolver sometimes returns the on-prem IP for the endpoint host, traffic could be hairpinned through VPN causing big variance.
+[02:18] Samir Patel: So split-horizon could give us the private on-prem endpoint occasionally? Hmm. We do have an internal resolver that forwards unknowns to on-prem.
+[02:29] Tara Singh: A common pattern: configure VPC resolver to prefer VPC endpoints and have conditional forwarders for the vendor domain. Otherwise you get intermittent on-prem resolution under load.
+[02:41] Jules Carter: Right. Next, NAT and conntrack: Oliver, you mentioned resets — what's the NAT type? Managed NAT Gateway? A NAT instance?
+[02:52] Oliver Reed: It's a managed NAT gateway in az-3 and we also have an egress proxy cluster behind a load balancer in the transit VPC. During spikes the NAT's conntrack table hits about 80% of documented limits, then we see resets.
+[03:08] Ravi Menon: That would definitely cause tail amplification. NAT conntrack saturation means packets get dropped or reset and TCP handshakes re-try, which adds huge latency at 99p. Two mitigations: increase conntrack / use multiple NAT gateways per AZ, or move egress to a stateful proxy that uses keep-alives from upstream to reduce ephemeral churn.
+[03:27] Samir Patel: We also have short TCP timeouts on clients. Could those interplay and increase ephemeral ports usage?
+[03:33] Tara Singh: Yes — short client-side timeouts + no connection reuse = more new connections, explosion in conntrack. For LLM serving you want persistent keep-alives and connection pooling.
+[03:42] Maya Lopez: For the KV cache — where does Redwood recommend placing it in a private deployment? We currently have the cache in a separate AZ to centralize.
+[03:51] Ravi Menon: Centralizing the cache can introduce 1–2x inter-AZ RTT depending on path. For KV cache (prefix/KV), the hotspot is on cache misses — miss latency propagates to generation latency. We recommend placing caches co-located with serving GPU pods per AZ or using a lightweight local L0 cache on the host for the hot working set, then a regional L1 cache.
+[04:12] Oliver Reed: We saw a tail where misses to the regional cache added 80–120ms per request at 99p.
+[04:18] Ravi Menon: That matches; request path: client -> endpoint -> serving -> check local L0 -> regional L1 -> disk. Every hop adds variance. If you can warm a local L0 with most common prefixes (via pre-warm or on-startup priming) you remove that tail.
+[04:33] Samir Patel: How about KV cache replication? We worried about consistency if we replicate across AZs.
+[04:40] Tara Singh: For inference it's okay to have eventual consistency; the tradeoff is availability vs strict sync. Use async replication and accept minor staleness — you gain lower read latency.
+[04:50] Jules Carter: Let's talk batching: your traffic is short prompts and bursty — Ravi, any config suggestions?
+[04:56] Ravi Menon: Sure. Use adaptive batching with a small max latency cap (e.g., 30–40ms) and a burst smoothing window. Also enable prefix caching plus request coalescing on the client side where possible. If the UI is chatty, merge near-simultaneous requests in the browser layer to reduce tiny batches.
+[05:14] Maya Lopez: We can change the client — but some third-party apps will still hit the API directly.
+[05:19] Tara Singh: In that case, set server-side batching policy conservative: lower max batch size but lower per-request scheduling overhead by keeping worker threads warm and reusing sequence buffers. Also consider batching by token-length histogram — group similar sequence lengths to reduce padding.
+[05:33] Samir Patel: Quantization — we tried int8 on one model and saw lower throughput good, but sometimes higher tail latencies. Why?
+[05:41] Ravi Menon: Two reasons: (1) quantized kernels can be faster per-token but sometimes have jittery runtimes depending on kernel selection and vectorization; (2) memory layout differences can cause rare page faults if memory wasn't pre-pinned — cold paths show up as tail latency. Solution: warm up quantized kernels and pre-pin memory; use a mixed precision profile for stable latency.
+[06:02] Oliver Reed: Do you have tooling to benchmark quantization per workload?
+[06:06] Ravi Menon: Yes — we have perf harness scripts that run synthetic token streams and capture kernel latencies and p95/p99. We'll drop that to you.
+[06:12] Lina Chen: On the security side, we need to confirm KMS/HSM flow for model keys and whether audit logs include per-request model version.
+[06:19] Jules Carter: Redwood Private supports customer-managed KMS integration and per-request audit logs; we'll include the exact log schema in the security pack.
+[06:26] Maya Lopez: Back to DNS — is the recommendation to force VPC resolver to answer the vendor domain locally?
+[06:31] Ravi Menon: Yes, conditional forwarding to the vendor endpoints or adding a VPC HOSTS entry for point-in-time will stop on-prem forwarders from handing back on-prem IPs. Also ensure the TTLs are low during rollout.
+[06:42] Samir Patel: We saw in traces that sometimes the endpoint IP resolved to an on-prem address for ~5% of requests which matches the 99p spike times.
+[06:49] Tara Singh: That's a smoking gun. Fixing split-horizon should immediately drop the 99p from seconds to hundreds of ms.
+[06:57] Jules Carter: Let's put together a prioritized mitigation list: 1) Fix DNS split-horizon/conditional forwarding; 2) Reduce NAT conntrack pressure (more NAT gateways or move egress to proxy with keepalives); 3) Local KV L0 caching + priming; 4) Batching tuning + client coalescing; 5) Quantization warmup and mem pinning.
+[07:17] Maya Lopez: Sounds good. For the pilot, we want Redwood to help run the KV cold-start test and also validate NAT behaviors if possible.
+[07:24] Ravi Menon: We'll run KV cold-start microbenchmarks and synthetic burst tests from your staging AZs. We'll also provide a set of tcpdump and conntrack thresholds to watch for.
+[07:33] Oliver Reed: We'll open a cloud ticket after we collect the timestamps and packet counters that Ravi asks for.
+[07:39] Lina Chen: One more compliance question: do audit logs include DNS queries or only endpoint accesses?
+[07:44] Jules Carter: We capture endpoint-level accesses and trace ids; for raw DNS you'd need to keep resolver logs — Redwood can accept ingest of resolver logs for correlation but we don't store raw DNS by default. We'll document options.
+[07:56] Samir Patel: Any recommendation on autoscaling policies to avoid cold start thundering?
+[08:01] Tara Singh: Use warm pools and predictive scaling based on usage windows, keep a minimum warm replica per AZ, and prefer scale-in delays to avoid immediate termination during brief lulls.
+[08:13] Rav i Menon: sorry Ravi — small mis-s.. (laugh) — and pre-warming with synthetic tokens can keep kernels hot.
+[08:18] Maya Lopez: OK good. Could you email the runbook and a short checklist we can hand to infra and sec?
+[08:24] Jules Carter: Absolutely. We'll send the network runbook, the KV cache priming script, perf harness, and the security pack.
+[08:30] Tara Singh: Also adding a tiny snippet for client coalescing in JS and Go so your front-end teams can implement quick fixes.
+[08:37] Maya Lopez: Great. I think that's all for now. Thanks everyone.
+[08:40] Jules Carter: We'll follow up with the action items. Thanks all.
+[08:44] — end of recording —
+
+Notes on transcription: occasional garble on product names (privatelink sometimes transcribed 'private link' or 'privatelinc'); timings approximate; speakers labeled by meeting roster where possible.

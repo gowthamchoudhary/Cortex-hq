@@ -1,0 +1,93 @@
+Asteria Health pilot weekly - privacy, retention & SSO handoff
+
+Meeting header:
+Date: 2027-11-20
+Time: 16:00 UTC
+Duration: 52 minutes (recording)
+Attendees: Samir Patel (Redwood AE), Elena Ortiz (Redwood SE), Noah Kim (Redwood CSM), Maya Chen (Asteria Head of Security), Liam O'Connor (Asteria Platform), Dr. Noor Rahman (Asteria Compliance), Priya Singh (Asteria DevOps)
+
+Summary:
+Short weekly touch for POC: focus on SSO handoff, audit log format and retention controls, SOC2 artifacts and one small bench to confirm audit ingestion. Confirmed open items and owners.
+
+Topics:
+- SAML/SCIM SSO integration status
+- Audit logs: schema, retention, ingestion cadence
+- Data retention options for sensitive PHI fields and scrub rules
+- SOC2 evidence deliverables and KMS/HSM questions
+- Next steps: bench test and handoff timeline
+
+Transcript body:
+[00:00] Samir: okay hey everyone thanks for making time, this is the weekly pilot touch for Asteria, hopefully a short focused one, audio's okay?
+[00:10] Maya: yeah hi, audio's good, thanks.
+[00:15] Elena: Cool, I'll kick off with current status on SSO since Priya and Liam raised a few items last week.
+[00:22] Elena: We pushed the staging SP metadata to the link you sent, we saw the assertion fail on first try because the NameID format was urn:oasis:names:tc:SAML:2.0:nameid-format:transient which your IdP isn't issuing, so we switched to email address and that landed; there may be a mapping mismatch for groups/roles.
+[00:45] Priya: yeah we saw that, our IdP is Okta, and our groups map is a bit custom. We can push a SCIM patch but need the attribute map from you.
+[00:55] Elena: absolutely, I'll send a SCIM attribute mapping table. Note though, SCIM patch endpoints in our staging may return 409 for unknown attributes, so be ready to filter on your side.
+[01:20] Liam: quick Q — is Redwood doing user provisioning via SCIM or just group sync? We want full deprovisioning for security.
+[01:28] Samir: we support both; typical pilot uses SCIM provisioning + SAML for SSO. For deprovisioning we have soft-delete TTL and immediate token revocation hooks, but we'll need to align retention policy.
+[01:40] Maya: On retention — we have PHI in some of the payloads (very small subset). We need a retention config to drop PII after 90 days and keep aggregate logs for 365. Can you map what we can redact vs what Redwood needs for model quality?
+[01:58] Elena: yes, we can configure field-level retention. The runtime supports prefix/KV cache, and we can redact or pseudonymize before it's persisted to audit logs. Small caveat: if you redact model inputs earlier, it may affect evals but we can maintain hashed identifiers for rollout correlation.
+[02:20] Dr. Noor: hashed identifiers are acceptable for our auditors as long as salt management is documented and irreversible.
+[02:30] Elena: we'll provide the salt rotation and KMS usage docs — currently we recommend using a customer-managed KMS for Private deployments; for hosted we can integrate with your cloud KMS with envelope encryption.
+[02:45] Priya: does Redwood support HSM-backed keys? Our compliance requires HSM for key custody for certain datasets.
+[02:52] Samir: yes, we have HSM integrations, you can present an HSM-backed KMS or we can integrate via partner HSM — will add that to artifacts.
+[03:05] Noah: quick note — I uploaded the SOC2 crosswalk last week into the shared drive, Samir will follow up with the cert binder.
+[03:15] Samir: correct, I'll send the full SOC2 Type II binder and the control mapping doc to Asteria.
+[03:22] Maya: thanks, auditors will want evidence for key rotation and access logs.
+[03:28] Samir: understood. We'll include KMS rotation policy and sample audit log snippets.
+[03:35] Liam: on audit logs — what schema are you emitting? Our SIEM team depends on consistent fields: timestamp, user_id, action, model_id, request_id, token_count, latency_ms.
+[03:48] Elena: Great question — our current audit payload includes: ts, uid, req_id, model, route, tokens_in, tokens_out, lat_ms, error_code, retention_tag. But sometimes the transcript text field is full text and may contain PHI, we usually send a pointer to the stored blob if you have stricter retention.
+[04:10] Liam: can we ingest via HTTPS push or do you support streaming to Kinesis/SQS?
+[04:15] Elena: both, staging supports HTTPS push webhook, and for production we support Kinesis, Pub/Sub, Event Hubs — we'll provide example connectors. For the POC we recommend HTTPS webhook to your SIEM ingestion endpoint.
+[04:30] Priya: okay we'll stand up a webhook receiver and try ingesting a few sample events.
+[04:36] Elena: I'll drop an example payload (note: sometimes 'KV cache' was transcribed in older notes as 'kiv cache' so ignore that typos), but payload fields are as I said.
+[04:50] Maya: also I want to confirm retention UI — can we set per-field retention windows per model?
+[04:58] Elena: yes per-model and per-field. We expose retention policies as JSON config — sample: {"model": "redwood-1", "fields": {"transcript": "90d", "meta": "365d"}} — in staging you can set via console or API.
+[05:20] Liam: will that be audited in the change logs? We need traceability of policy changes.
+[05:26] Samir: yes all retention config changes are tracked in audit logs and tied to the admin user; we can include a sample change record.
+[05:35] Dr. Noor: excellent. On SOC2 and the control set, we need mapping for logical access, change mgmt, encryption at rest, incident response.
+[05:46] Samir: we'll add the mapping doc — and include the incident response playbook summary.
+[05:52] Elena: small technical note on SSO: Okta default group claims size can cause truncated assertions if you push many groups; we suggest SCIM for group membership. Also for role-based RBAC in Redwood Console we map Okta groups to Redwood roles.
+[06:10] Priya: good to know. We'll limit to primary groups for now.
+[06:14] Liam: about logs retention, how easy is it to purge records if we need to for legal requests?
+[06:20] Elena: we have on-demand redaction APIs — you can call the purge endpoint with request_id or user_id and choose immediate deletion from the active store and flag for archive purge; there's also freezer retention for cold backups which we can coordinate with legal hold.
+[06:36] Maya: are backups encrypted separately? If backups are in AWS S3 do you use SSE-KMS?
+[06:42] Samir: yes we use SSE-KMS for backups and support customer-managed CMKs for the private mode. For hosted we hold the wrapped key but you can bring your own key for the Private deployment.
+[06:55] Dr. Noor: there's sometimes confusion between 'hosted' and 'private' modes in terms of who manages keys — can you summarize?
+[07:02] Samir: Hosted: Redwood manages key envelope but can integrate with customer KMS for envelope keys; Private/VPC: customer manages keys end-to-end and we only store references. We'll put this in the crosswalk.
+[07:18] Elena: moving to audit ingestion bench — for next week we'd like to run a 30 minute test where we pump ~5k events to your SIEM and measure latency; Noah will coordinate the timeslot.
+[07:30] Noah: I'll set up a calendar invite for 2027-11-30 14:00 UTC and include required endpoints.
+[07:36] Priya: that works. Also small perf ask — will redwood metrics include token-level breakdown per request for our billing reconciliation?
+[07:44] Elena: yes we emit token counts and cost metadata; you can map that to your internal billing. Note cost metadata in staging may be mocked.
+[07:55] Liam: competitor question — DeepServe flagged a faster ingest pipeline; how is Redwood's audit throughput?
+[08:01] Samir: we've seen sustained 10k events/sec in dedicated mode with batching; for hosted POC you'll be in the 500-2k/sec range depending on payload size and concurrency. We default to batching to reduce overhead.
+[08:17] Maya: acceptable for POC. Another ask from audits: show us proof of separation of environments (staging vs prod) and data flow diagrams.
+[08:27] Samir: yes, we'll share network diagrams and environment separation docs.
+[08:32] Dr. Noor: one more — auditors want to see least privilege on API keys, do you support token scoping?
+[08:39] Elena: yes API keys can be scoped by model, by route, and by retention policy; we can generate scoped service accounts.
+[08:48] Liam: on the SSO handoff, what's the expected effort from our team to finalize the integration?
+[08:53] Samir: For full SAML + SCIM + audit flows, estimate 2-3 full days of engineering on your side: provisioning SP, mapping attributes, firewall rules for webhooks. We'll try to minimize by providing templates.
+[09:06] Priya: okay that's doable. We'll plan for a 2 day effort next week.
+[09:12] Maya: small question on retention artifacts — can you provide example redaction logs that show what was redacted and by whom?
+[09:19] Elena: yes redaction logs include admin_id, request_id, fields_removed, reason_code, timestamp. We'll provide sanitized examples.
+[09:28] Liam: are there any GDPR considerations we should surface now? We have EU users and need data locality.
+[09:33] Samir: for EU data residency we can pin to region and keep control plane in Private mode; for hosted we'd require data region selection and we maintain region-scoped storage. We'll share the region residency matrix.
+[09:48] Dr. Noor: can you also show us retention TTL enforcement tests? Auditors like test evidence.
+[09:53] Elena: yes we'll include test scripts and example results.
+[10:00] Noah: quick sync on timeline — are we still targeting pilot completion by mid-December?
+[10:05] Samir: yes target hasn't changed: pilot wrap and go/no-go by 2027-12-15, with final review week of 2027-12-20.
+[10:14] Priya: that gives us enough time.
+[10:18] Maya: anything blocking from Redwood side to run the bench?
+[10:22] Elena: only the webhook endpoint from Asteria and the test SP provisioning. Once those are up we're golden.
+[10:30] Liam: final question — OIDC support? Some internal apps use OIDC instead of SAML.
+[10:36] Elena: we support OIDC for service accounts but SAML is first-class for SSO; we can provide OIDC client details if you prefer.
+[10:42] Maya: thanks.
+[10:44] Samir: okay to recap quickly — action items as we discussed: I'll send SOC2 artifacts and control mapping; Elena will send SAML metadata/SCIM map and example audit payloads; Noah will schedule the 11/30 bench; Asteria to provision SP and webhook. Any additions?
+[10:58] Dr. Noor: please include the salt rotation schedule for hashed identifiers.
+[11:03] Elena: will do.
+[11:08] Samir: great. We'll confirm next meeting time — same time next week?
+[11:12] Maya: yes midday UTC works.
+[11:15] Samir: perfect, thanks everyone.
+[11:20] [closing chatter and confirmation of artifacts]
+
+End of transcript.

@@ -1,0 +1,121 @@
+Clarify BAA applicability for EHR sync webhooks and logging separation
+
+From: Emily Ross <emily.ross@oakridge-health.org>
+To: soojin_lee <soojin_lee@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Sun, 15 Aug 2027 14:22:00 -0700
+Subject: EHR sync integration — BAA & PHI routing questions
+
+Hi Soojin and Marissa,
+
+Thanks for the demo last week — Oakridge’s integration team is mapping out the EHR synchronization flow for our pilot. A couple of quick questions that we need clarity on before we scope the contract: 
+
+- If we send lab report PDFs and clinician notes to Redwood via webhook for enrichment (entity extraction, summarization), will those files be stored by Redwood by default, or can they be proxy-transited (not persisted) back to our storage?
+- For hosted customers, does Redwood sign a BAA? If so, what controls do you require on our side (e.g., retention settings, routing rules) to remain eligible?
+- Is there an option to segregate logs (multi-tenant logging separation) so that any request/telemetry for Oakridge is logically and physically separated from other tenants? We need language we can share with Procurement.
+
+We also have an initial SIG/CAIQ questionnaire and would like SOC 2 and pen-test evidence. Can you point me to the current SOC 2 report and the SIG extract?
+
+If it helps, loop in security/infra folks and we can schedule a short call. We're aiming to close scope decisions this week.
+
+Thanks —
+Emily
+Emily Ross
+Director, Integrations
+Oakridge Health
+emily.ross@oakridge-health.org
+(415) 555-0193
+
+Attachments: none
+
+From: soojin_lee <soojin_lee@redwood.ai>
+To: Emily Ross <emily.ross@oakridge-health.org>
+Cc: marissa_cole <marissa_cole@redwood.ai>, karthik_iyer <karthik_iyer@redwood.ai>
+Date: Mon, 16 Aug 2027 09:10:00 -07:00
+Subject: Re: EHR sync integration — BAA & PHI routing questions
+
+Thanks Emily — quick reply and then I’ll loop in security for a deeper dive.
+
+High-level answers: 
+1) Persistence: By default our hosted inference API does not persist user payloads beyond the request lifecycle for customers on standard settings. However, customers can enable request/response logging for debugging and quality monitoring; when enabled those logs are stored in encrypted object storage for a configurable retention window. We can also support a proxy-only mode where payloads are streamed through the runtime and not written to long-term storage — this is commonly used in PHI workflows.
+
+2) BAA: Redwood will sign a BAA for customers with PHI. For hosted customers, BAA execution is possible but we require a combination of settings:
+- disable long-term request logging (or limit retention to 30 days and restrict access),
+- enable encryption-at-rest with either Redwood-managed keys or customer-provided keys (KMS/HSM), and
+- restrict webhook callbacks to VPC peering or static IP allowlists for the customer.
+
+3) Logging separation: We support logical tenant separation for telemetry, and for Dedicated/Private customers we can provide stronger physical separation (isolated logging buckets and dedicated SIEM ingestion). For hosted customers we offer per-tenant indexing and RBAC controls; if Oakridge needs proof of physical separation you should consider Dedicated or Private.
+
+I attached a draft BAA and an initial SIG extract (redwood_baa_draft_20270815.pdf, sig-extract-answers.xlsx) to give Procurement something concrete. Kar thik — can you confirm the default retention and KMS options and whether proxy-only mode is supported for streaming binary attachments?
+
+If you’re ok, I’ll set a 30-minute call today to walk through options.
+
+Best,
+Soojin
+Soojin Lee
+Enterprise Solutions
+Redwood Inference
+soojin_lee@redwood.ai
+
+Attachments: redwood_baa_draft_20270815.pdf, sig-extract-answers.xlsx
+
+From: karthik_iyer <karthik_iyer@redwood.ai>
+To: soojin_lee <soojin_lee@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>, Emily Ross <emily.ross@oakridge-health.org>
+Date: Tue, 17 Aug 2027 08:18:00 -07:00
+Subject: Re: EHR sync integration — BAA & PHI routing questions
+
+Hi all — adding technical details so Procurement and Security can evaluate. Posting answers inline where helpful.
+
+On Mon, Aug 16, 2027 at 09:10 AM soojin_lee <soojin_lee@redwood.ai> wrote:
+> 1) Persistence: ... proxy-only mode?
+
+Proxy-only mode: yes. Our runtime supports passthrough mode for streaming payloads (including binary attachments). In passthrough mode we avoid storing request or response bodies in object storage; ephemeral buffers exist only in memory and local NVMe caches until the request completes and are zeroed. This mode is recommended for webhooks carrying PDF lab reports or DICOM extracts.
+
+> 2) BAA: hosted BAA requirements and KMS options
+
+KMS & keys: hosted customers can choose Redwood-managed KMS (default) or bring-your-own-key via AWS KMS/CloudHSM or customer HSM. If you bring your own key we can configure envelope encryption so that persistent logs and any cached KV entries are encrypted under your key.
+
+Retention: default request log retention is 90 days for standard customers. For BAA-covered workflows we require reducing that to <=30 days or enabling pii-scrubbing/pseudonymization prior to persistence. We can redact PHI programmatically (we have an ML-backed PII scrubber) before logs are persisted, or you can opt-out of persistence entirely.
+
+Logging separation: for hosted we provide per-tenant encryption keys and isolated index namespaces; however the underlying logging cluster is shared. For true physical separation we recommend Dedicated or Private where we provision separate storage buckets and SIEM connectors under contract.
+
+Evidence & questionnaires: SOC 2 Type II report (current) is available at: https://redwood.app/soc2-report/2027. We can provide a current pen-test summary on an NDA or limited-distribution basis; the SIG extract we provided is a subset of CAIQ responses (attached). If Oakridge needs a full SIG or CAIQ matrix we typically export the extract and then mark sections that require customer-side controls.
+
+Suggested minimal controls for Procurement to accept hosted+BAA: 
+- disable long-term request logging (or set 30d retention),
+- enforce customer-managed keys or approved KMS rotations,
+- enable proxy-only mode for attachments,
+- limit webhook endpoints to VPC or allowlist IPs,
+- add contractual SLA for incident notification and support level
+
+I’ve attached an architectural diagram showing where data is encrypted and where logs are collected (architectural_diagram.svg). Happy to join the call to walk through it or draft a short control matrix for Oakridge.
+
+— Karthik
+Karthik Iyer
+Head of Security & Infrastructure
+Redwood Inference
+karthik_iyer@redwood.ai
+
+Attachments: architectural_diagram.svg
+
+From: Emily Ross <emily.ross@oakridge-health.org>
+To: soojin_lee <soojin_lee@redwood.ai>, karthik_iyer <karthik_iyer@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Tue, 17 Aug 2027 09:03:00 -07:00
+Subject: Re: EHR sync integration — BAA & PHI routing questions
+
+Thanks — this is very helpful. We’d like to proceed with a quick call to finalize the controls and timeline. A few follow-ups before the call: 
+
+- Can you provide the shortest vendor-side timeline to enable proxy-only mode in production for our pilot (we need as little friction as possible)?
+- For the SOC 2 report link you shared, can you confirm the scope covers the hosted inference API and that any pen-test references include the runtime components that handle KV cache and streaming?
+- Regarding attachments: if we choose proxy-only mode, do any thumbnails or metadata (file name, size, content-type) get persisted in logs by default? We prefer zero metadata retention but can accept filename-only with immediate redaction.
+
+We’ll accept the draft BAA as a starting point — Marissa, can your team coordinate legal redlines?
+
+Call windows: Tue 17 Aug 11:00–12:00 or 15:00–16:00 PT.
+
+Appreciate the quick turnaround —
+Emily
+
+On Tue, Aug 17, 2027 at 08:18 AM karthik_iyer <karthik_iyer@redwood.ai> wrote:
+> (attached architectural diagram)
+
+Attachments referenced in thread: redwood_baa_draft_20270815.pdf, sig-extract-answers.xlsx, architectural_diagram.svg

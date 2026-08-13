@@ -1,0 +1,124 @@
+Chiron4b elevated 5xx/timeouts — stability commitments and follow-up
+
+From: Sarah Lin <sarah.lin@brightcart.com>
+To: karthik_iyer@redwood.com, ops@brightcart.com
+Date: 2029-04-18T08:12:34-07:00
+Subject: Elevated 5xx/timeouts from Chiron4b in production — urgent
+
+Hi Karthik,
+
+We're seeing a sharp increase in 5xx responses and hard timeouts from the Chiron4b model on our production endpoint starting ~07:55 PDT. Traffic is normal for us but error rate jumped to ~18% and we saw hundreds of requests fail per minute for about 40 minutes. Example error in the logs: "502 Bad Gateway - inference timeout after 30s".
+
+Affected routes: /v1/generate (batch), streaming endpoints intermittently dropping connections. Our engineers attached a short log extract (chiron4b-requests.log) and a heap snapshot. Can Redwood confirm:
+- Are you seeing the same error pattern on your side?
+- Immediate mitigation options (fallback model, reroute, throttling) and ETA to restore stable service?
+
+This is impacting checkout features and we need an incident bridge ASAP. Please loop in ops and let us know bridge details.
+
+Thanks,
+Sarah Lin
+Head of ML, BrightCart
+Attachment: chiron4b-requests.log (text)
+
+From: karthik_iyer@redwood.com
+To: Sarah Lin <sarah.lin@brightcart.com>, neha_kapoor@redwood.com, mateo_alvarez@redwood.com
+Cc: ops@brightcart.com
+Date: 2029-04-18T08:18:05-07:00
+Subject: Re: Elevated 5xx/timeouts from Chiron4b in production — urgent
+
+Sarah — thanks for the quick flag. We're standing up a short bridge and pulling telemetry now. Bridge: https://meet.redwood.com/incident/bridge-20290418 (joining in 5m). I've opened SUP-12345 to track the issue.
+
+Immediate items we are enacting:
+- Route BrightCart traffic to Chiron3b-compat as a low-latency fallback for read-heavy endpoints (will be non-breaking for your integration).
+- Temporarily increase autoscale headroom for the Chiron pool to reduce queueing.
+- Capture full heap/trace (please keep the heapdump; we'll request as needed).
+
+Neha / Mateo: can you triage kernel memory pressure and confirm whether recent optimizer patches touched the attention kernel on Chiron4b? I'll confirm rollback window with infra if needed.
+
+Sarah — we'll update in the bridge and follow up here.
+
+— Karthik
+Director, Customer Reliability
+Redwood Inference
+Attachment: mitigation-checklist.pdf (stub)
+
+From: neha_kapoor@redwood.com
+To: karthik_iyer@redwood.com, mateo_alvarez@redwood.com
+Date: 2029-04-18T08:32:49-07:00
+Subject: Triage notes (internal) — Chiron4b 5xx spike
+
+Quick notes from the first 15m of triage:
+- Correlation: spike aligns with a rolling kernel/optimization push we shipped to the Chiron4b pool at 07:45 PDT (optimizer v2.1.4).
+- Observed symptoms: increased OOM/kcache churn on multiple GPUs, KV-cache eviction thrash under long-context requests; tokenization queue growth leading to timeouts at ~30s.
+- Hypothesis: optimizer change increased memory footprint for large attention heads, exposing fragmentation during high-concurrency spikes.
+
+Suggested immediate actions (we recommended these on the bridge):
+1) Roll back optimizer v2.1.4 (hotfix) to restore previous memory profile.
+2) Temporarily reduce max concurrency per instance and enable prefix caching for BrightCart sessions.
+3) Backfill requests onto Chiron3b-compat for non-deterministic endpoints.
+
+I'll start coordinated rollback with infra and confirm the build hash. If rollback not possible within 20m, we fallback routing only.
+
+On Thu, Apr 18, 2029 at 08:18 AM PDT karthik_iyer@redwood.com wrote:
+> Sarah — thanks for the quick flag. We're standing up a short bridge and pulling telemetry now. Bridge: https://meet.redwood.com/incident/bridge-20290418 (joining in 5m). I've opened SUP-12345 to track the issue.
+> 
+> Immediate items we are enacting: ...
+
+— Neha
+Senior SRE, Serving Runtime
+
+From: Sarah Lin <sarah.lin@brightcart.com>
+To: karthik_iyer@redwood.com, neha_kapoor@redwood.com
+Date: 2029-04-18T09:05:11-07:00
+Subject: Re: Elevated 5xx/timeouts from Chiron4b in production — urgent
+
+Thanks for the rapid response and bridge. Two quick asks while you triage:
+1) Can you share an estimate for number of failed requests so we can scope customer impact?
+2) We're going to file an internal incident — please include a brief note on whether you expect SLA credit eligibility based on initial findings.
+
+Also, we have a peak traffic window at 09:30 PDT. If you predict instability continuing, please advise on whether we should preemptively route traffic to Chiron3b-compat.
+
+On Thu, Apr 18, 2029 at 08:32 AM PDT neha_kapoor@redwood.com wrote:
+> Quick notes from the first 15m of triage: ...
+
+— Sarah
+
+From: karthik_iyer@redwood.com
+To: Sarah Lin <sarah.lin@brightcart.com>, neha_kapoor@redwood.com, mateo_alvarez@redwood.com
+Cc: ops@brightcart.com
+Date: 2029-04-19T10:03:12-07:00
+Subject: Chiron4b incident — recovery confirmed and postmortem plan
+
+Hi Sarah — follow-up and final update.
+
+Timeline summary (short):
+- 07:45 PDT: optimizer v2.1.4 rollout initiated (saw memory profile changes).
+- 07:55 PDT: BrightCart begins seeing elevated 5xx/timeouts.
+- 08:06 PDT: Bridge established; mitigation checklist executed.
+- 08:18 PDT: Traffic routed to Chiron3b-compat and autoscale headroom increased.
+- 08:26 PDT: Rollback of optimizer v2.1.3 -> v2.1.2 completed for Chiron4b pool.
+- 08:40 PDT: Errors dropped to baseline and timeouts cleared; full recovery at ~08:45 PDT.
+
+Root cause (preliminary): a memory-footprint regression in optimizer v2.1.4 that increased KV-cache churn under concurrency, producing queue growth and timeouts for long-context use cases.
+
+Actions taken:
+- Emergency rollback of optimizer change for Chiron4b.
+- Short-term routing policy to fallback model for BrightCart during peak windows for 24h.
+- Postmortem to include reproducer, memory-profile diff, and improved canary gating for optimizer changes.
+
+Next steps / commitments:
+- We will publish a full postmortem by 2029-04-21 with reproducer and regression test plan (link: https://drive.redwood.com/drive/postmortems/chiron4b-20290418).
+- Customer impact estimate (failed requests): preliminary count ~12,400 requests affected across a 40m window; full accounting in postmortem.
+- SLA/credits: ops will open a formal credit ticket; I'll include the failure accounting and we will follow Redwood's SLA process within 5 business days (SUP-12345).
+
+Owners:
+- Karthik Iyer (Customer RC lead) — overall comms and SLA follow-up
+- Neha Kapoor (SRE) — postmortem & mitigation engineering
+- Mateo Alvarez (Infra) — autoscale and rollback ops
+
+If you want a single slide summary for your incident report, I can provide one by EOD. Appreciate your patience and the signal — we pushed a change too aggressively on a memory-sensitive path.
+
+— Karthik
+Director, Customer Reliability
+Redwood Inference
+Attachment: chiron4b-heapdump-20290418.tar.gz (available on request)

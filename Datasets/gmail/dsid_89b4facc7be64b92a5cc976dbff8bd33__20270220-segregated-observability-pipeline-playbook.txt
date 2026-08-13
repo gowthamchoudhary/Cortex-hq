@@ -1,0 +1,116 @@
+Observability export options for VPC/on-prem SIEM ingestion
+
+From: secops@acme-corp.com
+To: jonas.weber@redwood.ai
+Date: Thu, 18 Feb 2027 09:12:00 -0800
+Subject: Observability export - VPC SIEM ingestion options
+
+Jonas,
+
+Thanks for taking this. We're finalizing our SIEM ingestion plan and need to understand the safest, least-privileged way to pull logs/metrics/traces out of Redwood running in our VPC. High level requirements:
+
+- Syslog-compatible export for audit logs (retained in-house)
+- Firehose or S3 drop for structured telemetry (metrics/aggregates)
+- Tracing hooks (OTLP/Zipkin style) for distributed tracing while keeping PII out
+- Minimal egress rules, explain ports/IPs and CIDR ranges required
+
+Can you map concrete options (push vs. pull, mutual TLS, brokered forwarder in customer subnet) and a recommended fallback if the preferred path is blocked by procurement? Also include any retention metadata or schema we should expect.
+
+--
+Acme Security Team
+secops@acme-corp.com
+
+
+From: jonas.weber@redwood.ai
+To: secops@acme-corp.com
+Cc: marissa_cole@redwood.ai, karthik_iyer@redwood.ai
+Date: Thu, 18 Feb 2027 12:40:00 -0800
+Subject: Re: Observability export - VPC SIEM ingestion options
+
+Hi — thanks for the clear list. Looping in Marissa (observability product) and Karthik (on-prem ingestion) to give the detailed options. Quick summary up-front so you have a single recommendation for procurement:
+
+1) Preferred (push with customer-managed forwarder): Run a lightweight forwarder inside your VPC (customer-managed EC2/container) that pulls from Redwood's private forwarder endpoint over mTLS. Forwarder writes to your SIEM (syslog/TCP) or S3; minimal inbound rules because it's an outbound TLS connection.
+
+2) Alternate (brokered pull via S3/Firehose): Redwood writes JSON batches to a customer-owned S3 bucket (via a short-lived role we assume). You configure an event/Firehose to feed SIEM. This requires a tightly scoped IAM role and explicit bucket policies.
+
+3) Fallback (agentless scrape): If neither is possible, we can deliver periodic encrypted archive drops via an enterprise SFTP gateway. Higher latency and operational overhead, but procurement-friendly for locked-down environments.
+
+Marissa/Karthik — can you add port/CIDR specifics, expected schemas (audit/log/metric), and a tracehook snippet for OTLP? Also attaching a quick VPC observability map I sketched.
+
+Thanks,
+Jonas Weber
+Solutions Architect | Redwood Inference
+jonas.weber@redwood.ai
+
+On Thu, Feb 18, 2027 at 09:12 AM secops@acme-corp.com wrote:
+> Jonas,
+> 
+> Thanks for taking this. We're finalizing our SIEM ingestion plan and need to understand the safest, least-privileged way to pull logs/metrics/traces out of Redwood running in our VPC...
+
+
+From: marissa_cole@redwood.ai
+To: jonas.weber@redwood.ai, secops@acme-corp.com
+Cc: karthik_iyer@redwood.ai
+Date: Fri, 19 Feb 2027 08:05:00 -0800
+Subject: Re: Observability export - VPC SIEM ingestion options
+
+Thanks Jonas — details below and attaching a mapping template (siem_mapping_template.yaml) and the tracehook snippet (tracehook-snippet.txt).
+
+Port/IP/CIDR guidance (preferred push model):
+- Outbound TLS (443) from customer forwarder to our private forwarder endpoint: fw-us-1.private.redwood.ai (IPs: 52.14.78.0/24)
+- Mutual TLS: client cert required (we provision short-lived certs via our control plane).
+- If you use syslog/TCP in the customer subnet, allow inbound from the forwarder host (recommended to keep forwarder inside the subnet where SIEM ingest runs).
+
+Schemas / payloads:
+- Audit logs: newline-delimited JSON, fields: timestamp, request_id, actor_id, action, resource, outcome, request_payload_hash. No request/response bodies are included unless explicitly requested and agreed in scope (PII mitigation).
+- Metrics: Prometheus-style aggregates + periodic JSON summaries for per-route token usage. TTL on metrics in the export: 30 days (you can request longer retention via contract).
+- Traces: OTLP over gRPC/HTTP. We provide a small hook that redacts full prompt text by default and instead emits a prompt_hash + metadata. Tracehook-snippet shows header injection and sampling controls.
+
+Operational notes:
+- Rotation: certs rotate every 24h by default; we support a longer rotation window if your PKI requires it.
+- Replay: forwarder supports idempotent chunked retries; we attach a sequence token to each batch.
+- Backfill: for compliance audits we can generate archived batches for a defined retention period (adds cost).
+
+Attachments: siem_mapping_template.yaml (field mappings), tracehook-snippet.txt (OTLP example), vpc_observability_map.png (Jonas sketch).
+
+Marissa Cole
+Product Manager, Observability | Redwood Inference
+marissa_cole@redwood.ai
+
+
+From: karthik_iyer@redwood.ai
+To: secops@acme-corp.com, jonas.weber@redwood.ai
+Cc: marissa_cole@redwood.ai
+Date: Sat, 20 Feb 2027 16:47:00 -0800
+Subject: Re: Observability export - VPC SIEM ingestion options
+
+Hi team — quick implementation plan and next steps so procurement/security can act:
+
+1) Run customer forwarder (preferred):
+   - Image: rwinference/forwarder:stable (small footprint, containerized)
+   - Ports: outbound 443 to 52.14.78.0/24; inbound as-needed to your SIEM collector inside the VPC (recommend collector on private IP, port 6514 for syslog-TLS)
+   - IAM: if using S3 drop, we provide an assume-role ARN with scope limited to s3:PutObject on the target prefix and kms:Encrypt if using CMEK.
+
+2) Network ACLs & egress:
+   - Minimal rules: allow ephemeral outbound and DNS. If your environment blocks broad egress, allow the specific CIDR and do certificate pinning (we provide CA fingerprints).
+
+3) Compliance checklist items for procurement/security (I will create a JIRA):
+   - Mutual TLS certificate exchange flow diagram (Doc 1)
+   - Data schema & PII redaction policy (Doc 2)
+   - RBAC/Key management: who in your org can request backfills or export toggles (we recommend 2-person approval)
+
+Next steps:
+- Jonas: schedule a 60-min technical runbook review with Acme secops and their infra lead.
+- Acme: confirm preferred path (forwarder vs S3) and whether CMEK is required.
+- I will open INF-7891 and attach the mapping template and runbook skeleton.
+
+I'll be available Mon/Tues next week for the review.
+
+Thanks,
+Karthik Iyer
+Senior Solutions Engineer | Redwood Inference
+karthik_iyer@redwood.ai
+
+On Fri, Feb 19, 2027 at 08:05 AM marissa_cole@redwood.ai wrote:
+> Thanks Jonas — details below and attaching a mapping template (siem_mapping_template.yaml) and the tracehook snippet (tracehook-snippet.txt).
+

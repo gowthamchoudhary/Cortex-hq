@@ -1,0 +1,63 @@
+Commitment sprint: regional capacity checkpoint
+
+HelixWorks is targeting a 12-month extension plus a stepped capacity uplift across EU and APAC. Primary asks: predictable reserved EU capacity, APAC burst for Black Friday-like spikes, and private key management for logs. SE will run benchmarks; AE to deliver updated quote and term sheet.
+Meeting header: 2025-11-28 16:00 UTC | Duration: 52m
+Attendees: Ethan Chen (Redwood AE), Maya Alvarez (Redwood SE), Jordan Blake (HelixWorks Head of ML), Priya Suresh (Infra Lead), Tom Warren (Procurement)
+
+Auto-summary (auto): HelixWorks wants to lock pricing for 12 months, add eu capacity and an apac burst lane; wants KMS + VPC controls; legal to review by mid-December.
+
+Topics: capacity uplift, region onboarding, contract extension, security / KMS, benchmarks.
+
+Transcript: 
+[00:00] Ethan: Hey everyone thanks for joining, um we'll just run through current usage, proposed uplift and timeline. Jordan, do you want to kick with where you are on usage this quarter?
+[00:20] Jordan: Yeah sure, so right now we're averaging about 1.8 million tokens a day on the hosted API, peaks hitting around 4.2M on heavy retrieval windows. Our EU traffic is growing — about 28% month over month — so the latency is starting to matter. We're seeing p95 climb into the 380 to 420ms range for some of our longer contexts.
+[00:45] Maya: ok, and that's with your current prefix cache settings? Is KV cache enabled for most routes?
+[00:52] Jordan: We have some prefix cache, yeah — but it's spotty; a lot of the longer conversations don't hit the cache. And for EU specifically we get the cross-region hop to us-west which adds 60 to 90ms sometimes.
+[01:10] Ethan: Got it. Priya, from infra side, what's your ask for regional nodes? Are you looking for reserved capacity in eu-west or a hybrid reserved + burst?
+[01:25] Priya: Hybrid. We need predictable baseline for inference — think 2x of our current p50 throughput in EU — plus an APAC burst pool we can consume on demand for campaigns. Ideally reserved eu-west nodes with a burst policy to fallback to hosted or to apac when needed.
+[01:45] Tom: Quick procurement note — if there's a one-time setup or private hosting fee that needs capital approval, we need to understand that by the 10th of December. Otherwise we can't commit to invoices before January.
+[02:00] Ethan: Makes sense. On the commercial side we can propose a 12-month extension with a stepped reserve: baseline reserved in eu-west, and a negotiated burst pool in ap-southeast. We can show pricing with and without an early payment discount.
+[02:20] Jordan: Also we need KMS integration. We can't have keys with you; actually we need customer-managed keys for any logs or model payloads stored.
+[02:30] Maya: to clarify, you're asking for customer-managed KMS for the control plane logs / audit trail, or for token encryption at rest?
+[02:40] Jordan: Both ideally. At minimum KMS for audit logs and for S3 dumps; tokenization data should be treated as sensitive.
+[02:50] Ethan: Understood. We support CMK via our KMS integration for Private and Dedicated customers, though for Hosted there are constraints. I'll flag that — Maya can add detail on the VPC and key flow.
+[03:05] Maya: Yeah, for Dedicated we can offer a VPC peering setup and customer-managed CMK. We do need to run an onboarding checklist though — network CIDR, egress rules, and certs. Some customers also ask for HSM-backed keys; that needs a special ops ticket.
+[03:25] Priya: HSM would be preferred but we can start with CMK. What's the audit retention window for logs if we enable that?
+[03:33] Ethan: Default is 90 days in the console, longer retention is an add-on. We can include extended retention in the quote.
+[03:40] Jordan: On benchmarking, we want a reproducible harness. We'll provide a sample prompt set (about 3k prompts) that represent real sessions, avg context 1,800 tokens, 95th percentile target under 300ms for EU.
+[03:57] Maya: Ok we'll run the harness in eu-west-1 and ap-southeast-1. Couple of caveats: cold starts on quantized checkpoints can add ~50-120ms depending on the model, and if KV cache isn't primed you'd see higher tails. Also some of our kernel paths differ on older GPUs which can change throughput.
+[04:20] Jordan: Understood. We can do a warm-up priming stage. We just need the numbers and the raw logs.
+[04:30] Ethan: Good. Tom, about procurement dates — you mentioned needing sign-off by the 10th — is that for purchase order or for terms?
+[04:38] Tom: PO. We need commercial terms by the 3rd so we can get legal review and issue the PO on the 10th. If we miss that, budget moves to next quarter.
+[04:48] Ethan: We'll get the commercial by the 3rd then.
+[04:52] [05:00] Speaker 3 (crosstalk): um just to highlight, we should also include a failover policy — if the EU pool is saturated, route to the lowest-cost compatible variant, is that something Redwood supports?
+[05:15] Maya: Yes, smart routing is configurable — you can set policies: latency-first, cost-first, or capacity-fallback. In practice we often do latency-first with a cost cap. The fallback can go to a smaller quantized variant or to hosted fallback.
+[05:30] Jordan: Any impact to model quality when falling back to quantized variants? We can't have hallucinations increase during bursts.
+[05:39] Maya: There is a small delta — usually in edge-case token generation. Our Optimize recommendations can set thresholds and quality hooks; we can monitor a prompt subset and auto-fail back if quality regresses.
+[05:55] Priya: Also, what about data residency — EU logs must stay in eu-west. If we send logs to your console, can they be partitioned per region?
+[06:06] Ethan: Yep — for Dedicated we can keep logs and metrics in region. For Hosted we typically centralize but we can enable regional retention for an enterprise contract. We'll note that in the doc.
+[06:20] Tom: Legal will want SOC2 and ISO evidence. Do you have a SOC2 report we can share?
+[06:27] Ethan: Yes we have SOC2 Type II and ISO attestation; I'll attach the latest reports.
+[06:33] Jordan: One more technical: we run a lot of long-context gen with KV cache; one of the earlier transcripts had Redwood's docs referencing KV cache behavior — sometimes transcribed as K-V cash in our notes — hah. When you run the benchmark include both primed and unprimed cache runs.
+[06:50] Maya: absolutely. We'll run cold start, warm primed cache, and sustained throughput. Also include a run that simulates your 10-second burst pattern.
+[07:02] Ethan: On pricing we can show three options: (A) 12-month term with reserved EU nodes + APAC burst (B) 24-month with larger discount (C) 12-month with a credit-backed burst pool. Any preference?
+[07:18] Priya: Option A to start, provision for a mid-term review after 90 days. We may lock in (B) if the numbers look good post-benchmark.
+[07:28] Tom: Option A is easiest to approve from finance if the up-front isn't too large. We need net-30 terms ideally.
+[07:35] Ethan: We can do net-30 for enterprise contracts. We'll include the payment terms in the quote.
+[07:42] Jordan: For the benchmark data, can you give raw token-level logs? We'll scrub as needed but need detail for our telemetry team.
+[07:50] Maya: Yes, we can provide structured logs with request/response times and token counts. We'll need an ingestion location; we can put an S3 bucket behind your KMS if you prefer.
+[08:02] Jordan: Good, we'll confirm bucket details.
+[08:08] [08:30] Ethan: Ok recap — items: AE to send commercial with Option A pricing and extended retention add-on, SE to run benchmark in EU+APAC using the HelixWorks prompt set and return results, customer to share prompts and procurement timeline. Any other blockers?
+[08:45] Priya: One small thing — can we get an ops contact for the VPC handshake? We need someone to test peering flows in a staging window.
+[08:54] Maya: I'll be primary for handshake, and I'll include ops-eng (infra-oncall) in the ticket.
+[09:02] Tom: Legal will ping Ethan for a standard enterprise SOW; they usually want indemnity language clarified.
+[09:09] Ethan: We'll push the SOW draft with the quote.
+[09:14] Jordan: timeline — can we aim to have benchmarks done and a go/no-go decision by Dec 12th? That's when our engineering sprint planning lands.
+[09:22] Ethan: Dec 12th is doable if we get the prompts and the PO timeline holds. We'll put the dates in the action items.
+[09:30] Priya: Awesome. A few handwritten notes: extended retention, CMK, baseline 2x p50 in eu, APAC burst pool 3x peak for campaigns.
+[09:45] Maya: Noted. I'll include the configuration matrix in the benchmark ticket.
+[09:51] Ethan: Anything else before we close?
+[09:55] Jordan: No, that's it. Thanks everyone.
+[10:00] Ethan: Thanks all — we'll follow up with the quote and ticket links. Meeting end.
+
+Post-meeting references: deck link (shared) - https://app.redwood.example/sales/decks/hlx-q4-commitment.pdf; benchmark runbook (to be attached); SOC2 report link: sas-2025-soc2.pdf (attached).

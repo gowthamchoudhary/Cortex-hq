@@ -1,0 +1,139 @@
+BrightLoop Dedicated GPU pool provisioning — ops handshake & burst policy
+
+From: Emma Watson <emma@brightloop.ai>
+To: olga_petrov@redwood.ai
+Cc: BrightLoop Sales Ops <salesops@brightloop.ai>
+Date: 2026-10-25T09:12:00-07:00
+Subject: BrightLoop dedicated capacity kickoff — rough requirements
+
+Hi Olga —
+
+Thanks for taking this. Quick summary from our side so you have the context before the handshake call:
+- Production target: ~300 concurrent requests at steady state, spiking to ~1k qps for short campaigns (~10–20 mins).
+- Model mix: 60% 13B encoder-decoder (LLM-X13), 40% 70B decoder-only for high-quality summarization.
+- Typical prompt lengths: 512 tokens, response average 150 tokens.
+- Region: primary in us-west, fallback us-east.
+
+We need a provisioning plan (pool sizing + autoscale/burst rules) and a proposed canary window. Also attaching our network diagram (network_topology.png) and the SOW draft — both referenced in the Drive link.
+
+Could you advise an initial pool configuration and when your team can provision a canary?
+
+Thanks,
+Emma
+Emma Watson
+Head of Platform Engineering, BrightLoop AI
+attachments: network_topology.png, BrightLoop_SOW_v1.pdf
+
+From: olga_petrov@redwood.ai
+To: Emma Watson <emma@brightloop.ai>
+Cc: grace_oconnor@redwood.ai, dev_patel@redwood.ai
+Date: 2026-10-26T11:05:00-07:00
+Subject: Re: BrightLoop dedicated capacity kickoff — rough requirements
+
+Emma —
+
+Appreciate the details and the attachments. Quick, high-level response before the call:
+- Recommended starting pool: 8 x A100-equivalent instances (mixed 80GB/40GB where available). That maps to ~350 steady concurrency for LLM-X13 with headroom.
+- Canary: provision a 2-node canary in us-west for 48–72 hours. Traffic routing via canary tag + 10% of non-critical traffic, then step up.
+- Autoscale/burst policy: baseline autoscale to keep latency SLO (p95 < 350ms for 13B), burst capacity of up to +50% for short campaigns with pre-warmed cache windows. We will configure burst as: scale-up threshold = 75% sustained utilization for 90s; burst window = 20 minutes, capped by reserved-burst tokens per-customer.
+
+I've looped in Dev to validate kernel/quantization choices + any networking prerequisites. Grace from CS will coordinate the activation cadence.
+
+Proposed next actions:
+1) Call this week to align on canary dates and DocuSign SOW.
+2) Dev to confirm model artifact sizes and recommend quantization.
+3) Ops: agree on monitoring hooks and rollback triggers.
+
+Availability: Thu 10/28 9–11am PT or Fri 10/29 1–3pm PT. Which works?
+
+—Olga
+Olga Petrov
+Head of Customer Implementation, Redwood Inference
+attachments: redwood-provisioning-checklist.xlsx
+
+From: dev_patel@redwood.ai
+To: Emma Watson <emma@brightloop.ai>, olga_petrov@redwood.ai
+Cc: rishi_malhotra@redwood.ai
+Date: 2026-10-27T08:22:00-07:00
+Subject: Re: BrightLoop dedicated capacity kickoff — rough requirements
+
+Emma, Olga —
+
+A few technical clarifications so we size and configure correctly:
+- Can you confirm model artifact sizes (FP16 / int8) and whether you can provide a traced/converted ONNX variant? For the 70B workload, int8 quantization will materially reduce memory and allow denser packing.
+- Sequence lengths: is 512 a hard cap or occasional longer contexts expected? We need the max to size KV cache.
+- Expected token generation distribution (avg/peak response tokens) — you listed 150 avg; please confirm 90th/99th percentiles.
+- Network: will BrightLoop terminate TLS at their side or should we handle TLS termination in the VPC peering? The referenced topology looks like a transit gateway to your VPC but not clear on egress policies.
+
+Once we have these, I'll propose exact instance SKUs and a pre-warm plan (warm-up token budget per model).
+
+Thanks —
+Dev Patel
+Senior Infrastructure Engineer, Redwood Inference
+
+From: BrightLoop Sales Ops <salesops@brightloop.ai>
+To: olga_petrov@redwood.ai, dev_patel@redwood.ai
+Cc: Emma Watson <emma@brightloop.ai>, grace_oconnor@redwood.ai
+Date: 2026-10-28T13:40:00-07:00
+Subject: Re: BrightLoop dedicated capacity kickoff — SOW and signatures
+
+Hi team —
+
+We uploaded the finalized SOW to DocuSign (link below) and attached the signed draft for reference. A couple clarifications from procurement:
+- Contracted baseline: 8 reserved instances for 12 months with a monthly burst allotment equivalent to 50% of baseline for no-cost bursts. Bursts beyond allotment bill at overage rates.
+- Data residency: logs retained in us-west; audit exports available to BrightLoop monthly.
+- We will need a simple runbook for escalation during the first 30 days.
+
+DocuSign link: https://www.docusign.com/en/BL-SOW-BL2026
+
+Attaching: BrightLoop_SOW_v1.pdf (signed draft)
+
+Please confirm canary dates — we prefer Fri 10/29 to coincide with lower campaign traffic.
+
+Best,
+BrightLoop Sales Ops
+
+From: grace_oconnor@redwood.ai
+To: Emma Watson <emma@brightloop.ai>, olga_petrov@redwood.ai
+Cc: dev_patel@redwood.ai, rishi_malhotra@redwood.ai
+Date: 2026-10-29T09:30:00-07:00
+Subject: Re: BrightLoop dedicated capacity kickoff — runbook, ops, and training
+
+Emma —
+
+Happy to own the activation checklist and customer-side runbook. Proposed activation sprint (high level):
+- Day 0 (canary start): provision 2 nodes in us-west, run connectivity/throughput tests, smoke test sample prompts provided by BrightLoop.
+- Day 1: expand to 4 nodes, run load ramp to 30% production traffic, validate latency and cost telemetry in Redwood Console.
+- Day 2–3: full baseline (8 nodes) if metrics stable; start traffic split to primary pool.
+
+Rollout controls and rollback triggers (example):
+- Auto-rollback if p95 > 700ms for 10 minutes or error rate > 2% for 5 minutes.
+- Manual rollback if canary triggers repeated OOMs or kernel failures.
+
+Training: 90-minute handoff session for BrightLoop SREs to cover console dashboards, alert tuning, and how to request emergency burst increases. I will create the runbook in Drive and share the link after today's call.
+
+Grace O'Connor
+Customer Success Manager, Redwood Inference
+
+From: olga_petrov@redwood.ai
+To: Emma Watson <emma@brightloop.ai>, BrightLoop Sales Ops <salesops@brightloop.ai>
+Cc: dev_patel@redwood.ai, grace_oconnor@redwood.ai, rishi_malhotra@redwood.ai, CloudX Partner <cloud-partner@cloudx.com>
+Date: 2026-10-30T15:45:00-07:00
+Subject: Re: BrightLoop dedicated capacity kickoff — ops handshake & burst policy
+
+Team —
+
+Quick summary and confirmed next steps after today's call:
+1) Canary provisioning window: Fri 2026-10-29 20:00–22:00 PT (us-west). Redwood will deploy 2 canary nodes, CloudX Partner will verify network path and peering.
+2) Baseline pool: target 8 instances (mix 4x80GB + 4x40GB). Dev to finalize exact SKUs once BrightLoop confirms artifact sizes (deadline: 2026-11-02).
+3) Autoscale & Burst: baseline autoscale configured to maintain p95 < 350ms. Burst policy: up to +50% capacity for 20-minute windows; automatic backpressure applied if burst quota exceeded. Overages bill per SOW.
+4) Rollout & rollback triggers: as Grace outlined. Ops runbook link: https://drive.google.com/drive/folders/1a2B3cBrightLoopOnboarding (runbook to be added by EOD).
+5) SOW: BrightLoop Sales Ops to complete DocuSign; provisioning will not start until the SOW is fully executed.
+
+Please reply to confirm you own your action items: BrightLoop confirms artifact formats and sign SOW; CloudX confirms network readiness; Dev will post SKU recommendation; Grace will publish runbook.
+
+Olga
+Olga Petrov
+Head of Customer Implementation, Redwood Inference
+Contact: olga_petrov@redwood.ai | +1-415-555-0123
+attachments: redwood-provisioning-checklist.xlsx

@@ -1,0 +1,114 @@
+SupplyChain integration: network isolation patterns & incident containment playbook
+
+From: Elena Morris <elena.morris@supplychainsys.com>
+To: Naomi Feldman <naomi.feldman@redwoodinference.com>
+Cc: Tom Weaver <tom.weaver@procurecorp.com>
+Date: Fri, 9 Apr 2027 09:22:00 -0700
+Subject: SupplyChain RFP - isolation + containment details
+
+Hi Naomi,
+
+Thanks for the quick intro last week. As part of our security review for the SupplyChain integration (RFP: SC-2027-0456) the reviewers asked for a short, prescriptive playbook that describes: 1) how Redwood isolates tenant workloads within our shared offering, 2) egress and inter-tenant protections, and 3) steps you would take in the first 60 minutes of a suspected lateral-movement or data-exfiltration event.
+
+Can you provide a single PDF we can include in the RFP bundle and an annotated network diagram that maps the typical flow for inference requests from customer app -> Redwood control/compute plane? If you can also call out any default time-to-rotate KMS secrets and evidence artifacts for audit (logs/retention), that would be ideal.
+
+Elena Morris
+CISO, SupplyChain Systems, Inc.
+elena.morris@supplychainsys.com
+
+
+On Fri, Apr 9, 2027 at 10:05 AM Naomi Feldman <naomi.feldman@redwoodinference.com> wrote:
+> From: Naomi Feldman <naomi.feldman@redwoodinference.com>
+> To: Elena Morris <elena.morris@supplychainsys.com>
+> Cc: Karthik Iyer <karthik.iyer@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>
+> Date: Fri, 9 Apr 2027 10:05:00 -0700
+> Subject: Re: SupplyChain RFP - isolation + containment details
+>
+> Hi Elena — thanks for the ask and the specifics. We've put together a concise playbook and an annotated diagram that map to the three items you listed. Attached: redwood-inference-isolation-playbook-v1.pdf (summary + steps) and an initial PNG network diagram.
+>
+> Quick notes in-line:
+> - Isolation model: multi-tenant compute instances run in tenant-bounded pools. We use network namespaces + sidecar proxies per tenant group, and strict RBAC at the control plane to prevent cross-tenant KV cache access.
+> - Egress controls: per-tenant egress policies via VPC routes, DNS filtering, and egress NAT per availability zone. We implement default-deny egress for hosted customers and mandatory egress breakouts for dedicated/private deployments.
+> - Incident containment (first 60 min): 1) enact tenant circuit-breaker (quarantine compute pool) 2) revoke session tokens and block new control-plane joins 3) initiate KMS key rotation for impacted model keys 4) snapshot and export KV cache read-only for forensics 5) enable enhanced audit sampling and forward logs to a cold archive for the incident window.
+>
+> I've looped in Karthik and Marcus for the annotated diagram and for a short technical appendix that you'll find useful for auditors. If you're happy with this draft we can provide a redacted evidence packet (audit hashes, retention proofs) and a requested SOC-2 artifact list.
+>
+> Best,
+> Naomi Feldman
+> Director, Security & Compliance
+> Redwood Inference
+> +1 415-555-0146
+>
+> Attachment: redwood-inference-isolation-playbook-v1.pdf (6 pages; schematic + 60-min playbook)
+>
+
+On Sat, Apr 10, 2027 at 08:40 AM Karthik Iyer <karthik.iyer@redwoodinference.com> wrote:
+> From: Karthik Iyer <karthik.iyer@redwoodinference.com>
+> To: Elena Morris <elena.morris@supplychainsys.com>, Naomi Feldman <naomi.feldman@redwoodinference.com>
+> Cc: Marcus Lin <marcus.lin@redwoodinference.com>
+> Date: Sat, 10 Apr 2027 08:40:00 -0700
+> Subject: Re: SupplyChain RFP - isolation + containment details
+>
+> Hi Elena — attaching the annotated network diagram (network-diagram-supplychain-annotated.png) and a short technical appendix in the docx with specific firewall rules we recommend for interconnect. Key clarifications: 
+>
+> 1) Control vs data plane: the control plane (auth, model routing, admin APIs) is logically separated and runs in a customer-scoped control domain. Customer workloads never receive control-plane credentials by default.
+> 2) KV cache: each tenant has an encrypted, tenant-scoped KV cache namespace. KVs are stored encrypted-at-rest with tenant-specific DEKs protected by KMS. Access is mediated by sidecars; sidecars authenticate with short-lived mTLS to the cache pool.
+> 3) Autoscaling and containment: when a tenant pool scales, new nodes are provisioned into the tenant's network namespace with ephemeral network policies applied prior to joining the mesh. That pre-join gating is the primary containment control for noisy or anomalous scaling events.
+> 4) Egress mitigation options: conditional egress blackholing, per-tenant NAT IP rotation, and temporary egress proxies that drop non-whitelisted destinations. We can script a short runbook for your ops to hit the API and quarantine an environment.
+>
+> Attachment: network-diagram-supplychain-annotated.png (PNG), scs-questions-answers.docx (docx appendix)
+>
+> Onesecret: we recommend an initial KMS rotation window of 30 minutes for session tokens and 48 hours for DEK rotation depending on workload size — practical tradeoffs documented in the attached playbook.
+>
+> Cheers,
+> Karthik Iyer
+> Senior Staff, Applied Infra
+> Redwood Inference
+>
+
+On Mon, Apr 11, 2027 at 11:14 AM Elena Morris <elena.morris@supplychainsys.com> wrote:
+> From: Elena Morris <elena.morris@supplychainsys.com>
+> To: Naomi Feldman <naomi.feldman@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+> Date: Mon, 11 Apr 2027 11:14:00 -0700
+> Subject: Re: SupplyChain RFP - isolation + containment details
+>
+> Naomi/Karthik — this is excellent, thank you. Two quick clarifying asks from our auditors: 1) can you call out which logs are retained in the hot pipeline vs cold archive (and retention windows)? 2) if we were to request a live containment drill, what API call sequence would your on-call follow to quarantine a tenant and preserve artifacts?
+>
+> Also, do you provide a pre-built Splunk/Datadog parsing rule pack for your audit events or will we need to map fields manually?
+>
+> —Elena
+>
+>
+On Mon, Apr 12, 2027 at 16:38:00 -0700 Marcus Lin <marcus.lin@redwoodinference.com> wrote:
+> From: Marcus Lin <marcus.lin@redwoodinference.com>
+> To: Elena Morris <elena.morris@supplychainsys.com>
+> Cc: Naomi Feldman <naomi.feldman@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+> Date: Mon, 12 Apr 2027 16:38:00 -0700
+> Subject: Re: SupplyChain RFP - isolation + containment details
+>
+> Hi Elena — short answers to your asks: 
+> 1) Logs:
+>    - Hot pipeline (30 days default): auth events, control-plane API traces, token issuance/rotation events, sidecar mTLS handshake logs, KV access logs at a sampling rate configurable per-tenant.
+>    - Warm (30–180 days): aggregated metrics, tail-sampled traces used in anomaly scoring.
+>    - Cold archive (>=180 days): full audit bundles exported as compressed WORM objects (SHA256 checksums provided).
+>
+> 2) Quarantine API sequence (example):
+>    - POST /api/v1/tenants/{tenant_id}/actions/quarantine {reason}
+>    - POST /api/v1/tenants/{tenant_id}/keys/rotate?scope=session_tokens
+>    - POST /api/v1/tenants/{tenant_id}/egress/blocklist {cidrs}
+>    - GET /api/v1/tenants/{tenant_id}/cache/snapshot?read_only=true -> stream to S3 for forensics
+>    - POST /api/v1/audit/export?tenant_id={tenant_id}&window=last_60min -> provide download link to requester
+>
+> We do provide parsers: a maintained Datadog event schema and a Splunk CIM mapping pack. We'll include the Splunk rule pack in the evidence bundle if you'd like.
+>
+> Attachment: redwood-inference-isolation-playbook-v1.pdf (re-sent)
+>
+> If you want, Naomi and I can schedule a 30-minute runbook walkthrough with your ops team this week and run a tabletop containment drill (no PII, redacted).
+>
+> Marcus Lin
+> Staff Software Engineer, Reliability
+> Redwood Inference
+>
+>
+>--
+>Notes: network-diagram-supplychain-annotated.png shows tenant egress breakouts, sidecar auth paths, and control-plane separation. The playbook PDF contains the attack-scenario checklist and evidence export steps.

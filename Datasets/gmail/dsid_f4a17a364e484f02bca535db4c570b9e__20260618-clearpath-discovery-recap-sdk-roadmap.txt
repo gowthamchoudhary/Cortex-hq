@@ -1,0 +1,123 @@
+ClearPath discovery: SDK integration fit & milestones
+
+From: Ben Carter <ben@redwood.com>
+To: Anya Petrova <anya@clearpath.ai>, Ethan Li <ethan.li@clearpath.ai>
+Cc: Marissa Cole <marissa@redwood.com>, Monica Patel <monica@redwood.com>
+Date: Thu, 18 Jun 2026 09:12:00 -0700
+Subject: ClearPath discovery: SDK integration fit & milestones
+
+Thanks for taking time this morning, Anya and Ethan — great overview of ClearPath's routing stack and the latency constraints on your edge map updates. Quick recap while it's fresh and a proposed set of next steps so we have alignment.
+
+High-level summary we captured
+- Pain: live route re-ranking for mobile robots where 200–400ms median inference per route decision is required; occasional 90s-long trace windows and large batches of telemetry per decision.
+- Goal: move from a CPU-based heuristic pipeline to a hybrid model-assisted reranker + structured action output that can produce: (1) a score for candidate routes, (2) a structured decision payload (action, params), and (3) an optional short explanation string for ops telemetry.
+- Constraints: air-gapped facility for some fleets, SOC-2 + network segmentation, and procurement lead times (you mentioned an internal PO process).
+
+Product/Integration fit notes
+- SDK surface: you liked our lightweight C++ inference shim + Python SDK for the orchestration layer. We discussed adding a small changeset to the SDK: function-call style outputs (json-schema enforced), a streaming token/partial response path for sub-second decision pipelining, and a compact embeddings API for rerank candidate vectors.
+- Model behavior: Recommend a rerank+structured-output model family (we have Redwood-rt-rerank-v1 / Redwood-structured-v1 variants) — can be pinned for predictable latency. Quantized variants are available for your Dedicated hosts to cut memory by ~60%.
+- Runtime knobs: continuous batching at the edge gateway with KV-prefix caching for repeated route contexts, and a 50ms tail latency SLO target for the hot path. We flagged fallback behavior for capacity: simpler heuristic fallback (rule-based) + partial structured payload if model times out.
+
+Action items / next steps (proposed)
+1) Ben -> Deliver a draft Mutual Action Plan (attached) with milestones, engineering owners, and timelines by EOD tomorrow. (attachment: clearpath_mutual_action_plan.xlsx)
+2) ClearPath -> Confirm procurement contact and expected PO timing (Ethan?) and share any baseline security questionnaire items (you said SOC-2 scoped evidence is possible).
+3) Engineering sync: 45-min technical demo with our SDK + sample C++ shim. Proposed slots: Mon 6/22 or Tue 6/23 (I set tentative times in the calendar invite).
+4) Test data: you to share a small anonymized trace (sample telemetry + candidate route list) so we can prototype latency/embedding size — attaching a sample zip you can drop into the Drive link.
+
+Notes on attachments: attaching two files — small sample traces (clearpath_mobility_samples.zip) and the Mutual Action Plan spreadsheet. If you prefer a different format for the MAP, tell me and I’ll convert.
+
+Open questions we flagged
+- Which fleets need the air-gapped on-prem option vs. cloud routing?
+- Do you have an internal policy for structured telemetry schema we should adhere to (JSON Schema or Protobuf)?
+
+Thanks again — happy to jump on a follow-up call to walk the MAP line-by-line.
+
+Best,
+Ben
+Ben Carter
+Enterprise Sales
+Redwood Inference
+
+---
+
+
+From: Anya Petrova <anya@clearpath.ai>
+To: Ben Carter <ben@redwood.com>, Marissa Cole <marissa@redwood.com>, Monica Patel <monica@redwood.com>
+Cc: Ethan Li <ethan.li@clearpath.ai>
+Date: Thu, 18 Jun 2026 12:05:00 -0700
+Subject: Re: ClearPath discovery: SDK integration fit & milestones
+
+Thanks Ben — solid summary, appreciate the clarity. A few clarifications and confirms from our side:
+
+Confirmations
+- Procurement: Ethan is the program lead for procurement. He'll be the PO contact and will coordinate on contract templates / timelines.
+- Air-gapped fleets: initially two sites will require on-prem deployment and HSM-based key management; most others can use a cloud-hosted dedicated pool.
+- Schema: we prefer Protobuf for the structured decision payloads; I'll attach a small proto we use for telemetry (sending shortly).
+
+Attachments / data
+- I'll upload a sanitized trace set to the Drive folder you shared (contains three typical route selection windows, plus a candidate list). Expect it by EOD today.
+
+Technical question
+- Regarding streaming: are you proposing a server-sent-events style stream for partial rerank scores, or do you envision chunked/full JSON responses with a committed structured output at the end? Latency on the hot path is critical so we may prefer partial early signals.
+
+Ethan, looping you in to confirm procurement cadence.
+
+Best,
+Anya
+Head of Platform
+ClearPath Robotics
+
+On Thu, Jun 18, 2026 at 09:12 AM Ben Carter <ben@redwood.com> wrote:
+> [original message]
+
+
+From: Ben Carter <ben@redwood.com>
+To: Anya Petrova <anya@clearpath.ai>, Ethan Li <ethan.li@clearpath.ai>
+Cc: Marissa Cole <marissa@redwood.com>, Monica Patel <monica@redwood.com>
+Date: Thu, 18 Jun 2026 13:45:00 -0700
+Subject: Re: ClearPath discovery: SDK integration fit & milestones
+
+Thanks Anya — quick answers inline and next steps.
+
+Streaming model
+- We recommend chunked partial outputs over SSE for this use case: the SDK will emit structured partials (e.g., interim scores + an incremental best-candidate id) and then a final structured payload when the decision is stable. That lets you act on the early signal and still get a consistent final action. We'll instrument the SDK so the application can subscribe to partials and a final commit event.
+
+Protobuf support
+- Good — we can add Protobuf serialization hooks to the Python/C++ SDKs. We'll include a reference proto adapter in the sample repo.
+
+Security / on-prem
+- For air-gapped fleets we support a Private deployment with customer-managed KMS/HSM. I'll flag our security team to prep SOC-2 artifacts for Ethan.
+
+Next steps (refined)
+- Ben: Send updated MAP (attached) and a short SDK demo repo link by EOD.
+- Anya: Upload trace set and prototype proto (ETA: EOD).
+- Ethan: Please confirm procurement contact details and any required PO templates.
+
+I'll schedule a 45-min engineering demo for Mon 6/22 10:30am PT; will send an invite shortly and include a calendar hold for your procurement counterpart.
+
+Regards,
+Ben
+
+> On Thu, Jun 18, 2026 at 12:05 PM Anya Petrova <anya@clearpath.ai> wrote:
+> > [reply]
+
+
+From: Ben Carter <ben@redwood.com>
+To: Monica Patel <monica@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: Fri, 19 Jun 2026 14:38:00 -0700
+Subject: Internal: ClearPath next steps + ask for cost/eng plan
+
+Internal notes — follow-up items for our pre-demo prep. Please keep internal.
+
+Summary
+- ClearPath is a good fit for a rerank + structured-output flow. Key constraints: 200–400ms median, occasional long traces, two air-gapped sites, SOC-2 required. They want Protobuf payloads and partial streaming for early signals.
+
+What I need from you
+1) Marissa — can you draft a preliminary SOW-level estimate for a 3-phase rollout (pilot, site ramp, fleet-wide) including estimated engineering effort and a ballpark monthly Dedicated cost? I need something we can share with Ethan by EOD Mon 6/22.
+2) Monica — please loop in Security (SOC-2 artifacts) and add a short checklist of items we'll likely need to surface to procurement (KMS/HSM spec, SLAs, data retention). If you can own the artifact handoff to Ethan, that'd be great.
+3) Engineering prep — we should prepare a short demo branch: (a) C++ shim example, (b) Python orchestration with Protobuf example proto, (c) streaming partial output example. Marissa/Eng: what primer do we need to make this runnable from their side during the demo?
+
+Attachments: Mutual Action Plan draft and sample traces are attached. I'll follow up with the Drive link once Anya uploads the proto.
+
+Thanks — Ben
+

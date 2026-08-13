@@ -1,0 +1,134 @@
+Post-demo: GreenBank integration - auth approach & MVP next steps
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Sam Torres <sam.torres@greenbank.io>, Priya Shah <priya.shah@greenbank.io>
+Cc: Monica Patel <monica.patel@redwood.com>
+Date: Thu, 26 Feb 2026 14:03:00 -0800
+Subject: Post-demo: GreenBank integration - auth approach & MVP next steps
+
+Thanks again for the time today — great conversation. Quick recap and suggested next steps so we can keep momentum: 
+
+- Goal: ship MVP of an internal analytics assistant that can query customer data (embeddings + reranker) and call a small set of internal tools for ticket creation.
+- Top constraints you mentioned: strict key control, quarterly rotation, and auditing for privileged tool calls (write operations).
+
+Recommended MVP auth approach (high level):
+1) Service accounts for server-to-server workloads (reporting/reranker calls) with short-lived JWT tokens minted by your IAM (recommended) or by Redwood if you prefer managed keys.
+2) Per-client API keys for client-side read-only features (rotated and scoped), backed by prefix caching on Redwood to reduce token exchange load.
+3) Audit log forwarding to your SIEM; Redwood will include token-level metadata in traces.
+
+I attached a short proposal (mvp-auth-proposal.pdf) and a diagram (redwood-mvp-arch-diagram.png).
+
+Next steps: could you confirm which model of key ownership you prefer (GreenBank-managed service accounts vs Redwood-managed key rotation) and which date range works for an engineering sync? I can coordinate with Lauren and Monica for an architecture walkthrough and estimate.
+
+Thanks,
+Marcus
+Account Executive | Redwood Inference
+marcus.lin@redwood.com
+
+Attachments: mvp-auth-proposal.pdf (application/pdf), redwood-mvp-arch-diagram.png (image/png)
+From: Priya Shah <priya.shah@greenbank.io>
+To: Marcus Lin <marcus.lin@redwood.com>
+Cc: Sam Torres <sam.torres@greenbank.io>
+Date: Thu, 26 Feb 2026 17:28:00 -05:00
+Subject: Re: Post-demo: GreenBank integration - auth approach & MVP next steps
+
+Thanks Marcus — concise recap. A few quick clarifying questions from the infra team before we pick ownership: 
+
+- For service accounts, do you support short-lived JWTs with audience-restrictions and rotating signing keys (we need to be able to rotate without downtime)?
+- Can Redwood accept our OIDC provider token exchange (token exchange via RFC 8693) so we don't have to mint new long-lived keys on our side?
+- For client-facing API keys, we want per-app scoping and the ability to revoke a single app key quickly — is that supported via your Console / API?
+
+Also: we will need an evidence bundle for SOC 2 box A around key rotation processes. Who can own that — us or Redwood — and what's the SLA for producing logs?
+
+Best,
+Priya
+Director, Cloud Platform | GreenBank Analytics
+priya.shah@greenbank.io
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Priya Shah <priya.shah@greenbank.io>, Sam Torres <sam.torres@greenbank.io>
+Cc: Monica Patel <monica.patel@redwood.com>
+Date: Fri, 27 Feb 2026 09:12:00 -0800
+Subject: Re: Post-demo: GreenBank integration - auth approach & MVP next steps
+
+Great questions — answered inline below.
+
+- Short-lived JWTs / rotating signing keys: yes. Redwood's Dedicated/Private runtimes support key rollover with zero-downtime signing key rotation; we can also accept signed JWTs issued by your KMS.
+- OIDC token exchange (RFC 8693): supported. We can accept exchanged tokens or implement a token-exchange bridge for the MVP to ease onboarding.
+- Per-app API key scoping & revocation: Console supports per-key metadata and immediate revocation via our API; we can also provide a webhook for revocation events so you can sync status.
+
+SOC 2 evidence: Redwood can supply token-level audit logs and retention windows as part of the Private offering. We can agree on a scoped evidence bundle for the MVP; Monica (CC'd) will coordinate the log extraction cadence and SLA.
+
+If that aligns, let's get an engineering sync scheduled next week — Monday or Wednesday morning PST? I'll invite Lauren and Monica to provide an architecture and effort estimate.
+
+Marcus
+Account Executive | Redwood Inference
+
+> On Thu, Feb 26, 2026 at 17:28, Priya Shah <priya.shah@greenbank.io> wrote:
+> > [original message]
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Lauren Bishop <lauren.bishop@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Fri, 27 Feb 2026 09:28:00 -0800
+Subject: Fwd: Post-demo: GreenBank integration - auth approach & MVP next steps
+
+Forwarding — greenbank is leaning toward service-accounts + token-exchange. They need confirmation on zero-downtime key rotation, RFC 8693 support, and an evidence bundle for SOC 2.
+
+Asks for architecture team:
+- One-page recommended auth pattern for MVP (service accounts vs Redwood-managed keys), including pros/cons for rotation burden and auditability.
+- SDK integration notes (server + browser), quick code snippets to show how to exchange/attach tokens and call embeddings/reranker endpoints.
+- Routing note: any suggestions for routing read-only requests to cheaper model variant and write/controlled tool calls to Dedicated hosts?
+- Ballpark effort (engineering days) + recommended timeline for a 6-week MVP.
+
+Attaching the proposal and diagram again for context. Can you reply with a short doc or bullets by Monday EOD? I'll coordinate a sync once we have your notes.
+
+Thanks — Marcus
+
+> -----Original Message-----
+> From: Marcus Lin <marcus.lin@redwood.com>
+> Sent: Thu, Feb 26, 2026 14:03:00 -0800
+> To: Sam Torres <sam.torres@greenbank.io>; Priya Shah <priya.shah@greenbank.io>
+> Cc: Monica Patel <monica.patel@redwood.com>
+> Subject: Post-demo: GreenBank integration - auth approach & MVP next steps
+
+From: Lauren Bishop <lauren.bishop@redwood.com>
+To: Marcus Lin <marcus.lin@redwood.com>
+Cc: Monica Patel <monica.patel@redwood.com>
+Date: Sun, 1 Mar 2026 09:12:00 -0700
+Subject: Re: Fwd: Post-demo: GreenBank integration - auth approach & MVP next steps
+
+Marcus — thanks for the context. High-level recommendation and a thin slice plan below (can expand into a one-pager / diagram if useful):
+
+1) Auth ownership: GreenBank-managed service accounts + OIDC token exchange (recommended)
+   - Pros: full control of key material, integrates with your KMS and rotation policies, easier compliance story.
+   - Cons: requires minor infra work to enable token exchange; Redwood will provide short-term bridge if needed.
+
+2) Concrete MVP pattern:
+   - Server-to-server: GreenBank issues service account JWTs. Redwood accepts JWTs with audience=redwood-ingest and validates via your JWKS endpoint. We create a short-lived internal session token (10m) for routing and caching.
+   - Client apps (internal dashboards): Use per-app API keys with read-only scope. Keys are stored in your secrets manager and rotated quarterly via an automated job that calls Redwood's key-rotation API.
+   - Tooling/writes: Protected behind a separate, dedicated route that requires an explicit elevated token and step-up MFA from your side for ticket-create flows.
+
+3) SDK notes (short):
+   - Server: exchange service account JWT -> call /v1/session with Authorization: Bearer <JWT>, receive short-lived token; attach token to subsequent calls.
+   - Browser: never expose service-account tokens; use backend-for-frontend to mint per-session tokens.
+
+4) Routing & model selection:
+   - Implement header-based routing: X-Redwood-Intent: read|write. Read requests hit cheaper quantized model variant; write/critical flows route to Dedicated pool with stricter logging.
+   - Embeddings/reranker: compute embeddings in batch jobs where possible; reranker calls can be pinned to Dedicated for latency consistency.
+
+5) Audit & evidence:
+   - Redwood can provide token-level traces and a weekly export to your S3 for the SOC 2 evidence bundle. Monica will own the export configuration.
+
+6) Effort & timeline (6-week MVP):
+   - Architecture + notes: 2 engineer-days (Lauren)
+   - Integration work (token exchange + SDK snippets): 6–8 engineer-days (split between GreenBank and Redwood)
+   - Testing + audit wiring: 3 engineer-days
+   - Total: ~11–13 engineer-days.
+
+If that looks good I can draft a formal one-pager and a short demo runbook. Also, Monica — can you confirm retention windows and expected log formats so we can map to their SOC 2 needs?
+
+—Lauren
+Principal Solutions Architect | Redwood Inference
+lauren.bishop@redwood.com
+
+> On Fri, Feb 27, 2026 at 09:28, Marcus Lin <marcus.lin@redwood.com> wrote:
+> > Forwarding — greenbank is leaning toward service-accounts + token-exchange.

@@ -1,0 +1,140 @@
+Sandstone connector pilot — tracing hooks & prompt orchestration evaluation
+
+From: Maya Roper <maya.roper@sandstone.ai>
+To: Jasmine Liu <jasmine_liu@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>
+Date: 2026-11-20T10:12:00-08:00
+Subject: Pilot: Sandstone connector + tracing for prompt orchestration
+
+Hi Jasmine —
+
+Thanks for the quick intro (Ben). I lead partnerships at Sandstone Labs — we run a lightweight prompt orchestration layer that teams plug into their LLM runtimes to get safe retries, context routing, and uniform tracing across tool calls.
+
+We think a small connector for Redwood that instruments the LangChain/LlamaIndex flows (and surfaces trace IDs back to your console) would make a great joint pilot. High-level ask: can Redwood take our connector for a 3-week evaluation, add your tracing hooks so tokens/requests map to your per-route metrics, and share a short mutual action plan?
+
+Attached: sandstone-connector-overview.pdf (connector spec + sample payloads).
+
+Proposed next steps:
+- Quick tech deep dive (30–45m) this week
+- Agree on success criteria (latency impact, trace fidelity, sample prompts)
+- Exchange a minimal MAP (sandbox data + safe prompt list)
+
+Are you and Ben available this Thurs (11/21) morning PT?
+
+Best,
+Maya Roper
+Head of Partnerships | Sandstone Labs
+maya.roper@sandstone.ai
++1 (415) 555-0196
+
+From: Jasmine Liu <jasmine_liu@redwood.ai>
+To: Maya Roper <maya.roper@sandstone.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Date: 2026-11-20T12:03:00-08:00
+Subject: Re: Pilot: Sandstone connector + tracing for prompt orchestration
+
+Hi Maya —
+
+Thanks — this looks promising. Ben and I are keen to explore. I’ve looped in Priyom from runtime/integration to cover the tracing hooks and any connector work.
+
+Quick answers up front:
+- We can expose request-level trace IDs and map them to per-route tokens in Console.
+- We need to confirm your connector’s data residency expectations (we support regional routing; private deployments may require a package).
+- Security: can you share a brief list of scopes the connector requests and whether it posts full prompts or salts them?
+
+Thursday 11/21 9:30–10:00 PT works for us for a quick deep dive. I’m attaching a short doc that lists Redwood trace fields we’ll want populated: redwood-trace-requirements.md
+
+Agenda proposal for the call:
+1) 15m connector payloads + auth model
+2) 15m tracing mapping + sample traces
+3) 10m success criteria & next steps (MAP + sandbox)
+
+See you on Thursday.
+
+—
+Jasmine Liu
+Senior Partner Manager | Redwood Inference
+jasmine_liu@redwood.ai
+
+From: Jasmine Liu <jasmine_liu@redwood.ai>
+To: Priyom Das <priyom_das@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: 2026-11-20T12:18:00-08:00
+Subject: Fwd: Pilot: Sandstone connector + tracing for prompt orchestration
+
+Internal notes — forwarding Sandstone’s connector spec and the requested call.
+
+Ask for the thread: can you do a quick feasibility check before the call? Key points we need:
+- Level of effort to add a LangChain middleware that injects Redwood trace_id and returns trace metadata into Sandstone payloads
+- Whether LlamaIndex adapters need a separate shim (they route through similar chains)
+- Any perf impact on token latency and how to measure it in our test harness
+
+Priorities: low-touch prototype for hosted API first; we can scope Dedicated/Private later if they need on-prem.
+
+Thanks — please reply with rough estimate (days) and any pre-call questions so I can surface them to Maya.
+
+—
+Jasmine
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Jasmine Liu <jasmine_liu@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2026-11-20T14:02:00-08:00
+Subject: Re: Fwd: Pilot: Sandstone connector + tracing for prompt orchestration
+
+Thanks for the ping. Quick feasibility note (high level):
+
+Summary: doable with small prototype work. Estimate: 3 engineer-weeks (1 engineer full-time for 3 weeks) to deliver a LangChain middleware + LlamaIndex shim, end-to-end tracing mapping into Console, and a perf validation run. If we scope down to a focused hosted-only prototype (no private package), we can cut it to ~10 business days.
+
+Technical approach:
+- Implement a LangChain middleware that intercepts chain runs, attaches redwood_trace_id, and forwards sanitized prompt and tokens to Sandstone payloads.
+- Add a LlamaIndex node adapter that wraps query() calls similarly (simple wrapper).
+- Instrument request lifecycle to return the trace_id in the response headers/body so Console can correlate tokens <-> Sandstone trace.
+- Perf testing: run 1k synthetic prompts (50–512 token range) using our load harness; measure p50/p95 latency delta and token-cost delta.
+
+Risks / questions:
+- If Sandstone requires the full prompt payload back for debugging, we’ll need a tighter agreement on retention and masking.
+- For Dedicated/private customers, packaging the connector for air-gapped installs adds ~1 week.
+
+Deliverables:
+- Prototype branch + README
+- Test matrix and perf report
+- Short integration guide for partners
+
+I’ll be on the call Thursday and can sketch out the MAP during the meeting.
+
+—
+Priyom Das
+Senior Software Engineer, Runtime Integrations | Redwood Inference
+
+From: Maya Roper <maya.roper@sandstone.ai>
+To: Jasmine Liu <jasmine_liu@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>
+Date: 2026-11-25T09:02:00-08:00
+Subject: Re: Pilot: Sandstone connector + tracing for prompt orchestration
+
+Great — thanks everyone for the quick turnaround and clear plan. Call confirmed for 11/21 9:30 PT (calendar invite sent).
+
+Two quick notes pre-call:
+- I uploaded a lightweight MAP template to our shared folder and dropped the sandbox user list there: https://drive.google.com/drive/folders/1aB2cD-example-MAP (MAP-sandbox.xlsx attached).
+- For security, Sandstone will only transmit hashed prompt fingerprints in logs by default — full prompts are available on request under NDA. We’ll bring our security lead to the call if needed.
+
+Looking forward to the prototype timeline Priyom sketched. If we land a hosted prototype and perf numbers look good, we’ll discuss a small co-marketing play and a paid pilot for Dedicated later.
+
+Best,
+Maya
+Head of Partnerships | Sandstone Labs
+
+
+On Thu, Nov 20, 2026 at 12:18 PM Jasmine Liu <jasmine_liu@redwood.ai> wrote:
+> Internal notes — forwarding Sandstone’s connector spec and the requested call.
+> 
+> Ask for the thread: can you do a quick feasibility check before the call? Key points we need:
+> - Level of effort to add a LangChain middleware that injects Redwood trace_id and returns trace metadata into Sandstone payloads
+> - Whether LlamaIndex adapters need a separate shim (they route through similar chains)
+> - Any perf impact on token latency and how to measure it in our test harness
+> 
+> Priorities: low-touch prototype for hosted API first; we can scope Dedicated/Private later if they need on-prem.
+> 
+> Thanks — please reply with rough estimate (days) and any pre-call questions so I can surface them to Maya.
+> 
+> —
+> Jasmine

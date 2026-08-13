@@ -1,0 +1,129 @@
+SIG follow-up: geo-redundancy, RTO/RPO & failover evidence
+
+From: Megan Taylor <megan.taylor@havenhealth.com>
+To: priyom_das <priyom.das@redwood.com>
+Cc: security@havenhealth.com
+Date: Mon, 05 Apr 2027 10:12:00 -0700
+Subject: Follow-up: SIG — need clarifications on RTO/RPO and regional failover evidence
+
+Hi Priyom,
+
+Thanks for the SIG packet you sent last week. Our security review team had a couple of follow-up questions specifically around business continuity and disaster recovery items where we need concrete evidence for our audit:
+
+- For Redwood's critical inference path (API request handling, model KV cache, and metadata services) please confirm RTO and RPO goals by tier (hosted API vs Dedicated).
+- Backup cadence and retention for model artifacts + customer metadata; are snapshots encrypted and replicated cross-region?
+- Describe the automated regional failover workflow (trigger conditions, orchestration, manual steps). If you can point to the runbook or provide the runbook extract that would help.
+- Please provide the date and outcome of the most recent DR test (time to recovery, any gaps).
+
+We like to capture these items as attachments (runbook excerpt, DR test report, backup manifest) so our auditors can reference them. Could you share those artifacts or a summary response we can include in the SIG answer set?
+
+Best,
+Megan
+Megan Taylor
+Security Programs Manager, HavenHealth
+megan.taylor@havenhealth.com
+
+(Attachment requested: runbook excerpt, DR test report)
+From: priyom_das <priyom.das@redwood.com>
+To: laura_bennett <laura.bennett@redwood.com>, rishi_malhotra <rishi.malhotra@redwood.com>
+Cc: olga_petrov <olga.petrov@redwood.com>, Megan Taylor <megan.taylor@havenhealth.com>
+Date: Mon, 05 Apr 2027 11:03:00 -07:00
+Subject: Fwd: Follow-up: SIG — need clarifications on RTO/RPO and regional failover evidence
+
+Laura/Rishi — looping you in. HavenHealth wants concrete SIG evidence for RTO/RPO, backups, and a runbook excerpt plus the last DR test report. Can you please draft concise answers and pull the attachments (runbook excerpt + DR test report + backup manifest) so I can send a consolidated response?
+
+Priority: they need items for their auditor next week. Aim for a short summary (bullet RTO/RPO numbers) and include the runbook PDF and test report as attachments.
+
+Thanks,
+Priyom
+Priyom Das
+Enterprise Sales — Security & Compliance, Redwood Inference
+priom.das@redwood.com
+From: laura_bennett <laura.bennett@redwood.com>
+To: priyom_das <priyom.das@redwood.com>
+Cc: rishi_malhotra <rishi.malhotra@redwood.com>, olga_petrov <olga.petrov@redwood.com>, Megan Taylor <megan.taylor@havenhealth.com>
+Date: Tue, 06 Apr 2027 09:18:00 -07:00
+Subject: Re: Fwd: Follow-up: SIG — need clarifications on RTO/RPO and regional failover evidence
+
+Hi all — providing the technical summary for the SIG answers below. Attaching a runbook extract (runbook-draft-v2.pdf) with the procedural steps and playbook excerpts. Attachment stub included.
+
+Summary (short answers for SIG):
+- RTO / RPO by workload tier:
+  - Hosted API (public): RTO = 15 minutes (regional degraded), 99.95% availability SLA; RPO = 1 minute for request metadata, 15 minutes for non-critical logs.
+  - Dedicated (reserved capacity): RTO = 5 minutes (automated failover within same tier to warm pool), 99.99% SLA for committed capacity; RPO = <1 minute for customer-critical metadata when KV persistence enabled.
+- Backups and replication:
+  - Model artifacts and customer metadata: hourly snapshots for critical datasets, daily full snapshot for model artifacts.
+  - Snapshots are encrypted at rest with customer-key or Redwood KMS; multi-region replication enabled (us-west-2 <-> us-east-1) for critical datasets using cross-region replication of object storage manifests.
+  - Retention: 30 days for hourly snapshots, 365 days for daily full snapshots (configurable under Dedicated/Private contracts).
+- Automated regional failover workflow (high level):
+  1) Health signals detected via multi-probe monitoring (latency + error rate + control-plane heartbeats).
+  2) Automated routing policy triggers failover to paired region after threshold (default 90s sustained error rate above baseline).
+  3) KV-cache warmup and prefix caching replay to minimize cold-start impact; DNS and load balancer failover handled by managed route53 + internal proxy layer.
+  4) Manual operator verification and rollback steps in runbook if data divergence is detected.
+
+Attached: runbook-draft-v2.pdf (playbook excerpt, failover checklist).
+
+Laura
+Laura Bennett
+Director, Infrastructure Reliability, Redwood Inference
+From: rishi_malhotra <rishi.malhotra@redwood.com>
+To: priyom_das <priyom.das@redwood.com>, laura_bennett <laura.bennett@redwood.com>
+Cc: olga_petrov <olga.petrov@redwood.com>, Megan Taylor <megan.taylor@havenhealth.com>
+Date: Wed, 07 Apr 2027 14:26:00 -07:00
+Subject: Re: Fwd: Follow-up: SIG — need clarifications on RTO/RPO and regional failover evidence
+
+Adding DR test context and evidence pointers. Attaching DR test report (dr-test-report-20270328.pdf).
+
+DR test highlights:
+- Most recent full regional failover test: 2027-03-28 (simulated az/regional outage in us-west-2).
+- Recovery time observed: 9 minutes from failover trigger to traffic acceptance in us-east-1 for Dedicated capacity; 18 minutes for Hosted API end-to-end including DNS propagation and cache warmup.
+- Data integrity checks: all KV manifests reconciled within 1 minute of service rehydration; no lost committed writes reported.
+- Gaps/lessons: identified a cold-cache penalty for largest models under full-swap; introduced pre-warm strategy implemented post-test (see runbook excerpt).
+
+Evidence available (links/objects):
+- DR test report (attached): dr-test-report-20270328.pdf
+- Snapshot manifest and replication log: internal object list (available on request or via secure share).
+- Runbook canonical link: https://drive.google.com/drive/folders/1a2b3cREDWOOD_DR_RUNBOOK
+
+Rishi Malhotra
+Head of Ops — Serving Runtime, Redwood Inference
+From: priyom_das <priyom.das@redwood.com>
+To: Megan Taylor <megan.taylor@havenhealth.com>, security@havenhealth.com
+Cc: laura_bennett <laura.bennett@redwood.com>, rishi_malhotra <rishi.malhotra@redwood.com>, olga_petrov <olga.petrov@redwood.com>
+Date: Sun, 11 Apr 2027 15:12:00 -07:00
+Subject: SIG deliverables: consolidated BCDR answers + attachments
+
+Megan — thanks for the patience. Please find a consolidated response below and the requested attachments included. If the auditor needs a single-page answer file for the SIG sheet we can also provide a PDF export of these bullets (attached as redwood-sig-dr-summary-20270411.pdf).
+
+Consolidated answers (for SIG):
+- RTO / RPO (concise):
+  - Hosted API: RTO 15 min (regional), RPO 1–15 min depending on commodity of data.
+  - Dedicated: RTO 5 min to warm pool, RPO <1 min for customer-critical metadata where KV persistence is enabled.
+- Backups: hourly snapshots for critical metadata, daily full model snapshots; encrypted at rest; cross-region replication (us-west-2 <-> us-east-1). Retention default: 30 days hourly, 365 days daily full snapshot (configurable).
+- Failover flow: automated routing based on multi-probe monitors; failover threshold -> region switch -> KV warmup -> traffic cutover; operator verification and rollback steps in runbook.
+- Last DR test: 2027-03-28. Observed recovery times: Dedicated 9 minutes, Hosted end-to-end 18 minutes. No data loss for committed writes; reconciliation completed within 1 minute in test.
+
+Attachments included (stubs):
+- redwood-sig-dr-summary-20270411.pdf (one-page SIG-ready answers)
+- dr-test-report-20270328.pdf (full test report with timings and logs)
+- runbook-draft-v2.pdf (playbook excerpt for failover and rollback)
+
+Next steps: happy to provide the object-level snapshot manifest or a secure share of the S3 replication log if the auditor requires it. Let me know if you want a short Teams call to walk through the runbook.
+
+Best regards,
+Priyom Das
+Enterprise Sales — Security & Compliance, Redwood Inference
+priom.das@redwood.com
+(Attachments: redwood-sig-dr-summary-20270411.pdf, dr-test-report-20270328.pdf, runbook-draft-v2.pdf)
+From: Megan Taylor <megan.taylor@havenhealth.com>
+To: priyom_das <priyom.das@redwood.com>
+Cc: security@havenhealth.com, laura_bennett <laura.bennett@redwood.com>, rishi_malhotra <rishi.malhotra@redwood.com>
+Date: Sun, 11 Apr 2027 16:02:00 -07:00
+Subject: Re: SIG deliverables: consolidated BCDR answers + attachments
+
+Thanks — this is perfect and exactly what our auditors needed. We may request the snapshot manifest next week but this covers the SIG fields. Appreciate the quick turnaround and the DR report.
+
+Warmly,
+Megan
+Megan Taylor
+Security Programs Manager, HavenHealth

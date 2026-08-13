@@ -1,0 +1,126 @@
+SIG/CAIQ request: Admin action ledger export & redaction needs
+
+From: Paul Reynolds <paul.reynolds@blueharbor.com>
+To: Diego Fernandez <diego_fernandez@redwood.com>
+Cc: BlueHarbor Security <security@blueharbor.com>
+Date: Thu, 19 Nov 2026 09:12:00 -0800
+Subject: SIG/CAIQ: Admin action ledger export & redaction needs
+
+Diego,
+
+Thanks for the walkthrough today. For our SIG/CAIQ review we need a formal description and example of the admin action ledger you retain: what events are captured, retention policy, export formats, and how you handle PII inside entries. Specifically BlueHarbor auditors requested:
+
+- A sampling of the ledger export (preferably a daily delta + end-of-window snapshot).
+- Manifest that enumerates files with checksums and an HMAC for integrity.
+- Redaction approach for user-identifiable fields (sample mapping or hashing scheme).
+- Accepted transfer methods (SFTP push, pre-signed cloud links) and SLA for delivery.
+- Evidence that retention windows are enforced and that deleted records are excluded from exports.
+
+Could you confirm what you can produce and an estimated delivery date? We hope to include the artifacts in the SIG submission next Tuesday.
+
+Thanks,
+Paul Reynolds
+Sr. Security Engineer, BlueHarbor Therapeutics
+paul.reynolds@blueharbor.com
+
+--
+BlueHarbor Security request id: BH-SIG-2026-447
+
+From: Diego Fernandez <diego_fernandez@redwood.com>
+To: Paul Reynolds <paul.reynolds@blueharbor.com>
+Date: Thu, 19 Nov 2026 13:02:00 -0800
+Subject: Re: SIG/CAIQ: Admin action ledger export & redaction needs
+
+Paul — appreciate the clear list. We can provide the artifacts you describe; a few clarifying points so we package exactly what your auditors expect:
+
+1) Event coverage: our admin action ledger includes authentication events, privilege elevation, role assignments, API key creation/deactivation, operator session starts/stops, config changes to model routing and rollout rules, and manual overrides. It does not include request payloads (user content) by default.
+
+2) Retention window: standard offering is 18 months rolling for admin-level audit events. We can provide longer retention under an enterprise contract; worth flagging if BlueHarbor needs 36 months.
+
+3) Export shapes & delta cadence: we recommend daily delta files in newline-delimited JSON (JSONL) plus a compressed weekly snapshot for the requested window. Each file includes an event index, ISO timestamps (UTC), actor_id (internal user id), actor_role, event_type, resource_path, and metadata.
+
+4) PII redaction: our default flow replaces email/username fields with deterministic anonymized ids (sha256(email) truncated) and emits a redaction_map CSV for auditor reconciliation. If you require pseudonymization (reversible under HSM), that needs an approved process and contract amendment.
+
+5) Integrity & manifest: we produce a signed manifest (JSONL manifest_template attached) that lists filename, byte_size, sha256, and an HMAC-SHA256 computed with a transient key. We can sign with customer-shared key or with our KMS-based attestation.
+
+6) Transfer options: SFTP push to a customer endpoint, or time-limited cloud storage links (GCS/AWS S3 pre-signed). For high-sensitivity runs we support direct SFTP + GPG-encrypted archives.
+
+If that looks good I will coordinate packaging and provide an estimated delivery (I can get an initial bundle out by Monday 23 Nov).
+
+Regards,
+Diego Fernandez
+Solutions Engineer — Redwood Inference
+Diego.Fernandez@redwood.com
++1 (415) 555-0142
+
+Attachments: manifest_template.jsonl (sample), transfer_instructions.pdf
+
+From: Diego Fernandez <diego_fernandez@redwood.com>
+To: Kimberly Park <kimberly_park@redwood.com>, Tessa Morgan <tessa_morgan@redwood.com>
+Date: Thu, 19 Nov 2026 13:15:00 -0800
+Subject: Fwd: SIG/CAIQ: Admin action ledger export & redaction needs
+
+Kimberly / Tessa — looping you both in to confirm packaging and redaction details for BlueHarbor. Key asks from Paul below; proposal:
+
+- Produce daily-delta JSONL for the window 2026-08-01 -> 2026-11-19 (retention proof sample).
+- Include a weekly compressed snapshot (tar.gz) per week for that window.
+- Provide a signed manifest.jsonl per day + an aggregated manifest for the full bundle. HMAC key will be customer-specified; if not provided we'll use our KMS attestation and include the cert.
+- Redaction: deterministic sha256 trunc(12) of email/username fields; include sample_redaction_map.csv mapping anonymized_id -> original (only in a separate, encrypted file). Auditor preference often: redaction_map provided to customer only, not included in public artifact.
+- Delivery: SFTP push to sftp.blueharbor.com preferred; else provide GCS presigned link per bundle (7-day expiry).
+
+Kimberly — can you produce the manifests and compute HMACs? Tessa — can you prepare the transfer_instructions.pdf with SFTP checklist and a note on EU data locality if needed?
+
+I will draft the cover note for Paul once we have the artifacts. Aim to ship monday morning.
+
+Thanks,
+Diego
+
+> On Thu, Nov 19, 2026 at 1:02 PM Diego Fernandez <diego_fernandez@redwood.com> wrote:
+> Paul — appreciate the clear list. We can provide the artifacts you describe; a few clarifying points so we package exactly what your auditors expect: ...
+
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Diego Fernandez <diego_fernandez@redwood.com>, Tessa Morgan <tessa_morgan@redwood.com>
+Date: Thu, 19 Nov 2026 14:08:00 -0800
+Subject: Re: Fwd: SIG/CAIQ: Admin action ledger export & redaction needs
+
+Diego / Tessa — I can take the manifest/HMAC work. Plan:
+
+- Generate per-day manifest.jsonl with fields: filename, sha256, bytes, iso_ts, event_count.
+- HMAC-SHA256 computed with the provided shared key (please get this to me via our KMS exchange doc or upload to the secure key portal).
+- I will mark any entries flagged as privileged (eg: operator session transcripts) in a separate index so auditors can request a deeper bundle with specific approvals.
+
+Tessa — once you create transfer_instructions.pdf, I'll attach both the manifests and a small README that describes the redaction_map handling (we should call out that the redaction_map is encrypted with customer's public key before transfer).
+
+I will start generating a sample (two days) and send that to Diego by end of day for review.
+
+-Kim
+
+--
+Kimberly Park
+Senior Security Program Manager — Redwood Inference
+
+From: Diego Fernandez <diego_fernandez@redwood.com>
+To: Paul Reynolds <paul.reynolds@blueharbor.com>
+Cc: BlueHarbor Security <security@blueharbor.com>, Kimberly Park <kimberly_park@redwood.com>, Tessa Morgan <tessa_morgan@redwood.com>
+Date: Fri, 20 Nov 2026 11:03:00 -0800
+Subject: Re: SIG/CAIQ: Admin action ledger export & redaction needs
+
+Paul — short update and proposed delivery plan attached. Summary:
+
+- Artifacts included: 1) daily-delta JSONL bundle (2026-08-01 -> 2026-11-19) 2) weekly snapshots (tar.gz) 3) per-file manifest.jsonl files and aggregated_manifest.jsonl with HMAC-SHA256 4) sample_redaction_map.csv (encrypted) 5) transfer_instructions.pdf (SFTP checklist + presigned-link fallback).
+- Delivery method: We can SFTP-push to sftp.blueharbor.com (please confirm host/key) or provide a GCS pre-signed URL per bundle (7-day expiry).
+- Retention statement: standard 18-month rolling retention for admin events; exported bundles are point-in-time artifacts and will reflect the records present in our ledger at export time (deleted events in the retention window are excluded).
+- Timeline: initial sample bundle (2 days of data + manifests) sent to you now; full packaging for requested window targeted Mon 23 Nov.
+
+Attachments (sent): manifest_template.jsonl, sample_redaction_map.csv (encrypted copy), transfer_instructions.pdf
+
+If this meets your needs I'll open a HubSpot ticket and provide the delivery coordinates.
+
+Best,
+Diego
+
+--
+Diego Fernandez
+Solutions Engineer — Redwood Inference
+Diego.Fernandez@redwood.com
++1 (415) 555-0142

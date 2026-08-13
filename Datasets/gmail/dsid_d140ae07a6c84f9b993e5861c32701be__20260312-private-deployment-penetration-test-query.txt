@@ -1,0 +1,128 @@
+Pen test scope for Private deployment (customer VPC) and remediation evidence
+
+From: Janelle Moore <j.moore@fintrak.io>
+To: karthik.iyer@redwood.ai
+Cc: security@fintrak.io
+Date: 2026-03-12T09:15:00-07:00
+Subject: Pen test details for Redwood Private (customer VPC)
+
+Hi Karthik,
+
+As part of our procurement and security review we need the penetration testing artifacts and a brief on the scope and boundary assumptions for Redwood Private when deployed into a customer-controlled VPC. Specifically:  
+- Do you run the pen test inside the customer's VPC or do you provide a report based on your own environment and controls?
+- What network/IP ranges / host responsibilities are considered in-scope vs out-of-scope for the tests?
+- We require remediation evidence (patch dates, tickets) for any findings impacting sensitive data flows.
+
+Our security team prefers tests to run either locally in our staging VPC or with a mutually-agreed remote testing plan. Can you indicate what evidence you can provide and whether Redwood can execute or facilitate on-VPC tests? We are aiming to close procurement by March 26, so a quick timeline would be helpful.
+
+Thanks,
+Janelle Moore
+Director, Information Security
+FinTrak Financial
+
+---
+Attachments: none
+
+From: karthik.iyer@redwood.ai <karthik.iyer@redwood.ai>
+To: Janelle Moore <j.moore@fintrak.io>
+Cc: dev.patel@redwood.ai, marissa.cole@redwood.ai
+Date: 2026-03-12T10:02:00-07:00
+Subject: Re: Pen test details for Redwood Private (customer VPC)
+
+Hi Janelle — thanks for the note and the timeline. Looping in Dev (technical lead for Private) and Marissa (security/compliance owner).
+
+Quick answers up-front:
+- We support both workflows: 1) Redwood executes an agreed penetration test within the customer VPC (we can bring our auditors or work with yours), or 2) we provide a redacted penetration-test report from our latest Private engagement plus remediation evidence.
+- Boundary assumptions differ by deployment mode; Dev will draft a short scope matrix (network boundaries, control-plane vs data-plane responsibilities, IP ranges when applicable).
+
+Action: Dev, can you prepare a one-page boundary + scope explanation and a redacted summary of the latest findings with remediation status? Marissa, please attach our remediation tracker and the summary PDF. Janelle, we'll aim to get the docs to you by EOD local time.
+
+Best,
+Karthik Iyer
+Head of Sales, Redwood Inference
+karthik.iyer@redwood.ai
++1 (415) 555-0123
+
+---
+
+From: Dev Patel <dev.patel@redwood.ai>
+To: Janelle Moore <j.moore@fintrak.io>
+Cc: karthik.iyer@redwood.ai, marissa.cole@redwood.ai
+Date: 2026-03-12T11:28:00-07:00
+Subject: RE: Pen test details for Redwood Private (customer VPC)
+
+Hi Janelle — apologies for the quick note but wanted to get the technical boundary details in front of you. Below is a concise summary; I attached the longer PDF and remediation tracker to this thread.
+
+Deployment patterns we commonly support (high level):
+1) Customer-managed VPC (recommended for regulated workloads):
+   - Control plane: Redwood-managed control plane services run in Redwood cloud (API, console) and are out-of-scope for customer-run VPC tests, unless agreed.
+   - Data plane: Customer provisions subnets and instances (or EKS nodes) in their VPC; Redwood Private agents (container workloads) run on those customer-hosted nodes. These agents are in-scope for the customer VPC test.
+   - Network egress: We support private endpoints and VPC endpoints; egress to Redwood control plane is limited to specific, documented service endpoints (we will provide FQDNs and IP ranges for routing/firewall rules).
+
+2) On-prem / air-gapped bundle:
+   - Entire stack is in customer control; pen test scope is fully within customer environment. We provide build artifacts and guidance for verification.
+
+Typical pen-test scope we recommend for customer VPCs:
+- Host/container runtime hardening (kernel packages, container runtime CVE checks)
+- Network segmentation tests (east-west and ingress filtering, private endpoints)
+- API auth & session management tests (token handling, replay, privilege escalation)
+- Key management and secret handling (KMS/HSM integration points)
+- KV cache isolation and unauthorized access to model state
+
+Boundary assumptions to confirm before an engagement:
+- Which subnets/instances does the customer consider in-scope? (provide subnet IDs)
+- Whether Redwood control-plane endpoints will be reachable from the test VPC (we can provide test IP ranges if you want us to be a test actor)
+- Expected level of exploitation allowed (read-only vs active privilege escalation)
+
+Remediation summary (high level):
+- All critical/high findings from our latest Private engagements were addressed within 30 days; fixes include kernel upgrades (Ubuntu 22.04 -> latest LTS kernel patch), container runtime pinning to patched versions, and stricter pod-level seccomp profiles.
+- We closed an API auth token refresh issue (ticket SEC-1123) and rotated affected keys; evidence is in the remediation tracker.
+- We hardened KV cache ACL checks and added additional audit logging to detect unauthorized cache access.
+
+Attachments included: redwood-pen-test-summary-2026-03.pdf (redacted), remediation-tracker-SEC-1123.csv
+
+If you prefer Redwood to perform the test inside your staging VPC, we can sign an SOW addendum and coordinate a narrow time window. Otherwise, the redacted report + remediation tracker is usually acceptable for procurement gating.
+
+--
+Dev Patel
+Senior Engineering Manager, Private Deployments
+dev.patel@redwood.ai
+
+
+From: Janelle Moore <j.moore@fintrak.io>
+To: karthik.iyer@redwood.ai, dev.patel@redwood.ai
+Cc: security@fintrak.io
+Date: 2026-03-12T13:05:00-07:00
+Subject: Re: Pen test details for Redwood Private (customer VPC)
+
+Thanks Dev — that is helpful. Couple of follow-ups:
+- For the customer-managed VPC flow, can you confirm whether Redwood requires any inbound firewall exceptions into our private subnets (we prefer no inbound from public internet)?
+- Would Redwood auditors (or a third party you recommend) be able to run authenticated tests (we can provide a scoped service account) or do you prefer an unauthenticated plan?
+- Please confirm SLA for remediation evidence delivery (we ask for evidence within 10 business days of a finding).
+
+If you can confirm the above and we get the redacted report + tracker by EOD tomorrow, that will keep us on schedule.
+
+Janelle
+
+
+From: karthik.iyer@redwood.ai <karthik.iyer@redwood.ai>
+To: Janelle Moore <j.moore@fintrak.io>
+Cc: dev.patel@redwood.ai, marissa.cole@redwood.ai
+Date: 2026-03-12T15:42:00-07:00
+Subject: Re: Pen test details for Redwood Private (customer VPC)
+
+Janelle — quick confirmations:  
+- Redwood does NOT require inbound public-facing firewall exceptions into customer private subnets for standard Private deployments. We use either VPC endpoints, private link, or customer-hosted agents that originate outbound connections to our control plane over TLS. Any inbound test traffic would be arranged explicitly and limited to agreed test IPs and windows.
+- We can support both authenticated and unauthenticated testing. If you want authenticated tests, we accept a scoped service account (least privilege) and prefer tests against a staging environment rather than production.  
+- SLA: for findings discovered during tests where Redwood is responsible, we commit to providing initial remediation evidence or a mitigation plan within 10 business days; full remediation depends on the finding severity. We will log deliverables in our remediation tracker (SEC-1123) and share updates via the Drive link.
+
+Next steps I propose:
+1) We'll upload the redacted PDF and tracker to the Drive link I shared (you should get access by EOD).
+2) If you want on-VPC testing, we'll exchange an SOW addendum and schedule a 2-hour kickoff to confirm subnets, service accounts and test windows.
+
+Dev & Marissa - please action items 1 & 2. Janelle - let me know which option you prefer and I’ll route legal/ops for the SOW as needed.
+
+Thanks,
+Karthik
+
+--- End of thread ---

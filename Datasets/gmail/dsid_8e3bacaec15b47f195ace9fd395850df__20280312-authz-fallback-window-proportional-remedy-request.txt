@@ -1,0 +1,98 @@
+Requesting proportional remedy for authorization fallback window
+
+From: ops@checkoutly.com
+To: marcus_lin@redwood.example
+Date: 2028-03-11T21:12:00-07:00
+Subject: Spike in authorization failures — 20m window impacting checkout
+
+Marcus —
+
+We saw a concentrated failure window on Saturday evening (~20:05–20:25 PDT) where ~12% of checkout attempts returned authorization failures; many were 5xx/429s chained to an auth fallback. This hit a peak during a marketing spike and impacted order completion. We captured some request traces and short logs (attached). Can you confirm whether this maps to any capacity preemption or routing fallback on Redwood's side and whether this meets SLA remediation for proportional remedy?
+
+Attachments: request_trace_excerpt.txt (snippet), access_logs_20280311.gz (scrubbed)
+
+Happy to jump on a call — we need an estimate for potential credit or remedy to present to finance.
+
+Thanks,
+Sarah Novak
+Product Ops — Checkoutly
+ops@checkoutly.com
+
+
+From: marcus_lin@redwood.example
+To: ops@checkoutly.com, sarah.novak@checkoutly.com
+Cc: karthik_iyer@redwood.example, soojin_lee@redwood.example
+Date: 2028-03-11T22:03:00-07:00
+Subject: Re: Spike in authorization failures — 20m window impacting checkout
+
+Sarah — thanks for the heads up and for sending traces. We're escalating this internally. Initial questions:
+
+- Can you confirm the highest affected customer region (us-west/us-east)?
+- Any client-side retries we should be aware of (you can point me to a sample request-id)?
+
+Karthik, can you pick this up for an initial timeline and check whether an authorization fallback (routing to lower-tier auth nodes) or a transient preemption occurred in the US region at the noted window? Soojin — please stand by for CS comms if this becomes an SLA claim.
+
+I'll follow up with a timeline and recommended next step (postmortem + eligibility check).
+
+Regards,
+Marcus Lin
+Senior Customer Reliability Manager
+Redwood Inference
+
+
+From: karthik_iyer@redwood.example
+To: marcus_lin@redwood.example, soojin_lee@redwood.example, laura_bennett@redwood.example
+Cc: ops@checkoutly.com
+Date: 2028-03-12T01:26:00-07:00
+Subject: Re: Spike in authorization failures — 20m window impacting checkout
+
+Marcus / team / Checkoutly —
+
+I've pulled the raw traces and infra telemetry for 2028-03-11 20:00–20:35 PDT. Preliminary timeline below (high level):
+
+- 20:03 PDT: Canary autoscaler kicked a scale-up for auth tier A in us-west-2 due to CPU pressure (normal).
+- 20:05–20:21 PDT: We observed an elevated rate of client connections hitting an authorization fallback path (the fallback is synchronous and returns 502/429 when the primary KV store had transient read timeouts).
+- 20:07–20:09 PDT: One auth node (auth-a-7) logged short-lived OOMs and was briefly removed from the pool; we saw request fanout to fallback nodes.
+- 20:20 PDT: Autoscaler fully provisioned new auth capacity and traffic normalized by 20:22 PDT.
+
+What this looks like: a short preemption-like event caused one node to failover; our fallback path prevented total outage but did increase error surface. Because traffic was high, this raised the error rate briefly.
+
+Evidence bundle attached: initial_timeline.csv (timestamps + request ids), small excerpt request_trace_excerpt.txt. Full log bundle (access_logs_20280311.gz) is in the s3 staging below (link in Jira).
+
+SLA/eligibility note: per our SLA, an availability gap that results from node-level failure where fallback preserved partial service can be considered for proportional remedy if the customer experienced measurable service degradation for a sustained window and the root cause is in our control (software/instance stability). This appears to meet the criteria for a proportional remedy evaluation. I'll prepare a post-incident timeline and root cause analysis (RC A) and recommend a proportional credit calculation (pro rata of impacted minute volume).
+
+Next actions I propose:
+- Internal RCA draft (48h)
+- Provide Checkoutly a sanitized evidence bundle and the proposed credit calculation
+- Offer a technical review call (SRE + platform) to explain mitigation steps (e.g., stronger OOM safeguards, node memory tuning, canary size changes)
+
+Attachments: initial_timeline.csv
+
+Karthik Iyer
+Principal SRE, Redwood Inference
+
+
+From: marcus_lin@redwood.example
+To: ops@checkoutly.com, sarah.novak@checkoutly.com
+Cc: karthik_iyer@redwood.example, soojin_lee@redwood.example, laura_bennett@redwood.example
+Date: 2028-03-12T15:40:00-07:00
+Subject: Re: Spike in authorization failures — 20m window impacting checkout
+
+Sarah — thanks again and sorry for the disruption. Summary and proposed next steps: 
+
+1) Confirmation: Redwood observed an auth node failure and fallback routing between 20:05–20:22 PDT on 2028-03-11; traffic normalized after autoscaler provisioning. Fallback prevented a full outage but increased client errors during the 17-minute concentrated window.
+
+2) Eligibility: Per Karthik's assessment, this qualifies for a proportional remedy evaluation because it was a service-side instability that degraded availability for a sustained period. We will calculate a pro-rata credit for the impacted window (minute-level weighting) and share the proposed amount.
+
+3) Deliverables by EOD tomorrow: sanitized evidence bundle, proposed credit amount, and RCA high-level notes. We'll redact any customer-identifiable data before sharing logs.
+
+4) Offer: We're available for a technical debrief (SRE + product) tomorrow afternoon — propose 11:00 PDT or 14:00 PDT. Please confirm preferred slot.
+
+If you'd like to accept the proportional remedy path now, we can begin the credit paperwork (standard SLO remedy form + HubSpot deal note) so your finance team can plan.
+
+Regards,
+Marcus Lin
+Senior Customer Reliability Manager
+Redwood Inference
+[attachment: access_logs_20280311.gz]
+

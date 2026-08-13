@@ -1,0 +1,92 @@
+Dovetail integration: SDK bridge & lightweight tracing shim
+
+From: Samira Khan <samira@dovetail.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Mon, 16 Nov 2026 09:12:00 -0800
+Subject: Integration ask — LangChain/LlamaIndex + tracing
+
+Hi Aditya / Marissa,
+
+Thanks for taking this — quick intro: I run platform partnerships at Dovetail Labs. We’re building a new insights export that relies heavily on LangChain orchestration and LlamaIndex for document indexing. Several customers have asked for a more robust Redwood integration so we can: 
+
+- surface per-request latency and prompt artifacts into our analytics pipeline,
+- fall back between model variants without changing orchestration code, and
+- ship a samples package so our enterprise customers can adopt Redwood with minimal dev work.
+
+I’ve attached a brief outline (dovetail-integration-outline.pdf) with our integration goals and a rough timeline. High level asks: an SDK bridge (LangChain/LlamaIndex bindings) and a lightweight tracing shim that emits traces/prompts to our telemetry (we can accept OpenTelemetry spans or a small JSON webhook).
+
+Can we schedule a 30-min sync this week to do a quick scoping call? Also curious if Redwood has any existing sample repo we can build on.
+
+Best,
+Samira
+Samira Khan
+Platform Partnerships, Dovetail Labs
+attachments: dovetail-integration-outline.pdf
+
+From: Aditya Rao <aditya.rao@redwood.ai>
+To: Samira Khan <samira@dovetail.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Mon, 16 Nov 2026 11:03:00 -0800
+Subject: Re: Integration ask — LangChain/LlamaIndex + tracing
+
+Thanks Samira — this is right in our sweet spot. I’m copying Marissa (ISV partnerships) and looping in Karthik (integration lead) for the technical scope.
+
+Quick answers up front:
+- We can provide a LangChain / LlamaIndex compatibility guide and a small sample binding (MIT-licensed repo) that shows model selection, streaming, and fallback routing.
+- For tracing/prompt artifacts we have two common patterns: an OpenTelemetry exporter and a minimal JSON hook that emits prompt + metadata post-call. We’ll prototype the lightweight webhook as requested.
+
+Are these your priority success criteria? If so, propose a 30-min sync tomorrow or Wednesday (nov 17/18). Available windows (PST): Tue 10:00-11:00, Tue 14:00-15:00, Wed 09:00-11:30.
+
+Also: could you share a short sample workload (QPS, avg seq length, streaming required Y/N) so we can size the prototype and the compatibility matrix?
+
+Thanks — looking forward to it.
+
+— Aditya Rao
+Partnerships, Redwood Inference
+aditya.rao@redwood.ai
+
+From: Samira Khan <samira@dovetail.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Tue, 17 Nov 2026 08:21:00 -08:00
+Subject: Re: Integration ask — LangChain/LlamaIndex + tracing
+
+Aditya — thanks for the quick reply and the options. Wed 09:30 PST works for our CTO (Ben) and me. Can you confirm and send a calendar invite?
+
+Attached a short tech note with our workload profile: most queries are short (avg 120 tokens), but embeddings batching is heavy (we do spikes up to 1000 embeddings batches for onboarding). Typical QPS per-worker is low (0.5–2 qps) but we run many parallel workers. Streaming is used by customers for long-form exports but not required for initial integration.
+
+For tracing: OpenTelemetry is preferred, but the webhook option is useful for customers that want an out-of-process ingestion path. For model-fallback: we’d like the SDK to expose a transparent fallback policy (candidate list + latency budget) so our LangChain orchestration doesn’t need bespoke code per-deployment.
+
+I’ve attached the outline again and added the workload note (both in dovetail-integration-outline.pdf). Looking forward to the sync.
+
+Samira
+attachments: dovetail-integration-outline.pdf
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Samira Khan <samira@dovetail.ai>, Aditya Rao <aditya.rao@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Wed, 18 Nov 2026 15:03:00 -08:00
+Subject: Notes & action items — Redwood <> Dovetail integration sync (Nov 18)
+
+Hi all — great sync today. Summarizing decisions and next steps so we have a single record: 
+
+Decisions
+- Redwood will deliver a small sample repository with LangChain and LlamaIndex bindings that demonstrates: model selection, streaming decoding, and an SDK-level fallback policy. Repo will be public under our integrations org.
+- We will provide two tracing delivery options: an OpenTelemetry exporter and a lightweight JSON webhook that posts prompt metadata and latency per-call.
+- For embeddings spikes, recommended approach is a staged batching adapter (client-side backpressure) + a dedicated dedicated_ingest queue in Redwood Dedicated for customers who need predictable throughput.
+
+Action items & owners
+- Karthik: produce compatibility matrix (targets, quantization profiles, guidance) and initial prototype of webhook exporter — due 2026-11-24. Attachment: redwood-sdk-compatibility-matrix.xlsx (draft).
+- Marissa: draft a co-marketing one-pager and customer onboarding checklist — due 2026-11-30.
+- Aditya: coordinate follow-up with Dovetail enterprise reference customer (intro email) and finalize pilot scope/metrics — due 2026-11-25.
+
+Open questions
+- Samira: confirm whether Dovetail prefers webhook payloads to include full prompt text or only hashes for privacy-conscious customers.
+- We should validate whether the onboarding customers require per-token cost breakdown surfaced in Dovetail analytics; if yes, we’ll expose token-level counters in the webhook.
+
+Next meeting: demo of prototype repo + webhook (tentative) on 2026-11-30. I’ll create a shared folder and link the draft artifacts there.
+
+Thanks,
+Karthik Iyer
+Senior Integration Engineer, Redwood Inference
+attachments: redwood-sdk-compatibility-matrix.xlsx

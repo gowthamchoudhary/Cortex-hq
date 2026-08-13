@@ -1,0 +1,107 @@
+Pin+Fallback runbook & subprocessor escrow — AtlanticPay DPA questions
+
+From: Anna Kim <anna.kim@atlanticpay.com>
+To: ben_carter <ben.carter@redwood.com>
+Cc: TrustOps <trustops@atlanticpay.com>
+Date: Fri, 21 Aug 2026 09:12:00 -0400
+Subject: Questions re region pin & cross-region failover behavior
+
+Hi Ben —
+
+Thanks for the demo last week. We’re close to procurement, but Legal and TrustOps need a few specific assurances before we proceed with the DPA addendum. Can you confirm the following in writing?
+
+1) Region pin guarantee: when we select EU pinning, can you confirm production inference (model compute and KV caches) will run solely in eu-central-1 during normal operation?
+
+2) Temporary failover window: in operational incidents (region outage, planned maintenance), what is the maximum window during which processing may egress to another region (e.g., us-east-1) while you remediate? We need a numeric SLA (hours).
+
+3) KMS and key residency: do customer-managed KMS keys remain in-region during transient failover, or are keys mirrored? What controls exist if keys must not leave the EU?
+
+4) Subprocessors roster & escrow: please provide a current list of subprocessors for EU hosting, and confirm whether Redwood can provide an escrowed roster and activation order for each (i.e., which subprocessor would be activated during failover).
+
+5) Audit evidence: sample audit/logging artifacts showing that egress events are recorded (timestamp, triggered policy, duration, affected request IDs) — a sanitized sample is fine.
+
+We appreciate a short-runbook style response (one pager or bullets) plus any artifacts you can share. Legal wants concrete numbers and an actionable escalation point.
+
+Regards,
+Anna Kim
+Head of Trust & Compliance, AtlanticPay
+[TrustOps contact: trustops@atlanticpay.com]
+
+From: ben_carter <ben.carter@redwood.com>
+To: Anna Kim <anna.kim@atlanticpay.com>
+Cc: monica_patel <monica.patel@redwood.com>, lauren_bishop <lauren.bishop@redwood.com>
+Date: Fri, 21 Aug 2026 13:05:00 +0000
+Subject: Re: Questions re region pin & cross-region failover behavior
+
+Anna — thanks for the clear list. Looping in Monica (infra) and Lauren (legal/partnerships) to assemble precise artifacts. High-level answers inlined below; we'll follow up with a short runbook and evidence pack by EOD Monday.
+
+1) Region pin guarantee: yes — for pinned deployments we operate compute and KV caches in-customer-region under normal operations. We offer EU pinning for eu-central-1, eu-west-1 on request and will document the exact endpoints in the addendum.
+
+2) Temporary failover window: our standard operational fallback window is 72 hours maximum for unplanned incidents where capacity constraints or critical outages prevent in-region processing. We will capture start/end times and provide a remediation SLA. For Reserved/Dedicated contracts we can tighten that to 24 hours with an elevated SLA (contract addendum).
+
+3) KMS & key residency: customer-managed KMS keys remain in-region. When customers bring their own keys (BYOK), we do not export keys to other regions; Redwood uses region-local wrapping keys and will perform crypto operations in-region. If a customer requires hard-blocking of keys from leaving a region, we can document an operational constraint (note: this may increase time-to-failover).
+
+4) Subprocessors roster & escrow: Monica — can you attach the current roster and the activation ordering logic? We can provide a CSV roster and a short explanation of which subprocessor is considered primary vs. standby for each geo.
+
+5) Audit evidence: we’ll include a sanitized sample of audit logs showing egress events and the runbook will list the fields we capture (timestamp, policy ID, request ids, pre/post region tag).
+
+Attachments: I’m attaching a draft DPA addendum (DPA-addendum-draft.pdf) for your review — it includes the failover SLA options and the pinning language. Monica will follow up with a roster.
+
+Proposed next step: 30-minute call Monday to walk Legal through the addendum. Are you available 09:30–11:00 UTC?
+
+Best,
+Ben Carter
+Head of Sales, Redwood Inference
+[Attachment: DPA-addendum-draft.pdf]
+
+From: monica_patel <monica.patel@redwood.com>
+To: Anna Kim <anna.kim@atlanticpay.com>, ben_carter <ben.carter@redwood.com>
+Cc: lauren_bishop <lauren.bishop@redwood.com>
+Date: Sat, 22 Aug 2026 10:47:00 +0000
+Subject: Re: Questions re region pin & cross-region failover behavior
+
+Anna, Ben — attaching the subprocessor roster and a short ops note. Quick technical clarifications below and a recommended runbook excerpt: 
+
+- Normal operation: compute, KV cache and KMS crypto calls occur in eu-central-1 for EU-pinned customers. We pin by tenancy/cluster and network ACLs prevent outbound replication to other regions unless a failover is triggered.
+
+- Failover trigger & window: failover can be manual (ops) or automatic (health check thresholds). When triggered, we follow the pinned deployment's runbook: 1) promote standby cluster (if available), 2) if standby not available, route traffic to cross-region compatible variant. We aim to resolve within 72 hours; the runbook contains checkpoints at 2h, 8h, 24h, 48h. For Dedicated customers we can commit to 24h.
+
+- KMS specifics: with BYOK, keys remain in the customer region. During cross-region routing we do not export raw keys; instead, we either: a) perform wrapped key ops via a regional proxy, or b) require a temporarily provisioned regional key (customer choice). We note the risk and added time for key material provisioning in the runbook.
+
+- Subprocessors roster & activation order: see attached CSV (subprocessors_roster_v3.csv). Each entry includes role, region, standby_order. During failover we escalate to the next available subprocessor per that standby_order. We can provide escrowed contact points and activation notifications as part of the addendum.
+
+- Audit artifacts: we capture an egress event record with fields: event_id, start_ts, end_ts, source_region, target_region, policy_id, affected_request_ids (sample sanitized). We will include a 1-page sample in the evidence packet.
+
+Attached: subprocessors_roster_v3.csv (names and standby order); short-runbook-excerpt (inline below).
+
+-- Runbook excerpt (high level) --
+1) Detection & notify: on incident detection, ops posts to a pinned channel and triggers notification to customer trust contact.
+2) Assess: 2-hour checkpoint with initial mitigation or route plan.
+3) Route: if routing required, move traffic to standby cluster or compatible region; mark all egressed sessions with a policy tag.
+4) Reconcile: after recovery, perform data reconciliation and provide audit logs and a postmortem.
+
+Note: We recommend AtlanticPay selects either (A) transient-egress SLA=72h (standard) or (B) committed SLA=24h (requires Dedicated or a premium addendum).
+
+I’ll prepare the evidence files and the sanitized audit sample. Ben — if Legal is comfortable we can lock the addendum language in the attached PDF and route to procurement.
+
+[Attachment: subprocessors_roster_v3.csv]
+
+From: Anna Kim <anna.kim@atlanticpay.com>
+To: ben_carter <ben.carter@redwood.com>, monica_patel <monica.patel@redwood.com>
+Cc: TrustOps <trustops@atlanticpay.com>, lauren_bishop <lauren.bishop@redwood.com>
+Date: Sun, 23 Aug 2026 14:05:00 -0400
+Subject: Re: Questions re region pin & cross-region failover behavior
+
+Ben/Monica — this is exactly the level of detail we needed, thank you. A few follow-ups: 
+
+- AtlanticPay will take the standard transient-egress SLA=72h for now; please include the 24h Dedicated option in the addendum wording for procurement clarity.
+- Please send the sanitized audit sample and a one-page summary of the KMS BYOK behavior (how wrapping/proxy works) so our crypto team can sign off.
+- Confirm you will push the final DPA addendum to HubSpot (ATL-2026-048) and we can route to Procurement.
+
+We are available for a 30-minute call Monday 10:00 UTC to finalize language — please send a calendar invite. Once legal signs the addendum we’ll open a PO.
+
+Thanks,
+Anna Kim
+Head of Trust & Compliance, AtlanticPay
+[TrustOps: trustops@atlanticpay.com]
+

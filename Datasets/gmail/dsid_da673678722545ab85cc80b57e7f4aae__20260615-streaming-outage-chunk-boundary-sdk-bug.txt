@@ -1,0 +1,111 @@
+Production streaming outage — intermittent 5xx and stalled chunks (suspected client SDK chunk-boundary bug)
+
+From: Elena Rossi <elena.rossi@fintechx.com>
+To: support@redwood.ai, connor.obrien@redwood.ai
+Date: 2026-06-15T08:14:00Z
+Subject: Streaming API: sudden latency spikes and stalled chunks (production)
+
+Hi Redwood team,
+
+We started seeing widespread errors and severe latency on our streaming responses this morning (~08:00 UTC). A subset of client connections hang mid-stream and eventually return 502/504 or no final closing chunk. Attached are a few log samples showing repeated: "read timeout waiting for final chunk delimiter" and an unusual set of trailing headers (x-ftx-trace) arriving mid-stream.
+
+Impact: critical — affects checkout flows for ~2% of sessions (real traffic).
+
+Requested: can someone confirm whether this looks like an issue on Redwood's routing/runtime vs a client-side integration bug? We can pull additional traces if useful.
+
+Thanks,
+Elena Rossi
+Head of Platform Integrations
+FinTechX
+
+Attachments: fintechx_streaming_errors_20260615.log, curl-repro-steps.txt
+From: Connor O'Brien <connor.obrien@redwood.ai>
+To: Elena Rossi <elena.rossi@fintechx.com>
+Cc: rishi.malhotra@redwood.ai, marissa.cole@redwood.ai, evelyn.hart@redwood.ai
+Date: 2026-06-15T08:27:00Z
+Subject: Re: Streaming API: sudden latency spikes and stalled chunks (production)
+
+Hi Elena — thanks for the quick report and the logs. I'm escalating this immediately. We see the same error pattern in our edge traces: certain connections show a sequence of streaming frames where a chunk includes trailing headers (non-standard) and the client-side parser on some SDK versions appears to block waiting for a final CRLF.
+
+Next steps from our side:
+- Rishi (SE/Infra) is triaging and will attempt to reproduce with your curl repro.
+- I'll coordinate an immediate mitigation (temporary routing to a fallback parser variant) and share a canary rollout.
+- Marissa, can you prepare an exec summary for FinTechX leadership if needed?
+
+Connor O'Brien
+Enterprise Sales
+Redwood Inference
+
+> On 2026-06-15 Elena wrote: (attached logs)
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: connor.obrien@redwood.ai, marissa.cole@redwood.ai
+Cc: evelyn.hart@redwood.ai
+Date: 2026-06-15T09:03:00Z
+Subject: Re: Streaming API: sudden latency spikes and stalled chunks (production)
+
+Quick update after reproducing locally against FinTechX repro steps. Repro steps used their curl example and our internal streaming harness. Findings:
+
+- Reproduction: when the upstream model service emits a streaming chunk that is followed immediately by non-standard trailing headers (e.g., "x-ftx-trace: 1234" without an intervening CRLF line break), the Redwood client-sdk HTTP/2 framing code in versions <= 1.3.6 will treat that as part of the chunk payload. The JS stream parser waits for the expected chunk boundary and can block the user-level stream until a full CRLF sequence appears.
+- Symptom: customer-observed stalled chunks and eventual timeout/502 from our edge when the SDK never consumes the full message. This lines up with the logs.
+- Workaround: clients can disable streaming-parsing heuristics by setting header "X-Redwood-Streaming-Mode: lax" or upgrade to the patched client-sdk (1.3.7) which includes a stricter chunk boundary state machine.
+- Patch: I have a small diff ready (client-sdk-1.3.7-patch.diff). Will push to canary and put an emergency release if QA passes.
+
+I'll push the patch to our dedicated canary pool and ping once deployed.
+
+Rishi
+Senior Infra Engineer
+Redwood Inference
+
+Attachments: client-sdk-1.3.7-patch.diff
+From: Connor O'Brien <connor.obrien@redwood.ai>
+To: Elena Rossi <elena.rossi@fintechx.com>
+Cc: rishi.malhotra@redwood.ai, marissa.cole@redwood.ai
+Date: 2026-06-15T10:12:00Z
+Subject: Re: Streaming API: sudden latency spikes and stalled chunks (production)
+
+Elena — quick update and an immediate workaround you can try right away:
+
+1) Short-term mitigation (we recommend while we roll a patch): add header "X-Redwood-Streaming-Mode: lax" to your client requests. This instructs older SDK versions to accept trailing headers as separate frames and not wait for an additional CRLF boundary. That should reduce the stalled-chunk symptom within minutes.
+2) Recommended fix: upgrade to client-sdk 1.3.7 (we will publish a secure patch and the release notes).
+
+We're going to run a canary rollout of the patch across the Dedicated pool; I'll follow up with a timeline in the next 30–60 minutes. Apologies for the disruption — we're treating this as a Sev2 until all customer sessions return to normal.
+
+Connor O'Brien
+Enterprise Sales — Redwood Inference
+
+> On 2026-06-15 Rishi wrote: (diagnostic summary)
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: connor.obrien@redwood.ai, rishi.malhotra@redwood.ai, marissa.cole@redwood.ai, sean.gallagher@redwood.ai
+Date: 2026-06-15T10:45:00Z
+Subject: Re: Streaming API: sudden latency spikes and stalled chunks (production)
+
+Team — looping in for visibility. This has exec attention at FinTechX (they flagged procurement impact and asked for a written RCA).
+
+Please make sure we have:
+- a public timeline of events for the customer (what happened, when we noticed, mitigation applied)
+- the fix rollout plan and rollback criteria
+- a postmortem with root cause of why trailing headers were delivered mid-chunk (model infra vs router transformation)
+
+Connor/Marissa: if FinTechX needs a bridge with our CSM/AE, coordinate now. Rishi: treat this as hot and secure the canary rollout.
+
+Evelyn Hart
+VP, Customer Reliability
+Redwood Inference
+From: Elena Rossi <elena.rossi@fintechx.com>
+To: connor.obrien@redwood.ai
+Cc: Carlos Mendes <carlos.mendes@fintechx.com>, ops@fintechx.com, marissa.cole@redwood.ai
+Date: 2026-06-16T12:30:00Z
+Subject: Re: Streaming API: sudden latency spikes and stalled chunks (production)
+
+Connor / team,
+
+Thanks for the rapid investigation and patch. We've applied the temporary header workaround and immediately saw sessions stabilize. After you deployed the 1.3.7 canary and we validated the patch on a subset of traffic, our error rate for streaming calls dropped from 4.8% -> 0.2%.
+
+Please share the RCA and the final release notes (we will need these for our procurement audit). FinTechX appreciates the responsiveness — will follow up with a short feedback note for your team.
+
+Best,
+Elena
+
+--
+Elena Rossi
+Head of Platform Integrations, FinTechX

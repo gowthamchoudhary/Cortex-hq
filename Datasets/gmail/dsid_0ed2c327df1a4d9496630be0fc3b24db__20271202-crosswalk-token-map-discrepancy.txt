@@ -1,0 +1,103 @@
+Re: Unexpected jump in Dec 1 token usage — needs reconciliation
+
+From: Lara Chen <lara.chen@brightspire.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>
+Cc: BrightSpire Finance <billing@brightspire.com>
+Date: Thu, 2 Dec 2027 09:14:00 -0700
+Subject: Unexpected jump in Dec 1 token usage — needs reconciliation
+
+Hi Evelyn,
+
+We noticed a sharp jump in token consumption on Dec 1 — ~3.2M tokens in one day — which is ~8x our typical peak. Our finance team flagged the invoice generation job and paused payment until we understand the root cause. I attached a small sample (rows for our busiest endpoint) and the hubspot record for the account.
+
+Can you confirm:
+- Whether there was any change on Redwood's metering logic or tokenization for conversational endpoints on Dec 1?
+- If you can share per-request traces or the token_map for affected requests (anonymized) so we can compare to our client-side logs.
+
+We'd like a short ETA for a response so we can move off hold. If this is an attribution issue on our side, we will remit immediately upon confirmation. Otherwise we'll need to discuss credit/waiver options.
+
+Thanks,
+Lara Chen
+Head of Finance — BrightSpire
+attachments: brightspire_usage_sample_20271201.csv
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Lara Chen <lara.chen@brightspire.com>
+Cc: Ben Carter <ben.carter@redwood.com>
+Date: Thu, 2 Dec 2027 10:05:00 -07:00
+Subject: Re: Unexpected jump in Dec 1 token usage — needs reconciliation
+
+Hi Lara — thanks for the heads up and for attaching the sample. Im flagging this internally and will prioritize a reconciliation. Immediate notes:
+- We did a small runtime patch on Nov 30 to improve async-batch routing (no metering code changes intended), but I will validate whether that changed attribution semantics.
+- I can put the invoice on temporary payment-hold for 72 hours while we investigate; Ben, please confirm.
+
+Next steps Im proposing:
+1) Our billing team will run a token_map crosswalk for the sample you sent and match request ids where possible.
+2) Engineering (Jonas) will check for duplicate ingestion or replays on Dec 1.
+3) Well share a redacted token_map + per-request timing slices by EOD tomorrow.
+
+If you can also send a couple of request IDs or a fingerprint from the sample it will speed matching.
+
+Best,
+Evelyn Hart
+Head of Customer Finance, Redwood Inference
+redwood.com | +1 415-555-0123
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Thu, 2 Dec 2027 10:12:00 -07:00
+Subject: Fwd: Unexpected jump in Dec 1 token usage — BrightSpire (urgent)
+
+---------- Forwarded message ----------
+From: Lara Chen <lara.chen@brightspire.com>
+Date: Thu, 2 Dec 2027 09:14:00 -0700
+Subject: Unexpected jump in Dec 1 token usage — needs reconciliation
+To: Evelyn Hart <evelyn.hart@redwood.com>
+Cc: BrightSpire Finance <billing@brightspire.com>
+
+Marissa/Jonas — BrightSpire has a large unexplained spike on Dec 1; they attached a CSV sample. Evelyn is proposing a 72hr payment hold while we investigate. Please prioritize:
+- Marissa: run token_map crosswalk and provide a delta report (per-route, per-model, per-prefix) with suspected root causes. Attach any evidence you will need to include in a credit proposal.
+- Jonas: check runtime logs for replays, duplicate deliveries, or async batching misattribution around 2027-12-01 00:00-23:59 UTC. Note any kernel selection or shard restarts.
+
+This is on our enterprise contract (BRSP-2026-0893). Ben, loop in AE if you need direct outreach.
+
+Thanks — Evelyn
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Evelyn Hart <evelyn_hart@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Lara Chen <lara.chen@brightspire.com>
+Date: Fri, 3 Dec 2027 08:37:00 -07:00
+Subject: Re: Fwd: Unexpected jump in Dec 1 token usage — BrightSpire (urgent)
+
+Evelyn/Jonas/Ben/Lara — preliminary reconciliation attached (redwood_token_map_20271202.json) and summary below. High-level findings:
+- Root cause: a client-side integration change that switched BrightSpire from synchronous per-request calls to an async-batched fanout pattern for one internal pipeline on 2027-12-01 00:12 UTC. The engine accepted the batched payloads correctly, but our prefix-merging logic double-counted the prefix tokens for a subset of batched requests when an identical prompt header was repeated across sub-requests. This produced over-attribution in the per-request billing report for Dec 1 only.
+- Impact: approximately +2.9M tokens attributed to BrightSpire (out of the ~3.2M delta). The remainder (~0.3M) is normal variance.
+- Fix: a one-line change to the prefix dedupe in metering will be shipped for the hosted pool (hotfix already staged). Jonas confirms no evidence of replays or GPU restarts.
+
+Proposed remediation:
+1) We will credit BrightSpire for the ~2.9M over-attributed tokens (pro-rated on Dec 1 invoice).
+2) Deploy the hotfix to hosted pools with immediate reprocessing of Dec 1 attribution for affected request-ids (target: within 24 hours).
+3) Share the redacted token_map and per-request sample mapping so BrightSpire can reconcile their logs.
+
+Action items: Ben — please confirm the communication and credit authorization. Lara — once we confirm the credits I will send an updated invoice and a short explanation doc you can share with your finance team.
+
+Attachments: redwood_token_map_20271202.json (redacted)
+
+Marissa Cole
+Revenue Operations — Redwood Inference
+
+From: Lara Chen <lara.chen@brightspire.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: BrightSpire Finance <billing@brightspire.com>, Ben Carter <ben.carter@redwood.com>
+Date: Fri, 3 Dec 2027 15:02:00 -07:00
+Subject: Re: Unexpected jump in Dec 1 token usage — needs reconciliation
+
+Thanks all for the quick turnaround and for the clear summary. We appreciate the analysis and proposed credit. A couple quick follow-ups:
+- Can you confirm the exact credit amount (USD) and how it will appear on the Dec invoice?
+- Please share the redacted mapping for two request IDs Ill paste below so we can fully match to our side before we authorize payment: rsq_34b2c9 and rsq_34b2f1.
+
+If we can get the updated invoice and credits applied today, we will release the payment hold and remit the outstanding balance.
+
+Regards,
+Lara Chen
+Head of Finance — BrightSpire

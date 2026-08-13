@@ -1,0 +1,122 @@
+Post-call: MedNova encryption & key management (next steps)
+
+From: Evelyn Hart <evelyn.hart@redwood.inference>
+To: Sam Post <sam.post@mednova.com>, security@mednova.com
+Cc: aditya_rao@redwood.inference, karthik_iyer@redwood.inference
+Date: Wed, 14 Jul 2027 09:18:00 -0700
+Subject: Post-call: MedNova encryption & key management (next steps)
+
+Hi Sam / MedNova security team —
+
+Thanks again for the call this morning. Quick recap and proposed next steps so we stay aligned: 
+
+What we covered
+- High-level: Redwood hosted inference with hooks for dedicated/private deployments.
+- Primary concerns you raised: SOC 2 timing, HIPAA/BAA, encryption at-rest & in-transit, and whether you can provide customer-managed keys (BYOK) for sensitive workloads.
+
+Requests / open items
+1) SOC 2: please confirm current report type/status and expected Type II completion date.
+2) HIPAA: confirm that a BAA is required for scope and any special logging/audit requirements.
+3) Encryption & key model: do you prefer a cloud-KMS CMEK model, an HSM-backed BYOK (customer holds root CMK), or both? Any regulatory constraints (e.g., key residency) we should plan for?
+4) Timeline: target production date and procurement steps needed (SOW/PO/Legal sign-off).
+
+Next steps from Redwood
+- I attached the post-call deck that summarizes our encryption options.
+- If you can share the security questionnaire, we’ll start intake and assign a QSA/SE.
+- Internally I’ll loop in Aditya + Karthik for a short technical note on latency/cost tradeoffs for BYOK vs managed keys.
+
+Can you confirm the SOC 2 timing and whether MedNova will push for CMK/HSM by default? If you prefer I can put together a 1-page summary for your procurement team.
+
+Thanks —
+Evelyn Hart
+Senior Sales Engineer | Redwood Inference
+E: evelyn.hart@redwood.inference | M: +1 (415) 555-0190
+
+Attachment: redwood-postcall-deck.pdf
+
+From: Sam Post <sam.post@mednova.com>
+To: Evelyn Hart <evelyn.hart@redwood.inference>
+Cc: security@mednova.com
+Date: Wed, 14 Jul 2027 10:12:00 -07:00
+Subject: Re: Post-call: MedNova encryption & key management (next steps)
+
+Evelyn — thanks for the clear recap. A few answers inline: 
+
+- SOC 2: We completed readiness work; Type I done earlier this year. Type II in progress, expected completion and report availability by 2027-11-15 (Q4).
+- HIPAA / BAA: Yes, a BAA will be required for PHI workloads. We also have a checklist around audit log retention (7 years for certain datasets).
+- Key model: Our security team prefers customer-managed keys (BYOK) where possible, ideally HSM-backed. Key residency in the US only. We are open to envelope encryption with Redwood managing the data keys if root CMKs remain under our control.
+- Timeline: Production target is end of Q1 2028. Procurement: we’ll need a short security intake, a signed BAA, and a technical annex describing key custody responsibilities.
+
+I attached our initial answers to the standard security questionnaire (we filled the contact + high-level items). It’s not exhaustive. We can follow up with the project intake doc if helpful.
+
+On the HSM question — can you provide an architecture option that shows latency/availability differences between: (A) Redwood-managed keys, (B) Customer CMKs in AWS KMS (BYOK via import), (C) Dedicated HSM appliance in our VPC?
+
+Thanks —
+Sam Post
+Director, Cloud Security | MedNova Health
+sam.post@mednova.com
+
+Attachment: MedNova-Sec-Contacts-answers.xlsx
+
+On Wed, 14 Jul 2027 at 09:18, Evelyn Hart <evelyn.hart@redwood.inference> wrote:
+> Hi Sam / MedNova security team —
+> 
+> Thanks again for the call this morning. Quick recap and proposed next steps so we stay aligned: 
+> 
+> ...
+
+From: Evelyn Hart <evelyn.hart@redwood.inference>
+To: aditya_rao@redwood.inference, karthik_iyer@redwood.inference
+Date: Wed, 14 Jul 2027 11:05:00 -07:00
+Subject: Fwd: Post-call: MedNova encryption & key management (next steps)
+
+---------- Forwarded message ---------
+From: Sam Post <sam.post@mednova.com>
+Date: Wed, 14 Jul 2027 at 10:12 AM -07:00
+Subject: Re: Post-call: MedNova encryption & key management (next steps)
+To: Evelyn Hart <evelyn.hart@redwood.inference>
+Cc: security@mednova.com
+
+Sam confirmed they prefer BYOK/HSM, US-only key residency, SOC 2 Type II expected 2027-11-15, production target end of Q1 2028. He asked explicitly for an architecture comparison across three options (Redwood-managed keys, AWS KMS BYOK, dedicated HSM in their VPC).
+
+Can you: 
+- Draft a 1-page comparison (latency/cost/operational risks) we can send to MedNova security and procurement?
+- Confirm what artifacts we can provide for procurement (diagram, playbook, BAA language snippets).
+
+Aditya — can you estimate any perf delta for our default quantized models with envelope encryption vs direct HSM sign/unwrap on every init? Put a short note in the doc.
+
+I attached Sam’s questionnaire. I’ll send the 1-pager to them once we have the internal notes.
+
+Thanks —
+Evelyn
+
+From: Karthik Iyer <karthik_iyer@redwood.inference>
+To: Evelyn Hart <evelyn.hart@redwood.inference>, aditya_rao@redwood.inference
+Date: Wed, 14 Jul 2027 15:20:00 -07:00
+Subject: Re: Fwd: Post-call: MedNova encryption & key management (next steps)
+
+Evelyn / Aditya —
+
+Draft answers and attachments below. High level: Redwood supports all three patterns; we typically recommend envelope encryption with customer root CMKs (CMEK) for the best balance of security and latency. Notes: 
+
+1) Architecture options (short):
+- Redwood-managed keys (managed CMK): simplest operationally, lowest procurement friction. Data keys are generated and stored encrypted by Redwood KMS; good for POCs and non-PHI workloads. Latency impact: negligible per-request with caching; cold-starts minimal.
+- AWS KMS BYOK (imported CMKs): customer retains root CMK control; envelope encryption in the runtime; key unwrap operations happen at customer KMS on key lifecycle events, not every token generation. Latency impact: <5% on tail latency when using prefix/KV caches; additional egress to KMS only for key rotations or rewraps.
+- Dedicated HSM in VPC (customer appliance): strongest custody model and suitable for strict compliance. Can be integrated via TLS- and attested key wrapping. Operational cost and complexity higher; small additional tail latency for initial session handshake; steady-state token generation unaffected due to envelope caching.
+
+2) HSM vs software KMS: HSM required if audit/regulator demands FIPS-140-2/140-3 Level 2+ for root operations. We support HSM-backed keys via standard KMS providers and customer-hosted appliances.
+
+3) Rotation and audit: Recommend monthly rotation of data-encryption-keys, with CMK rotation annual or per customer policy. We can surface key rotation events in audit logs (available for legal/procurement review).
+
+4) Artifacts for procurement: attached diagram and a short deployment playbook you can share (includes BAA language snippet and roles/responsibilities matrix).
+
+Action items
+- Evelyn: send 1-page summary to Sam + security with attachments.
+- Aditya: drop a 3-line perf note for the 1-pager (estimated token-latency delta for envelope vs direct unwrap).
+- I will prepare the playbook + diagram attachments for their intake queue.
+
+Attachments: kms-byok-architecture-diagram.png, cmk-deployment-playbook.pdf
+
+—Karthik
+Principal Applied ML Engineer | Redwood Inference
+karthik_iyer@redwood.inference

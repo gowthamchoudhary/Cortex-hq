@@ -1,0 +1,122 @@
+POC engineer runbook: prompt review, routing check, and environment gating
+
+From: Alex Morgan <alex@zenmade.ai>
+To: jasmine.liu@redwood.com
+Cc: ben.carter@redwood.com
+Date: Sun, 16 May 2027 09:12:00 -0700
+Subject: Re: POC kickoff - deep dive and environment prep
+
+Hi Jasmine,
+
+Thanks for the quick intro yesterday — Priya and I reviewed the high-level agenda and we want to lock the hands-on session next week. Two quick asks from our side before we kick off:
+
+1) Can you confirm the exact staging endpoints and whether we should hit a dedicated sandbox or shared test tenant for the prompts we'll be exercising? We want to mirror our production routing as closely as possible.
+2) Do you have the IP allowlist + CIDR ranges so our infra team can open the firewall?
+3) We'll be exercising prompt variants (safety checks + persona routing). I've attached a short set of sample prompts to validate token counts and response shapes.
+
+Availability: May 18–20 (PST) works best for us; Priya prefers afternoons. If you can propose a 90-minute block that includes 20–30 min for prompt review and 30–45 min for live routing/load checks that would be ideal.
+
+Attaching: sample-prompts.md (attached)
+
+Alex
+Account Lead | ZenMade.ai
+alex@zenmade.ai
+
+--
+Attachment: sample-prompts.md (text/markdown)
+
+From: jasmine.liu@redwood.com
+To: Alex Morgan <alex@zenmade.ai>, Priya Gupta <priya@luminahealth.com>
+Cc: ben.carter@redwood.com
+Date: Sun, 16 May 2027 10:05:00 -07:00
+Subject: Re: POC kickoff - deep dive and environment prep
+
+Alex — thanks, this is helpful. Looping in Ben (solutions) for scheduling and a parallel note to our infra engineer for allowlist details.
+
+Proposed plan / agenda (90 mins):
+- 0–15m: Intros + success criteria and access sanity check
+- 15–40m: Prompt review (sample prompt families; token profiling; edge-case examples)
+- 40–70m: Live routing checks (persona routing, fallback policies) + KV cache warmup
+- 70–90m: Load profile run (short bursts) + next steps / canary plan
+
+Staging endpoints / access: we recommend using a per-customer sandbox we manage for the session — it isolates KV caches and gives predictable token analytics. I'll coordinate keys. See allowlist below:
+- Redwood Egress IPs (primary): 34.220.12.0/24, 52.15.128.0/23
+- Region-specific pool (us-west): 13.57.0.0/18
+
+Action items for you before the session:
+- Confirm which prompt set (Alex attached one; Priya, please confirm)
+- Share any extra CIDR blocks on your side if you block inbound responses
+- Grant us a staging account admin or provide a service principal for key exchange (we support short-lived API keys).
+
+Attachments: poc-engineer-checklist.pdf (runbook checklist), network-allowlist.csv
+
+Proposed slots: 2027-05-18 13:00–14:30 PDT OR 2027-05-19 15:00–16:30 PDT. If neither works we'll open up more windows.
+
+-Jasmine Liu
+Solutions Engineer | Redwood Inference
+jasmine.liu@redwood.com
++1 (415) 555-0123
+
+--
+Attachments: poc-engineer-checklist.pdf (application/pdf); network-allowlist.csv (text/csv)
+
+From: karthik.iyer@redwood.com
+To: jasmine.liu@redwood.com, ben.carter@redwood.com, olga.petrov@redwood.com
+Date: Sun, 16 May 2027 13:02:00 -07:00
+Subject: RE: POC kickoff - deep dive and environment prep
+
+Jasmine / Ben / Olga — quick tech note ahead of the session:
+
+- Keys: we'll issue a scoped short-lived API key for the hands-on. Recommend rotating the key 24 hours before the session and revoking after the run. I can create the key and post to the secure link once we confirm the slot.
+- VPC / Allowlist: the CSV Jasmine attached is accurate — I'll add the management IPs for our dedicated sandbox (10.20.5.0/28). If ZenMade needs SSH tunnel IPs for any on-prem proxy we'll need those CIDRs.
+- Routing test plan: plan to exercise three routing buckets — default, high-precision, and fallback. For the load test please provide expected RPS per bucket; I'll prepare a short synthetic generator to replay 30s bursts at ~50 RPS to validate SLOs.
+- Observability: enable token-level tracing for the session and route traces to the shared debug dashboard (read-only for ZenMade).
+
+Small ask: can Priya/Alex flag any PII-sensitive prompts? We'll mask and ensure they never hit logs beyond what's allowed by the customer retention setting.
+
+Karthik Iyer
+Senior Infra Engineer | Redwood Inference
+karthik.iyer@redwood.com
+
+On Sun, May 16, 2027 at 10:05 AM jasmine.liu@redwood.com wrote:
+> Alex — thanks, this is helpful. Looping in Ben (solutions) for scheduling and a parallel note to our infra engineer for allowlist details.
+> 
+> Proposed plan / agenda (90 mins):
+> - 0–15m: Intros + success criteria and access sanity check
+> - 15–40m: Prompt review (sample prompt families; token profiling; edge-case examples)
+> - 40–70m: Live routing checks (persona routing, fallback policies) + KV cache warmup
+> - 70–90m: Load profile run (short bursts) + next steps / canary plan
+> 
+> Staging endpoints / access: we recommend using a per-customer sandbox we manage for the session — it isolates KV caches and gives predictable token analytics. I'll coordinate keys. See allowlist below:
+> - Redwood Egress IPs (primary): 34.220.12.0/24, 52.15.128.0/23
+> - Region-specific pool (us-west): 13.57.0.0/18
+> 
+> Attachments: poc-engineer-checklist.pdf (runbook checklist), network-allowlist.csv
+
+
+From: Priya Gupta <priya@luminahealth.com>
+To: jasmine.liu@redwood.com, Alex Morgan <alex@zenmade.ai>
+Date: Sun, 16 May 2027 16:38:00 -07:00
+Subject: Re: POC kickoff - deep dive and environment prep
+
+Thanks — this looks good and appreciated the thorough agenda. A few quick items from our side: 
+
+1) Our security lead finished the quick scan and we have added the Redwood IPs to our allowlist. Confirmed: 34.220.12.0/24 and 13.57.0.0/18 are reachable.
+2) We prefer the dedicated per-customer sandbox you suggested. Please create the short-lived key and share via the secure link.
+3) Scheduling conflict: the 13:00 PDT slot on 5/18 conflicts with a compliance review. Can we shift the session to 14:30–16:00 PDT on 5/18 instead? That gives us time to bring the security lead online for the first 20 minutes.
+
+Also: there's one prompt in Alex's sample that references PHI in an anonymized form — that's fine for the demo but please set the retention to 0 for that prompt family and disable verbose tracing for those examples.
+
+DocuSign link for the NDA amendment (we added a standard audit clause): https://docusign.com/XY2B3
+
+If you confirm the 14:30 slot we'll accept and we'll ask our platform admin to share a staging service principal if you need it instead of issuing a key.
+
+Cheers,
+Priya Gupta
+Director of Product | Lumina Health
+priya@luminahealth.com
+
+On Sun, May 16, 2027 at 10:05 AM jasmine.liu@redwood.com wrote:
+> Proposed slots: 2027-05-18 13:00–14:30 PDT OR 2027-05-19 15:00–16:30 PDT. If neither works we'll open up more windows.
+> 
+> -Jasmine

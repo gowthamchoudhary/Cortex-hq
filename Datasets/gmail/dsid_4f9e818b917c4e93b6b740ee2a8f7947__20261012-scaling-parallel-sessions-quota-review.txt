@@ -1,0 +1,136 @@
+Storix SLO / Parallel Sessions — follow-up and quota review
+
+From: Jasmine Liu <jasmine.liu@redwood.com>
+To: Max Turner <max.turner@storix.ai>
+Cc: Lena Ortiz <lena.ortiz@storix.ai>; Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2026-10-12T09:15:00-07:00
+Subject: Storix SLO / Parallel Sessions — follow-up and quota review
+
+Hi Max / Lena —
+
+Thanks for taking the time this morning. Quick recap so we have alignment and clear next steps from the call:
+
+Summary of Storix targets (as discussed)
+- Desired interactive latency: p50 ~ 150ms, p99 target we flagged as soft target ~ 800ms (streaming, token-by-token).
+- Expected steady-state throughput: ~400 QPS (in-region).
+- Anticipated peak bursts: up to ~1,200 QPS for short windows (2–10 minutes).
+- Concurrent user connections: ~350 active parallel sessions, with some power users opening 4–6 parallel requests each.
+- Streaming requirement: token-level streaming to the client (low per-token latency).
+
+Open asks for Redwood (please confirm):
+1) Recommended connection pool and parallel-request strategy for your workload pattern (HTTP/2 multiplexing vs keep-alive sockets).
+2) Provisional per-key rate limits and how burst behavior is handled (what happens past quota).
+3) Recommended plan: Hosted with burst vs Dedicated reserved capacity for initial POC (1 week) and production.
+4) A sample SLA and an initial quote so procurement can evaluate PO timing.
+
+Next steps from our side:
+- We will send a short technical note with connection-pool recommendations and provisional quota numbers. (cc: Karthik & Rishi)
+- Redwood will provide a target configuration and a draft quote by EOD tomorrow.
+
+Attachments: storix-call-notes-20261012.pdf (call notes + timing/metrics capture)
+
+If anything above is incorrect, please correct inline. Otherwise, please confirm POC start window (you mentioned mid-to-late Oct).
+
+Thanks —
+Jasmine Liu
+Account Executive | Redwood Inference
+jasmine.liu@redwood.com
++1 (415) 555-0172
+
+--
+Redwood Inference — Developer-first inference for production-grade LLMs
+From: Max Turner <max.turner@storix.ai>
+To: Jasmine Liu <jasmine.liu@redwood.com>
+Cc: Lena Ortiz <lena.ortiz@storix.ai>; procurement@storix.ai
+Date: 2026-10-12T11:02:00-07:00
+Subject: Re: Storix SLO / Parallel Sessions — follow-up and quota review
+
+Thanks Jasmine — good summary. A couple clarifications from our side:
+- The p50 150ms target is what our UI team is modeling; p99 of ~800ms is acceptable for now but tail latency is a key metric for us.
+- Streaming: yes, token-by-token is required; we will reject payloads that come in large blocks.
+- Bursts: the 1,200 QPS number is measured during marketing events and lasts for short windows (~3–8 minutes).
+
+We are open to a short POC. We prefer to start the week of Oct 20 and run for 7 calendar days with simple success criteria: mean request latency <200ms and no more than 2 sustained overload incidents requiring manual intervention.
+
+Procurement (copied) will need the quote + draft SLA.
+
+Max
+Max Turner
+Head of Platform Engineering, Storix AI
+max.turner@storix.ai
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Max Turner <max.turner@storix.ai>, Jasmine Liu <jasmine.liu@redwood.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Lena Ortiz <lena.ortiz@storix.ai>
+Date: 2026-10-13T08:47:00-07:00
+Subject: RE: Storix SLO / Parallel Sessions — follow-up and quota review
+
+Hi Max / team —
+
+Thanks for the clear targets. Below are our technical recommendations and an initial proposal for quotas and fallback behavior. High-level approach first, then specific numbers.
+
+Technical recommendations
+- Connection pooling: For token-streaming workloads we recommend HTTP/2 with long-lived keep-alive connections and multiplexing. In practice, aim for ~1 active TCP connection per 8–12 simultaneous streams from each ingestion tier; this minimizes TCP/TLS handshake overhead while letting HTTP/2 multiplexing handle parallel requests.
+- Parallel requests: Given your pattern (avg 400 QPS, peaks @1,200 QPS, 350 concurrent sessions) we recommend configuring the client pool to allow up to 6 parallel requests per active session for power users but enforce a per-API-key concurrent-request cap at the gateway.
+- Gateway rate limits: initial provisional limits we can *reserve* for the POC: 1,500 concurrent requests (global for your tenant), 4,000 requests/min sustained burst window (60s), token-rate limit of 200K tokens/min. If we observe headroom and stable behavior during the POC, we can raise the concurrent cap before production.
+- Batching & caching: Enable prefix/KV caching for repeated prompts; use 8–16 token prefetch/batching threshold to get significant cost/throughput gains while preserving latency for streaming.
+- Fallback policy: configure automatic fallback to a smaller, quantized model variant when queueing exceeds a safe threshold (e.g., >85% of reserved concurrency for >30s). We suggest fallback to redwood-13b-quant (lower cost, slightly higher latency) to avoid full outages.
+
+Why these numbers?
+- 1,500 concurrent requests covers steady-state (roughly 400 QPS) with headroom for bursts when combined with HTTP/2 multiplexing; it assumes average request concurrency of ~0.3s per token-window for streaming calls.
+- 4,000 requests/min gives cushion for short elastic bursts without immediate throttling; the gateway will apply soft-queuing then enforced rate-limit responses after sustained exceed.
+
+Operational notes
+- Canary / POC plan: We can start with a limited traffic slice (10% of production traffic from a single region) and progressively ramp to 100% over 48 hours if metrics look healthy.
+- Metrics to capture during POC: p50/p90/p99 latency (token-level), connection count, active streams, gateway queue length, error-rate (5xx and 429).
+- Logging: we will provide per-request trace ids and an S3 export of request/response metadata for the POC window.
+
+Attachments: redwood-connpool-guidance-20261013.pdf (detailed config, sample nginx/h2 client settings)
+
+I'll work with Karthik to get you a formal reserved-capacity quote and a draft SLA. Happy to hop on a 20-minute tech sync if you want to walk the plan through with an infra engineer.
+
+- Rishi
+Rishi Malhotra
+Director, Serving Runtime | Redwood Inference
+rishi.malhotra@redwood.com
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: procurement@storix.ai, Max Turner <max.turner@storix.ai>
+Cc: Jasmine Liu <jasmine.liu@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Date: 2026-10-13T14:30:00-07:00
+Subject: Storix — provisional quote and commercial model
+
+Hi procurement / Max —
+
+Attached is a provisional quote for the initial POC and an optional reserved capacity path for production. Highlights:
+- POC (7 days): Hosted Tier with reserved burst profile and the provisional quotas Rishi proposed. Fixed POC fee covers dedicated throughput monitoring + 24/7 on-call for the test window.
+- Production options: monthly reserved concurrency commit (options: 1,500 / 3,000 / 5,000 concurrent request slots) with graduated discounts and SLA tiers.
+- Deal id: STX-2026-157 — HubSpot proposal attached here: https://redwood.app/hubspot/STX-2026-157
+
+Attachments: quote-storix-2026-10.pdf (line items + terms)
+
+Please let us know if you need a PO template or a redlineable SLA. We can provide a one-page summary for legal and procurement as well.
+
+Thanks,
+Karthik Iyer
+Senior Solutions Engineer | Redwood Inference
+karthik.iyer@redwood.com
+
+From: Max Turner <max.turner@storix.ai>
+To: Jasmine Liu <jasmine.liu@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: procurement@storix.ai, Lena Ortiz <lena.ortiz@storix.ai>
+Date: 2026-10-14T10:04:00-07:00
+Subject: Re: Storix SLO / Parallel Sessions — follow-up and quota review
+
+This looks good — we are aligned on objectives and the POC plan. Procurement will review the quote and return a PO template by end of day Monday.
+
+PO / POC ask: please include the following in the POC agreement:
+- Start date: Oct 20 (target), run for 7 calendar days.
+- Success metrics: mean request latency <200ms; no more than 2 sustained overload incidents requiring manual intervention.
+- Ability to raise concurrent cap by up to 25% mid-PO if monitoring shows safe headroom.
+
+Once procurement sends the PO template I will sign off and we can lock dates. Thanks for the quick turnaround.
+
+Max
+
+-- End of thread --

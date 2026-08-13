@@ -1,0 +1,126 @@
+EU availability: bridge initiated and customer executive update
+
+From: Jasmine Liu <jasmine_liu@redwood.com>
+To: lauren_bishop@redwood.com, ben_carter@redwood.com, evelyn_hart@redwood.com
+Cc: oncall@redwood.com
+Date: Tue, 9 Mar 2027 09:14:12 -0700
+Subject: [INCIDENT] EU region 503s — starting bridge (assigning roles)
+
+Team — quick summary and assignments: customers in the EU region are seeing elevated 503/connection errors starting ~09:05 UTC. Impact: multiple production tenants (examples: Fresh Harbor Health) experiencing request failures and timeouts to text-generation endpoints.
+
+What I have so far:
+- Metrics: 503 rate spiked from 0.1% -> ~8% for 10:05-09:12 UTC window (graphs attached).
+- Initial signal: autoscaling thrash + a KV cache eviction pattern on one pool.
+
+Actioning (short):
+- Lauren — customer comms and exec liaison (visible to FH ops/CEO).
+- Ben — billing/credit/contract triage if we need to offer make-goods.
+- Evelyn — infra lead, take runtime debugging and kernel selection traces.
+- I’m starting a bridge (Zoom + Slack #inc-bridge-EU). Logs attached: bridge-log-20270309.txt.
+
+Immediate ask: Lauren please send an initial customer-facing status and expected ETA for next update (30m). We will post a root-cause hypothesis after deeper analysis.
+
+-Jasmine Liu
+Sr. Incident Lead — Redwood Inference
+
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: Elena Ramos <ops@freshharbor.com>
+Cc: Dana Meyers <ceo@freshharbor.com>, jasmine_liu@redwood.com, ben_carter@redwood.com, evelyn_hart@redwood.com
+Date: Tue, 9 Mar 2027 09:25:47 -0700
+Subject: RE: [INCIDENT] EU region 503s — initial customer status
+
+Elena — hi, thanks for flagging; quick update from Redwood: we have an active incident bridge and engineers are investigating a runtime scaling interaction that appears to be causing elevated 503s for some EU tenants.
+
+What we know now:
+- Impact: request failures for text-generation endpoints affecting a subset of calls for FH (short-lived, not all traffic).
+- Mitigation in progress: rolling throttling/redirect to a warm surge pool to reduce errors; this is already deployed to a fraction of traffic.
+- ETA for next update: 30 minutes.
+
+What we are doing for FH specifically:
+- Keeping a dedicated connection routing backstop for your production tenant to limit additional failures.
+- Preserving logs and request traces for integrity checks (we’ll confirm data consistency within the next update).
+
+We are prioritizing customer-facing mitigation and will follow with an executive note once we have confirmation on the cause. We’ll also schedule a post-incident review and invite FH stakeholders.
+
+Attachments: service-runbook.pdf (mitigation checklist)
+
+— Lauren Bishop
+Senior Solutions Engineer, Redwood Inference
+
+From: Elena Ramos <ops@freshharbor.com>
+To: lauren_bishop@redwood.com
+Cc: Dana Meyers <ceo@freshharbor.com>, jasmine_liu@redwood.com
+Date: Tue, 9 Mar 2027 10:05:03 +0000
+Subject: RE: EU region 503s — confirmation and exec escalation request
+
+Thanks — appreciate the quick response. Two asks from FH ops/execs:
+1) Please confirm whether any customer data (requests/responses) was lost or mutated. If you can give an initial integrity statement that would help calm execs.
+2) Our CEO has asked to be kept in the loop; please escalate any impacts to SLAs or billing immediately.
+
+Can you also confirm the people/responsible contacts for postmortem and when we can expect the write-up?
+
+— Elena Ramos
+Head of Platform Ops, Fresh Harbor Health
+
+On Tue, Mar 9, 2027 at 09:25 AM Lauren Bishop <lauren_bishop@redwood.com> wrote:
+> Elena — hi, thanks for flagging; quick update from Redwood: we have an active incident bridge and engineers are investigating a runtime scaling interaction that appears to be causing elevated 503s for some EU tenants.
+>
+> What we know now:
+> - Impact: request failures for text-generation endpoints affecting a subset of calls for FH (short-lived, not all traffic).
+> - Mitigation in progress: rolling throttling/redirect to a warm surge pool to reduce errors; this is already deployed to a fraction of traffic.
+> - ETA for next update: 30 minutes.
+>
+> — Lauren
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Dana Meyers <ceo@freshharbor.com>, Elena Ramos <ops@freshharbor.com>
+Cc: jasmine_liu@redwood.com, lauren_bishop@redwood.com, evelyn_hart@redwood.com
+Date: Wed, 10 Mar 2027 11:40:09 -0700
+Subject: FH impact — executive summary + next steps and goodwill offer
+
+Dana / Elena — I’m Ben Carter, your Redwood commercial lead. Following up with an executive summary from our internal review so far and next steps: 
+
+Summary:
+- Root-cause (interim): a kernel-selection regression combined with an aggressive autoscaling policy that led to intermittent KV cache misses under burst. This produced a transient 503 spike for ~18 minutes on 2027-03-09.
+- Impact to FH: higher error rate during the window; we have not found evidence of corrupted responses. We captured full request/response traces and are performing additional sampling checks.
+
+Actions taken and commitments:
+- Immediate mitigation: traffic rerouted to a warm pool; throttle controls tightened to prevent thrash. Completed within 12 minutes of alert.
+- Remediation: we’ve rolled a patch to kernel selection and updated autoscaling policy; these will be part of a controlled deployment to EU fleets this week.
+- Postmortem: scheduled for 2027-03-12; draft will be shared and we will include the full sampling/trace report.
+
+Goodwill gesture: Redwood will provide a one-time credit equal to 25% of March usage for FH as a service reliability credit; we’ll follow up with a formal billing note.
+
+Please let me know if you’d like an immediate executive call. If not, we’ll share the postmortem draft on Friday and schedule a review with FH stakeholders.
+
+Ben Carter
+Account Executive, Redwood Inference
+
+From: Jasmine Liu <jasmine_liu@redwood.com>
+To: Elena Ramos <ops@freshharbor.com>, Dana Meyers <ceo@freshharbor.com>
+Cc: ben_carter@redwood.com, lauren_bishop@redwood.com, evelyn_hart@redwood.com
+Date: Thu, 11 Mar 2027 16:22:05 -0700
+Subject: Follow-up: FH post-incident notes and actions (FH-5683)
+
+Dana / Elena — thank you again for your patience while we completed the investigation and mitigation steps. Attached is the postmortem PDF (postmortem-FH-5683.pdf) and a short executive summary below. Full report link: https://redwood.company.drive/postmortems/FH-5683
+
+Executive summary (short):
+- Incident window: 2027-03-09T09:05–09:23 UTC.
+- Primary cause: kernel-selection regression + autoscaler policy that allowed cold pool churn under a short burst pattern.
+- Impact: increased 503 rate for affected calls; no evidence of data corruption or loss in sampled traces.
+
+Committed follow-ups (owner / ETA):
+- Autoscaler policy update deployed to EU fleets (Evelyn Hart / complete).
+- Kernel-selection fix promoted and validated (Infra / complete).
+- Extended request/response retention for the affected pools (Jasmine Liu / 30 days).
+- Postmortem review session with FH: proposed 2027-03-16 10:00 UTC (Ben will coordinate).
+
+If you’d like any additional artifacts (sampling spreadsheets, trace slices, or Playbook changes) we’ll share them ahead of the review. We value your partnership and will apply the learnings across other fleets.
+
+Regards,
+
+Jasmine Liu
+Sr. Incident Lead, Redwood Inference
+
+--
+Attachment: postmortem-FH-5683.pdf

@@ -1,0 +1,115 @@
+Dedicated deployment: data-handling SLA & playbook review
+
+From: Audra Nguyen <audra@fintech-solutions.com>
+To: Markus Klein <markus.klein@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: compliance@fintech-solutions.com
+Date: Tue, 20 Mar 2028 09:12:00 -0700
+Subject: Dedicated deployment — quick Qs on residency, retention, and deletion
+
+Hi Markus / Marissa,
+
+Thanks for the demo last week. We're preparing our procurement checklist for a Dedicated deployment and need a compact summary we can pass to our security and legal teams. Two short asks: 
+
+1) Region pinning / physical locality — can you confirm whether tenant data (request logs, KV cache snapshots, and model interaction traces) are pinned to a single cloud region for Dedicated pools, or whether any of those artifacts may be replicated across regions for HA/backups? We need the exact guarantees.
+
+2) Deletion & retention — what is your standard retention timeline for logs and KV cache by default, and what is the documented workflow/timeline for a customer-initiated tenant purge? We are looking for RTO/RPO-style statements (how long to fully purge from primary storage, backups, and snapshots).
+
+If you have a short SLA/playbook or a checklist we can attach to our security review, that would be ideal. Appreciate any attachments or links.
+
+Thanks —
+Audra Nguyen
+Security Program Manager, FinTech Solutions
+Audit: +1 415 555 0198
+
+---
+No attachments in this message
+
+From: Markus Klein <markus.klein@redwood.ai>
+To: Audra Nguyen <audra@fintech-solutions.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: Wed, 21 Mar 2028 10:05:00 -0700
+Subject: Re: Dedicated deployment — quick Qs on residency, retention, and deletion
+
+Hi Audra — thanks for the clear asks. I captured the short answers below and attached our operational playbook summary for Dedicated customers. Happy to jump on a 30-min call if you want to walk through the purge procedure live.
+
+1) Region pinning / locality
+- For Dedicated deployments we offer region pinning at the cluster level. Tenant compute and primary storage are provisioned in the pinned region and are not actively replicated to other regions for normal operation.
+- Backups (daily snapshots) are stored in an encrypted object store. By default backups are stored in the same region; cross-region replication is an opt-in feature for customers that request multi-region DR (this is a billable add-on and is documented in the Dedicated configuration form).
+- Short form: primary data and live KV caches remain in the pinned region; backups are same-region unless explicitly configured for replication.
+
+2) Retention & deletion workflow
+- Default retention: request/interaction logs: 90 days; KV cache ephemeral entries: TTL-controlled by customer; system-level hold: 7 days for transient artifacts before archiving.
+- Customer-initiated purge (tenant wipe) — high-level timeline:
+  * T+0: Customer requests purge via Console or signed support ticket.
+  * T+24: Ops kick off tenant suspension and begin KV cache invalidation.
+  * T+72: Primary storage deletion complete (logical deletion + verification).
+  * T+7 days: Snapshot rotation ensures deleted data is no longer present in retained snapshot set; for customers requiring accelerated snapshot purge we provide a certificate of destruction after manual removal (subject to backup retention policies).
+- Note: If cross-region replication was enabled, purge includes replicated copies; additional coordination may extend completion time (we'll enumerate per-region timelines in the full playbook).
+
+I've attached: dedicated-data-playbook.pdf — two-page summary with runbook steps, RACI, and escalation contacts.
+
+Next steps: Ben (cc'd) can confirm the verified wipe checklist and provide the Excel we use with customers for audit evidence.
+
+Best,
+Markus Klein
+Director, Product — Dedicated Inference
+Redwood Inference
+
+Attachments: dedicated-data-playbook.pdf (PDF, 120KB)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Audra Nguyen <audra@fintech-solutions.com>, Markus Klein <markus.klein@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Fri, 23 Mar 2028 08:30:00 -0700
+Subject: Re: Dedicated deployment — quick Qs on residency, retention, and deletion
+
+Audra — adding a few operational clarifications and the wipe checklist as requested.
+
+- Wipe checklist highlights:
+  * Confirm tenant suspension and stop ingestion streams (operator step).
+  * KV cache zeroization and invalidation (automated + manual verification).
+  * Logical deletion of primary objects, then overwrite/crypto-erase where applicable for ephemeral cache nodes.
+  * Snapshot pruning: remove snapshots that include tenant data and rotate snapshot manifest.
+  * Backup retention holds: if customer has legal hold, we require documented authorization to bypass standard scrape.
+  * Final verification: Ops generates a tenant-erase attestation and a timeline CSV for audit.
+
+- Typical evidence package we deliver: tenant-wipe-checklist.xlsx (detailed activity log), attestation letter (signed by Ops lead), and optional storage-provider removal receipts.
+
+I've attached the tenant-wipe-checklist.xlsx for your security team to review. If you need a redline-friendly version for procurement, tell us and we'll provide a version without audit timestamps.
+
+—Ben
+Ben Carter
+Senior Site Reliability Engineer, Redwood Inference
+
+Attachments: tenant-wipe-checklist.xlsx (Excel, 42KB)
+
+From: Audra Nguyen <audra@fintech-solutions.com>
+To: Markus Klein <markus.klein@redwood.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, compliance@fintech-solutions.com
+Date: Mon, 27 Mar 2028 15:46:00 -0700
+Subject: Re: Dedicated deployment — quick Qs on residency, retention, and deletion
+
+Markus / Ben — this is very helpful, thank you. A couple quick follow-ups from our security team after reviewing the playbook and checklist: 
+
+- SOC 2 artifact: Can you point us to the SOC 2 certificate and/or provide a link to the evidence portal where we can download the control matrix? Our procurement will need that for the vendor intake.
+- Snapshot purge confirmation: For customers that opt-out of cross-region replication, can you confirm you provide a signed attestation once snapshot manifests have been pruned? Ben mentioned an attestation letter — can we see a template?
+
+If you can send the SOC 2 cert and a sample attestation (even a redacted one) we can move this into legal review. Happy to take a quick 20-min call if that's easier.
+
+Thanks —
+Audra
+Security Program Manager, FinTech Solutions
+
+---
+On Fri, Mar 23, 2028 at 08:30 AM Ben Carter <ben.carter@redwood.ai> wrote:
+> Audra — adding a few operational clarifications and the wipe checklist as requested.
+> 
+> - Wipe checklist highlights:
+>   * Confirm tenant suspension and stop ingestion streams (operator step).
+>   * KV cache zeroization and invalidation (automated + manual verification).
+>   * Logical deletion of primary objects, then overwrite/crypto-erase where applicable for ephemeral cache nodes.
+>   * Snapshot pruning: remove snapshots that include tenant data and rotate snapshot manifest.
+>   * Backup retention holds: if customer has legal hold, we require documented authorization to bypass standard scrape.
+>   * Final verification: Ops generates a tenant-erase attestation and a timeline CSV for audit.
+> 
+> Attachments: tenant-wipe-checklist.xlsx

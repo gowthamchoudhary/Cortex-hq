@@ -1,0 +1,87 @@
+Audit log retention slicing & export delivery — technical clarifications
+
+From: Alex Rivera <alex.rivera@starlitebank.com>
+To: sean_gallagher <sean_gallagher@redwood.com>
+Cc: Compliance Team <compliance@starlitebank.com>
+Date: Sat, 25 Apr 2026 09:12:00 -0700
+Subject: Clarification: partitioned audit slices + export formats
+
+Sean — thanks for the demo last week. A couple of follow-ups from our side before we finalize the RFP response: 
+
+1) Retention windows: we need a clear description of how Redwood supports multi-tier retention (e.g., 90-day hot access, 7-year cold archive) per tenant and per-log-type. Is the retention enforcement policy-first (platform-level) or tenant-configurable?
+
+2) Export slices: compliance wants to request 'time-range + tenant-id' slices and receive an integrity-checked bundle (hash manifest, signer, ingestion metadata). We need format options (NDJSON, Parquet), compression, and evidence of tamper-evidence methodology.
+
+3) Delivery & SLA: secure delivery options (S3 presigned upload, SFTP push, encrypted transfer to their secure bucket) and estimated pace for a 500GB slice. Also any takeaways for legal hold overrides.
+
+Appreciate a compact technical write-up we can attach to the RFP.
+
+Thanks,
+Alex Rivera
+Head of Platform Compliance
+Starlite Bank
+
+From: sean_gallagher <sean_gallagher@redwood.com>
+To: Alex Rivera <alex.rivera@starlitebank.com>
+Cc: marissa_cole <marissa_cole@redwood.com>, naomi_feldman <naomi_feldman@redwood.com>
+Date: Mon, 27 Apr 2026 08:34:00 -0700
+Subject: Re: Clarification: partitioned audit slices + export formats
+
+Alex — thanks for the clear list. High-level answers below; I attached a short spec and two sample export bundles. I will also loop in our infra engineer for a throughput estimate.
+
+1) Retention model: tenant-configurable retention policies enforced at the platform metadata layer. We support per-log-type retention rules (e.g., auth events vs request traces). Policies are declarative (retention window + storage tier) and enforced by automated lifecycle jobs. Hot vs cold tiers are configurable; cold archives are retained immutable for the configured period unless a legal hold is applied.
+
+2) Export slices & integrity: we support time-range, tenant-id, route, and event-type filters. Exports can be produced as NDJSON (line-delimited JSON) or partitioned Parquet files for analytics consumers. Each bundle includes:
+  - manifest.json with per-file SHA256 checksums
+  - signed manifest using our key (we can provide public key or integrate with customer's KMS for cross-checking)
+  - metadata file with ingestion timestamps, server timestamps, and last-modified ORCID-like IDs for traceability
+
+Tamper evidence: bundles are signed at creation; we also produce a ledger entry (append-only) that records the export event and hash pointer. For customers requiring highest assurance, we can produce a notarized timestamp (RFC3161) and deliver the notarization artifact.
+
+3) Delivery & SLA: delivery options — secure S3 transfer (push to customer bucket via temporary credentials), SFTP over managed endpoint, or encrypted HTTPS streaming to a specified endpoint. For a 500GB slice we typically multiplex across 8 concurrent workers and estimate 3–6 hours end-to-end depending on destination throughput and compression. We provide a delivery job id and progress logs. Legal hold: holds override retention delete operations; we persist a hold flag at the tenant and record the hold lifecycle in the audit ledger.
+
+I'll attach: audit_snapshot_spec_v1.pdf (export schema and manifest layout), and two example bundles (small). If you want, Jordan Patel from Forensics Consulting (copied below) can validate chain-of-custody language.
+
+Regards,
+Sean Gallagher
+Senior Solutions Engineer — Redwood Inference
+sean_gallagher@redwood.com
++1 (415) 555-0124
+
+From: Jordan Patel <jordan.patel@forensics-consulting.io>
+To: sean_gallagher <sean_gallagher@redwood.com>, Alex Rivera <alex.rivera@starlitebank.com>
+Date: Tue, 28 Apr 2026 11:07:00 -0700
+Subject: Re: Clarification: partitioned audit slices + export formats
+
+Quick note from the forensics side — the manifest + signed bundle + append-only export ledger is exactly the right approach. Two practical suggestions:
+
+- Include both event ingestion timestamp and authoritative server time (UTC, monotonic counter) to resolve ordering during investigations.
+- Provide a lightweight proof-of-possession file (simple signed hash file per bundle) so recipients can validate incremental receipts before reconciling.
+
+If Redwood wants an example chain_of_custody_template we can adapt your manifest layout to match standard evidence intake forms. Happy to review the spec.
+
+Jordan Patel
+Principal, Forensics Consulting
+
+From: marissa_cole <marissa_cole@redwood.com>
+To: Alex Rivera <alex.rivera@starlitebank.com>
+Cc: sean_gallagher <sean_gallagher@redwood.com>, naomi_feldman <naomi_feldman@redwood.com>, david_kim <david_kim@redwood.com>
+Date: Tue, 28 Apr 2026 15:46:00 -0700
+Subject: Re: Clarification: partitioned audit slices + export formats
+
+Alex — following up with some concrete SLAs and export knobs, pulled from our internal runbook: 
+
+- Export formats: NDJSON (recommended for simplicity) or Parquet (recommended for analytics). Default compression: gzip.
+- Integrity: SHA256 per-file checksums, manifest signing using RSA-2048 (we can switch to ECDSA on request).
+- Delivery throughput SLA: small bundles (<50GB) — same-day; medium (50–500GB) — 4–8 hours typical; large (>500GB) — custom schedule, often staged. All estimates dependent on destination write speed.
+- Retention enforcement: periodic sweeps run at UTC 02:00; deletions are soft for 24 hours then purged unless a legal hold flag exists.
+- Legal hold API: create_hold(tenant_id, reason, expires_at). Holds recorded in audit ledger and surfaced to retention jobs.
+
+We attached: chain_of_custody_template.docx and export_schema_examples.ndjson. Next step: Alex, if this aligns, we can convert into a 1‑page RFP addendum for your procurement team.
+
+Best,
+Marissa Cole
+Product Security — Redwood Inference
+marissa_cole@redwood.com
+
+-- Signatures and attachments referenced above are included in the thread as stubs: audit_snapshot_spec_v1.pdf (22KB), export_schema_examples.ndjson (3KB), chain_of_custody_template.docx (12KB). --

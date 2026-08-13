@@ -1,0 +1,93 @@
+Follow-up: Sensitive-field capture & retention lifecycle (NovaMed)
+
+From: Ellie Carter <ellie.carter@novamed.com>
+To: Marcus Lin <marcus.lin@redwood.com>
+Cc: NovaMed Security <security@novamed.com>
+Date: Sat, 14 Jul 2028 16:12:00 -0700
+Subject: Re: Discovery notes — quick clarification on what you store
+
+Hi Marcus,
+
+Thanks again for the demo this morning — quick follow-up from our privacy & engineering team. We need a concise statement for two items so we can finish our evaluation: 1) For user prompts that include sensitive patient identifiers (MRN, SSNs, PHI), does Redwood ever persist the full prompt payload to disk or object storage in hosted mode? 2) For generation outputs, do you retain the model output (responses) after the inference call completes, and if so what is the default TTL and where is it stored (region)?
+
+If you can point me to a one-pager and a sample retention CSV mapping (field -> retention TTL -> storage location) that would be great. We have a security review next Tuesday.
+
+Appreciate it —
+Ellie
+Principal PM, NovaMed
+
+Attachment: novamed-mrp-example-ask.csv (CSV, 2KB)
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Ellie Carter <ellie.carter@novamed.com>
+Cc: Jasmine Liu <jasmine.liu@redwood.com>, Aditya Rao <aditya.rao@redwood.com>
+Date: Sat, 14 Jul 2028 17:05:00 -07:00
+Subject: Re: Discovery notes — quick clarification on what you store
+
+Ellie — thanks for the sharp follow-up, and great question. Short answers up front: 1) No, hosted inference does not persist full prompt payloads to long-term object storage by default — we keep in-memory/ephemeral buffers and short-lived KV caches for active sessions only. 2) Model outputs are not persisted beyond short diagnostic retention unless configured or requested; default TTL for output traces in hosted is 0 days (ephemeral) for standard customers, with optional opt-in retention for troubleshooting/quality monitoring.
+
+I'm attaching a one-pager that summarizes our default behaviors and the available configuration knobs (redwood_data_retention_onepager.pdf). Below are the details your security team typically asks about. If you want, Jasmine can join your security call next week to run through both the matrix and a sample retention CSV.
+
+Summary details:
+- Prompt payloads: Ephemeral in-memory processing; no write-to-disk for hosted API requests under standard plan. We maintain short-lived KV cache in RAM for active sessions; caches are evicted per LRU and never persisted to disk.
+- Output responses: Default: ephemeral (not stored). Optional: customers can enable 30/90/365-day retention for outputs for debugging or evaluation via per-account config and explicit data retention policy. Enabling retention routes outputs to an encrypted object store in the chosen region.
+- PII redaction: We offer an optional preprocessor that can hash or redact configured sensitive fields before they reach the model.
+- Logging: Audit logs (control-plane events) are persisted for 90 days by default; request-level telemetry (latency, token counts) is separated from payloads and contains no prompt text unless retention is enabled.
+
+Next steps:
+1) I attached the one-pager and a sample mapping — Jasmine, can you create a filled sample based on Ellie's CSV?
+2) If NovaMed wants retention enabled for a pilot, we can scope a 30-day retention window limited to a test workspace and provide a signed addendum.
+
+--
+Marcus Lin
+Senior Solutions Engineer, Redwood Inference
+marcus.lin@redwood.com
++1 415-555-0192
+
+Attachment: redwood_data_retention_onepager.pdf (PDF, 48KB)
+From: Jasmine Liu <jasmine.liu@redwood.com>
+To: Ellie Carter <ellie.carter@novamed.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Aditya Rao <aditya.rao@redwood.com>, NovaMed Security <security@novamed.com>
+Date: Sun, 15 Jul 2028 08:17:00 -07:00
+Subject: Re: Discovery notes — quick clarification on what you store
+
+Ellie — I worked up a quick sample mapping based on the CSV you attached and our config model. Key rows below; I included the full sample CSV as a follow-up in case you want different TTLs per field.
+
+Sample mapping (field, store? , default ttl, storage location):
+- patient_name: not stored by default; redaction/hash recommended if the app sends PII.
+- mrn (medical record number): not persisted in hosted default; recommend pre-hash or tokenization. If retention enabled -> 30d (s3-us-west-2, encrypted).
+- diagnosis_text: can be retained for evals; default opt-out, optional 90d (s3-us-east-1).
+- system_prompt / conversation_context: ephemeral; can be included in debug retention buckets on request.
+
+A couple of operational notes:
+- Enabling retention creates a per-account encrypted bucket in the selected region and a narrow IAM policy so only the customer and Redwood's debug service can access (audit logs for access are included).
+- We support custom retention windows per-field on Dedicated/Private plans; hosted allows account-level TTLs (30/90/365).
+- Deletion is asynchronous; deletion jobs run nightly and are manifested in audit logs (we can provide a sample manifest for compliance).
+
+If you'd like I can turn this into a CSV and drop it into the Drive link Marcus shared. Marcus / Aditya — is there any technical caveat to call out about ephemeral KV caching and swap to disk behavior on high memory pressure?
+
+Thanks,
+Jasmine
+Solutions Engineer, Redwood Inference
+
+--On Sun, Jul 14, 2028 at 5:05 PM Marcus Lin <marcus.lin@redwood.com> wrote:
+> Ellie — thanks for the sharp follow-up, and great question. Short answers up front: 1) No, hosted inference does not persist full prompt payloads to long-term object storage by default ...
+
+From: Aditya Rao <aditya.rao@redwood.com>
+To: Ellie Carter <ellie.carter@novamed.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Jasmine Liu <jasmine.liu@redwood.com>, NovaMed Security <security@novamed.com>
+Date: Sun, 15 Jul 2028 09:03:00 -07:00
+Subject: Re: Discovery notes — quick clarification on what you store
+
+Ellie — quick technical confirmation on the KV cache behavior: default hosted path keeps KV cache in GPU/host memory and we do not swap to persistent disk under normal operations. Under extreme memory pressure on Dedicated hosts we may write memory-backed paging artifacts to ephemeral instance storage; these artifacts are encrypted and scrubbed on instance termination and are not part of the account-level retention buckets. For compliance reviews we can provide a short technical note describing eviction behavior and the scrubbing process.
+
+One more item: if NovaMed needs an air-gapped or Private deployment, we can guarantee zero outbound persistence to Redwood-managed object stores — the Private offering routes all storage to customer-managed buckets and full KMS control.
+
+If you want me on the call next Tuesday I can join for a brief technical Q&A.
+
+Best,
+Aditya Rao
+Principal Infrastructure Engineer, Redwood Inference
+aditya.rao@redwood.com
+
+> On Jul 15, 2028, at 08:17, Jasmine Liu <jasmine.liu@redwood.com> wrote:
+> > Ellie — I worked up a quick sample mapping based on the CSV you attached...

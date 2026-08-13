@@ -1,0 +1,106 @@
+Custody & closure: security questionnaire responses
+
+From: Ellen Park <ellen.park@pelagos.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.ai>
+Cc: security@pelagos.com
+Date: 2028-11-01T09:12:00-08:00
+Subject: Quick Qs on data custody + deletion windows for hosted API
+
+Hi Sofia —
+
+Thanks for taking the Pelagos security questionnaire. A couple of follow-ups from our infra/security team on the hosted API:
+
+1) Where is customer data physically stored by default (region/major cloud provider)? Can data be pinned to a specific region?
+2) For customer-initiated deletion requests, what is the expected end-to-end timeline (including backups and replicas)?
+3) Do you retain short-term logs/traces beyond model inputs for debugging? If so, how long and are they scannable for PII?
+4) Is there a documented process we can reference for proving deletion/compliance (audit artifacts)?
+
+We have an upcoming compliance review next Friday and need doc-level answers where possible.
+
+Appreciate a consolidated response and any supporting artifacts.
+
+Thanks,
+Ellen Park
+Security Engineering Manager — Pelagos Systems
+---
+Attachment: pelagos-questionnaire-2028-10-28.pdf (application/pdf, 432 KB)
+
+From: Sofia Ivanova <sofia.ivanova@redwood.ai>
+To: Ellen Park <ellen.park@pelagos.com>
+Cc: Ben Carter <ben.carter@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: 2028-11-01T11:05:00-08:00
+Subject: Re: Quick Qs on data custody + deletion windows for hosted API
+
+Hi Ellen —
+
+Thanks — quick answers below, and I attached a short PDF with the same points geared for auditor review (pelagos-data-residency-answers.pdf). Ben and Neha are looped in for any technical/contract clarifications.
+
+1) Default location: customer data for the hosted API is colocated in the cloud region that corresponds to the customer’s sign-up preference (we currently offer US (us-west-2), EU (eu-west-1), and APAC (ap-southeast-1)). Under default onboarding we place data in the chosen region on AWS; we also support GCP/Azure marketplace customers—region selection is available during provisioning and can be enforced via account-level lock.
+
+2) Deletion timeline: our policy is designed to remove customer data from primary stores within 24 hours of a verified deletion request, but full removal from backups and asynchronous replicas may take up to 30 days. We document and timestamp each deletion event; short-lived cache entries are purged immediately. The attached PDF includes the stepwise timeline we provide to auditors.
+
+3) Logs & traces: application logs and request-level traces are retained for operational debugging and quality monitoring. By default, request logs that include model inputs are kept for 7 days for debugging, then are either aggregated or redacted depending on the customer’s retention profile. We provide PII-scanning tooling during ingestion and can set stricter defaults (zero retention) for customers who require it.
+
+4) Audit artifacts: we maintain deletion receipts, S3 lifecycle manifests, and an audit log bundle that contains timestamps and storage object ids. We can produce an evidence package (signed) on request — see the KB link below.
+
+If you’d like, Ben can append the contractual language we typically use for SLAs/retention clauses. Let us know the level of evidence Pelagos needs for the review (high-level statement vs. signed artifact package).
+
+Best,
+Sofia Ivanova
+Senior Solutions Engineer | Redwood Inference
+sofia.ivanova@redwood.ai
+---
+Attachment: pelagos-data-residency-answers.pdf (application/pdf, 78 KB)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Sofia Ivanova <sofia.ivanova@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: 2028-11-02T10:20:00-08:00
+Subject: Re: Quick Qs on data custody + deletion windows for hosted API
+
+Folks —
+
+Adding a more granular engineering view for the packet we’ll send to Pelagos. Quoting Sofia’s note for context: 
+
+> 2) Deletion timeline: our policy is designed to remove customer data from primary stores within 24 hours of a verified deletion request, but full removal from backups and asynchronous replicas may take up to 30 days.
+
+Notes:
+- Primary store purge: deletion is a two-step process (mark-for-delete + compaction). Mark-for-delete occurs immediately on confirmation, compaction to physically remove objects runs in the next scheduled maintenance window (within 24 hours in most regions).
+- Backups & snapshots: incremental backups are retained for 30 days by default. For snapshot-based backups, object pointers are removed immediately but underlying blocks are zeroed/garbage-collected on the provider cadence — we represent this as up to 30 days to guarantee full irrecoverability.
+- Replication: cross-region replicas are deleted after primary deletion is acknowledged; the replica garbage collection process can add latency up to 14 days for edge-case replication queues.
+- For incident response and legal holds: we have a documented exception workflow that requires executive sign-off and appears in the deletion receipts; it is rare but necessary.
+- PII scanning: we redact high-risk tokens and surface a report to the customer as part of the audit bundle — we do not perform manual inspection without customer consent.
+
+I attached our internal deletion playbook (redacted) that maps these timelines to storage primitives and log artifacts. Use this when assembling the evidence package.
+
+Cheers,
+Ben Carter
+Account Executive | Redwood Inference
+ben.carter@redwood.ai
+---
+Attachment: deletion-playbook-v1.2.pdf (application/pdf, 110 KB)
+
+From: Sofia Ivanova <sofia.ivanova@redwood.ai>
+To: Ellen Park <ellen.park@pelagos.com>
+Cc: Ben Carter <ben.carter@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>, security@pelagos.com
+Date: 2028-11-03T15:44:00-08:00
+Subject: Re: Quick Qs on data custody + deletion windows for hosted API
+
+Hi Ellen —
+
+Thanks for the quick turn. We consolidated the answers and evidence you requested:
+
+- Region & pinning: data is stored in the selected cloud region; we can lock an account to a region at provisioning and document it in the onboarding manifest.
+- Deletion & backups: primary deletion: within 24 hours; full backup/replica purge: up to 30 days (14 days for most replica queues). We will produce a signed deletion receipt with object ids and timestamps on completion.
+- Logs & PII: default request-level logs retained 7 days; PII-scanning and redaction are available and can be enabled account-wide.
+- Evidence: attached is the PDF we discussed and a redacted deletion playbook. For audit purposes we can generate a ticket (RED-4821) and provide a signed evidence bundle that includes S3 manifests, audit log extracts, and PDF receipts.
+
+Next steps: please tell us whether Pelagos wants (A) a short auditor-friendly statement (we can provide a one-page signed letter), or (B) a full evidence bundle with manifests and signed deletion receipts. If you pick B, we’ll need a verified deletion request from your security console (one click from the admin UI) and an expected window of 30 days to complete end-to-end purge.
+
+I’m happy to jump on a 30-minute call with your infra team if that helps — Ben and Neha will join.
+
+Best regards,
+Sofia Ivanova
+Senior Solutions Engineer | Redwood Inference
+sofia.ivanova@redwood.ai
+---
+Related links: https://redwood-inference.company/kb/data-retention-playbook, https://support.redwood-inference.com/tickets/RED-4821

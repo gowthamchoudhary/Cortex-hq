@@ -1,0 +1,104 @@
+Rapid IO throttle hotfix — short notice customer verification
+
+From: Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+To: Anya Patel <anya.patel@acme.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Sat, 12 Dec 2026 01:42:00 +0000
+Subject: Rapid IO throttle hotfix — short notice customer verification
+
+Hi Anya / Acme ops team,
+
+Quick heads-up: during our 00:15 UTC monitoring sweep we observed a sudden increase in queued inference requests for customers with heavy synchronous workloads. Root cause is an unexpected IO pressure pattern on our shared metadata store that caused request backpressure for a small subset of tenants (including Acme Data).
+
+We pushed an unscheduled, targeted hotfix at 01:20 UTC (attached as a minimal IO-throttling guard). The change reduces aggressive metadata prefetch concurrency and enables a short-lived per-tenant IO token bucket while we stabilize.
+
+Why we shipped this patch short notice: the queueing was causing >95th percentile latency spikes and affecting tail SLOs for synchronous endpoints used by Acme. The fix is non-invasive and rolled only to the serving instances handling Acme traffic; we did not alter model weights or inference logic.
+
+What we need from you: a quick verification that your end-to-end smoke tests (sample queries that hit critical routes) look normal. Suggested checks:
+- Run 3 representative synchronous calls to your highest-throughput route and confirm response time is within your expected window.
+- Validate that no requests return 5xx or truncated responses.
+- If you have automated canary checks, a single-run is OK — just reply with a one-line pass/fail and any unusual logs.
+
+We've attached: a) the diff for the hotfix (io-throttle-patch-v1.diff) b) a short incident timeline worksheet we will maintain (incident-timeline-acme-20261212.xlsx).
+
+We appreciate the extra coordination on a short notice. I know this interrupts your morning; our priority is minimizing customer impact and keeping you informed.
+
+If anything looks off, please reply here and we'll escalate immediately.
+
+Thanks,
+Stephanie Nguyen
+Sr. Engineering Manager, Serving Runtime
+Redwood Inference
+
+Attachment: io-throttle-patch-v1.diff (text/diff)
+Attachment: incident-timeline-acme-20261212.xlsx (spreadsheet)
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Anya Patel <anya.patel@acme.com>
+Cc: Stephanie Nguyen <stephanie.nguyen@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Sat, 12 Dec 2026 02:15:00 +0000
+Subject: Re: Rapid IO throttle hotfix — short notice customer verification
+
+Thanks for the quick note, Stephanie — and sorry for the interruption, Anya.
+
+Anya, I'm Karthik (your account lead). If it's helpful, we can run a short synchronized verification call with your ops team in the next 30–45 minutes so we can watch telemetry together. My proposal:
+- You run three representative requests (we can provide a curl snippet).
+- We'll watch: per-request latency, error rates, and the metadata store IO counters.
+
+If you're already running automated checks, a single message with pass/fail is fine. If you prefer a joint session, reply with a time; otherwise I’ll assume you’ll run checks and reply in-thread.
+
+Also, if you hit 5xx failures, please include one example request ID from your logs (we'll tie it to our tracing).
+
+—Karthik
+Karthik Iyer
+Principal Solutions Architect
+Redwood Inference
+
+From: Anya Patel <anya.patel@acme.com>
+To: Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Stephanie Nguyen <stephanie.nguyen@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Sat, 12 Dec 2026 03:07:00 +0000
+Subject: Re: Rapid IO throttle hotfix — short notice customer verification
+
+Thanks Stephanie / Karthik — we ran a short smoke pass. Quick summary:
+- 3 sample synchronous calls to /v1/generate completed in 420ms, 498ms, 389ms (within our expected window of <=600ms).
+- No 5xx or truncation observed.
+- One request returned a 503 for ~12s earlier (request-id: acme-req-20261212-7f3a2) — we captured logs and forwarded to ops@acme.acme-corp.com.
+
+Overall: PASS for our immediate checks. We'll continue an extended run and share any anomalies. Please let us know if you want the sample request payloads.
+
+—Anya
+Anya Patel
+SRE Lead, Acme Data
+
+From: Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+To: Anya Patel <anya.patel@acme.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Sat, 12 Dec 2026 06:42:00 +0000
+Subject: Re: Rapid IO throttle hotfix — short notice customer verification
+
+Thanks Anya — really appreciate the quick verification and the sample request-id.
+
+Follow-ups and next steps:
+- We confirmed the transient 503 tied to the exact window before the patch rollout; our traces show request acme-req-20261212-7f3a2 queued at the metadata layer and timed out while waiting for an IO token. No data corruption.
+- Patch telemetry (01:20–06:20 UTC) shows queue depth reduced by ~78% for Acme-serving instances and 99th percentile latency returned to baseline.
+- We'll keep the throttle guard in place for up to 6 hours while we validate a safe parameter set; it is reversible without service restarts.
+
+Action items for us (Redwood):
+- Postmortem draft and timeline (I'll share within 48 hours) — link will be in the jira ticket INF-9427.
+- A small follow-up patch to make the token-bucket parameter tenant-configurable (ETA 48–72 hours).
+
+Action items for Acme (suggested):
+- Continue extended smoke runs for the next 6 hours; if anything regresses, include request-ids and time windows.
+- If you'd like a joint review of the postmortem and planned parameter change, tell us a convenient time and we'll set up a review.
+
+If there are no further issues during the stabilization window we'll remove the temporary guard and roll a controlled config change in the next maintenance window.
+
+Thanks again for the fast coordination.
+
+Stephanie Nguyen
+Sr. Engineering Manager, Serving Runtime
+Redwood Inference
+
+Attachment: incident-timeline-acme-20261212.xlsx (updated)
+

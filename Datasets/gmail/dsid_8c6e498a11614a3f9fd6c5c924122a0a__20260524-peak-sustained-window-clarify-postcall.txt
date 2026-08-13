@@ -1,0 +1,118 @@
+Post-call: peak vs sustained window — Clarify tokens/sec, streaming tail, and fallback SLOs
+
+From: Camila Reyes <camila@redwood.com>
+To: Nina Patel <nina@shiply.com>
+Cc: Marissa Cole <marissa@redwood.com>, Ben Carter <ben@redwood.com>
+Date: Sun, 24 May 2026 16:10:00 -0700
+Subject: Post-call: peak vs sustained window — Clarify tokens/sec, streaming tail, and fallback SLOs
+
+Hi Nina — thanks again for the time today. Quick recap and a short list of asks so we can size a realistic pilot and propose the right Dedicated vs Hosted fallback plan. I tried to capture what we walked through on the call; please correct any numbers.
+
+Recap (notes from call)
+- Primary workload: real-time shipment updates + natural-language exceptions (agent-facing chat). Mixed streaming + delta-generation.
+- Observed steady traffic: relatively constant webhook-driven inference (baseline requests).
+- Burst behavior: short crests (20–90s) tied to release batches and retry storms.
+
+Actionable data we need to finalize sizing
+1) Steady QPS: avg requests/sec during baseline window (60–300s windows).
+2) Peak QPS: highest sustained QPS during crest (and typical crest duration).
+3) Avg tokens/request and 95th percentile tokens.
+4) Typical concurrent streaming sessions and average message frequency per session.
+5) Latency targets (p50/p95/p99) for both non-streaming and streaming tail cancellation.
+6) Any hard SLA for availability/99.x uptime and maintenance blackout windows.
+
+Redwood early proposal (what we'll prepare once we get numbers)
+- Candidate SLOs to validate in pilot: p95 <= 150ms (non-streaming), p99 <= 400ms; streaming first-byte p95 <= 120ms.
+- Batching profile: enable small continuous batching for baseline (2–8ms batching window); aggressive parallelization for burst crest routing.
+- Fallback plan: when latency or queue depth crosses threshold, automatically route to a compatible distilled model with lower avg tokens.
+
+Attachments: I attached your heatmap export and a short SLO template to fill — helps us map model variants to cost buckets.
+[Attachment: shiply_traffic_heatmap.pdf (pdf, 1.2 MB)]
+[Attachment: redwood_slo_template.xlsx (xlsx, 45 KB)]
+
+Next steps / asks (please reply inline)
+- Nina: please confirm numbers for items 1–5 above. If you have a short CSV sample (timestamp,qps,tokens,stream_sessions), attach it.
+- Marissa / Ben: once Nina confirms, can you produce a quick sketch of: (a) estimated GPU-hours for Dedicated pilot vs hosted burst costs, and (b) suggested canary rollout policy?
+
+Proposed follow-up: 30m sync Tuesday 5/25 to lock the pilot params — I’ll send a calendar invite once we confirm availability.
+
+Thanks — Camila
+
+Camila Reyes
+Senior Solutions Engineer, Redwood Inference
+camila@redwood.com | +1 (415) 555-0187
+Redwood Inference
+
+From: Nina Patel <nina@shiply.com>
+To: Camila Reyes <camila@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>, Ben Carter <ben@redwood.com>, ops+infra@shiply.com
+Date: Sun, 24 May 2026 18:02:00 -07:00
+Subject: Re: Post-call: peak vs sustained window — Clarify tokens/sec, streaming tail, and fallback SLOs
+
+Hi Camila — thanks for the clear recap. Confirming the numbers we discussed, plus a couple of clarifications below. I've attached a tiny sample of last week's traffic (anonymized).
+
+Confirmed (approx)
+- Steady QPS: ~12 requests/sec (observed over 10m windows outside batch windows)
+- Peak QPS: up to ~260 QPS for bursts; typical crest duration 20–45s, occasional longer at ~90s during big releases
+- Avg tokens/request: ~420 tokens (median ~360, 95th ~980)
+- Concurrent streaming sessions: typically 12–20 during peaks (avg ~15) — streams push small messages every 1–3s
+- Latency targets: user-experience goal p95 <= 150ms for short generations, p99 <= 350ms; streaming first-chunk p95 <= 120ms
+- Availability expectation: 99.9% for inference window (we will accept short degraded-model fallbacks if latency preserved)
+
+Questions for Redwood
+- Does prefix/KV caching handle our repeated status prompt patterns out of the box (we see ~60% repeat in the first 3 tokens)?
+- For the fallback model, what’s the typical token reduction vs quality loss you see in similar comps?
+
+Attached: small_traffic_sample.csv (rows: ts,qps,tokens,stream_sessions)
+[Attachment: small_traffic_sample.csv (csv, 18 KB)]
+
+We can do the 5/25 10:30am PT sync (I put tentative hold).
+
+—Nina
+Nina Patel
+Director, Platform Engineering – Shiply Logistics
+nina@shiply.com | +1 (206) 555-3310
+
+From: Marissa Cole <marissa@redwood.com>
+To: Camila Reyes <camila@redwood.com>, Ben Carter <ben@redwood.com>
+Date: Mon, 25 May 2026 07:15:00 -07:00
+Subject: Internal: quick sizing sketch asks (Shiply)
+
+Camila / Ben — quick internal note after Nina's numbers. High level: steady 12 QPS, avg 420 tokens, peaks to 260 QPS for ~30s. A few quick asks before I build an ops sketch:
+- Ben: can you produce a rough GPU-hour and cost delta for a 2-week Dedicated pilot (provision for peak crest headroom 1.5x) vs hosted-on-demand with autoscale? I'm thinking 2x headroom on token capacity, but we should account for streaming concurrency separately.
+- Camila: confirm whether we want to propose prefix caching + aggressive KV eviction policy in pilot or leave caching conservative to avoid cross-tenant contamination. My instinct: enable caching on dedicated pilot and test fallback quality thresholds.
+
+I'll draft the canary rollout: initial 5% traffic -> 20% -> 60% over 72h, with automatic rollback on p99 latency spike > 30% baseline.
+
+Marissa
+Marissa Cole
+Solutions Lead, Redwood Inference
+marissa@redwood.com
+
+From: Camila Reyes <camila@redwood.com>
+To: Nina Patel <nina@shiply.com>
+Cc: Marissa Cole <marissa@redwood.com>, Ben Carter <ben@redwood.com>, ops+infra@shiply.com
+Date: Mon, 25 May 2026 09:38:00 -07:00
+Subject: Re: Post-call: peak vs sustained window — Clarify tokens/sec, streaming tail, and fallback SLOs
+
+Great — thanks Nina, that gives us enough to sketch a pilot. Quick responses inline and actions below.
+
+On prefix/KV caching: yes — our runtime will capture repeated prefixes automatically for the pilot if you run on Dedicated (isolated cache per tenant). For Hosted we can enable a safe cache policy but it will be limited by multi-tenant eviction. Expect ~25–40% effective token savings on repeat-heavy prompts; we'll quantify on the sample.
+
+Fallback model quality: typical distilled variants reduce token output by 30–50% with small drop on semantic fidelity for short prompts; we'll include a qualitative eval for the top 100 prompt templates from your sample before proposing a fallback.
+
+Proposed immediate plan
+- Action: Ben to produce quick cost/GPU sketch (Marissa flagged the canary policy).
+- Action: Nina to drop the CSV sample into the Drive link (or attach to this thread) — we have what you already sent; if there is a longer export, please share.
+- Action: Camila/Marissa to prepare a 1-pager pilot proposal + expected unit cost and model variants by EOD Tuesday 5/26.
+
+I'll send a calendar invite for 5/25 10:30am PT (tentative hold removed, confirmed). Drive link + HubSpot deal included below.
+
+Thanks — talk tomorrow.
+
+Camila
+Camila Reyes
+Senior Solutions Engineer, Redwood Inference
+camila@redwood.com
+[Calendar invite created: https://calendar.google.com/event?eid=shiply-redwood-sync-20260525]
+[HubSpot deal: https://app.hubspot.com/contacts/12345/deal/4821]

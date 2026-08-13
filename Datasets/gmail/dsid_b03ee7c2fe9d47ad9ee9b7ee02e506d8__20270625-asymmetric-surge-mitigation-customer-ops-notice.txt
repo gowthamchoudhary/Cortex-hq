@@ -1,0 +1,116 @@
+Asymmetric surge mitigation — incident update and next steps
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Oscar Ramos <oscar@dataflow.ai>; support-ops@dataflow.ai
+Cc: Priya Natarajan <priya_natarajan@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Fri, 25 Jun 2027 16:12:00 -0700
+Subject: Notice: transient asymmetric surge impacting your dedicated pool (Dataflow AI)
+
+Hi Oscar / Dataflow ops team,
+
+Quick update from Redwood Ops — we observed a focused surge against your dedicated GPU pool in us-west-2 starting ~15:40 PDT that resulted in asymmetric scheduling pressure for several tenants and caused request queuing for ~14 minutes for some of your account's routes. We routed additional warm nodes and applied temporary backpressure rules at 15:57 to stabilize.
+
+What we know so far:
+- Trigger: sudden traffic spike to long-context chat routes from a partner integration (we're correlating IDs).
+- Impact window: ~15:40–15:58 PDT.
+- Symptom: elevated queue times for generation requests (p95 latency spiked from ~120ms to ~3.2s).
+- Customer-visible: increased error rate for requests that hit internal throttling thresholds; some degraded tail latencies.
+
+Immediate mitigation actions taken:
+- Hot-allocated two additional reserved nodes to your pool at 15:49.
+- Applied targeted rate-limiting to the most aggressive calling client at 15:51.
+- Enabled short-term evictions on non-critical tenants to preserve headroom.
+
+Next steps (we're on it):
+- We're collecting allocator and node metrics and will share a short post-incident summary within 48 hours.
+- Priya (CS lead) and Laura (SRE escalation) are in the loop and will coordinate follow-up.
+
+I know this is disruptive — we’ll prioritize the RCA and propose remediation and any appropriate credit offers. Apologies for the impact.
+
+Ben
+Ben Carter
+Customer Reliability
+Redwood Inference
+
+Attachment: grafana-surge-06-25.png (screenshot of p95 spike)
+
+From: Oscar Ramos <oscar@dataflow.ai>
+To: Ben Carter <ben_carter@redwood.com>
+Cc: Priya Natarajan <priya_natarajan@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, legal@dataflow.ai
+Date: Fri, 25 Jun 2027 17:08:44 -0700
+Subject: Re: Notice: transient asymmetric surge impacting your dedicated pool (Dataflow AI)
+
+Ben — thanks for the rapid note. We saw the tail latency and a handful of failed requests surface in our customer telemetry. Two immediate asks:
+
+1) Can you quantify how many of our requests hit the throttles/evictions and map those to our API keys? We need a short list for our on-call to triage.
+2) Will Redwood be proposing any service credit? This spike affected a paying ML endpoint and caused missed SLAs on our side.
+
+We'd also like a short timeline once you have it so we can communicate internally. Priya / Laura — can you please own coordination?
+
+—Oscar
+Oscar Ramos
+Head of Infrastructure
+Dataflow AI
+
+[Quoted message below]
+
+On Fri, Jun 25, 2027 at 4:12 PM Ben Carter <ben_carter@redwood.com> wrote:
+> Quick update from Redwood Ops — we observed a focused surge against your dedicated GPU pool in us-west-2 starting ~15:40 PDT...
+
+From: Priya Natarajan <priya_natarajan@redwood.com>
+To: Oscar Ramos <oscar@dataflow.ai>
+Cc: Ben Carter <ben_carter@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>, legal@dataflow.ai
+Date: Mon, 28 Jun 2027 09:05:00 -0700
+Subject: Post-incident summary + short-term remediation (Dataflow AI, DF-9802)
+
+Hi Oscar / Dataflow team — thank you again for the patience while we investigated. Attached is a concise postmortem draft, and below is an executive summary with immediate remediation and our proposed customer accommodation.
+
+Executive summary (TL;DR)
+- Root cause: an asymmetric surge pattern caused by a 3rd-party integration that fan-outed long-context requests from a small client ID. The allocator’s fairness heuristics underestimated the bursty hot-path due to a skewed sequence-length distribution, which allowed aggressive clients to occupy GPU slots and push queued requests for your tenant.
+- Timeline: surge begins 15:40 PDT; first mitigation (warm nodes) at 15:49; targeted rate limit at 15:51; normal servicing resumed by 15:58.
+- Customer impact: p95 tail latency elevated (to ~3.2s) for ~14 minutes; ~0.8% of requests received 429/503 failures due to transient throttling.
+
+Actions already taken
+- Short-term: tuning allocator fairness weight for hot-sequence clients and adding sequence-length-aware eviction thresholds (deployed in canary at 02:00 UTC).
+- Medium-term: adding a hotspot detector to our routing plane that will detect skewed sequence-length traffic and proactively shift workload or spin warm nodes (ETA: 3 weeks).
+- Long-term: a model-agnostic scheduler improvement to reduce asymmetric occupancy under heavy tail sequences (ETA: 9–12 weeks).
+
+What we will provide to Dataflow AI
+- A CSV mapping of request IDs and the approximate percent of requests affected (we can provide API key mappings where available) — attached allocator log sample (anonymized) and we’ll deliver full mapping within 48 hours.
+- A one-time account credit equal to 10% of billed compute for the affected hour, applied to your next invoice. If that does not address the impact, we will escalate to a bilateral credit review.
+- A 30-minute technical sync with our SRE and allocator engineers to review the mitigations and the planned rollout.
+
+Attachments included
+- redwood-postmortem-draft-DF-9802.pdf (draft postmortem)
+- allocator-sample-log-20270625.txt (sanitized sample linking request IDs)
+- grafana-surge-06-25.png (tail-latency timeline)
+
+Requested next steps from you
+- Confirm whether the 10% credit is acceptable, or if you prefer we open a formal bilateral credit review.
+- Confirm a preferred time for the 30-minute technical sync (suggested windows: Tue 06/29 09:00–11:00 PDT or Wed 06/30 08:00–11:00 PDT).
+
+We’ll follow up with the detailed mappings within 48 hours and will share a final postmortem once medium/long term fixes are scoped.
+
+Sincerely,
+Priya Natarajan
+Senior Customer Success Manager
+Redwood Inference
+
+Attachment: redwood-postmortem-draft-DF-9802.pdf
+
+From: Oscar Ramos <oscar@dataflow.ai>
+To: Priya Natarajan <priya_natarajan@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, support-ops@dataflow.ai, legal@dataflow.ai
+Date: Tue, 29 Jun 2027 10:03:00 -0700
+Subject: Re: Post-incident summary + short-term remediation (Dataflow AI, DF-9802)
+
+Thanks Priya — that summary is helpful and the proposed credit is reasonable; we accept the 10% credit for the affected hour. Please proceed with the mapping and the credit.
+
+We'd like the 30-minute sync on Tue 06/29 at 10:30 PDT with Ben and whoever is owning allocator changes (Stephanie if available). Agenda: quick walkthrough of allocator logs, planned canary deployment, and mitigation timeline.
+
+Also, for our auditors we will need a short statement documenting the timeline and actions for our records — if you can provide a one-paragraph official incident statement on Redwood letterhead that would be ideal.
+
+I'll send a calendar invite for 10:30.
+
+—Oscar
+

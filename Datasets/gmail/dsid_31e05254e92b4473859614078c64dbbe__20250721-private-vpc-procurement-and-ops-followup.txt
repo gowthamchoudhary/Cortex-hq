@@ -1,0 +1,129 @@
+Private deployment qualification — Aurelia Pharma (air-gapped)
+
+From: Priya Natarajan <priya@redwood.ai>
+To: Sanjay Rao <sanjay@aureliapharma.com>, Marta Lopez <marta.lopez@aureliapharma.com>
+Cc: Diego Fernandez <diego@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: Mon, 21 Jul 2025 10:07:00 -0700
+Subject: Private deployment qualification — Aurelia Pharma (air-gapped)
+
+Hi Sanjay / Marta,
+
+Great to meet the team on today's call — thanks for walking us through your use case. As discussed, Aurelia's primary constraint is an air-gapped on-prem deployment (no outbound internet from the inference cluster) with strict maintenance windows during your lab hours. To keep momentum on the procurement and ops side, I wanted to capture the open items we discussed and request a few clarifications so we can produce a firm BOM, SOW and runbook: 
+
+Key takeaways (short):
+- Deployment mode requested: Private (on-prem, air-gapped).
+- Primary concerns: secure offline upgrades, hardware compatibility, patching windows, and audit log retention.
+- Timeline goal: procurement in Q3, pilot cluster online in Q4.
+
+Open questions / asks (please reply inline):
+1) Hardware baseline: do you have an existing node spec or preferred vendor? If not, confirm target GPU class (A100-80GB, H100, or equivalent) and whether you require dual-socket servers or single-socket.
+2) Maintenance windows: what weekly windows are available for disruptive upgrades (UTC)? We heard you prefer weekends but want exact times.
+3) Physical access policy: will Redwood engineers be allowed on-site for installs/repairs, or do we ship sealed appliances and work with your on-prem ops only?
+4) KMS/HSM: do you have an on-prem KMS or HSM for key material, or do you need Redwood to provide an offline key escrow option?
+5) Network topology: can you share an internal network diagram (firewalls, VLANs) and whether the inference hosts can reach a local update server (air-gapped but reachable over local LAN)?
+
+Attachments: if you have a current hardware inventory or a procurement template, please attach it — that'll speed the BOM.
+
+Next steps we propose once we have the answers:
+- Redwood to produce a recommended HW BOM + cost estimate (3 configs: pilot, production-1, production-2).
+- Draft SOW and runbook for offline upgrade process (we'll include checksum-signed bundles and USB fallback procedures).
+- Schedule an ops kickoff to walk through rack/network/UPS/cooling needs.
+
+I'll loop Markus (for approvals) and Diego (solutions) on the technical details here. Thanks — happy to jump on a short follow-up call if that's easier.
+
+Best,
+Priya Natarajan
+Enterprise Sales (Private Deployments)
+Redwood Inference
+priya@redwood.ai | +1 (415) 555-0192
+
+---
+Note: attachments referenced are stubs — please attach any inventory files in reply.
+From: Sanjay Rao <sanjay@aureliapharma.com>
+To: Priya Natarajan <priya@redwood.ai>
+Cc: Marta Lopez <marta.lopez@aureliapharma.com>, Diego Fernandez <diego@redwood.ai>
+Date: Mon, 21 Jul 2025 15:42:00 -07:00
+Subject: Re: Private deployment qualification — Aurelia Pharma (air-gapped)
+
+Priya — thanks for the recap and crystal-clear asks. Inline answers below.
+
+1) Hardware baseline: We don't have a uniform fleet today. Current lab compute is a mix of dual-socket nodes (2x 40G NIC) with NVMe. For GPUs, our preference is to standardize on A100-80GB, but we'd consider H100 if you recommend it for inference throughput/cost. No vendor lock — Dell or Supermicro ok.
+
+2) Maintenance windows: Preferred disruptive window is Sat 02:00–06:00 UTC. Non-disruptive updates can be during Thu 22:00–02:00 UTC.
+
+3) Physical access: Redwood staff will not be allowed on-site initially. We expect to manage installs with our ops team; Redwood can ship sealed appliances or provide a validated build image and installation procedure.
+
+4) KMS/HSM: We have an on-prem HSM (Thales) and will provide an HSM admin contact for key import.
+
+5) Network topology: Attaching a basic topology and current inventory. The inference hosts are on an isolated VLAN that can reach a local jump-host/update server but cannot reach the internet.
+
+Attachments: Aurelia_HW_Reqs_v1.xlsx (hardware inventory + prelim constraints)
+
+Quick note: on upgrades — we need a clear offline upgrade pattern. If Redwood can support an update bundle we can verify locally (checksum + signature) and apply via our jump-host, that would be ideal. Also need to confirm rollback behavior if an upgrade fails.
+
+Thanks,
+Sanjay Rao
+Head of Infrastructure
+Aurelia Pharma
+sanjay@aureliapharma.com | +1 (617) 555-3342
+
+From: Diego Fernandez <diego@redwood.ai>
+To: Sanjay Rao <sanjay@aureliapharma.com>, Priya Natarajan <priya@redwood.ai>
+Cc: Marissa Cole <marissa@redwood.ai>, Markus Klein <markus@redwood.ai>
+Date: Tue, 22 Jul 2025 09:18:00 -07:00
+Subject: Re: Private deployment qualification — Aurelia Pharma (air-gapped)
+
+Thanks Sanjay — helpful details. A few technical clarifications and recommendations from the solutions side: 
+
+- Offline upgrade workflow: Redwood supports two modes for air-gapped sites: (A) Signed update bundles delivered on encrypted USB (or transfer via your jump-host) with a verification step (SHA256 + public key signature). (B) Local update server image that we provide as an OVA/Tarball your team imports; our runbook covers verification and staged rollout. Both support automatic rollback to the previous image if health checks fail within the first N minutes.
+
+- Hardware recommendation (initial pilot): 3-node cluster, each node with 4x A100-80GB (or 2x H100 as budget allows), 2x 25GbE NICs, 4 x NVMe for local KV cache, and minimum 512GB RAM. Production-1 (scale) would move to 6 nodes + dedicated control plane.
+
+- KMS/HSM: We can integrate with your Thales HSM. We'll need a short window with your security contact to exchange public keys and validate key import procedure.
+
+- Maintenance window: Sat 02:00–06:00 UTC works for disruptive ops. For pilot, we recommend a staged upgrade on Thu non-disruptive then Sat disruptive for final step.
+
+I've attached a draft SOW that outlines responsibilities, a proposed timeline, and an initial ops runbook excerpt. Also attaching a network- topology PNG showing required ports between control plane, inference nodes, and your jump-host.
+
+Attachments included: Redwood_Private_SOW_draft.pdf, network-topology.png
+
+Next technical steps I propose:
+1) Redwood to finalize BOM (pilot/prod) and confirm pricing.
+2) Security sync between Redwood Eng and your Security/HSM admin (30–45min).
+3) Ops kickoff to review runbook and testable upgrade procedure (we can demo the offline bundle on your jump-host).
+
+Happy to take this to a short working session — Priya, can you coordinate availability?
+
+— Diego
+Solutions Engineer, Redwood Inference
+diego@redwood.ai | +1 (650) 555-2410
+
+From: Priya Natarajan <priya@redwood.ai>
+To: Sanjay Rao <sanjay@aureliapharma.com>, Marta Lopez <marta.lopez@aureliapharma.com>
+Cc: Diego Fernandez <diego@redwood.ai>, Marissa Cole <marissa@redwood.ai>, Markus Klein <markus@redwood.ai>
+Date: Wed, 23 Jul 2025 16:24:00 -07:00
+Subject: Re: Private deployment qualification — Aurelia Pharma (air-gapped)
+
+Thanks Sanjay and Diego — this is great. Quick summary of agreed next steps and owners so nothing falls through: 
+
+Action items
+- Redwood (Diego / Marissa): Finalize HW BOM for pilot + two scale options and send cost estimate by EOD Friday (2025-07-25). [attachment: Redwood_Private_SOW_draft.pdf]
+- Aurelia (Sanjay): Confirm procurement contact and estimated PO timeline; share any vendor constraints (preferred OEM) by 2025-07-28. [attachment: Aurelia_HW_Reqs_v1.xlsx received]
+- Security sync (Diego + Aurelia security contact): schedule 30–45min call to exchange HSM key procedure — target 2025-07-29.
+- Ops kickoff (Redwood + Aurelia ops): 60min working session to demo offline bundle and walk runbook — propose 2025-08-05 or 2025-08-06 (Sat window ok for final step). Please confirm preferred date.
+- Redwood Legal/Procurement: I'll send the SOW to your contracts team once the BOM is finalized. We flagged export-control items in the draft; please loop in legal early if needed.
+
+Timeline notes: pilot cluster targeted for Q4 2025 pending PO and site prep. We'll include an explicit rollback test in the runbook and a signed acceptance checklist for the pilot.
+
+If you can confirm the procurement lead (name/email) and the weekend maintenance window, we'll lock the dates and circulate calendar invites.
+
+Thanks — can jump on a quick call if helpful.
+
+Best,
+Priya
+Enterprise Sales (Private Deployments)
+Redwood Inference
+priya@redwood.ai | +1 (415) 555-0192
+
+---
+Redwood attachments referenced are the SOW draft and diagrams (stubs). We will deliver validated update bundles and clear verification steps in the runbook.

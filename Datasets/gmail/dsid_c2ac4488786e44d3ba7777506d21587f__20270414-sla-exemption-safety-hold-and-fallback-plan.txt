@@ -1,0 +1,117 @@
+Request: SLA carveout for canary safety-hold and automated fallback (Evergreen Health)
+
+From: Paul Moore <paul.moore@evergreenhealth.com>
+To: Alex Martinez <alex.martinez@redwood.ai>
+Cc: Sara Dolan <sara.dolan@evergreenhealth.com>
+Date: 2027-04-12T16:41:00-07:00
+Subject: Request: SLA carveout for canary safety-hold and automated fallback
+
+Alex — thanks for the demo yesterday. We are generally happy with Redwood's performance, but procurement and our reliability team raised a few questions around canary/A-B rollouts and how they interact with the uptime/latency SLA in the MSA. Specifically: 
+
+- We need contractual clarity that customer-facing degradation caused by a canary (new model variant or quantized build) will trigger an automatic fallback to the previous pinned variant, without manual ops intervention.
+- We want the right to request that Redwood "pin" a stable version if the canary causes service impact for N minutes.
+- We need a definition of how SLA credits are calculated if a canary briefly increases latency or causes reduced throughput during the rollout window.
+
+I've attached Evergreen's risk assessment and a procurement matrix for context. Can you propose language we can add as an addendum (or point to existing options) so legal can review? Also happy to take a quick call with product/ops.
+
+Thanks,
+Paul Moore
+Head of Procurement
+Evergreen Health Systems
+Attachment: evergreen_risk_assessment.pdf
+From: Alex Martinez <alex.martinez@redwood.ai>
+To: Paul Moore <paul.moore@evergreenhealth.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.ai>, Priyom Das <priyom.das@redwood.ai>
+Date: 2027-04-12T18:07:00-07:00
+Subject: Re: Request: SLA carveout for canary safety-hold and automated fallback
+
+Paul — appreciate the clear list. We've reviewed Evergreen's matrix; attached is a first-draft addendum that attempts to balance your need for predictability with our operational safety practices (redwood_sla_canary_addendum_v1.docx). High-level summary of our proposal: 
+
+1) Canary Safety-Hold: For any canary or A/B rollout, Redwood will maintain an automated health monitor based on latency, error-rate, and output validity signals. If the canary exceeds defined thresholds for X consecutive 5-minute buckets, traffic is automatically routed away from the canary to the last-stable variant (auto-fallback).
+
+2) Pinning: Customers can request a manual pin of a model variant. In addition, we offer an automatic pin option: if auto-fallback triggers, the previous stable variant is pinned for a configurable hold period (we propose 60 minutes) unless the customer explicitly approves re-try.
+
+3) SLA impact & credits: Credits for SLA deviations during an identified canary window will be calculated pro-rata over affected requests, with a carveout only if the canary window was mutually agreed in advance or flagged in the control plane. We included explicit examples in the doc.
+
+4) Telemetry & audit: All canary rollouts will record audit logs (trial IDs, telemetry snapshots, and the exact time of auto-fallback) and we will share those logs on request for investigations.
+
+Next steps: Lauren (product/ops) and Priyom (infrastructure) are looped to confirm thresholds we propose. Legal at Redwood can take this draft and make it signable after we land on thresholds and credit calculations. If agreeable, we can schedule a 30-minute working session tomorrow.
+
+Attachments: redwood_sla_canary_addendum_v1.docx; redwood_soc2_summary.pdf
+
+— Alex Martinez
+Director, Sales Engineering
+Redwood Inference
+From: Lauren Bishop <lauren.bishop@redwood.ai>
+To: Paul Moore <paul.moore@evergreenhealth.com>, Alex Martinez <alex.martinez@redwood.ai>
+Cc: Priyom Das <priyom.das@redwood.ai>
+Date: 2027-04-13T09:12:00-07:00
+Subject: Re: Request: SLA carveout for canary safety-hold and automated fallback
+
+Paul — adding a few technical guardrails so the addendum maps to operational behavior: 
+
+- Signals used: p50/p95 latency, 5xx rate, percent of requests failing output validation checks (we have model-level checkers for hallucination rate on structured tasks).
+- Threshold proposal (initial, can be calibrated in trial): auto-fallback if p95 > 2x baseline AND 5xx rate > 0.5% for 3 consecutive 5-minute buckets.
+- Canary scope: canaries default to 5% user traffic unless Evergreen requests a smaller window.
+- Pin behavior: after auto-fallback, we will pin the stable variant for 60 minutes (auto), with the option for Evergreen to request an immediate manual pin for longer retention. Manual pins require a support ticket and confirmation from both parties.
+- Fail-open vs fail-closed: by default we route to the last-stable variant (fail-open to conservative baseline).
+
+Operational notes: we use KV cache warmup and prefix caching to limit cold-start regressions. If Evergreen prefers, we can add a clause that probe traffic and synthetic checks do not count toward SLA credit calculations if they are run at times agreed in advance.
+
+Happy to walk through the example scenarios in the doc. Priyom — can you confirm the audit log retention and the format we'll provide to Evergreen?
+
+— Lauren Bishop
+VP, Product Operations
+From: Paul Moore <paul.moore@evergreenhealth.com>
+To: Lauren Bishop <lauren.bishop@redwood.ai>, Alex Martinez <alex.martinez@redwood.ai>
+Cc: Sara Dolan <sara.dolan@evergreenhealth.com>
+Date: 2027-04-13T11:46:00-07:00
+Subject: Re: Request: SLA carveout for canary safety-hold and automated fallback
+
+Thanks Lauren, that level of detail helps. A couple of clarifications before we pass this to legal: 
+
+1) SLA credits: if we experience a degradation that was not previously agreed as a canary window, will credits apply from the first affected minute, or only after auto-fallback completes? Our preference is credits from the first affected minute unless the canary was scheduled and pre-notified.
+2) Can you quantify the typical time-to-fallback? Lauren's proposed thresholds look reasonable, but Evergreen needs a worst-case bound for contractual purposes (e.g., auto-fallback within 10 minutes for 95% of incidents).
+3) For pinning: can Evergreen initiate a pin directly through the console for emergencies, or does it require a support ticket? Console control is a big selling point for our reliability team.
+
+I've attached a small procurement matrix with our preferred language if helpful.
+
+— Paul
+Attachment: procurement_matrix.xlsx
+From: Alex Martinez <alex.martinez@redwood.ai>
+To: Paul Moore <paul.moore@evergreenhealth.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.ai>, Priyom Das <priyom.das@redwood.ai>
+Date: 2027-04-14T08:33:00-07:00
+Subject: Re: Request: SLA carveout for canary safety-hold and automated fallback
+
+Paul — thanks for the questions. Here's a compact proposal that we think is workable for contracting: 
+
+A) Credits: If a service-impacting event occurs outside a pre-scheduled canary window, SLA credits will apply starting at the timestamp of the first affected request, prorated to impacted tokens/requests. If the event occurred during a mutually pre-notified canary window, credits will not apply provided the canary met the pre-notification requirements in the addendum.
+
+B) Time-to-fallback commitment: Redwood proposes a contractual auto-fallback bound of "<= 15 minutes" for 95% of auto-fallback events triggered by the defined thresholds. The operational median is typically under 5 minutes; we want to keep a conservative contractual bound that includes detection, routing, and cache warmup.
+
+C) Pin controls: We can expose a console-level emergency pin button for customers with Dedicated or Private deployments. For Hosted API (standard accounts) the pin action requires a support ticket to avoid accidental global pinning. We can include language in the addendum specifying which plan types get console pin access.
+
+D) Example SLA wording: (we included a short, signable paragraph in redwood_sla_canary_addendum_v2.docx). It includes the thresholds from Lauren, the 15-minute 95% commitment, and the credit calculation examples.
+
+Next steps: If Evergreen agrees to the 15-minute 95% fallback window and console pin rules, legal can exchange redlines and we can push a v2 addendum through DocuSign. I will attach v2 with those specifics. Also proposing a 30-minute technical sync tomorrow to confirm telemetry endpoints and log formats.
+
+Attachments: redwood_sla_canary_addendum_v2.docx
+
+— Alex Martinez
+Director, Sales Engineering
+Redwood Inference
+From: Paul Moore <paul.moore@evergreenhealth.com>
+To: Alex Martinez <alex.martinez@redwood.ai>
+Cc: Sara Dolan <sara.dolan@evergreenhealth.com>
+Date: 2027-04-14T11:03:00-07:00
+Subject: Re: Request: SLA carveout for canary safety-hold and automated fallback
+
+Alex — this reads well and should be acceptable to Evergreen's legal and reliability teams. We agree to the 15-minute (95%) fallback bound and console pin rules for Dedicated deployments. Please send the v2 addendum via DocuSign and we'll route for signature. Scheduling: Sara will coordinate the 30-minute technical sync for tomorrow.
+
+Thanks for the quick turnaround.
+
+— Paul Moore
+Head of Procurement
+Evergreen Health Systems
+Quoted: "On 2027-04-14 08:33, Alex Martinez wrote: > Paul — thanks for the questions..."

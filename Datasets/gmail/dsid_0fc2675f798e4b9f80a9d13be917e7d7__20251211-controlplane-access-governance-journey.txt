@@ -1,0 +1,106 @@
+Control plane access governance — role delegation & SCIM gaps
+
+From: Jack Morales <acme-iam-admin@acme.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Juan Perez <vendor-identity@iden.co>
+Date: 2025-12-11T09:12:00-08:00
+Subject: Private CP access model + SCIM mapping (initial ask)
+
+Hi Karthik,
+
+Thanks for taking this on. Our security team wants to lock down the Private Control Plane (VPC) integration before the pilot. Two quick asks to start the conversation:
+
+1) SCIM: attached is our current user + group mapping (acme_scim_mapping_v1.csv). We need to confirm which attributes Redwood expects for: email, externalId, roles, department, and manager. Also need guidance on how you handle SCIM deltas and partial failures (e.g., 409s / rate limits).
+
+2) SAML / role delegation: Our ops team prefers delegated admin (SCIM + SAML assertions mapping to Redwood operator roles) rather than creating long-lived service accounts. We have constraints around assertion audiences and want per-request Subject confirmation.
+
+Other constraints: auditors require a playbook for cert rotation and a 90-day retention window for auth logs (audit detail: who requested, which model/route, token id).
+
+Can you confirm how Redwood's Private CP handles: delegated role bindings, provisioning failures, and audit export formats? If useful, Juan from Iden.co is cc'd and can share sample metadata.
+
+Thanks,
+Jack
+Jack Morales
+Identity & Access lead, Acme Corp
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Jack Morales <acme-iam-admin@acme.com>
+Cc: laura_bennett <laura_bennett@redwood.com>, marcus_lin <marcus_lin@redwood.com>, mina_haddad <mina_haddad@redwood.com>
+Date: 2025-12-11T11:03:00-08:00
+Subject: Re: Private CP access model + SCIM mapping (initial ask)
+
+Jack — thanks for the clear asks. Looping in Laura (product/security), Marcus (serving runtime), and Mina (onprem ops) so we can align the pilot contract and runbook. High-level answers and next steps below.
+
+Quick answers:
+- SCIM shape: Redwood expects email (primary), externalId (opaque id), groups (array of group names), and a roles attribute that maps to our operator role names (operator.read, operator.write, admin). We can accept additional attributes (department, manager) but we don't canonicalize them for RBAC decisions.
+- SCIM errors/deltas: we support incremental SCIM PATCH and full replace. Our connector retries transient failures with exponential backoff and surfaces persistent 4xx errors in the console. We'll provide a delta-report export (CSV) for the pilot.
+- Delegation vs service account: we prefer delegated SAML assertions for operator sessions (short-lived) where feasible. We still support service accounts for automation. Delegated flow requires: SAML assertion with audience set to our private control plane SP, NameID/email, and a roles claim (mapped to Redwood operator roles).
+- Audit logs & retention: we can export audit logs (JSON) to customer S3 or push to a syslog endpoint. Retention is configurable in Private CP; default export TTL for pilot can be set to 90 days.
+
+Open questions for you:
+1) Do you need per-request token hashing/obfuscation in the audit export?
+2) Do you have a preferred SCIM rate limit window we should simulate?
+
+Action items I'm proposing:
+- Marcus to produce a minimal RBAC mapping table by EOD tomorrow.
+- Mina to draft a rotation + rollout runbook (cert rotation, connection test steps) by Friday.
+- Karthik to produce a SCIM partial-failure test plan and a short demo for your ops next Tue.
+
+I'll attach the mapping template and a sample SAML requirements doc after this thread.
+
+— Karthik
+Karthik Iyer
+Director, Private Deployments — Redwood Inference
+
+From: laura_bennett <laura_bennett@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Jack Morales <acme-iam-admin@acme.com>
+Cc: marcus_lin <marcus_lin@redwood.com>, mina_haddad <mina_haddad@redwood.com>
+Date: 2025-12-11T15:45:00-08:00
+Subject: Re: Private CP access model + SCIM mapping (initial ask)
+
+Jack / team — quick product decision memo so we have a single source of truth for the pilot scope. This is a binding alignment for the PoC runbook and contract amendment.
+
+Decisions:
+1) Adopt delegated SAML assertions for operator sessions (preferred). Rationale: shorter lived credentials, clearer audit surface, aligns with our fallback model to hosted API.
+2) SCIM mappings: support canonical attributes (email, externalId, roles, groups). For roles, we will expose three operator roles to Acme: operator.read, operator.write, operator.admin. Any additional entitlements will be handled via groups->role mapping documented in the runbook.
+3) Audit export: Redwood will provide consumed-audit JSON with the following fields: timestamp, internalUserId, externalPrincipal (email/externalId), action, route, model_version, request_token_hash. We will enable 90-day retention and delivery to Acme S3.
+4) Cert rotation: require customer-managed SAML certs rotated at least every 60 days for the pilot (we can relax to 90 days in GA). Set automated alerting if cert expires in <10 days.
+
+Risks and mitigations:
+- Partial SCIM failures: we will surface a per-user delta report and provide an endpoint for re-run of failed operations. Marcus to add an exponential backoff advisory for large directories.
+- Operator privilege creep: RBAC review must be performed quarterly. We'll require Acme to sign off on mapping before any admin grants.
+
+Deliverables & owners:
+- Marcus: RBAC mapping table + sample SCIM payloads (due 2025-12-12 17:00 PT).
+- Mina: Rotation runbook + audit export sample (due 2025-12-12 12:00 PT).
+- Karthik: Test plan + internal run-through notes (due 2025-12-16).
+
+Jack — once Marcus and Mina deliver, can your team run the mapping against a small test scope (50 users + 5 groups) and validate? If yes, we'll schedule the demo.
+
+Laura Bennett
+VP, Product — Redwood Inference
+
+From: Jack Morales <acme-iam-admin@acme.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, laura_bennett <laura_bennett@redwood.com>
+Cc: Juan Perez <vendor-identity@iden.co>, marcus_lin <marcus_lin@redwood.com>
+Date: 2025-12-12T16:45:00-08:00
+Subject: Re: Private CP access model + SCIM mapping (initial ask)
+
+Thanks — that looks good.
+
+We can run the 50-user test next Wed (2025-12-17). Attached is our current SAML metadata and a PEM we rotate monthly (acme_saml_metadata.xml, saml-cert.pem). Juan will stand up a temporary IdP endpoint for the test. A couple of follow-ups:
+- We'll need the RBAC mapping CSV from Marcus as soon as available — I'll validate mappings against our HR system.
+- For audit export, S3 delivery is fine; please provide a sample of the JSON schema so our SIEM team can onboard parsers.
+
+Forwarding Marcus' earlier note (for context):
+
+On Tue, Dec 10, 2025 at 07:30 AM Marcus Lin <marcus_lin@redwood.com> wrote:
+> We're preparing the minimal mapping table and will include sample SCIM PATCH requests and a failure-report schema. Expect that in the EOD bundle.
+>
+> - Marcus
+
+Appreciate the quick alignment. If you can confirm the demo slot (Tue internal dry run + Wed customer test) we'll block calendar invites.
+
+— Jack
+Jack Morales
+Identity & Access lead, Acme Corp

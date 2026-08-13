@@ -1,0 +1,178 @@
+Performance evaluation & MAP: concurrency benchmarking outcomes and next steps
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Claire Duval <claire@novalink.io>
+Cc: aisha_rahman@redwood.com, marissa_cole@redwood.com
+Date: Mon, 8 Jun 2026 16:12:00 -0700
+Subject: Performance evaluation kickoff + MAP draft
+
+Hi Claire —
+
+Thanks again for taking time today. Per our convo, attached is a first-pass benchmarking plan and a MAP draft to align milestones for the evaluation and procurement. High-level ask from Novalink: verify that Redwood meets your latency SLOs under both burst and steady-state traffic, and confirm TTFT for interactive flows.
+
+Attachments: Redwood-Benchmarking-Plan-v1.xlsx, MAP-Novalink-v1.docx
+
+Proposed evaluation scope (brief):
+- Models: redwood-13B-quant and redwood-13B-fp16 (we'll test both)
+- Metrics: P50/P95 token latency, TTFT (ms), sustained throughput (tokens/sec), request qps, and queueing depth
+- Concurrency matrix: 50, 100, 200, 400 concurrent requests; Burst shots at 500 qps for 2 mins
+- Runs: 30-min steady-state per concurrency point; 5 repeats for statistical significance
+
+Could you confirm the traffic profile (peak qps, typical session lengths) and the contract target for P95 latency? I want to lock MAP milestones for test completion, report delivery, and procurement consent.
+
+Thanks — plan to have Aisha and Dev join the technical sync tomorrow to finalize the runbook.
+
+Jordan Blake
+Account Exec, Redwood Inference
+jordan_blake@redwood.com
++1 (415) 555-0123
+
+--
+Redwood Inference
+
+
+From: Claire Duval <claire@novalink.io>
+To: Jordan Blake <jordan_blake@redwood.com>
+Date: Tue, 9 Jun 2026 09:04:00 -0400
+Subject: Re: Performance evaluation kickoff + MAP draft
+
+Jordan —
+
+Thanks, received both attachments. A few clarifying points from our side:
+- Peak: 480 qps sustained for ~10 minutes during campaign spikes; typical steady is ~110 qps.
+- Typical session: 1–3 prompts (avg 380 tokens per session).
+- Target: P95 end-to-end generation latency < 450ms for our interactive surface; TTFT target < 120ms.
+
+I attached a trimmed traffic sample (traffic-profile-novalink.csv) that includes minute-level qps for the past 7 days.
+
+We prefer an evaluation that emphasizes burst behavior (this is when user experience suffers). Also procurement will want a clear MAP with milestone dates tied to payment triggers. I've copied procurement for visibility on timelines.
+
+Claire Duval
+Head of Product, Novalink
+claire@novalink.io
+
+
+From: Aisha Rahman <aisha_rahman@redwood.com>
+To: Jordan Blake <jordan_blake@redwood.com>, marissa_cole@redwood.com
+Cc: dev_patel@redwood.com
+Date: Wed, 10 Jun 2026 11:20:00 -0700
+Subject: RE: Performance evaluation kickoff + MAP draft — proposed evaluation plan and MAP milestones
+
+Team —
+
+Per Claire's traffic profile, I've sketched a pragmatic evaluation plan to be embedded into the MAP. Key elements below; I also updated the MAP document with dates (see MAP-Novalink-v1.docx).
+
+Evaluation plan (test matrix):
+- Model variants: redwood-13B-fp16, redwood-13B-8bit (quant)
+- Sequence lengths: 64 / 256 / 512 tokens
+- Concurrency points: 50 / 100 / 200 / 400
+- Burst shots: 2 x 2-min bursts at 500 qps separated by 10 minutes
+- Steady-state: 30-minute sustained run at customer's steady qps (110 qps) + at 200 qps to evaluate headroom
+- Repeats: 3 independent runs per point, aggregate P50/P95 and TTFT
+
+Measurement guidance:
+- TTFT: measure server time to first-token (exclude network tail when possible), report median and 95th
+- Queueing: log request queue depth and per-request wait time before execution
+- Failure modes: capture 5xxs and throttled responses and include run-by-run failure counts
+
+MAP milestones (proposed):
+- 2026-06-12: Finish instrumentation and dry run (internal)
+- 2026-06-14: Execute full benchmarking matrix
+- 2026-06-16: Deliver formal report + run artifacts to Novalink (HubSpot deal link in MAP)
+- 2026-06-18: Exec review + procurement signoff (conditional)
+
+Close timeline suggestion: if results are within target, request Novalink sign-off and PO within 5 business days of report delivery. If we see regressions, we add a pilot week (see contingency below).
+
+I'll be the MAP owner for milestone tracking; Jordan will handle commercial next steps and Dev will lead execution.
+
+Aisha Rahman
+Sales Manager, Redwood Inference
+aisha_rahman@redwood.com
+
+
+From: Dev Patel <dev_patel@redwood.com>
+To: aisha_rahman@redwood.com, jordan_blake@redwood.com, marissa_cole@redwood.com
+Date: Fri, 12 Jun 2026 09:05:00 -0700
+Subject: RE: Performance evaluation kickoff + MAP draft — preliminary run results and observations
+
+Team — attaching raw artifacts (concurrency-run-20260612.jsonl, server-metrics-20260612.tar.gz). Below are observed numbers from today's runs (redwood-13B-fp16 unless noted). All runs executed in our us-west cluster.
+
+Summary (steady-state @ 110 qps):
+- P50 token latency: 48ms
+- P95 token latency: 210ms
+- Mean TTFT (first token server-side): 85ms
+- Sustained throughput: ~14.5k tokens/sec (aggregate across serving pool)
+- Queue depth: typically 0–2 requests, spikes to 8 when concurrent short bursts overlap
+- GPU util: 62–78% during steady-state; CPU (host) 35%
+- 5xx: 0 for steady-state runs
+
+Burst behavior (500 qps, 2-min shots):
+- Immediate increase in queue depth up to 32 requests within 30s; average per-request queuing wait 120–260ms
+- P95 token latency during bursts: 520–780ms (exceeds Claire's target)
+- TTFT tail: spikes up to 340ms under peak queueing; cold-shard spinups accounted for ~60ms extra TTFT on some runs
+- Observed throughput cap: about 28–30k tokens/sec aggregated before token-drop started for largest seq lengths
+- Error mode: transient 429s when request bursts saturate rate limiter for a single serving shard; overall request success 97–99% depending on sequence length
+
+Engineering notes / suggestions:
+- Short-term: introduce a soft global request-rate limit per-customer (recommended 200 qps) plus token-based guardrails to avoid long sequences pushing tokens/sec beyond provisioned capacity.
+- Burst mitigation: enable short-lived admission control with early 503-backpressure signals to client for overload scenarios; this produces better tail behavior than synchronous queueing.
+- Autoscale: recommend reducing scale-up cooldown to 30s and enabling predictive pre-warm for scheduled campaign windows (based on customer's past traffic).
+- Caching: prefix caching for repeated prompt starters would drop per-request token generation by ~8–12% in our traces.
+
+Action items for MAP:
+- Add a contingency line: If P95 > 500ms in bursts, provision a 1-week pilot with throughput-optimized variant (redwood-small-optimized) and a discounted pilot rate.
+- Update MAP milestone: add a pilot-start gate (if needed) by 2026-06-20.
+
+Dev Patel
+Senior SRE, Redwood Inference
+dev_patel@redwood.com
+
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Claire Duval <claire@novalink.io>
+Cc: aisha_rahman@redwood.com, dev_patel@redwood.com, marissa_cole@redwood.com, procurement@novalink.io
+Date: Mon, 15 Jun 2026 09:12:00 -0700
+Subject: RE: Performance evaluation kickoff + MAP draft — results and recommended MAP updates
+
+Claire —
+
+Thank you for the quick turnaround and for sharing the traffic sample. We completed the benchmarking matrix and attached the formal report to the HubSpot deal folder (link below). Key takeaways:
+
+- Steady-state at your typical load (110 qps): within targets (P95 ~210ms, TTFT ~85ms).
+- Burst shots at 500 qps: P95 exceeded target (range 520–780ms) driven largely by queueing and transient shard saturation.
+
+Recommended MAP updates (condensed):
+1) Immediate: enforce a per-customer soft rate limit at 200 qps with token-based gating to reduce token-flood events (Dev suggests token guards).
+2) Contingency: a 1-week pilot using redwood-small-optimized if we see continued P95 > 500ms in customer acceptance; pilot discount applied per MAP clause 4.2.
+3) Ops: schedule predictive pre-warm windows for marketing campaigns (Novalink to provide campaign windows at least 48h ahead).
+4) Commercial: we will add a clause that ties final payment to acceptance criteria in MAP (P95 < 450ms steady + documented burst mitigation plan).
+
+Next steps: please sign the updated MAP (DocuSign link below) or reply with any comments. If acceptable, we propose a short exec sync on 2026-06-18 to finalize procurement.
+
+HubSpot / artifacts: https://hubspot.com/deal/4721
+DocuSign: https://www.docusign.com/EN/prepare?envelopeId=ABC-1234
+
+Jordan Blake
+Account Exec, Redwood Inference
+jordan_blake@redwood.com
++1 (415) 555-0123
+
+
+From: Claire Duval <claire@novalink.io>
+To: Jordan Blake <jordan_blake@redwood.com>
+Cc: procurement@novalink.io
+Date: Mon, 15 Jun 2026 16:45:00 -0400
+Subject: Re: Performance evaluation kickoff + MAP draft — results and recommended MAP updates
+
+Jordan / team —
+
+Appreciate the thoroughness. The steady-state numbers look good and are acceptable to Product. The burst behavior is the primary concern — we need a mitigation plan before full sign-off.
+
+We can agree to the updated MAP with the contingency pilot clause. Procurement is prepared to issue a PO conditional on a short pilot week where Redwood proves the mitigation (soft limits + predictive pre-warm) and demonstrates P95 < 500ms on burst tests. Please send updated MAP via DocuSign and we'll aim to return signature + PO within 7 business days of successful pilot.
+
+I've looped procurement to coordinate the PO.
+
+Claire Duval
+Head of Product, Novalink
+claire@novalink.io
+

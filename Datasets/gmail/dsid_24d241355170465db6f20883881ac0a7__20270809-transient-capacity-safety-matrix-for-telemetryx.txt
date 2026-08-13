@@ -1,0 +1,101 @@
+Transient capacity safety matrix for Dedicated deals — TelemetryX pilot
+
+From: Samir Khan <samir@telemetryx.com>
+To: laura_bennett <laura@redwood.ai>, marissa_cole <marissa@redwood.ai>
+Cc: Procurement <procurement@telemetryx.com>
+Date: 2027-08-02T09:12:00-07:00
+Subject: Dedicated capacity — pilot spike profile & ask
+
+Hi Laura / Marissa,
+
+Thanks for the demo last week. As we bake the pilot plan, procurement asked us to nail down how Redwood will handle short, intense traffic surges. A few numbers to work against: our baseline qps is ~25 for inference traffic, but we expect periodic bursts up to ~200 qps for windows of 15–45 minutes (roughly 4–6 times/day) during experiments.
+
+Key asks:
+- Can you propose a safety matrix that maps committed slabs + ephemeral capacity for a pilot?
+- How do you suggest the autoscaler and warmup should behave for these short windows (we want predictable latency)?
+- Any recommendations for pre-warm / reserved percentages and cost buckets for procurement to review.
+
+We need draft guidance for internal stakeholders and procurement by next Monday (8/9) so they can include it in the SOW. Happy to hop on a call if useful.
+
+Thanks,
+Samir
+Samir Khan
+Head of Platform Engineering
+TelemetryX
+
+From: laura_bennett <laura@redwood.ai>
+To: Samir Khan <samir@telemetryx.com>
+Cc: marissa_cole <marissa@redwood.ai>, karthik_iyer <karthik@redwood.ai>
+Date: 2027-08-03T11:08:00-07:00
+Subject: Re: Dedicated capacity — pilot spike profile & ask
+
+Samir — thanks for the clear numbers. Quick response with an actionable starting point (attachment: telemetryx-transient-capacity-matrix-v1.xlsx). High level:
+
+1) Safety matrix approach (summary)- Commit a small reserved slab sized to steady-state + 20% (so 25 qps -> slab ~= 30 qps).- Complement with an ephemeral burst pool sized for the expected peak minus slab (for your numbers: target burst headroom ~= 170 qps).- Limit sustained burst eligibility to defined windows (15/30/45 min buckets) so we avoid long-running overcommit.
+
+2) Autoscale + warmup policy recommendations- Pre-warm: allow a fast pre-warm handshake up to 20% of the burst pool (cold-start fast-path for commonly used routes) — the goal is <150ms median additive warmup for hot keys.- Scale step: geometric 2x steps with a 60s stabilization cooldown; max scale actions per minute = 3 to prevent oscillation.- Fallback: if burst pool exhausted, route to lower-cost quantized variant (same model family) with a graceful degradation policy.
+
+3) Cost and procurement mapping- Provide three cost buckets in the attached one-pager: Baseline (reserved slab), Pilot burst (ephemeral hourly spends), Contingency credits (for exceptional days).
+
+I attached a draft Mutual Action Plan (redwood-dedicated-map-draft.pdf) and a capacity matrix workbook. If this aligns, we can produce a short SOW draft for procurement.
+
+Proposed next step: 30-minute ops call to align sizing and SLA numbers — are you available Thu 8/5 10–11am PT?
+
+Best,
+Laura Bennett
+Sr. Sales Engineer, Redwood Inference
+laura@redwood.ai
+Attachments: telemetryx-transient-capacity-matrix-v1.xlsx (xlsx), redwood-dedicated-map-draft.pdf (pdf)
+
+On 2027-08-02T09:12:00-07:00 Samir Khan <samir@telemetryx.com> wrote:
+> Thanks for the demo last week. As we bake the pilot plan, procurement asked us to nail down how Redwood will handle short, intense traffic surges. ...
+
+From: karthik_iyer <karthik@redwood.ai>
+To: laura_bennett <laura@redwood.ai>, ben_carter <ben@redwood.ai>, marissa_cole <marissa@redwood.ai>
+Cc: Samir Khan <samir@telemetryx.com>
+Date: 2027-08-04T14:22:00-07:00
+Subject: Re: Dedicated capacity — pilot spike profile & ask
+
+Looping in infra recommendations from the runtime side — copying Samir for visibility. TL;DR: matrix looks good; a few concrete knobs to avoid surprises during pilot.
+
+Recommendations (runtime/infra):
+- Reserved slab sizing: agree with slab ~= steady + 20%. For your 25 qps baseline, we recommend reserving 1 N GPU slab (optimistic) but map to per-model throughput — see workbook.
+- Burst pool sizing: carve an ephemeral pool of specialized instances (mixed T4/NVIDIA future-gen) that can be reclaimed after 30–45 min of inactivity.
+- Eviction policy: prefer LRU over TTL for prefix cache eviction during noisy bursts to preserve hot-session latency.
+- Autoscale controls: cooldown 60s, max parallel scaleups = 3, max instances per customer during pilot = 8 (to bound blast radius).
+- Telemetry: enable request-level tracing + token-level cost breakdown for the pilot so we can reconcile cost vs latency per window.
+
+Operational ask: we should add a per-day burst cap (in pilot contract) and a mechanism for temporary crediting if telemetry shows an experiment run that legitimately exceeded the cap. That gives procurement comfort.
+
+I attached a quick sizing sketch in the telemetryx workbook. If procurement wants hard numbers, Ben — can you produce a cost run for the pilot using the three buckets Laura outlined?
+
+-Karthik
+Principal Infra Engineer, Redwood Inference
+
+> On 2027-08-03T11:08:00-07:00 laura_bennett <laura@redwood.ai> wrote:
+> Samir — thanks for the clear numbers. Quick response with an actionable starting point...
+
+From: Procurement <procurement@telemetryx.com>
+To: laura_bennett <laura@redwood.ai>, karthik_iyer <karthik@redwood.ai>, ben_carter <ben@redwood.ai>, marissa_cole <marissa@redwood.ai>
+Date: 2027-08-09T15:42:00-07:00
+Subject: Re: Dedicated capacity — pilot spike profile & ask
+
+Laura / Karthik / Ben — thanks for the thorough breakdown. Procurement is comfortable with the proposed slab + ephemeral burst model, provided: (1) we include a per-day burst cap, (2) there is a crediting clause for experimental overruns, and (3) we have a concise cost one-pager for internal approval.
+
+Pilot timeline: TelemetryX aims to kick off the pilot week of 2027-08-22. Please send a short SOW draft and the cost one-pager by EOD Tue 8/10 so legal can begin review.
+
+Accepted items so far:
+- Reserved slab = steady + 20%
+- Ephemeral burst pool with 30–45 minute reclaim policy
+- Autoscale cooldown = 60s and max parallel scaleups = 3
+
+Outstanding: exact cost numbers and the SOW language for the per-day cap + crediting.
+
+Procurement contact: Mira Patel <mira.patel@telemetryx.com> (cc'd on follow-ups).
+
+Best,
+Procurement — TelemetryX
+Attachments: pilot-cost-estimate-onepager.xlsx (xlsx)
+
+> On 2027-08-04T14:22:00-07:00 karthik_iyer <karthik@redwood.ai> wrote:
+> Looping in infra recommendations from the runtime side — copying Samir for visibility. TL;DR: matrix looks good; a few concrete knobs to avoid surprises during pilot...

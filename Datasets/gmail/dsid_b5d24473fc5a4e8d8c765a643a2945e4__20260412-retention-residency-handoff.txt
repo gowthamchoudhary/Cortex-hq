@@ -1,0 +1,149 @@
+Retention windows & regional residency — implementation handoff
+
+From: Nadia Brooks <nbrooks@stellar-retail.com>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: security@stellar-retail.com
+Date: 2026-04-12T09:15:00-07:00
+Subject: POC: residency & retention questions
+
+Hi Marissa —
+
+Thanks again for the demo yesterday. Before we move to a short POC, our compliance team had a few quick must-haves we need to confirm: 
+
+- Can Redwood provide per-tenant configurable data retention windows (e.g., 30/90/365/custom)?
+- Can we pin storage to a specific region (EU vs US vs APAC) for both logs and persisted artifacts?
+- Does Redwood expose a deletion API and an auditable purge pipeline (with deletion proof/audit log)?
+
+I attached our security checklist (see attachment). Happy to jump on a short call but a written confirmation is sufficient for now.
+
+Thanks,
+Nadia
+Nadia Brooks
+Head of Platform Security — Stellar Retail
+security@stellar-retail.com
+
+Attachment: security_checklist.pdf (PDF stub)
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Nadia Brooks <nbrooks@stellar-retail.com>
+Cc: lauren_bishop@redwood.ai, dev_patel@redwood.ai, vivek_kulkarni@redwood.ai
+Date: 2026-04-12T10:02:00-07:00
+Subject: RE: POC: residency & retention questions
+
+Hi Nadia —
+
+Appreciate the checklist. Looping in Lauren (product) and Dev (infra) to scope the POC ask and confirm a delivery approach. High level answers below so you have something to share with your compliance team right away:
+
+- Per-tenant retention: yes — we can surface configurable retention windows (preset options + custom TTL). Need to confirm maximum allowable custom duration for legal retention.
+- Regional pinning: yes — hosted customers can request region pinning (US/EU/APAC). For Dedicated/Private we can deploy in-customer VPC region per their cloud contract.
+- Deletion API + audit trails: we have delete endpoints and background purge jobs; for the POC we can provide deletion proofs and an audit log export in CSV.
+
+Dev — can you please sketch feasible acceptance criteria and an estimated timeline for an MVP (MVP = per-tenant retention config in Console + region pinning toggle + deletion API + exportable audit log)? Also include any security/compliance gaps we should call out.
+
+Nadia — I added a copy of the checklist to our internal thread. Expecting Dev to follow up with technical detail by EOD.
+
+Best,
+Marissa
+Account Exec — Redwood Inference
+marissa_cole@redwood.ai
+
+
+From: Dev Patel <dev_patel@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: lauren_bishop@redwood.ai, vivek_kulkarni@redwood.ai
+Date: 2026-04-12T16:28:00-07:00
+Subject: RE: POC: residency & retention questions
+
+Marissa / team —
+
+Thanks — here are the technical notes and a proposed delivery plan for the MVP scope: 
+
+1) Per-tenant retention
+- Implementation: retention TTL stored in metadata per tenant. Background retention worker runs once/hour applying TTL to object store keys and DB rows. For low latency deletes we use an async index + SQS-style queue to batch purge to avoid tail-latency spikes.
+- Storage: object artifacts live in S3-compatible buckets partitioned by region. Metadata in our primary DB (Postgres).
+- Edge cases: partial objects (KV cache) vs persisted logs — need to clearly mark what "retention" applies to.
+
+2) Regional pinning
+- Implementation: policy layer that picks bucket/region per tenant at write time. For hosted customers we can create logical partitions in our multi-region infra; for Dedicated/Private we rely on customer-provided VPC region.
+- Cross-region failover: by default we won't replicate across regions for pinned tenants; we do provide optional DR if requested (higher cost).
+
+3) Deletion API + audit
+- Delete API: immediate logical delete + enqueue physical purge job.
+- Audit trail: immutable audit-log events written to append-only store (WORM-like S3 prefix) and available for export; include requestor, timestamp, object ids, purge job id.
+
+Security notes: 
+- KMS: keys must be region-bound; need to coordinate with KMS team for per-region key usage and key rotation policies.
+- Proof of deletion: we can provide signed manifests of deleted object IDs and purge job timestamps; legal team should validate format.
+
+Effort estimate (rough) for MVP: 
+- Design + spec: 1 week (INF-4521)
+- Implementation + infra changes: 4 weeks (core retention worker + APIs + region routing)
+- Tests + canary + docs: 2 weeks
+Total: ~7 weeks.
+
+Open questions for product/security sign-off: 
+- Allowed maximum custom TTL? (e.g., up to 7 years)
+- Default retention for hosted accounts (e.g., 365 days)
+- Required retention proof format for legal.
+
+Attachments: retention_design_sketch.png (diagram)
+
+-Dev
+Senior Software Engineer, Inference Runtime
+dev_patel@redwood.ai
+
+
+From: Lauren Bishop <lauren_bishop@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Dev Patel <dev_patel@redwood.ai>
+Cc: vivek_kulkarni@redwood.ai
+Date: 2026-04-13T09:40:00-07:00
+Subject: RE: POC: residency & retention questions
+
+Thanks Dev — this is very helpful. Product acceptance criteria I'd like to lock in before we hand to engineering: 
+
+Acceptance criteria (MVP):
+- Console: per-tenant retention selector with presets (30, 90, 365) + custom (customer-entered days up to max)
+- Console: region pinning toggle (US / EU / APAC) with note about DR opt-in costs
+- API: /v1/tenants/{id}/retention GET/PUT and /v1/tenants/{id}/delete to trigger logical delete
+- Audit: downloadable CSV export of deletion events (ISO timestamps, user id, object ids, job id)
+- Security: region-bound KMS keys for pinned tenants; delete-manifest signed by service KMS key
+
+Policy decision needed: max custom TTL = 7 years or unrestricted? Legal and security usually prefer an upper bound — propose 7 years for now.
+
+Timeline: I agree ~7 weeks for an MVP. For the POC with Stellar Retail we can scope a trimmed canary: implement retention selector + delete API + exportable audit CSV (no Console UX polish) and deliver in ~3 weeks if we deprioritize region pinning UI and DR. That gives them deletion proof and TTL control for their POC.
+
+Marissa — please confirm whether Stellar is OK with the 3-week trimmed POC scope. If yes, I'll raise a PRD ticket and mark INF-4521 as P1 for the sprint.
+
+-Lauren
+Director, Product — Redwood Inference
+lauren_bishop@redwood.ai
+
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Nadia Brooks <nbrooks@stellar-retail.com>
+Cc: lauren_bishop@redwood.ai, dev_patel@redwood.ai, vivek_kulkarni@redwood.ai
+Date: 2026-04-15T16:45:00-07:00
+Subject: RE: POC: residency & retention questions — proposed scope & timeline
+
+Hi Nadia —
+
+Quick summary & proposed next steps from our side: 
+
+Scope for POC (trimmed MVP, 3-week delivery):
+- Per-tenant retention selector (Console API + minimal UI) with presets 30/90/365 and a custom field (max 7 years)
+- Deletion API that triggers logical delete + background purge
+- Downloadable audit CSV with deletion proof (signed manifest + job id)
+
+Notes: region pinning (US/EU/APAC) is supported but will be staged after the trimmed POC as it requires infra partitioning and KMS coordination. If you require region pinning for the POC we can add it but timeline increases to ~7 weeks.
+
+Deliverables: MVP-specs.pdf (attached) and the PRD link here: https://drive.google.com/drive/folders/1a2b3cDEFghi
+
+Can you confirm by EOD tomorrow if the trimmed POC is acceptable or if you need region pinning included? Once you confirm I'll create a formal mutual action plan and calendar a kickoff.
+
+Thanks — looking forward to moving quickly on this.
+
+Best,
+Marissa
+Account Exec — Redwood Inference
+marissa_cole@redwood.ai
+
+Attachment: MVP-specs.pdf (PDF stub)

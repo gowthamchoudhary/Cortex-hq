@@ -1,0 +1,153 @@
+Orbit Commerce launch: spike of 5xx/429 during planned ramp - mitigation & exec note
+
+From: Alex Green <alex.green@orbitcommerce.com>
+To: Aditya Rao <aditya.rao@redwood.ai>
+Date: 2026-11-29T10:05:00Z
+Subject: Orbit Commerce ramp test produced 5xx/429 spike — urgent
+
+Aditya —
+
+We ran the agreed ramp test this morning starting at 10:00 UTC (target 250 RPS steady-state). Around 10:12 we started seeing a spike of 5xx (mostly 500/503) and a secondary spike of 429s. Our webapp started timing out and automatically retried a subset of requests which amplified the issue. Attached is a short error dump and a screenshot from our dashboard showing the error % jump.
+
+Impact: checkout latency degraded; ~12% of requests failing for ~8 minutes during peak. We had the SRE on our side cut the ramp at 10:20.
+
+Can you confirm whether this was something on your side (rate limiter, global quota, or backend saturation)? We need an urgent mitigation and a plan before our next scheduled ramp tomorrow.
+
+Thanks,
+Alex
+Alex Green
+Platform Lead, Orbit Commerce
+attachments: orbit_error_dump_20261129.log, dashboard_screenshot_1012.png
+From: Aditya Rao <aditya.rao@redwood.ai>
+To: Mina Haddad <mina.haddad@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-11-29T10:14:00Z
+Subject: Fwd: Orbit Commerce ramp test produced 5xx/429 spike — urgent
+
+Forwarding Alex's note — short summary & proposed immediate actions below.
+
+Summary:
+- Planned ramp to 250 RPS at 10:00 UTC; spike in 5xx/429 observed from ~10:12–10:20.
+- Customer reports retries from client side exacerbating error rates.
+
+Immediate ask for SRE (Mina): can you triage and apply quick mitigations? Suggested levers:
+- Reduce route max_concurrency from 100 -> 40 for the launch window (soft throttling).
+- Temporarily pin Orbit to a dedicated pool variant (lower perf but stable).
+- Enable 5xx->429 mapping at the load balancer + add 100–300ms response jitter recommendation for client.
+
+Marcus — want your read on whether we should proactively pause tomorrow's ramp until we confirm stability. Marissa — can you draft a brief customer-facing update (1–2 bullets) acknowledging and outlining steps?
+
+I'll loop in customer execs after we have a mitigation timeline.
+
+-Aditya
+attachments: orbit_error_dump_20261129.log
+From: Mina Haddad <mina.haddad@redwood.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-11-29T10:27:00Z
+Subject: Re: Fwd: Orbit Commerce ramp test produced 5xx/429 spike — urgent
+
+Aditya / team — quick triage notes and actions taken at 10:27 UTC:
+
+What we saw (quick):
+- Tail latency on long-response model routes spiked (P95->P99).
+- Evidence of KV-cache thrashing: cache hit-rate dropped when the ramp hit sustained sequences.
+- GPU kernel queueing increased CPU-side scheduling latencies — some requests timed out and surfaced as 500/503.
+- Client retries caused bursty replays -> retry storm pattern (many 429s follow).
+
+Immediate mitigations applied (10:27–10:35):
+- Reduced max_concurrency for Orbit route to 40 (soft throttle).
+- Temporarily routed the account to a dedicated small pool with warmed embeddings/kv caches.
+- Adjusted LB to map transient 5xx to 429 for a 2-minute window to force client backoff.
+- Added a transient 200ms server-side delay to spread out retries (experimental but helped).
+
+Status: error rate dropped to baseline over ~6 minutes after mitigations. We collected heap traces and attached the error dump.
+
+Next steps (short):
+- Schedule kernel parameter tuning and KV prewarm before next ramp. Owner: infra (Mina).
+- Recommend progressive ramp with 10-minute holds and prewarm step. Owner: Marcus + CS.
+
+I'll follow with a runbook excerpt and a short incident timeline for the customer note.
+
+-Mina
+attachments: orbit_error_dump_20261129.log
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>, Mina Haddad <mina.haddad@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-11-29T11:05:00Z
+Subject: Re: Orbit ramp spike — product follow-up
+
+Thanks Mina — good quick work. A couple product notes for the postmortem and long-term fix: 
+
+- This looks like a workload-shape issue: long-sequence prompts + cache churn. We should add an automated prewarm signal for planned launches.
+- Kernel scheduling: consider a scheduling window that prioritizes short-latency routes during launches (reduce head-of-line blocking).
+- We should enhance the console to show "launch mode" recommendations (dedicated pool suggestion + concurrency cap).
+
+For customer comms: propose we offer Orbit a 1-hour dedicated launch window (engineered prewarm + SRE on call) and a one-time credit gesture. Aditya / Marissa — can you confirm what the customer is asking for (credit + reschedule)?
+
+I'll own the postmortem and include a prioritization ticket for prewarm/launch-mode features. ETA for postmortem: 2026-12-06.
+
+-Marcus
+
+From: Aditya Rao <aditya.rao@redwood.ai>
+To: Alex Green <alex.green@orbitcommerce.com>, Platform Ops <platform-ops@orbitcommerce.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Mina Haddad <mina.haddad@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: 2026-11-29T11:22:00Z
+Subject: RE: Orbit Commerce ramp test produced 5xx/429 spike — mitigation & plan
+
+Alex — thank you for the heads up and the artifacts. Quick summary from our side:
+
+- Cause (preliminary): cache thrash + kernel queueing causing elevated tail latency; client retry pattern amplified the impact.
+- Immediate actions: we reduced concurrency, routed you to a warmed pool, and applied a short 5xx->429 mapping to encourage client backoff. Error rates returned close to baseline after ~6 minutes.
+- Offer: Redwood can provide a 1-hour dedicated launch window with SRE on-call and prewarm steps; as goodwill we'll apply a one-time credit (10% of this month's invoice) if you'd like.
+
+Can you confirm whether you'd like us to hold tomorrow's ramp until we've completed the postmortem and prewarm? If you want to proceed, let's agree on a stepped ramp plan: start 25 RPS, 10-minute hold, then 2x each step until 250 RPS with a prewarm run 30 minutes prior.
+
+We will send a short executive note summarizing the incident once the postmortem is complete.
+
+-Aditya
+
+On 2026-11-29T10:05:00Z Alex Green wrote:
+> Aditya —
+> 
+> We ran the agreed ramp test this morning starting at 10:00 UTC...
+
+attachments: mitigation_playbook_v1.pdf
+From: Alex Green <alex.green@orbitcommerce.com>
+To: Aditya Rao <aditya.rao@redwood.ai>
+Cc: Platform Ops <platform-ops@orbitcommerce.com>
+Date: 2026-11-30T09:04:00Z
+Subject: RE: Orbit Commerce ramp test produced 5xx/429 spike — mitigation & plan
+
+Aditya / team — thanks for the quick response and for the offer. We ran a smaller validation yesterday afternoon after your mitigations and saw improvement, but when we resumed a staged ramp this morning there were still intermittent 429s at ~150 RPS for short bursts. Not full regressions but enough to worry our release team.
+
+We want the dedicated hour with SRE support and a prewarm. Also please confirm the credit in writing.
+
+We'll hold the public launch until we do a supervised run with Redwood.
+
+Regards,
+Alex
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>, Mina Haddad <mina.haddad@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: 2026-11-30T16:42:00Z
+Subject: Orbit launch coordination + customer note (draft)
+
+Team — draft customer-facing note below. I will send once Aditya signs off. Also enumerated action owners and dates.
+
+Customer note (draft) — short:
+Hi Alex — thank you for working with us. Quick summary: we identified cache-thrashing and GPU kernel queueing during your ramp which, combined with client retries, produced a transient error spike. We reduced concurrency, routed you to a warmed pool, and applied temporary controls; error rates returned toward baseline.
+Next steps:
+- Schedule 1-hour supervised launch window with Redwood SRE (prewarm + progressive ramps). Owner: Aditya / Marissa.
+- Postmortem and technical fixes (KV prewarm + kernel tuning) due 2026-12-06. Owner: Marcus.
+- One-time service credit (10% of November invoice) to be applied. Owner: Finance Ops (I'll coordinate).
+
+Action owners & timeline:
+- Aditya: Confirm launch window and send customer note (2026-11-30).
+- Mina: Deliver runbook excerpt and prewarm checklist (2026-12-02).
+- Marcus: Postmortem + prioritization ticket for launch-mode features (2026-12-06).
+
+I'll send the note and the credit confirmation once Aditya gives the final OK.
+
+-Marissa
+attachments: mitigation_playbook_v1.pdf, orbit_error_dump_20261129.log

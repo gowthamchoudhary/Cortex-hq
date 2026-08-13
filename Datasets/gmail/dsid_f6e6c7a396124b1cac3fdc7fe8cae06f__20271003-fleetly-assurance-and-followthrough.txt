@@ -1,0 +1,144 @@
+Fleetly checkout instability — assurance deliverables & follow-through
+
+From: Aisha Gomez <aisha.gomez@fleetly.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: procureops@fleetly.com
+Date: 2027-10-01T08:12:00-07:00
+Subject: Urgent: Latency spike impacting Fleetly checkout — need immediate support
+
+Jordan —
+
+We just started seeing a sharp spike in checkout latency and a correlated increase in 500-level errors across multiple regions (US-WEST and US-EAST) starting ~07:50 PDT. This is directly impacting conversions — checkout confirms are timing out and our payment provider is rejecting retries.
+
+Numbers from our side (summary):
+- Error rate up from 0.4% to 6.2% between 07:50–08:05
+- Median latency for /checkout/generate dropped from ~120ms to 900ms, p95 > 3s
+- Throughput dropped ~35% due to retries and backpressure
+
+We need immediate mitigation and an exec-level update. Can you confirm:
+1) Whether Redwood has an active incident?
+2) Can you pin us to a stable model variant or open an emergency burst for Dedicated fleet?
+3) We will need a writeup of root cause and a timeline for remediation — procurement wants it for their audit.
+
+Screenshot attached (fleetly_screenshot_101.png). I’ve CC’d procureops for procurement visibility. Please escalate to your operations and product teams — this is affecting our peak traffic window.
+
+Thanks,
+Aisha Gomez
+Head of Platform Reliability, Fleetly
+A: aisha.gomez@fleetly.com
+
+--- attachment: fleetly_screenshot_101.png (image/png) ---
+From: Jordan Blake <jordan.blake@redwood.com>
+To: neha.kapoor@redwood.com, kimberly.park@redwood.com, marcus.lin@redwood.com
+Cc: Aisha Gomez <aisha.gomez@fleetly.com>
+Date: 2027-10-01T08:27:00-07:00
+Subject: Re: Urgent: Latency spike impacting Fleetly checkout — need immediate support
+
+Team —
+
+Seeing this come in from Fleetly (below). I’ve put this in the high-priority queue. Immediate asks:
+- Neha: please open an incident, capture the first-seen and link to traces. Prioritize p95/p99 tail latencies and error-rate spike.
+- Marcus: can we temporarily pin Fleetly to the 8-bit quantized variant (v3-q8) and enable burst nodes in us-west? If pinning helps, we can avoid a full rollback.
+- Kimberly: procurement and customer success will need an exec readout; please prepare a one-page summary and propose any customer credits.
+
+Aisha — we’re on this. Neha will send an initial incident note in ~15m and we’ll propose mitigations immediately.
+
+Jordan Blake
+Account Executive, Redwood Inference
+jordan.blake@redwood.com
+Redwood Inference
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, kimberly.park@redwood.com, marcus.lin@redwood.com
+Cc: Aisha Gomez <aisha.gomez@fleetly.com>
+Date: 2027-10-01T09:10:00-07:00
+Subject: RE: Urgent: Latency spike impacting Fleetly checkout — need immediate support
+
+Quick technical summary (initial findings):
+- Scope: requests routed to the hosted inference pool servicing Fleetly saw a sudden rise in KV-cache misses for long-prefix checkout prompts (related to recent prompt expansion on Fleetly side).
+- Root cause (prelim): a pattern of longer-than-usual prefixes caused more frequent cache invalidations across instances, which amplified cross-instance KV-sync operations and increased per-token tail latency. That, combined with a collector bug that delayed garbage collection of per-request caches, resulted in request queues backing up and higher 5xx from timeouts.
+
+Mitigations applied (09:05 PDT):
+1) Enabled prefix-level cache warming for Fleetly routes (warm cached keys for hot prefixes).
+2) Temporarily increased concurrency on the dedicated shard serving Fleetly (burst capacity + wavier routing).
+3) Reduced batch timeout from 25ms -> 10ms for the checkout route to favor lower latency over throughput.
+
+Initial impact: error-rate down from 6.2% -> 1.8% over 15m, p95 improved from >3s to ~450ms; throughput recovering but still ~10% below baseline.
+
+Attachments: preliminary RCA draft attached (fleetly_prelim_rca_v1.pdf). I’ve added trace links to the incident ticket.
+
+Action items (owner -> next step):
+- Neha -> complete trace-level RCA and get approval from infra (ETA 2027-10-02 EOD).
+- Marcus -> test and validate model-variant pinning rollback plan (ETA 2027-10-01 14:00 PDT).
+- Kimberly -> schedule exec readout with Fleetly and procureops (ETA 2027-10-01 11:30 PDT).
+
+Neha
+Senior SRE, Redwood Inference
+neha.kapoor@redwood.com
+
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Aisha Gomez <aisha.gomez@fleetly.com>, Jordan Blake <jordan.blake@redwood.com>
+Cc: neha.kapoor@redwood.com, marcus.lin@redwood.com
+Date: 2027-10-02T15:35:00-07:00
+Subject: Fleetly incident readout — proposed mitigations and exec call
+
+Aisha —
+
+Thanks again for flagging this early. We’ve validated the initial mitigations Neha applied and scoped the longer-term fixes. Proposed next steps and what we want to commit to you: 
+
+1) Immediate (this week)
+- Finalize and ship cache-gc fix to prevent delayed cache reclaiming (target: 2027-10-04).
+- Keep Fleetly pinned to v3-q8 variant and maintain burst capacity while we validate stability.
+- Provide 30% credit for any measured lost conversions during the incident window (TBD by procurement).
+
+2) Near-term (2–4 weeks)
+- Implement a workload-aware batching policy for Fleetly routes (adaptive batch timeout + prefix sensitivity).
+- Harden prefix cache warming paths and add early-warning metrics (p50/p95 mismatches).
+
+3) Longer term (quarter)
+- Add a model-variant fallback that prefers low-latency kernels for checkout paths when tail-latency exceeds SLO.
+- Audit and update our monitoring playbooks so ops gets an automated recommended mitigation sequence.
+
+We propose a 30-minute exec readout today at 16:00 PDT to walk through the timeline, compensations, and our action tracker. Link: https://drive.google.com/drive/fleetly-rca-sheet (read-only until final doc).
+
+Please let me know if 16:00 works. Jordan — I’ll draft the one-pager and attach a versioned action tracker.
+
+Kimberly Park
+Head of Customer Success, Redwood Inference
+kimberly.park@redwood.com
+--- attachment: fleetly_action_tracker.csv (text/csv) ---
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Aisha Gomez <aisha.gomez@fleetly.com>, procureops@fleetly.com
+Cc: neha.kapoor@redwood.com, kimberly.park@redwood.com, marcus.lin@redwood.com
+Date: 2027-10-03T11:00:00-07:00
+Subject: Final: Fleetly incident RCA, actions, and verification plan
+
+Aisha / Fleetly team —
+
+Attached is our finalized RCA (fleetly_final_rca_v2.pdf) and the completed action tracker (fleetly_action_tracker.csv). Summary highlights: 
+
+- Root cause: longer prompt prefixes led to cache thrash + delayed GC, amplifying KV-sync work across instances and spiking token-level tail latency during a high-concurrency window.
+- What we changed: prefix-warming, GC fix (deployed 2027-10-02), temporary variant pinning to v3-q8, adaptive batching rollout for checkout routes, and new early-warning metrics (p50/p95 delta alerts).
+- Outcomes: measured error-rate returned to baseline within 90 minutes of mitigations; conversion loss estimated and itemized in the tracker.
+
+Action tracker (high level):
+- Neha: validate GC fix in staging and run chaos tests (due 2027-10-08).
+- Marcus: complete automated rollback/pinning playbook for model variants (due 2027-10-10).
+- Kimberly: finalize compensation calculation with procurement, deliver credit note by 2027-10-05.
+- Jordan: coordinate executive sign-off and share final readout with Fleetly execs (complete).
+
+Verification plan: we will run a two-week elevated monitoring window for Fleetly routes and provide daily status updates (email + dashboard snapshot) until 2027-10-17. After that, we’ll move to weekly checks for the next quarter.
+
+Links and attachments:
+- Final RCA: fleetly_final_rca_v2.pdf (attached)
+- Action tracker (CSV) and live sheet: https://drive.google.com/drive/fleetly-rca-sheet
+- HubSpot deal: https://app.hubspot.com/contacts/12345/deal/4729
+
+If you want a short exec recording walking through the RCA, I can schedule and record a 10-minute readout.
+
+Thanks for your patience, and we’ll stay closely coordinated for the verification window.
+
+Jordan Blake
+Account Executive, Redwood Inference
+jordan.blake@redwood.com
+--- attachments: fleetly_final_rca_v2.pdf, fleetly_action_tracker.csv ---

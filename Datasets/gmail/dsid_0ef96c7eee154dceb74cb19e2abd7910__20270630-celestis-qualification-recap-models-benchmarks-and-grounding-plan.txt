@@ -1,0 +1,126 @@
+Post-call recap: model & grounding evaluation plan for Celestis Health
+
+From: Marcus Lin <marcus@redwood.ai>
+To: Sofia Mendez <sofia@celestishealth.com>
+Cc: Rachel Kim <rachel_kim@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Date: Wed, 30 Jun 2027 14:12:00 -0700
+Subject: Post-call recap: model & grounding evaluation plan for Celestis Health
+
+Sofia — thanks again for a productive call today. Summary + recommended next steps below so we have a single source of truth.
+
+Quick recap of goals we reviewed:
+- Primary: accurate, evidence-backed answers to clinician queries over your SOPs and knowledge base (short answers + citations).
+- Constraints: sub-300ms token latency target for 95th percentile for UI flows; strict PHI/data residency requirements (US only).
+- Volume: expected 200k monthly sessions at pilot scale, spiky peaks expected during morning rounds.
+
+Recommended initial evaluation plan (RAG-focused):
+1) Models to benchmark (initial):
+   - Redwood-7B-v1 (optimized inference profile, q4f16 path) — baseline for quality/latency balance
+   - Llama-2-13B (q4f16) — quality ceiling for retrieval + cross-encoder reranker experiments
+   - Redwood-3B-fast (low-latency) — control for cost/latency tradeoffs
+
+2) Retrieval config to try in first pass:
+   - Chunking: 600–800 token chunks with 128-token overlap for clinical SOPs
+   - Embedding model: bi-encoder using (recommended) 'embed-large-v2' for higher recall
+   - Vector index: hybrid ANN (HNSW) + time-based secondary filter for doc freshness
+
+3) Reranker options and when to use them:
+   - Light re-ranker (dot-product re-rank on dense vectors): use for low-latency scoring (fast path)
+   - Cross-encoder reranker (small cross-encoder ~200M): use for high-sensitivity questions or safety-critical answers; evaluate latency and run only on top-K=20 candidates as a compromise.
+
+4) Grounding & metrics we will report:
+   - Source precision (percent of answers with at least one correct supporting doc)
+   - Supporting-evidence recall (how often the true source is present in top-K)
+   - Hallucination rate (human-reviewed false assertions per 100 answers)
+   - Answer latency (p95 token latency) and cost per session
+
+Deliverables and timeline:
+- By Fri (2027-07-02): we’ll share the initial prompt set and a small synthetic query suite (attached: celestis_eval_promptset_v1.csv).
+- Week 1 (pilot): Redwood will run a 2k-question sweep across the three model configs above and return a one-pager with the metrics above and sample failure modes (benchmarks_celestis_20270630.pdf).
+- Technical deep-dive: propose Tue 2027-07-06 10:00 AM PT to loop in eng/infra for deployment constraints and private vs dedicated recommendations.
+
+Notes/asks for your team: please confirm whether we should prioritize private deployment (VPC/on-prem) for the pilot or if Dedicated reserved capacity in us-west is acceptable as a first step. Also send a small redacted doc sample if you can — it helps tune chunking.
+
+Attachments: celestis_eval_promptset_v1.csv, benchmarks_celestis_20270630.pdf (initial template)
+
+Thanks — happy to adjust timing if it helps.
+
+—Marcus
+Marcus Lin
+Solutions Engineer, Redwood Inference
+marcus@redwood.ai
+
+
+From: Sofia Mendez <sofia@celestishealth.com>
+To: Marcus Lin <marcus@redwood.ai>
+Cc: Celestis AI Team <ai-team@celestishealth.com>
+Date: Wed, 30 Jun 2027 15:03:20 -0700
+Subject: Re: Post-call recap: model & grounding evaluation plan for Celestis Health
+
+Thanks Marcus — this is very thorough and aligned with what we discussed. A couple quick clarifications before we lock dates: 
+
+1) Data residency and PHI: for the pilot we need to ensure no patient identifiers leave our VPC. Is the Private deployment the only option to guarantee that, or can Dedicated with customer-managed KMS satisfy our compliance team?
+
+2) Quantization/quality: you mentioned q4f16 for Redwood-7B — do you have any internal numbers on small but clinically significant drop in factuality vs float32 for the cross-encoder reranker path? Our clinicians will be sensitive to even small hallucination increases.
+
+3) Sample doc: attaching an anonymized SOP snippet (attachment: celestis_sop_sample_redacted.docx). We redacted names but left structure for chunking.
+
+We can tentatively do Tue 7/6 10am PT for the deep-dive — I'll confirm after checking with infra.
+
+—Sofia
+Sofia Mendez
+Head of Applied AI, Celestis Health
+sofia@celestishealth.com
+
+
+From: Marcus Lin <marcus@redwood.ai>
+To: Sofia Mendez <sofia@celestishealth.com>
+Cc: Rachel Kim <rachel_kim@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Date: Thu, 1 Jul 2027 08:42:00 -0700
+Subject: Re: Post-call recap: model & grounding evaluation plan for Celestis Health
+
+Sofia — appreciate the quick reply and the redacted SOP snippet. Short answers inline below.
+
+1) Data residency: both approaches are workable but trade-offs differ:
+   - Private deployment (recommended): customer-managed control plane + VPC-only access; we do not ingest data into our hosted index. This is the clearest path for PHI-sensitive workloads and will satisfy tight compliance gates.
+   - Dedicated with customer-managed KMS: possible if legal signs a narrow data-processing addendum; logs/audit configuration can be restricted, but there is slightly more operational surface. We'll bring our compliance engineer to the deep-dive to walk through specifics.
+
+2) Quantization & factuality: short answer — small quality delta for many instruction tasks, but clinical specificity can degrade for rare tokens or precise numeric values. Our recommendation:
+   - Start with Redwood-7B-v1 q4f16 for the first sweep; compare to Llama-2-13B float32 (or q4f16 variant) specifically on a small clinical QA holdout where clinicians check for numeric/dose-like answers.
+   - If we observe increased hallucination on quantized runs, we can fall back to cross-encoder verification + grounding rules (i.e., require a supporting doc match above a confidence threshold before returning an answer).
+
+3) Reranker config: attaching an initial YAML (initial_reranker_config.yaml) with two candidates — light vector re-rank and a small cross-encoder. Priyom, can you prepare the cross-encoder candidate (weights + cost estimate) ahead of Tue deep-dive? Rachel, can you scope the 2k-question sweep and confirm compute estimate?
+
+Links that address Sofia's questions:
+- Private deployment overview & compliance: https://redwood.example.com/private-deployments
+- Quantization tradeoffs note: https://redwood.example.com/notes/quantization-fidelity
+- Celestis benchmark space (will update after sweep): https://redwood.example.com/benchmarks/celestis-2027
+
+Next steps (action items):
+- Marcus: upload the evaluated prompt set + schedule deep-dive (I’ll send a calendar invite once Sofia confirms).
+- Priyom: prepare initial reranker config and cost estimate (attach at least rough GPU-hours).
+- Rachel: produce compute estimate and expected p95 token latency projections for each model config.
+
+Thanks — we’ll be ready to share the first set of results within 5 business days after we have the sample data.
+
+—Marcus
+
+
+From: Marcus Lin <marcus@redwood.ai>
+To: Rachel Kim <rachel_kim@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Date: Thu, 1 Jul 2027 09:45:00 -0700
+Subject: Internal: Celestis pilot quick asks (reranker + sweep scope)
+
+Team — quick internal note to prep before the deep-dive. Thread: CEL-2027-042.
+
+Priority asks: 
+- Priyom: pull the small cross-encoder candidate (approx ~200M params) and produce a 1-page estimate: GPU-hours and cost for running cross-encoder on top-K=20 for 2k queries. Include expected p99 latency contribution.
+- Rachel: define the 2k-question sweep plan (holdout split, clinician review budget for hallucination labeling, QA F1 measure) and compute estimate for the three model configs (Redwood-7B-q4f16, Llama-2-13B, Redwood-3B-fast). 
+
+Metrics to return in the first pass: source precision, supporting-evidence recall@20, hallucination rate per 100 answers (human-labeled), p95 latency, and estimated cost per 1k sessions.
+
+I attached the initial reranker config and the prompt set we will send to the customer. I’ll draft the invite after Sofia confirms Tuesday.
+
+Thanks — Marcus
+
+

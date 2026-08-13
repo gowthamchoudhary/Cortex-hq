@@ -1,0 +1,131 @@
+Connectivity options for Private Deploy (VPC peering / PrivateLink / S2S VPN) — next steps
+
+From: Rohit Malhotra <rohit@edgehealth.io>
+To: Marcus Lin <marcus.lin@redwood.com>
+Cc: EdgeHealth Networking <networking@edgehealth.io>
+Date: 2025-07-10T09:12:00-07:00
+Subject: Private deployment connectivity — quick context and ask
+
+Marcus,
+
+Thanks for the walkthrough earlier. We're moving the PoC for Redwood Private into our staging VPC next month and need a recommended connectivity pattern: low-latency inference calls from our app fleet (in our VPC), secure control-plane access for telemetry, and a fallback path if the primary link has an outage.
+
+Our constraints:
+- No internet egress for request traffic (compliance)
+- 20–50 ms P99 between app tier and inference endpoints desired
+- Ops team prefers minimal networking changes on our side
+
+Can you sketch the pros/cons for VPC peering vs PrivateLink vs site-to-site VPN and indicate Redwood's recommended default for a customer like us?
+
+Attaching current topology.
+
+— Rohit
+Network Lead, EdgeHealth
+
+---
+attachment: edgehealth-current-topology.png (image/png)
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Rohit Malhotra <rohit@edgehealth.io>
+Cc: ben.carter@redwood.com, kimberly.park@redwood.com
+Date: 2025-07-10T11:03:00-07:00
+Subject: Re: Private deployment connectivity — quick context and ask
+
+Rohit — thanks for the details and the topology. High level answers up front so your ops team can triage:
+
+Short recommendation (starter): PrivateLink (interface endpoints) for control plane + Direct Peering for dataplane where low P99 latency is required. If your team cannot set up peering, use S2S VPN as a fallback for limited throughput.
+
+Why:
+- PrivateLink: strong isolation for control-plane telemetry and reduces need to open inbound rules; good for compliance and audit.
+- VPC Peering: lowest latency if you can accept full-mesh routing and security review; simpler packet flow (no extra proxies) but scales poorly across many customer VPCs.
+- S2S VPN: easiest with existing firewalls, but higher jitter/latency and operationally brittle for high QPS.
+
+I'll loop in internal networking folks with tradeoffs and a quick action plan. Suggested next step: 1) confirm VPC CIDR overlap risk (if any), 2) indicate whether you can accept cross-VPC routing (peering) or prefer endpoint abstraction.
+
+Marcus
+Senior Solutions Architect, Redwood Inference
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Marcus Lin <marcus.lin@redwood.com>, Rohit Malhotra <rohit@edgehealth.io>
+Cc: kimberly.park@redwood.com
+Date: 2025-07-10T14:28:00-07:00
+Subject: Fwd: Private deployment connectivity — notes and quick tradeoffs
+
+Forwarding a short tradeoffs list we discussed internally. Rohit — adding detail for your network folks.
+
+--- original below ---
+
+Tradeoffs summary (peering / privatelink / s2s vpn):
+
+1) Latency and packet path
+- VPC peering: best (no intermediate NAT or proxy). P99 expectations in-prod: 10–30 ms cross-AZ depending on cloud region. Ideal when your app and private nodes are both in same cloud region.
+- PrivateLink: adds a proxy hop (AWS ENI + NLB path) — usually adds ~2–8 ms and is stable. Good when you want explicit service endpoints and don't want route table changes.
+- S2S VPN: variable; typical additional jitter and 10–40+ ms added; not recommended for strict p99 goals.
+
+2) Security & blast radius
+- VPC peering: implicit routing; requires careful route management and can increase blast radius if not segmented per-VPC. No endpoint-level IAM.
+- PrivateLink: service-level isolation, good for least-privilege. Traffic is private to provider endpoints. Works nicely with endpoint policies.
+- S2S VPN: depends on firewall rules; encrypted but susceptible to NAT/MTU issues.
+
+3) Operational complexity
+- VPC peering: once set up, low ops. But CIDR overlap means no-go. Cross-account peering requires approvals.
+- PrivateLink: more components (NLB, ENIs); our side needs to expose an endpoint service. Easier for customer to adopt without broad network changes.
+- S2S VPN: quickest short-term but requires monitoring and failover automation (BGP recommended if throughput is moderate).
+
+4) Scaling & multi-region
+- Peering: not transitive; multi-region needs multiple peerings or backbone.
+- PrivateLink: region-scoped endpoints; for multi-region you need regional endpoints.
+- VPN: can be combined with transit/VPN concentrators but complexity rises.
+
+Operational suggestion for EdgeHealth:
+- Phase 1 (PoC): PrivateLink (control plane + low-volume dataplane) so your teams don't need route changes.
+- Phase 2 (production): Add a peering link or direct cloud interconnect for high-throughput, low-p99 paths. Keep PrivateLink for control-plane telemetry and admin access.
+
+Attachments: privatelink-vs-peering-cheatsheet.pdf attached.
+
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Marcus Lin <marcus.lin@redwood.com>, Ben Carter <ben.carter@redwood.com>, Rohit Malhotra <rohit@edgehealth.io>
+Date: 2025-07-11T08:47:00-07:00
+Subject: Re: Private deployment connectivity — security checklist and PCI/PHI notes
+
+Adding a security lens for your compliance team:
+
+- Data in flight: all three patterns support TLS; PrivateLink and VPN provide strong channeling for minimizing internet egress.
+- Identity & Access: PrivateLink allows us to put endpoint policies and require mTLS from the customer side. For peering, we recommend restricting SGs and using mutual TLS between services.
+- Audit & logging: with PrivateLink we can produce ENI-level flow logs and tie AD audit events. For peering, you'll want VPC Flow Logs enabled on both sides and central log collection.
+- Failover: If you adopt peering + PrivateLink, configure a health-checked failover route (e.g., route via PrivateLink NLB if peering path drops) — this is what we used for another customer to meet a 99.9% path SLA.
+
+Operational asks for EdgeHealth:
+1) Confirm whether you can accept a dedicated CIDR for Redwood endpoints (recommended).
+2) Share any approved firewall egress ports (we typically need 443 + health-check ports).
+3) Indicate if you have a transit/VPN concentrator or prefer per-VPC config.
+
+Happy to run a short 30-min ops call to map ACLs and Security Group entries.
+— Soojin
+Security & Compliance, Redwood Inference
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Rohit Malhotra <rohit@edgehealth.io>
+Cc: ben.carter@redwood.com, kimberly.park@redwood.com, soojin.lee@redwood.com
+Date: 2025-07-11T15:30:00-07:00
+Subject: Re: Private deployment connectivity — next steps and mutual action plan
+
+Rohit — thanks all. Proposed mutual action plan below; suggested owners and ETA:
+
+1) Confirm CIDR overlap risk (EdgeHealth) — due 2025-07-13 — owner: EdgeHealth network team (rohit)
+2) Decide Phase 1 path: PrivateLink for control-plane + optional dataplane (EdgeHealth) — due 2025-07-15
+3) Redwood: create endpoint service and share service-id + policy template — due 2025-07-17 — owner: Marcus/Ben
+4) Ops call to validate SGs and firewall rules (30 min) — schedule by 2025-07-16 — owner: Kimberly/Soojin
+5) If Phase 2 requires peering, draft peering request and run security review — target week of 2025-07-21
+
+I uploaded the suggested policy templates and our diagram to the shared folder: https://drive.redwood.com/drive/folders/edgehealth-privatedeploy
+HubSpot record: HS-82341.
+
+If that looks good I'll open the endpoint service request and propose two time slots for the ops call.
+
+Thanks,
+Marcus
+Senior Solutions Architect, Redwood Inference
+
+---
+attachments: privatelink-vs-peering-cheatsheet.pdf, edgehealth-current-topology.png

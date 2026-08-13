@@ -1,0 +1,106 @@
+Recap: HelioPay discovery — budget boundaries, batching trade-offs, next steps
+
+From: Alicia Ramos <alicia@heliopay.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>
+Cc: Tom Bradley <tom.bradley@heliopay.com>, HelioPay Finance <finance@heliopay.com>
+Date: 2026-05-11 09:12:00 -0700
+Subject: Discovery follow-up: HelioPay / Redwood
+
+Hi Hannah,
+
+Thanks for the discussion this morning — helpful to get a handle on what Redwood does and how others have optimized costs with batching/caching. Quick summary from my side and a couple of clarifications we need before pulling finance into an explicit budget discussion.
+
+Key pain points we raised:
+- Production token costs are spiking for our decrypted transaction enrichment pipeline (real-time fraud scoring + enrichment).
+- Current endpoint (self-hosted) has unpredictable tail latency during peaks which breaks SLAs for merchant-facing flows.
+- Limited ops bandwidth to manage quantization/variant testing and cache invalidation across models.
+
+Goals we articulated:
+- Ceiling for incremental inference spend: $22k/month for the initial pilot (must include everything).
+- Latency target: p99 < 450ms for scoring path; 95th < 200ms preferred.
+- Proof points: 30% reduction in per-token cost or a defined path to a combined 20–30% unit savings through batching + caching.
+
+Clarifications requested (from your side):
+1) How aggressively can Redwood’s autoscaling + batching push down per-token costs for a baseline 256-token average request?
+2) What are typical cache hit rate assumptions and how often do customers see invalidation complexity (and ops burden) when models change?
+3) For a committed pilot (3 months) — what committed spend level unlocks the most material per-token discounts or capacity guarantees?
+
+Could you send a quick sketch of the TCO assumptions (token price, expected throughput, hit-rate scenarios) and any sample savings case studies? We’ll share an internal TCO template (attached) and loop Finance if the numbers look feasible.
+
+Thanks,
+Alicia Ramos
+Head of Integrations
+HelioPay
+
+Attachment: HelioPay_TCO_v1.xlsx (HelioPay template)
+
+From: Hannah Schmitt <hannah_schmitt@redwood.ai>
+To: Alicia Ramos <alicia@heliopay.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: 2026-05-11 11:05:00 -07:00
+Subject: Re: Discovery follow-up: HelioPay / Redwood
+
+Alicia — thanks for the clear recap and the TCO template. Posting answers inline and attaching a succinct pricing snapshot + a quick sketch model we can iterate on.
+
+Inline answers:
+1) Baseline 256-token average: with continuous batching and prefix/kv caching we typically see 25–40% per-token cost reductions at pilot scale (depending on request concurrency). For steady 200rps during peak windows + batching window tuned to 40–60ms, your effective token cost could be roughly 30% lower than naive single-request inference.
+
+2) Cache hit-rate assumptions: we see 35–65% hit rates for prompt-heavy productization (higher when prompts have stable prefixes). Model changes can require lightweight cache warming; our ops hooks include automated warmup and soft TTLs — in practice customers tolerate a 24–72 hour warmup window with minimal manual intervention. The ops burden is usually low if model variant rollouts are staged (canary first).
+
+3) Committed pilot economics: a 3-month reserved pilot at $60k commit yields material benefits — guaranteed capacity during peaks, a 10–15% reserved discount, and a dedicated onboarding credit for optimization work. If $22k/month is the true ceiling, we can structure a $66k/3mo commitment but we should discuss expectations for throughput vs commit.
+
+Next steps I propose (short):
+- Hannah/Marissa to convert your attached sheet into our comparison view (we’ll put three scenarios: conservative, expected, optimistic).
+- Quick synchronous review with your Finance (30m) once we have the comparison — can you share who in Finance you want us to invite?
+- If numbers align, draft a one-page mutual action plan (MAP) with success metrics and a pilot runbook.
+
+I’ve attached: redwood_pricing_snapshot_20260511.pdf and a one-tab sketch (HelioPay_TCO_redwood_sketch.xlsx).
+
+—Hannah
+Hannah Schmitt
+Senior Account Executive, Redwood Inference
+
+Attachments: redwood_pricing_snapshot_20260511.pdf; HelioPay_TCO_redwood_sketch.xlsx
+
+From: Tom Bradley <tom.bradley@heliopay.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>, Alicia Ramos <alicia@heliopay.com>
+Date: 2026-05-12 10:22:00 -07:00
+Subject: Re: Discovery follow-up: HelioPay / Redwood
+
+Thanks — quick note from Finance side.
+
+We can consider a 3-month pilot but need line-item clarity: total monthly cap must be visible, with clear breakpoints for additional spend. Our questions:
+- With a $66k commit, what is the expected monthly effective spend after discounts and credits?
+- Can Redwood provide a basic consumption alerting template for Finance (thresholds, daily rollup)?
+- Any standard security/compliance checklist we should send to our InfoSec?
+
+Happy to do a 30m review on Thursday if Hannah/Marissa are available.
+
+—Tom Bradley
+VP Finance, HelioPay
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Tom Bradley <tom.bradley@heliopay.com>, Alicia Ramos <alicia@heliopay.com>
+Cc: Hannah Schmitt <hannah_schmitt@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: 2026-05-13 15:42:00 -07:00
+Subject: Re: Discovery follow-up: HelioPay / Redwood
+
+Tom/Alicia — great to have Finance involved. Short answers and proposed meeting cadence below.
+
+1) Expected effective spend with $66k/3mo commit: net monthly outflow is typically the committed amount less onboarding credits; we’d model ~ $20k/month effective (post-credit) in the conservative case and ~ $17k/month in the expected case once batching/caching ramps. The attached snapshot shows line-item math (token price assumptions, estimated concurrency, cache-hit scenarios).
+
+2) Consumption alerting: yes — we’ll share a Finance-facing daily rollup CSV and set threshold email alerts (example thresholds: 60% of monthly cap, 85%, and 100%). We can include a small webhook to your billing system for automated notifications.
+
+3) Security/compliance: we’ll attach our standard checklist (SOC 2 type II evidence pointers, KMS integration notes, audit-log export sample). For the pilot, customers often use our hosted private VPC option; we can accelerate an FAQ for InfoSec in <48 hours.
+
+Proposed next steps:
+- Send us a slot for a 30m Thursday review (we have 10:00–14:00 PT available).
+- Hannah/Ben to deliver the comparison CSV by Wednesday EOD.
+- If Finance is comfortable after the review, we’ll circulate a short MAP and a pilot SOW (one page + appendix).
+
+Thanks — looping Ben for engineering/ops questions.
+
+—Marissa Cole
+Account Director, Redwood Inference
+
+Attachments referenced: redwood_pricing_snapshot_20260511.pdf, Redwood_Security_Checklist_v2.pdf, HelioPay_TCO_redwood_sketch.xlsx

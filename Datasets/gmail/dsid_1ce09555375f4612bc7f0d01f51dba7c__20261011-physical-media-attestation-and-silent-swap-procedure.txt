@@ -1,0 +1,124 @@
+Physical media attestation and silent-swap procedure for isolated deployment
+
+From: jordan_blake@redwood.example.com
+To: deploy@acmesystems.com, ops@graycourier.com
+Cc: kimberly_park@redwood.example.com, ben_carter@redwood.example.com
+Date: 2026-10-11T08:22:00-07:00
+Subject: Physical media attestation and silent-swap procedure for isolated deployment
+
+Hi team,
+
+We're preparing the physical media handoff for ACME's air-gapped cluster (activation window: 2026-10-25 to 2026-10-27). This thread captures the validation/attestation steps and the 'silent-swap' approach we agreed would minimize service disruption if an operator swap is required.
+
+Core asks: 
+- GrayCourier: confirm ETA for sealed crate and whether you can provide tamper-evidence photo packet at pickup and at delivery (time-stamped).
+- ACME: please confirm the list of on-site operator names and their PGP public keys (we'll verify signatures against the manifest).
+- Kimberly/Ben (ops): confirm Redwood operator acceptance checklist changes below and whether we need a 2nd signer in the HSM for the release key.
+
+High-level flow (proposed):
+1) Build artifact bundle -> sign with Redwood release key (primary HSM) -> produce manifest+sha256s -> produce offline bundle (tar.gz) -> duplicate and write to two mirrored SSDs.
+2) GrayCourier performs sealed-chain pickup; we capture tamper photos and courier signature.
+3) At ACME site: operator runs arrival verification (hashes & signature) and operator signs the acceptance receipt (paper + photo).
+4) Silent-swap: in case of activation failure, operators perform a swap to standby media (pre-seeded) following the operator_checklist_v2.xlsx. Only after acceptance do we trigger activation window.
+
+Attachments: acme_signed_manifest_v3.json (signed by ACME PO), operator_checklist_v2.xlsx
+
+I've attached the Drive link with the bundle and a DocuSign envelope for the chain-of-custody form.
+
+Please reply with acknowledgements and any deviations by EOD 2026-10-12.
+
+Thanks,
+Jordan
+Jordan Blake
+Senior Solutions Engineer, Redwood Inference
+
+
+From: deploy@acmesystems.com
+To: jordan_blake@redwood.example.com
+Cc: kimberly_park@redwood.example.com, ben_carter@redwood.example.com
+Date: 2026-10-11T10:08:00-07:00
+Subject: Re: Physical media attestation and silent-swap procedure for isolated deployment
+
+Thanks Jordan — ACME confirms operator roster below and attached PGP keys.
+
+On-site operators:
+- Maria Lopez <maria.lopez@acme.com> (PGP: 0x9A12C3F4)
+- Arun Patel <arun.patel@acme.com> (PGP: 0x4B7E11D2)
+- Sophie Chen <sophie.chen@acme.com> (PGP: 0x2F6D88A1)
+
+We reviewed the silent-swap steps and the acceptance checklist; two notes:
+- We require a witness signature from our Security Ops (TrustLabs will be present for attestation).
+- For legal reasons we need the courier to confirm chain-of-custody on a notarized form (GrayCourier can they confirm?).
+
+I've attached the PGP key bundle and a signed purchase-order manifest (acme_signed_manifest_v3.json).
+
+— Diego, ACME Deployment Lead
+
+
+From: ops@graycourier.com
+To: jordan_blake@redwood.example.com, deploy@acmesystems.com
+Cc: kimberly_park@redwood.example.com
+Date: 2026-10-11T14:33:00-07:00
+Subject: Re: Physical media attestation and silent-swap procedure for isolated deployment
+
+Jordan / ACME team — GrayCourier confirms pickup window 2026-10-20 09:00-12:00 PT. We'll provide:
+- Tamper-evidence photo packet at pickup and deliver (time-stamped)
+- Chain-of-custody receipt (PDF) with courier signature (will include notarization option on request)
+- Transport manifest: GRAY-9982 (attached)
+
+Requested clarifications:
+1) Are the mirrored SSDs in identical hardware trays (we need the physical spec for crating)?
+2) For the 'silent-swap' standby media — do you want us to ship both active+standby in the same crate or separate sealed crates?
+
+If you want notarization we need a +48h lead so we can schedule a notary at the pickup site.
+
+— Grey Ops (GrayCourier)
+
+
+From: kimberly_park@redwood.example.com
+To: jordan_blake@redwood.example.com, ben_carter@redwood.example.com
+Cc: deploy@acmesystems.com, ops@graycourier.com, mina_haddad@redwood.example.com
+Date: 2026-10-12T09:02:00-07:00
+Subject: Re: Physical media attestation and silent-swap procedure for isolated deployment
+
+Thanks all — quick operational clarifications from Redwood ops: 
+
+- Hardware trays: the two mirrored SSDs will be placed in separate sealed trays and labeled "A" (primary) and "B" (standby). We recommend separate crates to avoid single-point transit risk.
+
+- HSM signing: Ben, please confirm whether we need dual-HSM (two-of-two) for the release key. Current plan: single HSM signing with operator witness + audit log. If ACME insists on dual-HSM, provisioning will add ~3 business days.
+
+- Acceptance flow to embed in operator_checklist_v2.xlsx: 
+  * Step 3: Verify manifest signature (PGP and HSM release signature)
+  * Step 4: Hash check on both A and B SSDs (sha256)
+  * Step 5: Attach tamper photos to sealed manifest and upload to the private Drive link (offline QR token to map to record)
+
+Ben: can you add a fallback command sequence for a silent-swap that doesn't require network? (we need on-site operator steps they can run in Bash without contacting Redwood).
+
+If GrayCourier can notarize, let's opt for notarization to cover legal.
+
+Kimberly Park
+Director, Field Ops, Redwood Inference
+
+
+From: ben_carter@redwood.example.com
+To: kimberly_park@redwood.example.com, jordan_blake@redwood.example.com
+Cc: mina_haddad@redwood.example.com, deploy@acmesystems.com
+Date: 2026-10-13T17:05:00-07:00
+Subject: Re: Physical media attestation and silent-swap procedure for isolated deployment
+
+Ack — I'm attaching the offline fallback commands and a minimal script snippet below for the silent-swap. I also confirm we will NOT require dual-HSM for this release (single HSM + operator witness + audit log is acceptable to Redwood and ACME per current approvals).
+
+Offline silent-swap minimal steps (operator-run, no network):
+1) Insert standby SSD (B) into slot as labeled.
+2) Run: sudo dd if=/dev/sdX of=/dev/sdY bs=4M conv=sync,noerror status=progress (verify exact device nodes in checklist).
+3) Run provided sha256sum files against manifests shipped on the crate: sha256sum -c shipped_manifest.sha256
+4) If hashes match, touch /var/run/acceptance.complete; bring services up in maintenance mode via local init script: sudo /usr/local/bin/start_redwood_offline.sh --maintenance
+5) If any mismatch, follow rollback: re-seat SSD A and contact Redwood support hotline on emergency card (phone on paper receipt).
+
+Attachments sent: operator_checklist_v2.xlsx (updated), silent_swap_fallback.sh (bash snippet), courier_receipt_GRAY-9982.pdf
+
+I'll join the pre-pickup call on 2026-10-19 to walk through operator steps.
+
+Ben Carter
+Principal Infrastructure Engineer, Redwood Inference
+

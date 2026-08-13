@@ -1,0 +1,137 @@
+RFI: Evidence Package & Continuity Plan for Open Model Use
+
+From: Alice Turner <alice.turner@globex.com>
+To: dylan_brooks <dylan_brooks@redwood.com>
+Cc: procurement@globex.com
+Date: 2028-01-18T08:15:00-05:00
+Subject: RFI: Evidence package and continuity plan for open model use
+
+Dylan,
+
+Thanks for the demo last week. As part of our RFI run-rate review we need a focused evidence package and continuity plan for how Redwood handles open-model licensing, provenance, and version pinning. High level asks below — we need responses and any supporting artifacts by EOD Friday so our legal/procurement can proceed.
+
+Top asks: 
+- A single-page manifest format you publish for each catalog model and how it maps to license obligations (attribution, share-alike, commercial restrictions).
+- Proof that a pinned model artifact is immutable (cryptographic guarantees, signing).
+- Process and SLAs for update notifications, repinning, and emergency rollbacks.
+- How you maintain provenance for models (upstream sources, dataset attributions).
+- Any license-risk tooling (automated scans, license compatibility matrix).
+
+If you can attach examples (manifest, playbook) and point us at your audit logs or SOC-2 snippets that demonstrate retention/auditability that would be ideal.
+
+Regards,
+Alice Turner
+Sr. Manager, AI Procurement
+Globex Corporation
+
+--
+Attachment: null
+
+From: dylan_brooks <dylan_brooks@redwood.com>
+To: Alice Turner <alice.turner@globex.com>
+Cc: marissa_cole <marissa_cole@redwood.com>
+Date: 2028-01-18T10:04:00-05:00
+Subject: Re: RFI: Evidence package and continuity plan for open model use
+
+Alice —
+
+Thanks for the clear list. I've attached two artifacts that directly map to your asks: redwood-model-manifest-v1.2.pdf (single-page manifest spec + example) and pinning-playbook.docx (operational steps for pin/repin/rollback). Below is a concise summary while the product and legal teams review the attachments in detail — looping in Marissa who can provide an authoritative product endorsement if you need architecture diagrams.
+
+Short answers (summary):
+- Manifest format: We publish a machine- and human-readable manifest per catalog entry. Key fields include model_id, version_tag, artifact_digest (SHA256), source_url, license_id, license_text_url, training_data_attribution, provenance_chain (upstream commits/releases), and accepted_use_constraints. See attached PDF for an annotated example.
+- Immutable artifacts: All production artifacts are content-addressed and signed. Artifact storage uses SHA256 digests and we cryptographically sign manifests with our org key. We can provide public key fingerprints and attestations on request.
+- Update/repin/rollback process: Normal updates follow a staged rollout (canary → 25% → 100%) with a minimum 7-day notification window for enterprise accounts; emergency rollbacks are initiated within our 1-hour SLA for critical regressions and will restore the previous signed artifact (we retain blobs and manifests). The pinning-playbook has step-by-step runbooks.
+- Provenance: Each manifest includes a provenance_chain field that references upstream checkpoints (commit hashes, dataset manifests, license provenance). We store these references immutably alongside the model artifact.
+- License-risk tooling: We run license scanners over model artifacts and associated repo metadata, and surface any mixed-license flags. We also maintain an internal compatibility matrix (Apache2, MIT, BSD, CC-BY, CC-BY-SA, etc.) and map obligations to runtime controls (attribution banners, commercial-export constraints).
+
+I've also placed a focused exemplar manifest in a shared Drive folder (link below). If Globex needs cryptographic verification packaged as a signed bundle for procurement, we can generate that and include an independent auditor signature.
+
+Links: https://drive.google.com/drive/folders/1A2b3C-redwood-glx-evidence  
+HubSpot: GLX-000451
+
+Would you like us to produce a short 1-page table that maps each of your internal license classes to a recommended usage posture (e.g., dev-only, staging-only, allowed-prod-with-attribution)? We can deliver that by Thursday.
+
+Best,
+Dylan Brooks
+Head of Enterprise Sales
+Redwood Inference
+Phone: +1 (415) 555-0134
+
+Attachments: redwood-model-manifest-v1.2.pdf, pinning-playbook.docx
+
+From: Globex Legal <legal@globex.com>
+To: dylan_brooks <dylan_brooks@redwood.com>
+Cc: Alice Turner <alice.turner@globex.com>, procurement@globex.com
+Date: 2028-01-18T15:20:00-05:00
+Subject: Re: RFI: Evidence package and continuity plan for open model use
+
+Dylan —
+
+Thanks for the quick reply and attachments. A few clarifying questions from our legal review: 
+
+1) Mixed-license models: How do you represent mixed-license weights and derived code? If a model includes components under Apache-2.0 and a CC-BY-SA dataset, how is that presented in the manifest and what runtime obligations do you enforce?
+2) Re-licensing / downstream rights: Do you provide guidance or guarantees about what customers may distribute (weights vs. outputs) and do you treat outputs as derivative works for share-alike licenses?
+3) Cryptographic attestation: You mention signing — can you provide the signing key fingerprint and a sample signed manifest entry we can verify? Is there an offline verification tool?
+4) Retention and audit logs: For evidence requests we need logs showing who requested a repin, who approved a rollout, and blob retention policies (how long old artifacts are preserved).
+
+Please respond with numbered answers so we can map to our questionnaire. If needed we can schedule a short call next week with your product counsel.
+
+Regards,
+Evan Shaw
+Senior Counsel, Globex
+
+--
+Attachment: null
+
+From: dylan_brooks <dylan_brooks@redwood.com>
+To: Globex Legal <legal@globex.com>
+Cc: Alice Turner <alice.turner@globex.com>, marissa_cole <marissa_cole@redwood.com>, kimberly_park <kimberly_park@redwood.com>
+Date: 2028-01-19T11:02:00-05:00
+Subject: Re: RFI: Evidence package and continuity plan for open model use
+
+Evan / Alice —
+
+Thanks for the thoughtful questions. Below are numbered answers mapping to your list. Kim (Legal & Compliance) and Marissa (Product) are cc'd for any follow-ups or to provide artifacts.
+
+1) Mixed-license models: Manifest strategy and runtime enforcement
+- Representation: The manifest includes a "license_breakdown" section that itemizes artifact-level and component-level licenses with a short canonical id (e.g., Apache-2.0, CC-BY-SA-4.0), source_url for the origin, and the percentage contribution score (estimated) where available. Example manifest snippet (annotated in attachments):
+  {
+    "model_id": "redwood/kestrel-7b-open-v2",
+    "version_tag": "20271215",
+    "artifact_digest": "sha256:3b7f9e...f2a1",
+    "license_breakdown": [
+      { "component": "base_weights", "license": "Apache-2.0", "source_url": "https://repo.example/base", "contrib_pct": "88" },
+      { "component": "fine_tune_corpus", "license": "CC-BY-SA-4.0", "source_url": "https://datasets.example/corpus", "contrib_pct": "12" }
+    ]
+  }
+- Runtime obligations: When a CC-BY-SA component is present, we surface an "obligations" field in the manifest that lists attribution text, distribution constraints, and recommended controls (e.g., disable redistribution of model weights, require provenance notice in UI). These obligations are surfaced to operator consoles and can be enforced via policy hooks in Redwood Dedicated/Private deployments (e.g., disable export endpoint).
+
+2) Re-licensing / downstream rights
+- Guidance: Redwood provides a usage posture mapping (dev/staging/prod/redistribution) per license class. We do not relicense third-party artifacts; we only publish manifests that declare upstream licenses. For share-alike licenses we treat outputs as potentially derivative and include conservative guidance to customers in the manifest. Customers can choose a restrictive runtime posture or request a dual-license from the original upstream where available.
+- Commercial guarantees: We can provide contractual language (SOW/TOA) around tooling and controls (e.g., non-export clause, UI attribution obligation), but we do not make representations about third-party relicensing rights beyond the manifest provenance.
+
+3) Cryptographic attestation
+- Signing: Manifests and artifact bundles are signed with an organization key. Fingerprint (SHA-256 of public key): 9F:3B:4C:AA:11:7D:88:EE:5B:2D:0A:4C:23:9E:7F:5A:8C:2D:3A:6B:1E:44:C0:77:8D:91:3F:62:BD:AA:12:3F
+- Sample signed manifest: See attached manifest-sample.json (signed) and redwood-model-manifest-v1.2.pdf. We also provide a small verification script (Python, open-source) that verifies signature + digest; if you want we can produce a statically-signed tarball for procurement to verify offline.
+
+4) Retention and audit logs
+- Actions logged: Every pin/repin/rollback, who initiated, who approved (if approval was required), rollout percentages, and timestamps are recorded in our immutable audit store. For enterprise accounts we provide log export (S3/CloudWatch) for the configured retention window.
+- Retention policy: By default we retain artifacts and manifests for 18 months; on enterprise contracts we can extend to multi-year retention or indefinite preservation (we keep object blobs and manifest snapshots).
+- Evidence export: We can emit a bundle containing the signed manifest history, signatures, and an approval chain CSV that satisfies standard procurement evidence requests.
+
+Operational notes / additional options:
+- Immutable pins: For sensitive accounts we offer an "immutable pin" feature that prevents repinning without an out-of-band legal approval and two-person engineering sign-off.
+- Canary & tests: Repins trigger an automated pre-deploy test battery (sanity, perf regression, and a small coverage eval against saved prompt-suite) before canary promotion. Failure blocks rollout.
+- Private deployment: If Globex requires, Redwood Private can run the pinning service in your VPC with local KMS for signing to satisfy more restrictive custody needs.
+
+Next steps: We will produce the license-mapping table you requested and a signed verification tarball by Thursday. If helpful, Marissa can run a 30-minute technical walkthrough for your engineering/legal team next week and Kim can join for legal Q&A.
+
+Please let me know which of the two next-week slots (Tue 1/24 10:00-10:30 ET or Wed 1/25 14:00-14:30 ET) works for you and I'll send calendar invites.
+
+Thanks,
+Dylan Brooks
+Head of Enterprise Sales
+Redwood Inference
+
+--
+Attachments: manifest-sample.json (signed), redwood-model-manifest-v1.2.pdf, pinning-playbook.docx

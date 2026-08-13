@@ -1,0 +1,148 @@
+Dedicated pool node configs — cost vs latency proposal for BrightStack
+
+From: Sara Lin <sara@brightstack.com>
+To: Irene Choi <irene@redwood.com>
+Date: Sat, 18 Apr 2026 09:12:00 -0700
+Subject: Questions on GPU selection & committed pool sizing
+
+Hi Irene,
+
+Thanks for the demo yesterday — Jordan and I had a great conversation with Marissa about latency targets. We’re trying to map a committed pool (dedicated) price for our inference traffic and need help on two fronts:
+
+1) Perf/$ comparisons across A100, H100, and L40S for our mixed workload (70% chat, 30% embeddings; peak 400 concurrent users, p50 token length ~120).
+2) How memory tiers affect the effective throughput for our models (we’re running a customized 13B opt and a trimmed 70B variant that’s memory sensitive).
+
+High level goals: stay under $0.0025/token (amortized) on average and meet a 100ms p95 SLO for short-turn interactions. We don’t need absolute numbers yet but would like a simple model and a proposal that shows commit tiers (3/6/12mo) and the expected perf/$ deltas.
+
+Can you share a quick breakdown and any templates you use to estimate perf per GPU type? If helpful, I can share a week of representative traffic.
+
+Thanks — Sara
+
+--
+Sara Lin
+Director, Platform Engineering
+BrightStack Analytics
+
+From: Irene Choi <irene@redwood.com>
+To: Sara Lin <sara@brightstack.com>
+Cc: Marissa Cole <marissa@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Sat, 18 Apr 2026 11:05:00 -0700
+Subject: Re: Questions on GPU selection & committed pool sizing
+
+Sara —
+
+Great to meet you and Jordan yesterday. High-level answers up front and I’ve attached a small throughput model (throughput_model.xlsx) plus a baseline proposal.
+
+- Short answer on perf/$: H100 gives the best raw throughput for large-LLM workloads but A100 (80GB) often wins on perf/$ for mid-sized models because memory headroom reduces token-level fragmentation; L40S is compelling for chat-heavy, low-latency small-model routing because of lower cost per card but will saturate for the 70B variant.
+
+- Memory impact: models that require >40GB KV/cache memory (70B) push you to 80GB-class cards or require sharding which increases latency. For your 13B opt model, an L40S or A100 40GB can be efficient if we use prefix caching aggressively.
+
+- Commit tiers: we usually show a three-pack: entry (4–8 cards), growth (12–32 cards), and committed (64+ cards). Each step unlocks deeper slab discounts and burst buffers. I put sample perf/$ numbers in the sheet — they assume 70/30 traffic split, the traffic profile you described, and conservative batching.
+
+Next steps:
+- If you can send a 7-day traffic dump (timestamps + payload size distribution) we’ll run it through the model and give you a tailored perf/$ table.
+- We can also sketch two pack options: a memory-tilted pack (more 80GB-class H100/A100s) and a throughput-tilted pack (mix of L40S + some H100 headroom).
+
+Attachments: throughput_model.xlsx (estimator), draft_pricing_notes.txt (quick notes).
+
+I’ll loop Marissa for discounting/packaging and Karthik for commit/throughput guarantees.
+
+Best,
+Irene
+
+--
+Irene Choi
+Enterprise Sales Lead, Redwood Inference
+
+From: Jordan Miles <jordan@brightstack.com>
+To: Irene Choi <irene@redwood.com>
+Cc: Sara Lin <sara@brightstack.com>, BrightStack Sales <sales@brightstack.com>
+Date: Sun, 19 Apr 2026 08:30:00 -0700
+Subject: Re: Questions on GPU selection & committed pool sizing
+
+Irene —
+
+Thanks for the quick follow. A couple clarifying points from our side:
+
+- The 70B variant is optimized for retrieval-augmented generation and will see long KV caches (peaks up to ~90 tokens prepended per request). We’re worried about cross-request cache pressure and cold-start latency.
+- Savings target is about 25–30% against our current cloud spend (mix of on-demand and some committed instances).
+
+Can your team outline fallback plans if we land on a mixed fleet (e.g., routing short calls to L40S and long context to H100) and how that affects SLOs? Also interested in how committed-hour credits vs upfront discounts interplay for finance.
+
+On the traffic dump — Sara will send the sample later today.
+
+—Jordan
+CTO, BrightStack Analytics
+
+From: Irene Choi <irene@redwood.com>
+To: Marissa Cole <marissa@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Mon, 19 Apr 2026 13:15:00 -0700
+Subject: Internal: BrightStack counter / packaging strategy (notes)
+
+Team —
+
+Internal notes before we respond with numbers. Please keep internal.
+
+Goals: land a committed contract that meets BrightStack’s 25–30% savings target while protecting our unit economics and preserving upsell levers (Dedicated -> Dedicated+Optimize add-ons).
+
+Suggested packages to present (short bullets):
+- Option A — Memory-first pack (recommended)
+  - 24x 80GB cards (mix H100 + A100 80GB), target p95 <= 130ms for long-context calls
+  - 12-month commit, structured slab credits (monthly consumption vs committed baseline)
+  - Discount: 20% off hosted list + 10% slab credit on overage buckets
+- Option B — Mixed fleet, performance-tilted
+  - 32x nodes (L40S majority + 8x H100 for 70B spikes), can hit p95 110ms for short chat paths
+  - 6–12 month flexible commit (step-up clause at month 3)
+  - Discount: 15% on list, volume credits for burst capacity
+- Option C — Entry roll (proof-of-value)
+  - 8x L40S nodes, month-to-month for 3 months, migration path to A/B
+  - Small onboarding credit + pilot pricing (no SLA)
+
+Negotiation playbook:
+- Push to a 6–12 month minimum commit with a structured slab model rather than pure upfront credits — slab preserves margin and incentivizes predictable usage.
+- Carve out an experimental pool for their long-context workload (H100-backed) to prove p95 without pricing the whole fleet at H100 rates.
+- Offer a finance-friendly mix: modest upfront discount + committed consumption credits spread monthly (preferred by procurement).
+
+Attachments for the external email: pricing_grid.pdf (internal grid with perf/$ bands and discount elasticity).
+
+PTA before sending back: confirm perf/$ numbers with Karthik and add a short paragraph on cold-start/caching mitigations.
+
+Irene
+
+From: Irene Choi <irene@redwood.com>
+To: Sara Lin <sara@brightstack.com>, Jordan Miles <jordan@brightstack.com>
+Cc: Marissa Cole <marissa@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Tue, 20 Apr 2026 09:42:00 -0700
+Subject: Dedicated pool proposals & committed packaging — BrightStack options
+
+Hi Sara / Jordan —
+
+Thanks for the traffic sample; we ran it through the attached estimator and validated the high-level trade-offs. Below are three concrete proposals (numbers are illustrative; final quote in DocuSign). We focused on perf/$, memory fit, and finance structure so you can pick by savings target.
+
+Option 1 — Memory-first (recommended)- Fleet: 24x 80GB cards (mix H100 + A100 by kernel profile)- Expected perf/$: ~0.0019/token (amortized, conservative batching)- SLO: p95 ~120–140ms for long-context flows- Commit: 12 months, monthly slab credits, 20% off list + 10% slab-credit on overage
+
+Option 2 — Mixed throughput (balanced)- Fleet: 32x nodes (24 L40S + 8 H100 for spikes)- Expected perf/$: ~0.0022/token for blended traffic- SLO: p95 ~100–130ms for chat-heavy short-turns- Commit: 6–12 months flexible; 15% off list + burst credits
+
+Option 3 — Proof-of-value pilot- Fleet: 8x L40S nodes, 3-month pilot- Expected perf/$: ~0.0030/token (no SLA)
+- Commit: month-to-month; onboarding credit applied
+
+Routing and cold-starts: we recommend a policy-based router that sends short-chat calls to L40S for lower-latency/cheaper tokens and routes long-context requests to the H100-backed pool. For cold-start mitigation on the 70B variant we’ll reserve an H100-backed small warm pool and use proactive KV prefetch based on access patterns (this is in the estimator).
+
+Finance options: we can do either an upfront discount or monthly slab credits; procurement usually prefers slab credits for cashflow. If you sign a 12-month memory-first pack we can extend an additional 5% loyalty discount after month 6 conditioned on meeting the committed baseline.
+
+Next steps:
+- I’ll push a formal quote via DocuSign (link below) with detailed SLA language and the commit schedule.
+- If this looks reasonable, Marissa will own commercial finals and Karthik will validate throughput guarantees.
+
+DocuSign (draft): https://www.docusign.com/brightstack-proposal/BS-2026-042
+HubSpot deal: https://app.hubspot.com/contacts/1234567/deal/BS-2026-042
+
+Attachments: redwood_proposal_brightstack.pdf (proposal + sample SLA).
+
+Looking forward — happy to hop on a quick call to walk numbers.
+
+Best,
+Irene
+Enterprise Sales Lead | Redwood Inference
+Phone: +1 415-555-0142
+

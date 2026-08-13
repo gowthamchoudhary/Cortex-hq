@@ -1,0 +1,99 @@
+Peak-window transition: tokens/sec, streaming windows & next steps
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Sofia Ramos <sofia.ramos@fulcrumretail.com>, John Lee <john.lee@fulcrumretail.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Fri, 14 May 2027 15:02:00 -0700
+Subject: Peak-window transition: tokens/sec, streaming windows & next steps
+
+Hi Sofia / John — great speaking with you earlier. Quick recap of what we captured on performance and next steps so we have a shared starting point. TL;DR: we need a small sizing pass focused on short streaming responses (avg 60–120 tokens) with short peak bursts (~7–10 minutes) that happen daily.
+
+What we heard (please flag anything I missed):
+- Steady-state profile: 80–120 QPS steady during business hours; average payload ~85 tokens/request (paraphrases + small context).
+- Peak bursts: daily morning spike around 09:00 PST, ~10–12x steady QPS for 7–10 minutes; peak requests are streaming chat sessions (token-at-a-time delivery).
+- Tokens profile: average request ~85 tokens; 95th-token-per-request ~240 tokens. During peak windows you see up to ~1.0–1.2M tokens over a 10-minute burst (roughly 1,700–2,000 tokens/sec sustained across the fleet at burst).
+- Concurrency & streaming: expected concurrent in-flight streams at peak ~90–120; steady concurrent ~20–30.
+- Latency targets (customer SLOs): p95 end-to-end streaming completion <= 1.2s for short responses, p95 per-chunk/append <= 120ms where practical. We noted some tolerance for longer tails for very large responses.
+- Failure modes: customer wants graceful degradation (fallback to smaller model family) during overload and guarantees around preserve-incoming-requests (queueing behavior).
+
+Ask from Redwood:
+1) We uploaded a short sample workload CSV (attached) — can you confirm the spike windows and whether the 09:00 PST window is representative across weekdays? Also confirm timezone for other regions if applicable.
+2) Any security constraints for private deployments (VPC/KMS) or does hosted API look acceptable for the pilot?
+3) If you can provide 24–48h of request traces (anonymized) that includes a peak window that would let ops produce a more accurate QPS-to-GPU mapping.
+
+Next steps (our suggested cadence):
+- You: confirm spike cadence + attach small trace (by Mon 2027-05-17).
+- Redwood: produce a first-cut sizing estimate and two options — cost-optimized (quantized model + caching) and latency-optimized (larger instance footprint) by Tue 2027-05-18.
+- 30m follow-up ops call to review sizing and fallbacks Wed 2027-05-19 (suggest 10:00 PST).
+
+Attachments: [Attachment: fulcrum_workload_snapshot.csv (spreadsheet)], [Attachment: redwood_sizing_template.xlsx (spreadsheet)].
+
+Thanks — I pulled Marissa and Ben into this thread so we can iterate quickly.
+
+— Karthik
+Karthik Iyer | Solutions Engineer, Redwood Inference
+karthik_iyer@redwood.ai | +1 (415) 555-0134
+Redwood Inference — Production-first LLM inference
+
+
+From: Sofia Ramos <sofia.ramos@fulcrumretail.com>
+To: Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, John Lee <john.lee@fulcrumretail.com>
+Date: Fri, 14 May 2027 17:35:00 -0700
+Subject: Re: Peak-window transition: tokens/sec, streaming windows & next steps
+
+Thanks Karthik — this matches our notes. A couple clarifications:
+- Yes, the 09:00 PST spike is the main recurring one; we also see a smaller lunchtime blip (~1.5–2x steady) but that’s usually <5 minutes.
+- The peak burst numbers look right — the 1.0–1.2M tokens/10-minute figure corresponds to a big promotional push we run every morning.
+- Spikes are almost always front-loaded with new user sessions (so prefix reuse is low during the first 60s of the spike). We do, however, see high prefix reuse for returning sessions after ~30–60s.
+- Security: hosted API is fine for the pilot; we will need a Private/VPC option for production but not for this PO. KMS required for any persistent data export.
+
+We’ll try to export a 48h anonymized trace including yesterday’s spike and drop it in the Drive folder by Monday. Also — can you include a quick note on how streaming concurrency maps to our concurrency level? That’s the main thing our infra folks want to see before the follow-up call.
+
+Appreciate the clear next steps.
+
+— Sofia
+Sofia Ramos | Head of Platform Engineering, Fulcrum Retail
+sofia.ramos@fulcrumretail.com | +1 (212) 555-0241
+
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Sofia Ramos <sofia.ramos@fulcrumretail.com>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Sat, 15 May 2027 09:12:00 -0700
+Subject: Re: Peak-window transition: tokens/sec, streaming windows & next steps
+
+On Fri, May 14, 2027 at 03:02 PM Karthik Iyer <karthik_iyer@redwood.ai> wrote:
+> TL;DR: we need a small sizing pass focused on short streaming responses (avg 60–120 tokens) with short peak bursts (~7–10 minutes) that happen daily.
+
+Thanks for the call — adding a few pragmatic sizing notes from ops to set expectations before we run a formal estimate:
+- Mapping concurrency -> machines: ~90–120 concurrent streaming sessions at peak typically map to ~3–4 GPU-equivalent serving slots (A100-equivalent) if using a latency-optimized model (full FP16) and little prefix reuse.
+- Cost-optimized option (quantized int8 + 2–3 node pool): realistic to meet p95 completion <= 1.2s for avg responses if you accept slightly higher p99 tails (we'd recommend active KV caching for session prefixes; expect ~30–45% token cost reduction on repeat requests).
+- Streaming-specific notes: per-chunk latency is dominated by kernel scheduling and network hop; to hit ~120ms per-chunk we suggest batch size tuning and an aggressive prefix cache.
+- Fallback plan: automatic routing to smaller model family when queue depth > X (we'll define X during Ops call).
+
+I’ve attached a quick first-cut proposal with two sizing options and a rough cost band. This is intentionally conservative until we get traces.
+
+Attachments: [Attachment: sizing_proposal_v1.pdf (pdf)]
+
+I can join the ops call on Wed 2027-05-19 10:00 PST — works for me.
+
+— Ben
+Ben Carter | Performance Solutions, Redwood Inference
+ben_carter@redwood.ai
+
+
+From: Sofia Ramos <sofia.ramos@fulcrumretail.com>
+To: Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, John Lee <john.lee@fulcrumretail.com>
+Date: Sun, 16 May 2027 09:18:00 -0700
+Subject: Re: Peak-window transition: tokens/sec, streaming windows & next steps
+
+Perfect — thanks Ben and Karthik. We’ll drop the 48h anon trace in the Drive folder by Monday morning (2027-05-17). Please include a ballpark monthly cost range in your sizing doc so our finance team has something to react to in advance of the ops call.
+
+Confirming Wed 2027-05-19 10:00 PST for the follow-up (invite welcomed).
+
+— Sofia
+Sofia Ramos | Head of Platform Engineering, Fulcrum Retail
+sofia.ramos@fulcrumretail.com
+

@@ -1,0 +1,125 @@
+Migration lane allocations, escape-hatch policy, and customer comms cadence
+
+From: Ava Chen <ava@redwood.ai>
+To: Karthik Iyer <karthik@redwood.ai>, Laura Bennett <laura@redwood.ai>, Marissa Cole <marissa@redwood.ai>, Marcus Lin <marcus@redwood.ai>
+Date: Sun, 18 Apr 2027 08:12:00 -0700
+Subject: Migration lane allocations, escape-hatch policy, and customer comms cadence
+
+Team —
+
+I pulled together a first-pass migration lane matrix for the v1 -> rfv2 model transition and an initial proposal for an "escape-hatch" policy for customers who need more time. Attached: migration_lane_matrix.csv and a short comm draft (comm_draft.md).
+
+Key asks: 
+- Product: confirm which model variants we must keep in the slow-lane (compatibility) for 90 days vs 30 days.
+- Sales/CS: flag customers who need exemption (we currently have a few in legal procurement) and prioritize by revenue/impact.
+- Infra/Runtime (Marcus): are there known perf regressions on rfv2 at <64 token sequences we should call out in comms?
+
+My proposed lanes in the matrix: 
+- Fast lane: auto-migrate at day 0, full deprecation fallback after 30 days
+- Slow lane: 90-day soft support, manual opt-in migration, technical support priority
+- Escape-hatch: ad-hoc 120-day exceptions for validated compliance/regulatory cases (manual review)
+
+I want us to land on a policy by end-of-day Tuesday (2027-04-20) so we can start customer outreach Wednesday. Please reply inline with your lane suggestions and any required policy text.
+
+Thanks,
+Ava Chen
+Sr. PM, Platform
+Redwood Inference
+
+Attachment: migration_lane_matrix.csv (csv)
+Attachment: comm_draft.md (markdown)
+
+From: Karthik Iyer <karthik@redwood.ai>
+To: Ava Chen <ava@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Cc: Marcus Lin <marcus@redwood.ai>, Laura Bennett <laura@redwood.ai>
+Date: Sun, 18 Apr 2027 10:03:00 -0700
+Subject: Re: Migration lane allocations, escape-hatch policy, and customer comms cadence
+
+On Sun, Apr 18, 2027 at 08:12 AM Ava Chen <ava@redwood.ai> wrote:
+> Team —
+> 
+> I pulled together a first-pass migration lane matrix for the v1 -> rfv2 model transition...
+
+Thanks for pulling this together, Ava. Quick product notes after skimming the matrix: 
+
+1) Compatibility surface: rfv2 removes the legacy reranking endpoint semantics (scoring mode). Any customer using the old /rerank path will need a shim or explicit rerun. We should add a compatibility flag (query param) that we can support for 30 days to avoid breaking customers in the fast lane.
+
+2) Latency/regressions: Marcus — I've seen 5-8% higher p95 for 1-16 token sequences on A100 when quantized; if infra can't fix that quickly, call it out as a risk in comms. If we offer a per-customer small fast-path reservation (dedicated 1-slot burst) we can keep latency SLOs for key accounts.
+
+3) Escape-hatch gating criteria: propose a 3-step validation: (a) sales attestation of customer impact, (b) security/compliance check (if data residency/regulatory), (c) PM approval. Use the customer_exemptions_list.xlsx to capture approvals.
+
+I added inline comments in the matrix and flagged two customers (OakWallet and Olympus Payments) as likely requests.
+
+-Karthik
+Head of Product, Serving
+Redwood Inference
+
+From: Laura Bennett <laura@redwood.ai>
+To: Ava Chen <ava@redwood.ai>, Karthik Iyer <karthik@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: Mon, 19 Apr 2027 09:22:00 -0700
+Subject: Re: Migration lane allocations, escape-hatch policy, and customer comms cadence
+
+Ava / team —
+
+Flagging customer context from the field:
+- OakWallet (Katie Ham, katie.ham@oakwallet.com): heavy use of embeddings + long-running session state. They asked explicitly for a 90-day slow lane previously; legal is pushing back on new SLAs unless we provide a concrete rollback plan.
+- Olympus Payments (support@olympus-payments.com): mid-sized, high-volume. Ops is nervous about token-cost regressions; they want an explicit burst reservation for peak hours.
+
+Suggested sales-side commitments: 
+- Offer OakWallet a timed escape-hatch (90 -> 120 days) if they sign a migration support addendum (1-2 week dedicated onboarding from Solutions Eng).
+- For customers with cost concerns, offer a brief cost-analysis workshop and a one-week rollback window during initial migration.
+
+I uploaded a draft exemption spreadsheet (customer_exemptions_list.xlsx) with the two accounts noted and preliminary revenue tiers. Also added a short draft email we can send once policy approved.
+
+Laura Bennett
+Senior AE, Enterprise Sales
+Redwood Inference
+
+Attachment: customer_exemptions_list.xlsx (xlsx)
+
+From: Marissa Cole <marissa@redwood.ai>
+To: Ava Chen <ava@redwood.ai>, Karthik Iyer <karthik@redwood.ai>, Marcus Lin <marcus@redwood.ai>, Laura Bennett <laura@redwood.ai>
+Date: Mon, 19 Apr 2027 17:40:00 -0700
+Subject: Re: Migration lane allocations, escape-hatch policy, and customer comms cadence
+
+Appreciate the input. A few roadmap/comms asks from PM side: 
+
+- Timeline: We need formal canary dates for the first 10% of traffic, and a rollback plan that is executed automatically (feature flag + model routing) in case of severe regressions. Proposed schedule:
+  * Week 0 (Apr 21): enable canary for internal traffic and Redwood demo orgs
+  * Week 1 (Apr 28): 10% customer traffic (fast lane only) + monitor quality metrics
+  * Week 3 (May 12): begin slow-lane invitations for selected customers with SE support
+
+- Messaging: comm_draft.md needs a clear "what to expect" section and explicit SLOs for any customers granted escape-hatch. We should also add an FAQ for the outages/rollback process.
+
+- Exceptions: We should limit active escape-hatches to no more than 8 customers at a time to keep support overhead manageable. Add that constraint to the matrix.
+
+Marcus — can you confirm whether the runtime team can make the temporary compatibility-flag available for fast-lane rollback? If not, we should escalate to infra leadership today.
+
+-Marissa
+Group PM, Model Infra
+Redwood Inference
+
+From: Ava Chen <ava@redwood.ai>
+To: Karthik Iyer <karthik@redwood.ai>, Marissa Cole <marissa@redwood.ai>, Laura Bennett <laura@redwood.ai>, Marcus Lin <marcus@redwood.ai>
+Date: Tue, 20 Apr 2027 11:03:00 -0700
+Subject: Re: Migration lane allocations, escape-hatch policy, and customer comms cadence
+
+Thanks everyone — good alignment. Short summary and decisions: 
+
+1) Lanes finalized: fast (auto, 30d rollback window), slow (90d), escape-hatch (120d limited to 8 active customers).
+2) Compatibility flag: Marcus confirms runtime will ship a temporary query param flag for /generate and /chat routes by Thu EOD (2027-04-22).
+3) Sales commitments: Laura to get OakWallet to sign the addendum; if OakWallet requests 120d, they must agree to a 2-week SE onboarding and a migration checklist.
+4) Comms: Ava will publish a one-page FAQ + comm_draft.md to Drive and send a sales-ready email template by Wed morning.
+
+Action items: 
+- Laura: update customer_exemptions_list.xlsx and capture signatures (due 2027-04-26).
+- Marcus: confirm rollout plan and post canary runbook (due 2027-04-22).
+- Karthik/Marissa: finalize the compatibility gating language in the policy doc (due 2027-04-21).
+
+I'll send the customer note once we have the SE addendum for OakWallet. Thanks all.
+
+– Ava
+Sr. PM, Platform
+Redwood Inference
+
+Related links: https://drive.google.com/drive/folders/1a2b3-migration-playbooks (comm_draft.md, canary-runbook)

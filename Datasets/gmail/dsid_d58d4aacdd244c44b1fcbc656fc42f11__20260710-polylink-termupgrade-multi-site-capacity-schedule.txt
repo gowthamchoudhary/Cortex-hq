@@ -1,0 +1,113 @@
+Polylink capacity & term upgrade — multi-site commitment and failover schedule
+
+From: Elena Petrov <elena@polylink.ai>
+To: Sofia Ivanova <sofia@redwood.ai>
+Date: Fri, 10 Jul 2026 09:12:00 -0700
+Subject: Multi-site capacity & renewal — initial demand
+
+Hi Sofia,
+
+Quick note as we're starting renewal planning: our usage projections for Q4 2026 require committing additional reserved capacity in both EU and APAC. We want a single renewal that: 1) extends our term by 12 months, 2) adds guaranteed reserved pools in EU-WEST and APAC-SOUTHEAST, and 3) includes a failover schedule so our latency budget for the product stays acceptable during regional outages.
+
+Attaching our demand template (monthly token / concurrency / peak windows). Can Redwood propose a high-level capacity commitment (GPU counts & committed throughput) plus the expected cross-region failover latency and warm-standby behavior? Also note we're likely to ask legal for an SLA clause for failover recovery time.
+
+Primary contacts: Yusuf Rahman (cc) for procurement, Elena Petrov for architecture.
+
+Thanks,
+Elena
+--
+Elena Petrov
+Head of Platform Engineering, Polylink
+elena@polylink.ai
+
+Attachments: Polylink_Demand_Template.xlsx (spreadsheet stub)
+From: Sofia Ivanova <sofia@redwood.ai>
+To: Elena Petrov <elena@polylink.ai>, Yusuf Rahman <yusuf@polylink.ai>
+Cc: Jordan Blake <jordan@redwood.ai>
+Date: Sat, 11 Jul 2026 10:05:00 -0700
+Subject: Re: Multi-site capacity & renewal — initial demand
+
+Elena — thanks for the demand sheet, this is helpful. High-level proposal below based on the usage breakouts and the 99th percentile latency targets you noted:
+
+Proposal (initial):
+- Term: 12 months (auto-renew opt out)
+- EU (primary): 8x A100-equivalent reserved GPUs across two AZs; committed throughput target 420 tokens/sec sustained (aggregate).
+- APAC (secondary): 6x A100-equivalent reserved GPUs across one regional pool; committed throughput target 260 tokens/sec sustained.
+- Burst capacity: +20% burst pool available for 6 hours/day at a discounted overage rate.
+- Failover behavior: automatic cross-region fallback to APAC/EU variants. Warm-standby replica maintained for critical models; expected additional latency for cross-region failover ~80–140 ms depending on topology and route.
+
+SLA note: We can include a failover recovery target (time-to-route + capacity spin-up) of 3 minutes for warm-standby, 12 minutes for cold-start fallback. We will provide a revised SLA PDF with the exact definitions.
+
+Commercials: preliminary uplift ~15% on current committed spend to cover reserved capacity + warm-standby charges; exact pricing to be confirmed by Marcus/Jordan. Next steps: internal alignment on infra feasibility and final pricing; I'll share the SLA draft and a DocuSign when ready.
+
+Would you like us to include APAC as active/passive or active-active for your traffic patterns? Active-active increases cost but reduces failover latency.
+
+Cheers,
+Sofia Ivanova
+Account Executive — Redwood Inference
+sofia@redwood.ai
+
+Attachments: Proposed_SLA_Redwood_v2.pdf (draft)
+From: Sofia Ivanova <sofia@redwood.ai>
+To: Marcus Lin <marcus@redwood.ai>, Neha Kapoor <neha@redwood.ai>, Jordan Blake <jordan@redwood.ai>, Tessa Morgan <tessa@redwood.ai>
+Date: Sun, 12 Jul 2026 08:30:00 -0700
+Subject: Fwd: Multi-site capacity & renewal — Polylink term upgrade (ask)
+
+Team — forwarding Polylink ask and my proposed high-level config. Quick asks so we can turn around pricing and an SLA they can take to legal: 
+1) Confirm capacity feasibility for 8 EU / 6 APAC reserved A100-equivalents with warm-standby. Any constraints on AZ placement for EU-WEST multi-AZ config?
+2) Can SRE commit to the warm-standby failover TTRs: 3 minutes warm, 12 minutes cold? If not, alternatives and mitigations (e.g., pre-warmed KV caches, keepalive routing).
+3) Pricing: ballpark uplift calculation we should present to Polylink (aiming for ~15% uplift on their committed spend). Also confirm our burst pricing model for the +20% window.
+4) Any compliance/region notes for APAC deployment (data residency or KMS requirements) we need to flag to legal?
+
+Polylink legal will want clear definitions and a DocuSign-ready SLA. I attached their demand template and the SLA draft I sent them. Please reply with inputs inline so I can consolidate.
+
+— Sofia
+
+On Fri, Jul 10, 2026 at 09:12, Elena Petrov <elena@polylink.ai> wrote:
+> Quick note as we're starting renewal planning: our usage projections for Q4 2026 require committing additional reserved capacity in both EU and APAC...
+
+Attachments: Polylink_Demand_Template.xlsx (from client), Proposed_SLA_Redwood_v2.pdf (draft)
+From: Marcus Lin <marcus@redwood.ai>
+To: Sofia Ivanova <sofia@redwood.ai>, Neha Kapoor <neha@redwood.ai>, Jordan Blake <jordan@redwood.ai>, Tessa Morgan <tessa@redwood.ai>
+Date: Mon, 13 Jul 2026 14:22:00 -0700
+Subject: Re: Fwd: Multi-site capacity & renewal — Polylink term upgrade (technical + ops)
+
+Sofia / team — quick technical summary and constraints: 
+
+1) Reserved pools: We can provision regional reserved pools exactly as requested. For EU-WEST multi-AZ, we recommend spreading the 8 GPUs across 2 AZs (4/4) to reduce single-AZ impact.
+
+2) Warm-standby & failover timings: Our warm-standby design keeps model parameters and KV caches resident; failover to warm standby is typically sub-90s for routing + cache rehydration for most models, assuming cross-region bandwidth is stable. 3 minutes (180s) warm-standby SLA is conservative and acceptable. Cold-start (spinning new long-tail instances) is variable — 8–12 minutes depending on image pull and model weight sizes; 12 minutes is achievable but should be scoped in the SLA with a caveat for unusually large models.
+
+3) Cross-region latency: intra-region tail_latency (p95) target we can support is <60ms for EU regional traffic. Cross-region failover will add network RTT — ~80–150ms depending on APAC exit points. If Polylink needs sub-100ms global p95 for all users, we should recommend active-active with geo-routing and additional APAC capacity (higher spend).
+
+4) Autoscale & burst: The +20% burst window is fine; we recommend a queue-based admission with graceful degradation when burst limits are hit. Overage billing can be set to a discounted per-token rate.
+
+5) Compliance: APAC deployments require customer-managed KMS for certain APAC-regulated accounts; confirm with Polylink if they'll need that. No other regional blocks.
+
+I'll sync with Jordan on pricing numbers — early estimate: the 15% uplift seems in range if we amortize warm-standby costs across the term.
+
+— Marcus
+Senior Infra Engineer, Redwood Inference
+marcus@redwood.ai
+From: Elena Petrov <elena@polylink.ai>
+To: Sofia Ivanova <sofia@redwood.ai>, Jordan Blake <jordan@redwood.ai>
+Cc: Yusuf Rahman <yusuf@polylink.ai>, Polylink Legal <legal@polylink.ai>
+Date: Fri, 17 Jul 2026 16:45:00 +0100
+Subject: Re: Multi-site capacity & renewal — initial demand
+
+Sofia / Jordan — thanks for the quick turnaround and the detail. The proposed configuration looks workable for us. A couple of quick items before we route to procurement / legal: 
+
+- Please send the final SLA draft with the explicit warm/cold definitions and the DocuSign link.
+- We'll confirm whether we want active-active or active-passive by EOD Monday, but leaning toward active-passive to start (cost reasons).
+- Our procurement timeline: aim to sign and issue PO by 2026-08-05 if both legal and finance are aligned.
+
+If you can get the DocuSign and final commercial by Monday morning UTC, we'll start internal review.
+
+Best,
+Elena
+--
+Elena Petrov
+Head of Platform Engineering, Polylink
+elena@polylink.ai
+
+Attachments referenced: DocuSign_Polylink_Renewal.zip ( signing package stub )

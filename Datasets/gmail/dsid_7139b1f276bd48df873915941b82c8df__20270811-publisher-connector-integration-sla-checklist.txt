@@ -1,0 +1,106 @@
+Publisher connector, weights transfer & distribution SLA checklist
+
+From: Elena Moroz <elena@aurora-publishers.com>
+To: dylan_brooks@redwood.com
+Cc: camila_reyes@redwood.com
+Date: Wed, 11 Aug 2027 09:12:00 -0700
+Subject: Proposed connector & distribution terms (Aurora + Redwood)
+
+Hi Dylan,
+
+Thanks again for the demo yesterday — the connector preview looked promising. Aurora is keen to move from exploration to a small pilot to let a subset of our partner ISVs surface models through Redwood. Before legal and infra can sign off, two items are blocking us: (1) clarifying weights distribution and embargo terms, and (2) an operational SLA for the initial distribution (we'll be pushing ~500GB of model checkpoints to your ingest).
+
+To speed this up, I've attached a redline of our standard publisher license and a draft S3 transfer spec. High level asks from our side:
+- No redistribution to third parties without explicit publisher approval.
+- A 90-day embargo window for any public releases of Aurora-published checkpoints from the pilot.
+- Verification of storage-only access on Redwood Dedicated pools (we need KMS & HSM integration notes).
+- Transfer integrity: manifest + checksums, and a retention policy for raw uploads for 30 days.
+
+Can your team confirm Redwood's expected flow for ingesting publisher weights, hosting (Hosted vs Dedicated vs Private), and typical time-to-live in your cache/serving layer post-ingest? Also flag any blockers for us on the license redline.
+
+Best,
+Elena
+Elena Moroz
+Head of Partnerships, Aurora Publishers
+
+From: dylan_brooks@redwood.com
+To: Elena Moroz <elena@aurora-publishers.com>
+Cc: camila_reyes@redwood.com, marissa_cole@redwood.com
+Date: Wed, 11 Aug 2027 11:03:00 -0700
+Subject: Re: Proposed connector & distribution terms (Aurora + Redwood)
+
+Elena — thanks, appreciate the detail and the redline. Quick answers up front:
+- Redistribution: we can support publisher-controlled gating. By default Redwood does not redistribute weights; we can bind access to Aurora-managed keys/ACLs or to Dedicated pools only.
+- Embargo: 90-day embargo is workable; we'll add controls to prevent public catalog listing until a publisher toggle flips.
+- Storage/KMS/HSM: Redwood Dedicated supports customer KMS keys (AWS KMS or customer-owned HSM). We'll include an integration checklist.
+- Transfer integrity & retention: The S3 transfer spec looks good. We require a manifest.json with SHA256 checksums + object size. We hold raw uploads for 30 days in a quarantine bucket before moving to production storage.
+
+Two operational notes before we call this pilot-ready:
+1) Ingest SLA: for large checkpoints we recommend Bulk Ingest (asynchronous transfer job) — target SLA for manifest validation & quarantine validation is 48 hours for the pilot (can be tightened with reserved capacity).
+2) Serving variant: publishers often want weights pinned to a non-public model id. We'll create a publisher-scoped model-id and a routing policy so only Aurora-authorized accounts can hit it.
+
+Looping Sergio for legal/attribution language (cc'ed). Camila — can you help schedule a short runbook review with Aurora's infra team and our infra-run team next week?
+
+Thanks,
+Dylan Brooks
+Partnerships, Redwood Inference
+
+From: camila_reyes@redwood.com
+To: Elena Moroz <elena@aurora-publishers.com>, dylan_brooks@redwood.com
+Cc: marissa_cole@redwood.com, sergio_alvarez@redwood.com
+Date: Thu, 12 Aug 2027 09:00:00 -0700
+Subject: Re: Proposed connector & distribution terms (Aurora + Redwood)
+
+Elena — scheduling: I booked a 45min runbook + legal sync for Tue 17 Aug 2027 at 10am PT (Zoom link in calendar invite). Agenda: transfer flow, manifest format, embargo enforcement, KMS mapping, and the license redline. Please add any additional items.
+
+Prep items for Aurora:
+- Confirm a sample manifest (one checkpoint with 6 files).
+- Confirm the canonical publisher contact for release toggles.
+- A short list of ISV partners included in the pilot (we need account IDs).
+
+A few clarifications from our side that would help legal:
+- Attribution: Redwood proposes a non-prominent attribution line for catalog metadata (publisher name + link). If Aurora prefers no attribution until the embargo lifts, we can support that.
+- Rev-share: pilot won't include revenue share — this is a distribution/hosting pilot only. We'll revisit commercial terms after pilot success metrics.
+
+Thanks,
+Camila Reyes
+Partner Solutions, Redwood Inference
+
+From: Elena Moroz <elena@aurora-publishers.com>
+To: camila_reyes@redwood.com, dylan_brooks@redwood.com
+Cc: Rajiv Patel <rajiv@openweights.org>
+Date: Tue, 17 Aug 2027 10:52:00 -0700
+Subject: Re: Proposed connector & distribution terms (Aurora + Redwood)
+
+Thanks Camila — joined the call. Quick follow-ups from Aurora infra & legal that came out of the discussion:
+- Attachment: Aurora's legal insists on a clause preventing downstream model fine-tuning or commercial redistribution without a separate license.
+- We need a short-run attestation template from Redwood saying weights were stored & served per Aurora spec (for audit).
+- Rajiv (cc) from OpenWeights asked whether Redwood would honor a publisher-enforced watermarking / provenance header in model metadata. Is that something you can reserve space for in your model catalog schema?
+
+One more ask: can Redwood provide a short recovery-runbook in case the initial bulk ingest fails (network interruption or checksum mismatch)? We'd like to lock that into the operational SLA for the pilot.
+
+Best,
+Elena
+
+From: sergio_alvarez@redwood.com
+To: Elena Moroz <elena@aurora-publishers.com>, dylan_brooks@redwood.com, camila_reyes@redwood.com
+Cc: marissa_cole@redwood.com
+Date: Fri, 15 Aug 2027 16:04:00 -0700
+Subject: Re: Proposed connector & distribution terms (Aurora + Redwood)
+
+Elena — thanks for the notes, and great call earlier. Legal position (high-level):
+- Redistribution clause: we will accept publisher-first control. Redwood will not provide copies to third parties without an explicit, signed publisher license. We'll add a clause that the publisher may request removal of access at any time and Redwood will deprovision access within 72 hours for pilot customers (expedited for Dedicated setups).
+- Fine-tuning: we'll include a prohibition on downstream fine-tuning without explicit commercial terms.
+- Attestation: we can provide an audit attestation (signed PDF) confirming ingestion and handling per the manifest and KMS mapping. It will include timestamps and manifest checksums.
+- Provenance header: engineering confirms we can add publisher-provided provenance fields (publisher_id, original_manifest_sha256, embargo_until) to the model metadata. We'll reserve metadata slots and document them in the runbook.
+
+Operational SLA commitments for the pilot (summary):
+- Manifest + checksum validation: 48 hours after upload; quarantine retention 30 days.
+- Deprovision on request: 72 hours (expedited 24 hours for Dedicated with a paid rush).
+- Recovery runbook: Redwood will provide a documented retry flow for failed bulk ingest jobs (multipart re-upload, resume tokens, and a reconcile job that verifies checksum and replays objects).
+
+I'll send a short redline of the publisher license (small edits) and a runbook template by COB Monday. If Aurora is aligned, we'll produce a pilot SOW that captures the SLA, pilot metrics, and success criteria.
+
+Regards,
+Sergio Alvarez
+Head of Publisher Partnerships, Redwood Inference

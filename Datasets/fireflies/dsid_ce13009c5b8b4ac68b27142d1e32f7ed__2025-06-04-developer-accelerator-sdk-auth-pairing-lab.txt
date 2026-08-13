@@ -1,0 +1,119 @@
+Developer Accelerator: SDK auth pairing lab
+
+AE + SE walked through Redwood SDKs (Python + TypeScript) auth patterns and sandbox environment. Covered env var vs secret manager, Console sandbox for keys, basic optimize suggestions (batching, cache), and next steps to share sample repo + SOC2/KMS docs. Customer raised data residency and on-prem questions; SE suggested dedicated/private deployment options and offered spike for latency benchmarks.
+Meeting header:
+Date: 2025-06-04
+Time: 15:00 PDT (48m)
+Location: Zoom
+Recorded: Yes
+Attendees: Avery Park (Redwood AE), Tomás Rivera (Redwood SE), Sofia Lind (Fjord) , Marcus Dahl (Fjord), Priya Kapoor (Fjord)
+
+Auto-generated topics: SDK quickstart, auth, console, optimize suggestions, dedicated vs hosted
+
+--- Transcript ---
+[00:00] Avery: All right folks uh thanks for joining, really appreciate it. Quick intro — I'm Avery, AE on the account, and Tomás is our solutions engineer who will run the pairing lab. Sofia, Marcus, Priya, thanks for making time.
+[00:12] Sofia: Thanks, excited. Quick note — we're trying to get a minimal integration running by end of next week.
+[00:18] Tomás: Perfect, we'll focus on the Python + TypeScript examples, auth patterns, and then show the Console sandbox so you can generate ephemeral keys.
+[00:28] Priya: Can you clarify ephemeral keys? We want to avoid leaking prod keys in CI.
+[00:34] Tomás: Yep totally. There's two recommended flows: store long-lived secrets in your vault/KMS and mint short lived tokens for CI or front-end. We'll demo both.
+[00:42] Marcus: And from security side, we need audit logs and KMS integration — SOC2 is a requirement.
+[00:49] Avery: We'll attach the SOC2 + KMS integration docs after the call. I'll note that.
+[00:53] Tomás: Ok starting the walkthrough — first step is environment variables for local dev. In Python: pip install redwood-sdk, then set export REDWOOD_API_KEY=sk_live_XXX (demo only). In TS: npm i @redwood-inference/sdk and set process.env.REDWOOD_API_KEY in the .env file.
+[01:12] Sofia: Wait, small thing — your SDK package name is sometimes recorded as "redwood-infer" in older docs, we saw that. Which is correct?
+[01:20] Tomás: Right now it's @redwood-inference/sdk for TS and redwood_sdk for Python — sorry docs overlap, we'll send the canonical package names in the repo.
+[01:29] Tomás: Demo: quick Python snippet —
+[01:32] Tomás: "from redwood_sdk import Client
+client = Client(api_key=os.getenv('REDWOOD_API_KEY'))
+res = client.generate('Write a summary of my meeting')"
+[01:45] Sofia: Looks straightforward. How do we do key rotation?
+[01:48] Tomás: Console supports key rotation and per-key scopes. You can create a sandbox key scoped to embeddings-only for tests. We'll show that in the Console.
+[01:56] Avery: Pulling up the Console now, excuse the slight lag.
+[02:05] Tomás: On the Console dashboard — top-right you can create keys, set description, set expiration. The UI also exposes activity logs, which is handy for audit trails. Note: sometimes in transcription it's called "red-wood console" or "red wood" which is the same.
+[02:28] Marcus: Are audit logs retained for 90 days by default? We need 365.
+[02:33] Tomás: Hosted defaults are 90 days; for enterprise we can extend retention under the Dedicated/Private contracts. We'll call that out in the follow-up.
+[02:40] Priya: For our CI, we use HashiCorp Vault — what's recommended?
+[02:45] Tomás: Best practice is vault -> short lived credential minting. Either store Redwood long-lived key in Vault and use Vault to inject ephemeral creds into CI, or use an internal service to mint tokens via the Redwood session API if you want more rotation. We'll include example Vault policies in the repo.
+[03:05] Sofia: Can you show the TypeScript sample?
+[03:08] Tomás: Sure. sample.ts: "import { RedwoodClient } from '@redwood-inference/sdk'
+const c = new RedwoodClient({ apiKey: process.env.REDWOOD_API_KEY })
+await c.chat.create({ messages: [...] })". Real code lives in the sample repo link we'll share.
+[03:26] Sofia: Nice. Any common gotchas?
+[03:29] Tomás: A few: token not exported in sub-shells, Windows env differences, and build pipelines that strip env vars. Also watch for rate limits on sandbox keys if many parallel devs spin up.
+[03:44] Avery: Switching to Optimize — this is our cost/perf toolkit. For a dev flow, Optimize suggests batching and prefix caching to reduce token costs while keeping p99 low.
+[03:55] Marcus: We have a high throughput 1k rps workload in testing; would batching hurt latency for us?
+[04:02] Tomás: It's workload-dependent. For many short requests, intelligent small batching helps throughput and unit cost. For latency-critical user-facing requests, you can disable batching on that route and enable for async workers. Optimize can propose per-route configs based on observed token lengths.
+[04:20] Sofia: You mentioned quantization — will that impact model output quality?
+[04:24] Tomás: Quantization profiles trade a small drop in quality for significant cost savings. Optimize provides model+quantize suggestions and evaluation harnesses so you can run regression tests against your prompt set. We'll include an eval harness example.
+[04:39] Priya: For private deployment, do we need to change SDK endpoints?
+[04:42] Tomás: Yes, for Private you'll point the SDK to your control plane endpoint (e.g., https://control.fjord.redwood.local) and supply certs or mTLS depending on setup. It's one config flag in the client.
+[04:55] Marcus: We're interested in a canary rollout and A/B testing. Does the SDK handle routing?
+[05:00] Tomás: Routing is mostly handled by server-side policies and model tags. Your SDK calls the same API, the control plane will route to variants according to rollout rules.
+[05:10] Sofia: Let's try a live quickstart — can you walk us through creating a sandbox key step-by-step?
+[05:15] Tomás: Yep. Console -> Developer -> API Keys -> Create Key -> name: fjord-dev-sandbox -> scope: chat, embeddings -> expire in 7 days. Copy the key.
+[05:28] Priya: (typing) Trying to paste — getting a 403 when testing locally.
+[05:32] Tomás: Hmm 403 on the test? Can I see the request?
+[05:36] Priya: It's a curl: curl -X POST https://api.redwood.ai/v1/generate -H "Authorization: Bearer sk_xyz" -d '{"prompt":"hi"}'
+[05:44] Tomás: Two things: use the region endpoint we provisioned for you (us-west-2.sandbox.redwood.ai) and ensure the key has chat scope. Also JSON body needs content-type header. Example: curl -H "Authorization: Bearer sk_xyz" -H "Content-Type: application/json" -d '{"input":"hello"}' https://us-west-2.sandbox.redwood.ai/v1/chat/generate
+[06:05] Marcus: Ah that was the region mismatch. Good catch.
+[06:08] Sofia: Any limitations in the sandbox compared to hosted prod?
+[06:11] Tomás: Sandboxes are rate limited and may not have Dedicated performance characteristics. They are for dev/test. If you need throughput tests, we can provision a short-lived Dedicated pool for benchmarking.
+[06:25] Avery: We'll record the ask: provisional Dedicated benchmark for 1k rps. Tomás will draft plan.
+[06:31] Tomás: Moving to CI example — show GitHub Actions snippet where the key is pulled from Vault. (Tomás pastes a snippet).
+[06:40] Sofia: Our infra team prefers short-lived JWTs rather than long-lived keys. Can Redwood accept OIDC tokens?
+[06:45] Tomás: Yes, we support OIDC for private deployments and a token exchange mechanism for hosted as well — details differ by deployment mode. We'll include OIDC notes in the repo.
+[06:58] Priya: On RBAC — can we restrict inside our org per-team keys?
+[07:02] Tomás: Yes, Console supports per-key scopes and you can create service accounts with limited permissions. Dedicated also supports role sync from your IdP via SCIM.
+[07:15] Sofia: Let's talk observability — what telemetry do we get by default?
+[07:18] Tomás: By default you get per-request latency, token usage, model used, and errors. You can send traces to your own tracing backend via our tracing hooks. We also have cost breakdowns by token, per-route.
+[07:34] Marcus: Do logs include prompt content? We need to avoid storing PII in logs.
+[07:38] Tomás: Good point. Red-wood Console supports masking and configurable retention; customers can opt out of storing prompt text or route logs. For Private, you control everything.
+[07:50] Avery: Ok I'm going to switch to the sample repo now — creating a branch 'fjord-quickstart'. You should receive invite.
+[07:58] Priya: Received. Trying to run the Python quickstart...
+[08:02] Priya: "ModuleNotFoundError: No module named 'redwood_sdk'"
+[08:06] Tomás: That indicates pip install didn't run in the venv. Did you run python -m venv .venv && source .venv/bin/activate? On Windows use venv\scripts\activate.
+[08:18] Priya: Ah missed activate. Running now... ok working.
+[08:25] Sofia: We saw a note about model pinning — can we pin to a specific model version for production?
+[08:30] Tomás: Yes, you can pin model versions in your route config or via the SDK by supplying model: 'redwood-llama-v1@2025-05-01' so rollouts are deterministic. Optimize can recommend model variants.
+[08:45] Marcus: For evaluation, will you run a regression test against our prompt set? We want to ensure quality doesn't regress with quantization changes.
+[08:51] Tomás: Absolutely — we'll include an eval harness and walk through how to add your prompt set. Optimize can raise alerts if quality drops beyond thresholds.
+[09:05] Priya: Can you talk about network egress — we have strict egress rules in prod.
+[09:09] Tomás: For Private deployments you can run everything in your VPC or on-prem with no public egress. For Hosted we have regional controls and dedicated peering options. We'll include network diagrams in the follow-up docs.
+[09:24] Sofia: A quick question about billing — how do sandbox usage charges appear in the Console?
+[09:29] Avery: Sandboxes are typically free within a limit; beyond that they roll into dev credits or appear on the usage dashboard with a tag. Full billing shows per-token breakdown. We'll send pricing notes.
+[09:40] Tomás: Now quick demo of Optimize UI — shows per-route suggestions, recommended batch sizes, and a simulated cost delta if you flip on prefix caching. (Tomás narrates).
+[09:54] Marcus: For our transcripts feature, we have long context windows — 20k tokens — how does that affect KV cache?
+[09:59] Tomás: Long contexts increase KV cache pressure; our runtime supports efficient KV eviction and prefix caching. For very long docs we recommend chunking and embedding-based retrieval. Optimize can recommend chunk sizes.
+[10:15] Sofia: Let's do a quick smoke test end-to-end. Priya will trigger the TS client to call chat.generate and we'll watch logs.
+[10:20] Priya: Running... getting 429 now.
+[10:23] Tomás: 429 indicates rate limit — sandbox keys have low qps. For dev teams, either stagger requests or we'll provision a higher-limit sandbox.
+[10:33] Priya: Understood. We'll add rate-limiting middleware in front of our dev harness.
+[10:38] Avery: Quick compliance note — Marcus, you'll want the SOC2 and KMS docs; I'll attach them. Also we have a compliance whitepaper on private deployments.
+[10:48] Marcus: Great. Also can you confirm encryption-at-rest and in-flight?
+[10:51] Tomás: Data is encrypted in transit (TLS) and at rest. For hosted we manage keys but can integrate with your KMS for Dedicated/Private.
+[11:03] Sofia: Any gotchas with npm workspaces? We use monorepo with Yarn.
+[11:07] Tomás: Monorepos are fine; be mindful of pathing for env var injection during build and ensure you don't check keys into lockfiles. We'll include CI snippets for Yarn workspaces.
+[11:18] Priya: For the benchmark plan, what metrics should we capture?
+[11:21] Tomás: p50/p95/p99 latency, token throughput, error rate, cost per 1k tokens, and variance under load. We'll propose a test harness and synthetic workload generator.
+[11:36] Avery: Recap: we'll send repo, SOC2/KMS docs, and Tomás will propose a benchmark plan. Marcus to share residency requirements. Next call we'll deep-dive private deployment if they want to proceed.
+[11:50] Sofia: Sounds good. One last small ask — can you add a note about truncated prompts in the SDK logs? We sometimes see subtle truncation when content-type mismatches happen.
+[11:58] Tomás: Yep we'll add a troubleshooting section for truncation, content-type, and common 4xx/5xx patterns.
+[12:06] Priya: Thank you all, really helpful pairing.
+[12:09] Avery: Thanks everyone — we'll follow up by EOD with links.
+[12:12] (call ends)
+
+--- End of transcript ---
+
+References mentioned:
+- sandbox console link: https://console.redwood.ai/sandbox/fjord (invite-only)
+- sample repo: https://github.com/redwood-inference/fjord-quickstart (will share invite)
+- SOC2 + KMS notes: link to internal doc (shared post-call)
+- Benchmark plan template: will be attached
+
+Notes about transcript quality: medium — a few mis-heard package names and "red wood" tokens were present; speaker labels may be approximate in 2 places.
+
+Avery Park: Share minimal mono-repo with Python + TS quickstarts and README by 2025-06-06
+Tomás Rivera: Draft proposed benchmark plan for 99th p99 latency + throughput check for on-prem by 2025-06-10
+Marcus Dahl: Provide data residency requirements doc and current cloud regions list by 2025-06-08
+Send sandbox keys and sample repo link
+Schedule 60m technical deep-dive for private deployment scoping (Tomás + Marcus + infra team)
+Customer to run quickstart and report any environment issues in Jira thread

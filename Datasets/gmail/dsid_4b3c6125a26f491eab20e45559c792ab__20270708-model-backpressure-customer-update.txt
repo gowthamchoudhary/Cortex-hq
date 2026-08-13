@@ -1,0 +1,146 @@
+rw-storm-6b: elevated HTTP errors & short-term mitigation
+
+From: Ben Carter <ben@redwood.ai>
+To: Monica Patel <monica@redwood.ai>, Aditya Rao <aditya@redwood.ai>
+Date: Tue, 6 Jul 2027 09:12:00 -0700
+Subject: rw-storm-6b: elevated HTTP errors & short-term mitigation
+
+Monica / Aditya,
+
+We are seeing an uptick in 5xx and timeout responses for rw-storm-6b starting ~08:50 PDT. Error spike appears concentrated on longer-context generation jobs (>= 1024 tokens) and on a handful of BrightBank customers routing to the model. Initial signs point to memory backpressure on a subset of GPU hosts when KV cache grows quickly.
+
+What I've done so far:
+- Scaled up instance pool for rw-storm-6b by +20% (warm nodes coming up).
+- Flipped aggressive prefix cache eviction to free KV memory on the busiest hosts.
+- Notified BrightBank ops; holding a sync at 10:00 to share temporary mitigations.
+
+Immediate ask:
+- Aditya: can you validate kernel OOM/restart logs on host pool gw-rw-6b-*/ and share any related metrics?
+- Monica: prepare a short customer-facing blurb (2-3 sentences) to post to status and send to BrightBank. Keep it factual and avoid root cause until we confirm.
+
+I'll follow up with an update before the 10:00 call.
+
+Thanks,
+Ben Carter
+Account Executive, Redwood Inference
+ben@redwood.ai
+Redwood Inference
+
+
+From: Ben Carter <ben@redwood.ai>
+To: BrightBank Ops <ops@brightbank.com>
+Cc: Monica Patel <monica@redwood.ai>
+Date: Tue, 6 Jul 2027 09:28:15 -0700
+Subject: rw-storm-6b: brief notice — elevated errors impacting some requests
+
+Hi Sarah / BrightBank team,
+
+We wanted to let you know we are investigating an increase in 5xx and timeout errors affecting certain rw-storm-6b requests, primarily long-context generations. We have deployed interim capacity and cache-eviction changes to reduce impact and are tracking the situation closely.
+
+Immediate impact: intermittent failed/gateway errors for generation calls; customers may see retries or higher latency.
+Planned next steps: engineering is collecting host-level logs and will push a mitigation patch if necessary.
+
+We will provide a status update at 10:00 PDT with mitigation progress. If you have sample requests that reproduced the error, please reply with a redacted example and timestamps so we can correlate.
+
+Apologies for the interruption — we appreciate your patience.
+
+Regards,
+Ben Carter
+ben@redwood.ai
+Redwood Inference
+
+Attachment: customer-error-sample-20270707.txt (text)
+
+From: Sarah Lewis <sarah.lewis@brightbank.com>
+To: Ben Carter <ben@redwood.ai>
+Cc: BrightBank Ops <ops@brightbank.com>
+Date: Tue, 6 Jul 2027 09:41:02 -07:00
+Subject: Re: rw-storm-6b: brief notice — elevated errors impacting some requests
+
+Thanks Ben — we are seeing increased failed calls on our fraud-scoring pipeline between 08:55-09:15 PDT. I attached a snippet of the API request/response (redacted) — key fields: session_id, model=rw-storm-6b, ctx_len=2048.
+
+This is high priority for us. Please keep us posted on any ETA for full recovery or a recommended fallback model (short-term).
+
+—Sarah
+Sarah Lewis
+SRE, BrightBank
+sarah.lewis@brightbank.com
+
+On Tue, Jul 6, 2027 at 09:28 AM Ben Carter <ben@redwood.ai> wrote:
+> Hi Sarah / BrightBank team,
+> 
+> We wanted to let you know we are investigating an increase in 5xx and timeout errors affecting certain rw-storm-6b requests, primarily long-context generations. We have deployed interim capacity and cache-eviction changes to reduce impact and are tracking the situation closely.
+> 
+> Immediate impact: intermittent failed/gateway errors for generation calls; customers may see retries or higher latency.
+> Planned next steps: engineering is collecting host-level logs and will push a mitigation patch if necessary.
+> 
+> We will provide a status update at 10:00 PDT with mitigation progress. If you have sample requests that reproduced the error, please reply with a redacted example and timestamps so we can correlate.
+> 
+> Apologies for the interruption — we appreciate your patience.
+> 
+> Regards,
+> Ben Carter
+> ben@redwood.ai
+> Redwood Inference
+
+From: Aditya Rao <aditya@redwood.ai>
+To: Ben Carter <ben@redwood.ai>, Monica Patel <monica@redwood.ai>
+Date: Wed, 7 Jul 2027 11:05:31 -07:00
+Subject: Re: rw-storm-6b: elevated HTTP errors & short-term mitigation
+
+Ben / Monica,
+
+Root-cause signal: several hosts serving rw-storm-6b experienced sustained KV cache growth when clients sent long-prefix prompts and kept KV pinned (no forced eviction). Under heavy concurrency, memory pressure triggered a host-side worker restart causing 502/504s. Evidence: repeated GPU memory fragmentation warnings and the kernel OOM logs I attached to the ticket.
+
+Mitigations applied:
+- Rebalanced traffic away from three noisy hosts (gw-rw-6b-13/14/19) and started replacement warm nodes.
+- Enabled more aggressive per-session KV eviction for requests > 1500 tokens to prevent unbounded growth.
+- Added a temporary routing rule to prefer rw-temp-6b-compat as a fallback for sessions with ctx > 1200 tokens.
+
+Next steps:
+1) Patch runtime to proactively trim KV after response send (INF-3421) — ETA 24h to rollout to staging, 48h to prod if tests pass.
+2) Run a job to surface long-lived pinned sessions and notify customers with recommendations.
+3) Provide BrightBank recommended fallback config (model and new retry settings).
+
+I've uploaded host logs to the Jira ticket and attached rw-storm-6b-prefix-logs-0707.tar.gz.
+
+- Aditya
+Principal Infra Engineer, Redwood Inference
+aditya@redwood.ai
+
+
+From: Ben Carter <ben@redwood.ai>
+To: BrightBank Ops <ops@brightbank.com>
+Cc: Monica Patel <monica@redwood.ai>, Aditya Rao <aditya@redwood.ai>
+Date: Thu, 8 Jul 2027 16:45:00 -07:00
+Subject: rw-storm-6b: recovery update and recommended short-term fallback
+
+Hi Sarah / BrightBank team,
+
+Quick update following our mitigation work:
+
+Summary:
+- Impact window: Jul 6 08:50 PDT — Jul 8 15:40 PDT (gradual recovery as replacement nodes fully warmed).
+- Root cause: uncontrolled KV cache growth on rw-storm-6b under long-context concurrent workloads leading to host restarts and 5xx/timeout errors.
+- Status: We have rebalanced traffic, enabled KV eviction, and provisioned additional warm hosts. Production error rate for rw-storm-6b is now back to baseline (<0.2% 5xx).
+
+What we recommend for BrightBank (short-term):
+- Add a model fallback to rw-temp-6b-compat for requests where ctx_len > 1200. This reduces memory pressure and keeps latency predictable.
+- Reduce client-side retry window to 6s and add exponential backoff (base 300ms) to avoid compounding load.
+
+Artifacts and next steps:
+- Logs and analysis: https://redwood.atlassian.net/browse/INF-3421 (contains attached logs and timeline).
+- ETA for runtime patch to proactively trim KV: 48h for prod rollout (we will keep you posted).
+- We'll schedule a follow-up sync next week to review any changes to your integration and plan the fallback deployment.
+
+Attachments: rw-storm-6b-prefix-logs-0707.tar.gz (host logs), customer-error-sample-20270707.txt
+
+If you'd like us to apply the fallback on your behalf for a short window, we can coordinate a low-risk cutover — let me know preferred time windows.
+
+Thanks again for flagging this, and sorry for the disruption.
+
+Best,
+Ben Carter
+Account Executive, Redwood Inference
+ben@redwood.ai
+Redwood Inference

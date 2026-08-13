@@ -1,0 +1,110 @@
+BluePeak: instance-affinity & partitioning priority request
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Priyom Das <priyom_das@redwood.com>
+Cc: Hannah Schmitt <hannah_schmitt@redwood.com>, Sandra Diaz <sandra.diaz@bluepeakhealth.com>
+Date: Sat, 12 Jun 2027 09:12:00 -0700
+Subject: BluePeak: instance-affinity & partitioning priority request
+
+Team —
+
+Quick context: BluePeak Health (prospect -> likely $1.2M ARR, procurement active) has raised two blocking asks we didn’t anticipate in the SOW:
+
+1) Instance affinity / per-customer model residency (warm-cache pinning) for low-latency clinical workflows.
+2) Strong tenant-level routing / data partitioning guarantees (they want cryptographic separation and prefer no shared warm pools).
+
+They’re close on terms but said they will only sign the pilot + PO if we can guarantee a short runway to a targeted implementation (pilot-ready within ~3 weeks) or a clearly scoped phased delivery plan. I attached their latest MOP that lists the asks.
+
+Why this is an ask to Product/Eng: the feature set sits between a dedicated capacity offering and a runtime change — we need an opinion on whether: (A) we can ship a scoped shim (routing tag + affinity TTL for warm caches) as a stopgap, (B) recommend Dedicated (reserved capacity) for the initial contract, or (C) require a larger runtime change (longer timeline).
+
+Request: Can Product + Eng weigh tradeoffs and give a recommended path with a conservative ETA and minimal eval criteria we should present to the customer? If there’s cost or SLA delta call it out. BluePeak needs a firm answer by EOD Monday (14 Jun) to keep momentum.
+
+Next steps I propose: short sync Monday morning (15–20m) and I’ll join the call with Sandra if needed.
+
+Thanks —
+Vivek
+Account Exec, Redwood Inference
+
+Attachment: BluePeak_MOP_v3.pdf (pdf; 220KB)
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Vivek Kulkarni <vivek_kulkarni@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Priyom Das <priyom_das@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>, Sandra Diaz <sandra.diaz@bluepeakhealth.com>
+Date: Sat, 12 Jun 2027 13:04:00 -07:00
+Subject: Re: BluePeak: instance-affinity & partitioning priority request
+
+Thanks Vivek — good summary. A few clarifying questions before we propose a path:
+
+- Is the requirement for "no sharing of warm pools" absolute, or would a per-tenant affinity with TTL + cryptographic separation of KV caches suffice? The former implies Dedicated-only.
+- What does their traffic profile look like during a typical clinical hour? Burstiness matters for whether a shim is practical.
+- Are they expecting cross-region isolation or strictly within-us controls?
+
+Initial thought: if this is a gating requirement for signature, a phased approach seems sensible:
+  1) Short-term: implement routing tag + affinity TTL (2–3 weeks dev + 1 week QA) to give them pilot-level guarantees while keeping them on shared infra. This reduces engineering scope but is not zero-risk for isolation-sensitive customers.
+  2) Medium-term: Dedicated pool option (negotiable commercial addon) as a second phase for full tenancy guarantees.
+
+Jonas — can you confirm feasibility and rough timebox for the shim? Priyom / Hannah — please flag any compliance or billing constraints we should surface to BluePeak.
+
+-Marissa
+Product Lead, Redwood Console
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Cc: Priyom Das <priyom_das@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>, Sandra Diaz <sandra.diaz@bluepeakhealth.com>
+Date: Sun, 13 Jun 2027 08:47:00 -07:00
+Subject: Re: BluePeak: instance-affinity & partitioning priority request
+
+Marissa / all —
+
+Short answer: shim is feasible but has defined constraints. High-level notes:
+
+- Implementation: add tenant-affinity tag at the routing layer + warm-cache TTL pinning. This requires changes across request router, cache manager, and autoscaler hooks. Estimated dev: 10 engineer-weeks total. If we staff 2 engineers full-time and prioritize, we can hit a pilot-capable subset in ~3 weeks (dev + integration smoke tests) as Marissa suggested.
+
+- Isolation caveat: the shim reduces cold-start latency for the pinned tenant, but storage-level isolation is still shared. For customers requiring cryptographic separation and zero co-residency, Dedicated remains the only honest answer.
+
+- Risk: affinity TTL leakage and incorrect eviction could cause QoS for other tenants; we’ll need the ops team to add monitoring and a rollback plan (1–2 days ops ramp).
+
+- Cost & SLA: we should propose a higher unit price for pinned residency in shared infra OR push them to a Dedicated quoting path. If they opt for dedicated capacity we can guarantee tenancy and tighter SLA but with a commercial uplift.
+
+I’ll draft a minimal scope doc and a proposed delivery plan in JIRA (INF-7891) by Monday morning. If BluePeak signs a short pilot commitment that covers 4 weeks of engineering cost we can prioritize.
+
+-Jonas
+Engineering Lead, Serving Runtime
+
+From: Sandra Diaz <sandra.diaz@bluepeakhealth.com>
+To: Vivek Kulkarni <vivek_kulkarni@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: procure@bluepeakhealth.com
+Date: Mon, 14 Jun 2027 09:15:00 -07:00
+Subject: Re: BluePeak: instance-affinity & partitioning priority request
+
+Vivek / Marissa / Jonas —
+
+Thank you for the quick turn. To clarify BluePeak's position:
+
+- Our InfoSec team is comfortable with a staged approach if the first stage provides demonstrable per-tenant affinity (i.e., requests from our production subnets should consistently hit a pinned cache for the pilot timeframe).
+- We need a written description of the isolation guarantees, fallback behavior, and a rollback plan for our compliance team.
+- We can sign an accelerated pilot PO that covers the engineering runway (we are prepared to commit $60k for an initial pilot if the plan and ETA are firm).
+
+We are available for a short alignment call Monday at 10:00am PT. Please confirm and send dial-in.
+
+—Sandra Diaz
+VP of Product, BluePeak Health
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: Sandra Diaz <sandra.diaz@bluepeakhealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Priyom Das <priyom_das@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>
+Date: Mon, 14 Jun 2027 11:25:00 -07:00
+Subject: Re: BluePeak: instance-affinity & partitioning priority request
+
+Perfect — thanks Sandra.
+
+Recap / next steps:
+1) Jonas to post minimal scope + delivery plan to INF-7891 by Monday 08:30am PT.
+2) Marissa / Priyom / Hannah to draft a 1-page isolation guarantee + rollback note for BluePeak (for their InfoSec) by EOD Monday.
+3) Sales: I’ll prepare a pilot PO template for $60k and share with procure@bluepeakhealth.com.
+4) Short sync Monday 10:00am PT — I’ll create the calendar invite and include the proposed dial-in.
+
+If we can align on those items Monday morning we should have a binding pilot commitment by close of day. Thanks everyone for moving fast.
+
+-Vivek
+Account Executive, Redwood Inference

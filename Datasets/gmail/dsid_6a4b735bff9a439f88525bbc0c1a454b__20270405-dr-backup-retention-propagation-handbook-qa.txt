@@ -1,0 +1,75 @@
+Backup deletion propagation and snapshot retention handoff
+
+From: Oliver Hayes <oliver@storix.com>
+To: Maya Srinivasan <maya_srinivasan@redwood.ai>
+Cc: SaaSOps Support <support@storix.com>
+Date: Mon, 05 Apr 2027 09:12:00 -0700
+Subject: Question: how deletions propagate to backups / cross-region copies
+
+Hi Maya,
+
+We're running through our internal audit and need to confirm the exact behavior when a user dataset is deleted in production. Specifically: if a customer (or our admin) issues a deletion that removes a dataset at T0, how and when do backups and offsite snapshots reflect that deletion? Our auditors want:
+
+- Whether the original snapshot is tombstoned or physically expunged and on what timeline.
+- If the deletion is blocked by legal hold, what surface evidence do you provide (audit log + snapshot immutability flag?)
+- For cross-region replication: does the tombstone/expunge trigger a delete across replicas immediately, or is there a reconciliation window?
+
+We found the short bullet notes in the public doc but need concrete SLAs and any caveats (e.g., multi-region lag during failover, restore window shrinking after expunge). Could you point us to the exact guarantees or provide the specifics?
+
+Thanks,
+Oliver
+Oliver Hayes
+Head of SRE, Storix
+
+Attachment: business-case.pdf (referenced)
+
+From: Maya Srinivasan <maya_srinivasan@redwood.ai>
+To: Oliver Hayes <oliver@storix.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Mon, 05 Apr 2027 11:04:00 -07:00
+Subject: Re: Question: how deletions propagate to backups / cross-region copies
+
+Hi Oliver — thanks for the clear list. High-level answers below; I'm looping in Karthik and Hannah for the low-level timelines and evidence we can attach for your audit.
+
+High level:
+- Snapshot lifecycle: when a deletion is confirmed in-prod we mark the live object as deleted and create a tombstone record. Snapshots that already reference the object remain intact (i.e., point-in-time snapshots are immutable), but the object becomes unreachable for new snapshots after tombstoning.
+- Expunge window: tombstones are eligible for expunge after the configured retention TTL (default 90 days for hosted customers, configurable down to 30d with policy override). Expunge physically frees storage; cross-region expunge follows the same TTL + replication lag.
+- Replication/reconciliation: replication is asynchronous. Tombstone metadata is propagated as part of the replication stream; typically replicas observe tombstones within 30–120 minutes depending on cross-region bandwidth. Physical expunge may lag by up to the TTL + 24–48 hours for internal background compaction and GC.
+- Legal hold / audit: when a legal hold is applied we set an immutability flag on the snapshot lineage and surface "hold" markers in the audit log; we do not expunge held items until the hold is released. We can provide a signed audit snapshot, timeline of events, and a retention matrix for your compliance folder.
+
+Karthik/Hannah: can you confirm the worst-case window we should put in the audit (end-to-end from deletion request to physical expunge across regions) and attach the retention matrix + lifecycle diagram? Oliver needs this for Storix's control docs.
+
+—Maya
+Maya Srinivasan
+Account Lead, Enterprise Sales
+Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Maya Srinivasan <maya_srinivasan@redwood.ai>, Oliver Hayes <oliver@storix.com>
+Cc: Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Mon, 05 Apr 2027 15:08:00 -07:00
+Subject: Re: Question: how deletions propagate to backups / cross-region copies
+
+Oliver — adding the technical specifics to cite in your audit. I'll keep this concise and call out the exceptions.
+
+Behavior and timelines (typical hosted configuration):
+1) Tombstone creation: immediate (within seconds) when deletion completes at the API layer. Tombstone is a metadata record that marks the object as logically deleted.
+2) Snapshot immutability: point-in-time snapshots taken before T0 continue to reference the object; we never retroactively remove object bytes from those snapshots until expunge. This ensures restore windows remain valid until expunge begins.
+3) Replication propagation: tombstone metadata is included in the CDC/replication stream. Typical observation window for replicas: 30–120 minutes. This is network- and load-dependent; for very large deletion jobs we throttle the stream which can extend to ~6 hours in worst-case heavy-maintenance windows.
+4) Expunge/compaction for physical deletion: controlled by retention TTL + background GC. For default 90d TTL: expunge job runs after TTL elapses — expunge start = TTL + up to 48h scheduling jitter for compaction; physical bytes reclaimed over a rolling window. Cross-region physical byte reclamation depends on when the replica runs its compaction pass (often within 24–72h after the central expunge start).
+5) Legal hold/forensics: if a legal hold is present we flip an immutability bit on the snapshot lineage and mark the object in the metadata store; expunge does not include these objects. We keep a signed event trail (audit logs) that includes: deletion request id, tombstone creation timestamp, replication acknowledgement ids, and expunge job run ids. We can export this as CSV.
+
+Caveats/notes to include in control docs:
+- If a customer pins a model / dataset for ongoing work, they can set a custom retention > default; this can delay expunge indefinitely until a policy change.
+- Restores initiated after tombstone but before expunge will succeed because the bytes are retained in snapshot storage. After physical expunge, restores fail; we surface errors and provide the last-known snapshot id.
+- In DR failover scenarios where we promote a replica, there is a short window where the promoted copy may not yet have observed very recent tombstones; promotion does not trigger retroactive expunge.
+
+Attachments: I attached the retention matrix and a lifecycle diagram (dr-retention-matrix.csv, snapshot-lifecycle-diagram.png) — they show default vs configurable settings and the observable windows to include in an audit.
+
+If you want an explicit worst-case number for your control, use: tombstone to replica observation = 6 hours (worst-case), replica observation to physical expunge = TTL + 120 hours (to cover GC/compaction scheduling), so worst-case end-to-end = TTL + ~132 hours (for a 90d TTL this is 90 days + ~5.5 days).
+
+If Storix needs signed evidence for a particular deletion event, let us know the deletion request id and we will produce the audit bundle (logs + replication ack + expunge job record).
+
+—Karthik
+Karthik Iyer
+Staff SRE, Redwood Inference

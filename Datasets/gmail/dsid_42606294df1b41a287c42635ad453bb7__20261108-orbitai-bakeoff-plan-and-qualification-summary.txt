@@ -1,0 +1,142 @@
+OrbitAI bake-off: qualification summary, decision criteria, and test plan
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Alex Johnson <alex.johnson@orbitai.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: 2026-11-08T16:02:00-08:00
+Subject: OrbitAI bake-off: qualification summary, decision criteria, and test plan
+
+Alex — thanks again for a productive conversation earlier. High-level recap and next steps below; please flag anything I missed.
+
+Call summary / primary pain points
+- Latency spikes on short-turn queries (observed p95 ~550ms, occasional p99 >1s) that hurt interactive UI.
+- Unpredictable token cost and billing reconciliation across multiple model variants.
+- Cold-starts / KV cache warm-up for long chat sessions; they want session continuity across pods.
+- Multi-region failover and data residency concerns (EU customers).
+
+Goals for bake-off
+- Verify 99th percentile token latency under 300ms for 128-token prompts in US region.
+- End-to-end cost-per-1M-tokens and projected monthly unit costs at 10M tokens/mo.
+- KV cache hit rate improvement and session continuity tests.
+- Validate private deployment option (VPC) + SOC2 evidence for procurement.
+
+Decision criteria (weighted):
+1) Latency and tail (35%)
+2) Observability & debugging (20%)
+3) Cost predictability and unit economics (20%)
+4) Security/compliance and private deployment (15%)
+5) Integration effort & ops maturity (10%)
+
+Competitive context
+- You mentioned ModelServeCo and LargeCloudAI running parallel tests — we'll map our results to the same matrix so you have apples-to-apples metrics.
+
+Proposed bake-off tests (summary)
+- Test A: Short prompt synthetic burst (128 tokens) — capture p50/p95/p99 across 1k requests with 100 concurrency.
+- Test B: Long chat continuity — 20-turn conversations, validate KV cache reuse and token counts.
+- Test C: Cost run — measure tokens, throughput, and compute utilization for 1M tokens.
+- Test D: Failover simulation — region switch and model fallback behavior under partial zone outage.
+
+Attachments: discovery notes and a starting proposal spreadsheet (attached).
+
+Next steps (requested from OrbitAI)
+- Confirm procurement timeline (you mentioned target decision before Nov 22).
+- Confirm which competitor(s) you'll run side-by-side so we match test harness.
+- Send any RFP or procurement attachments — I see a Doc reference you mentioned.
+
+What I can deliver this week (by Tue 11/10)
+- Bake-off matrix populated with Redwood metrics and proposed success thresholds.
+- Test harness (scripts + instructions) and a run schedule for your engineering team.
+
+Thanks — I'll loop in our solutions engineer for test orchestration once you confirm timelines.
+
+—
+Marissa Cole
+Senior Account Executive | Redwood Inference
+marissa_cole@redwood.com | +1 415-555-0123
+
+Attachments referenced: 20261108-orbitai-discovery-notes.pdf, redwood-bakeoff-proposal.xlsx
+From: Alex Johnson <alex.johnson@orbitai.com>
+To: Marissa Cole <marissa_cole@redwood.com>
+Cc: Procurement <procurement@orbitai.com>
+Date: 2026-11-08T17:21:00-08:00
+Subject: Re: OrbitAI bake-off: qualification summary, decision criteria, and test plan
+
+Marissa — great summary, thank you. A few additions from our side:
+
+- Procurement timeline: we need final commercial terms and SOC2 artifacts by COB 2026-11-22 to make an exec-level recommendation.
+- Technical ask: can Redwood run Test A and C on a hosted isolate environment (not shared noisy neighbors) and provide raw logs (anonymized) for verification?
+- Competitors: we'll run ModelServeCo (Samantha Lee) and LargeCloudAI in parallel; I'll share contact for ModelServeCo and confirm schedule tomorrow.
+- Pricing: please include both Hosted (with data retention options) and Dedicated reserved capacity pricing in your spreadsheet.
+
+I've attached our RFP excerpt that lists compliance requirements and contract clauses (high level).
+
+Alex
+Alex Johnson | Director of Platform Engineering, OrbitAI
+alex.johnson@orbitai.com | +1 617-555-0199
+
+Attachment: orbitai-rfp.pdf
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2026-11-09T09:02:00-08:00
+Subject: Fwd: OrbitAI bake-off: qualification summary, decision criteria, and test plan
+
+Team — forwarding the OrbitAI notes and request. Key asks: hosted isolate runs, SOC2 evidence, and pricing for Hosted vs Dedicated.
+
+Internal asks:
+- Karthik: can you draft a tight runbook and a minimal test harness (bash + python) that the OrbitAI ops team can run? Aim to make results reproducible and easy to validate against ModelServeCo outputs. Include exact model version, sequence lengths, concurrency profile, and KV cache config.
+- Ben: help me finalize the pricing workbook; include 12-month commit for Dedicated and a monthly hosted SKU with data retention toggle.
+
+We should treat this as a short bake-off: target window Nov 15–18 for the first pass. I'll offer a canary run on 11/15 and a full run on 11/17.
+
+Quoted for context:
+> On 2026-11-08, Alex Johnson <alex.johnson@orbitai.com> wrote:
+> Marissa — great summary, thank you. A few additions from our side:...
+
+I'll add the bakeoff-matrix.csv and minimal instructions in a follow-up.
+
+—
+Marissa
+
+Attachments referenced: bakeoff-matrix.csv
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2026-11-10T09:17:00-08:00
+Subject: Re: OrbitAI bake-off: qualification summary, decision criteria, and test plan
+
+Marissa — outlined plan below and attached test-scripts.zip (scripts + README). High level schedule and what we'll capture:
+
+Schedule
+- 11/15 09:00 PST: Canary run (short prompt burst, 100-concurrency, 1k requests)
+- 11/16 08:00 PST: Cost run (1M tokens, controlled traffic generator)
+- 11/17 10:00 PST: Long-chat continuity (20-turn sessions, 200 parallel sessions)
+- 11/17 14:00 PST: Failover simulation (region switch + variant fallback)
+
+What we capture
+- Latency: p50/p95/p99 per-test and across model variants
+- KV cache hit-rate and per-session token counts
+- Per-token compute utilization and estimated $/1M tokens (billing model matched to Redwood pricing table)
+- Error and fallback rates during simulated failure
+- Trace context and per-request IDs for post-run verification
+
+Test harness notes
+- Scripts include a generator for replaying real user traces (sanitized) and a set of ab-like concurrent runners that log full request/response times.
+- We'll provide an anonymized log bundle and a runbook for OrbitAI to reproduce.
+- For hosted isolate: we'll allocate an isolated pool for the November runs and provide temporary credentials; logs will be redacted to remove infra metadata.
+
+Deliverables (by 11/12):
+- test-scripts.zip (attached)
+- populated bakeoff-matrix.csv with expected thresholds and data columns
+- runbook + instructions in shared Drive (link below)
+
+Links
+- Shared drive: https://drive.google.com/drive/folders/1AxyZ_example_shared_drive
+- HubSpot deal: HS-ORB-2319
+
+If this looks good I'll kick off resource allocation and send creds to Alex once OrbitAI confirms schedule.
+
+—
+Karthik Iyer
+Solutions Engineering Lead | Redwood Inference
+karthik_iyer@redwood.com | +1 206-555-0178
+
+Attachments: test-scripts.zip

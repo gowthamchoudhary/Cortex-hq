@@ -1,0 +1,102 @@
+Urgent: Live checkout spikes + client dechunking bug (impacting Checkoutly)
+
+From: Sara Hayes <sara.hayes@checkoutly.com>
+To: rachel_kim@redwood.com, sean_gallagher@redwood.com
+Cc: support@bigretail.com
+Date: 2026-07-14T09:12:00-07:00
+Subject: Checkoutly live: checkout failures + latency spike since 08:50 PDT
+
+Rachel / Redwood team —
+
+We started seeing elevated checkout latency and a rising error rate across multiple clients at ~08:50 PDT. BigRetail reported checkout errors and timeouts; our ops filtered Redwood logs and found a recurring pattern: the client SDK (Checkoutly embedded agent v2.3.1) shows repeated parser exceptions flagged as "dechunk: unexpected fragment" and the Redwood ingress shows many 400/502s with short upstream traces.
+
+Impact: ~12% error rate on checkout calls (p99 latency spiked from 220ms to 3.4s). This is affecting paid checkouts — customers are calling.
+
+We've attached a trimmed log bundle and a small set of request ids. Can someone triage immediately and advise whether this is a client integration mismatch or a server-side regression? If this is a known dechunking/streaming parser edge we saw earlier, we need mitigation guidance ASAP.
+
+Attachments: replay_logs_2026-07-14.tar.gz (logs), p99-traces_checkoutly_2026-07-14.pdf
+
+Requesting a short call at 09:30 if you have an on-call engineer.
+
+— Sara Hayes
+PM, Checkoutly
+
+From: rachel_kim@redwood.com
+To: Sara Hayes <sara.hayes@checkoutly.com>
+Cc: sean_gallagher@redwood.com, neha_kapoor@redwood.com
+Date: 2026-07-14T09:25:00-07:00
+Subject: Re: Checkoutly live: checkout failures + latency spike since 08:50 PDT
+
+Sara — thanks for the heads up and for the logs. Sorry you're seeing this. We're pulling an on-call eng now. Quick asks while we spin up: can you share 3 example request IDs (prefer trace ids) and confirm whether you're using the Redwood client SDK bundled via NPM (sdk-js) or the native mobile agent? You mentioned v2.3.1 — are you on the default parser opts or rolling custom chunk sizes?
+
+I've looped in Sean (platform eng lead) and Neha (CS lead). Proposing a 09:30 stand to align — I'll send a calendar invite.
+
+If you can, please toggle debug=true in the SDK for a small subset of traffic and attach the expanded traces to the Drive link you sent.
+
+— Rachel Kim
+Senior Account Manager, Redwood Inference
+
+From: sean_gallagher@redwood.com
+To: rachel_kim@redwood.com, neha_kapoor@redwood.com, jonas_weber@redwood.com
+Date: 2026-07-14T10:05:00-07:00
+Subject: Re: Checkoutly live: checkout failures + latency spike since 08:50 PDT
+
+Quick triage notes from the on-call team after a first pass on the logs you attached:
+
+- Symptoms look like a client-side dechunking/reassembly failure where the SDK's dechunker rejects a header when a boundary splits a multi-part header. On our side the ingress sees a lot of short-lived reconnects and retries that amplify p99.
+- This is not identical to the 2025 parser bug; we've got a slightly different failure signature in the stack traces ("hdr_reasm_failed" inside sdk-js dechunker v2.3.1).
+- Immediate mitigation options: 1) Ask Checkoutly to roll a short-lived server-side tolerant parser (we can enable a lenient header reassembly mode for that route), 2) Temporarily disable client batching or lower max chunk size, 3) If urgent, we can route their traffic to an alternate backend pool with increased timeouts.
+
+I'll prepare a short mitigation plan. Jonas — can you schedule a fast revert of any recent parser heuristics if we find them? Neha — FYI for customer comms and potential crediting.
+
+Attaching initial trace snippets to the Drive link.
+
+— Sean Gallagher
+Principal SRE, Redwood Inference
+
+From: rachel_kim@redwood.com
+To: neha_kapoor@redwood.com, jonas_weber@redwood.com
+Cc: sara.hayes@checkoutly.com, ops@checkoutly.com
+Date: 2026-07-14T14:30:00-07:00
+Subject: Fwd: Exec requested: Checkoutly live SLA impact — need rapid path and credits
+
+Forwarding the thread to loop in CS + Platform leadership. Summary: Checkoutly experienced a production spike from ~08:50–12:30 with sustained elevated errors; initial triage points to a dechunk/reassembly failure in their use of sdk-js v2.3.1 that interacts poorly with our ingress parser. Sean has mitigation options: enable lenient parser on their route and push a server-side tolerant shim; Jonas is evaluating whether a rollback of recent parser heuristics is necessary.
+
+Customer asks: urgent mitigation and a goodwill remediation (credits). They're a current enterprise customer on a Reserved plan (DEAL-4721). We should prioritize a low-impact server-side mitigation while engineering ships a patch for the SDK.
+
+Suggested immediate next steps (for leadership approval):
+- Approve temporary lenient parser on Checkoutly route (48–72h),
+- Approve expedited engineering support and a one-off 10% billing credit for the incident window,
+- Communicate an interim mitigation and ETA for a patch within 24–36h.
+
+Attachments: replay_logs_2026-07-14.tar.gz
+
+— Rachel Kim
+Senior Account Manager, Redwood Inference
+
+From: jonas_weber@redwood.com
+To: rachel_kim@redwood.com, neha_kapoor@redwood.com, sean_gallagher@redwood.com
+Cc: sara.hayes@checkoutly.com
+Date: 2026-07-15T18:43:00-07:00
+Subject: Re: Fwd: Exec requested: Checkoutly live SLA impact — need rapid path and credits
+
+All — final engineering summary and mitigation plan after code dive:
+
+Root cause: a bug in sdk-js dechunker v2.3.1 where header reassembly logic fails when certain chunk boundaries split multi-line headers; the dechunker returns "hdr_reasm_failed" and the SDK retries the request, which, under load, triggers head-of-line retries and amplifies upstream p99 and error rates. This manifests as intermittent 400/502 on ingress.
+
+Immediate actions taken:
+- Deployed server-side tolerant parser on Checkoutly's route at 12:05 PDT (accepts split header reassembly for 72 hours).
+- Deployed a temporary traffic routing policy to increase per-request timeout and reduce client-side retry aggression.
+- Built and validated an SDK patch (v2.3.2) that corrects header reassembly; can cut a release and post to NPM after a short test.
+
+Validation plan:
+1) Patch rollout to 5% of Checkoutly traffic tonight (smoke tests),
+2) If green, ramp to 100% over 2–3 hours,
+3) Keep tolerant parser enabled for 72 hours then remove after monitoring window.
+
+Customer remediation: recommend 10% billing credit for the incident window; Neha to confirm PR/comms.
+
+I'll produce a postmortem draft with the signal timeline and recommended long-term fixes (hardening parser tests + adding end-to-end fuzzing around chunk boundaries).
+
+— Jonas Weber
+Staff Software Engineer, Platform Runtime

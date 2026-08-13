@@ -1,0 +1,120 @@
+Incident synthesis: inference degradation — customer-facing RCA & verification
+
+From: tim.rice@acmecloud.com
+To: priyom.das@redwood.ai
+Cc: anna.lee@clearwave.com
+Date: 2026-05-09T09:12:00-07:00
+Subject: Re: Elevated latency and token drops (ClearWave)
+
+Hi Priyom,
+
+Thanks for the rapid updates this morning. Our platform saw sustained token drops between 02:10-02:55 UTC that affected about 8% of inference requests; our payments flow retried but a few payments were delayed. Ops has captured request ids and traces, attaching a small sample. We need a short customer-friendly RCA and a verification checklist we can run on our side before we close the postmortem.
+
+Can you confirm expected timeline for the RCA and what validation steps ClearWave should run?
+
+—Tim
+Tim Rice
+VP, Platform Engineering
+AcmeCloud (ClearWave team)
+Attachment: clearwave_sample_traces.json (JSON, 120KB)
+From: priyom.das@redwood.ai
+To: tim.rice@acmecloud.com
+Cc: marissa.cole@redwood.ai, jonas.weber@redwood.ai, irene.choi@redwood.ai
+Date: 2026-05-09T10:05:00-07:00
+Subject: Re: Elevated latency and token drops (ClearWave)
+
+Tim — thank you for the traces. We’ve started a joint investigation. High-level summary (so you have immediate context):
+
+- What we saw: a burst of inference worker restarts coincident with elevated latency and some token delivery failures for requests that relied on prefix/KV cache.
+- Customer impact window (prelim): 02:06–02:58 UTC (we are refining).
+- Immediate mitigation: we rolled a compatibility-sidecar to bypass a newly-introduced cache eviction path at 02:45 UTC which reduced restarts; full stabilization by 02:57 UTC.
+
+We’ll circulate a customer-facing RCA draft by end of day tomorrow (May 10) with a timeline and concrete verification steps you can execute (small test harness + request ids). We’ll attach the RCA and a short validation packet.
+
+Apologies for the disruption — Priyom
+Priyom Das
+Senior Solutions Engineer, Redwood Inference
+Phone: +1 (415) 555-0123
+
+
+From: priyom.das@redwood.ai
+To: marissa.cole@redwood.ai, jonas.weber@redwood.ai, irene.choi@redwood.ai
+Date: 2026-05-10T08:30:00-07:00
+Subject: INTERNAL: Draft RCA for ClearWave — please review and approve for customer send
+
+Team — please review the attached draft RCA and the validation packet. Key technical points to confirm:
+
+1) Root cause: a regression in the cache-eviction controller (introduced in 2026-04-28 deploy) that incorrectly scheduled large-scale KV cache invalidation during rolling updates. The controller created a spike in memory pressure on inference workers, causing the runtime to restart workers that held hot KV state. When workers restarted, some in-flight requests that depended on cached prefix state observed token drop/partial outputs.
+
+2) Why the fallback failed earlier: our automatic reroute policy attempted to fall back to a smaller model variant, but because the worker restarts coincided with a brief service registry lag, a subset of requests were routed to workers still rebuilding KV state.
+
+3) Corrective actions (PRs and deploys):
+  - Revert the eviction controller change and harden the scheduling (deploy completed 2026-05-09 02:45 UTC).
+  - Add pre-checks to avoid eviction when live inference load > 10% of steady-state.
+  - Add telemetry: per-worker KV eviction traces and an eviction-rate SLI.
+  - Add an automatic hold during rollout if registry lag detected.
+
+4) Customer verification steps (draft): run the included test harness (small request set) that includes requests with cached prefixes, verify 0% token drops for the sample ids, and confirm latency within baseline.
+
+Please add or edit. I’ll consolidate and send to Tim and Anna after approvals.
+
+Attachments: draft_rca.md, verification-harness.sh, timeline.csv
+
+—Priyom
+From: priyom.das@redwood.ai
+To: tim.rice@acmecloud.com, anna.lee@clearwave.com
+Cc: marissa.cole@redwood.ai, jonas.weber@redwood.ai, irene.choi@redwood.ai
+Date: 2026-05-11T14:22:00-07:00
+Subject: Incident synthesis: inference degradation — customer-facing RCA & verification
+
+Tim / Anna — thank you again for your patience. Attached is the final customer-facing RCA packet and a compact verification checklist. Summary below; full details in attached PDF.
+
+Executive summary:
+- Incident window: 2026-05-09 02:06–02:58 UTC.
+- Impact: 8% of requests for ClearWave’s inference path experienced token drop or partial responses; automated retries handled many cases but you reported delayed payments for a small fraction of flows.
+- Root cause: a cache-eviction controller regression accidentally scheduled broad KV eviction during a rolling update, causing memory pressure and worker restarts which, for some in-flight requests, resulted in token delivery failures.
+
+Timeline (high level):
+- 02:06 UTC — first elevated error rates observed by internal monitors.
+- 02:30 UTC — alerts escalated; investigation began.
+- 02:45 UTC — rollback/compatibility-sidecar deployed to bypass eviction controller (mitigation).
+- 02:57 UTC — worker restart rate returned to baseline; tail latency normalized by 02:58 UTC.
+
+Action items delivered and planned (customer-facing):
+- Immediate: rollback of eviction controller change (complete).
+- Short-term (2 weeks): add rollout safety gates, eviction pre-checks, and per-worker eviction telemetry.
+- Medium-term (6–8 weeks): automatic fallback hardening (reduce reliance on registry during rollouts) and additional stress tests for KV eviction scenarios.
+
+What we request from ClearWave for verification (attached verification packet):
+1) Run the verification harness in the attached repo (verification-harness.sh) against your staging routing for 30 minutes using the sample request ids (we included the trace sample). Expectation: 0 token drops and latency within your baseline + 5%.
+2) Share the harness results and any failing request ids; we will cross-check with our traces and make a targetted replay for debugging.
+
+Attachments: clearwave_rca_summary.pdf, incident-timeline.csv, mitigation-checklist.md
+
+We’re available to run the verification together this week. Proposed times: Wed 2026-05-12 09:00–11:00 PDT or Thu 2026-05-13 13:00–15:00 PDT. Which works for you?
+
+Again, we apologize for the disruption. If you want a one-page executive brief for internal stakeholders at ClearWave, let me know and I’ll send it over.
+
+—Priyom Das
+Senior Solutions Engineer, Redwood Inference
+Attachments: clearwave_rca_summary.pdf (PDF, 220KB); incident-timeline.csv (CSV, 6KB); mitigation-checklist.md (MD, 2.8KB)
+
+
+From: anna.lee@clearwave.com
+To: priyom.das@redwood.ai
+Cc: tim.rice@acmecloud.com
+Date: 2026-05-11T16:45:00-07:00
+Subject: Re: Incident synthesis: inference degradation — customer-facing RCA & verification
+
+Priyom — thanks for the thorough packet and for the proposed verification times. Wed 05/12 09:00 PDT works for our SREs; we’ll run the harness in staging beforehand and bring results to the session.
+
+A couple of asks from our side:
+- Please include the small list of sample request ids in the PDF (we saw them in the draft).
+- Can Redwood run a parallel replay of our failing traces during the joint session (so we can watch both sides)?
+
+We appreciate the quick turnaround.
+
+—Anna
+Anna Lee
+SRE Lead, ClearWave
+Attachment: none

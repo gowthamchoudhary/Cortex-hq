@@ -1,0 +1,120 @@
+Realtime chunk blackout during peak — escalation & exec ask
+
+From: Danielle Reed <danielle@clarify.ai>
+To: Karthik Iyer <karthik@redwood.ai>; Monica Patel <monica@redwood.ai>
+Cc: sre@clarify.ai
+Date: Sat, 10 May 2025 09:12:00 -0700
+Subject: Production: repeated socket silence during morning burst — impacting orders
+
+Karthik / Monica —
+
+We started seeing repeated live-response silence on our Clarify Retail stream this morning around 08:42 PDT. Clients see the UI hang (no tokens) for ~6–20s, then the stream either recovers or the request fails with a 504. This is happening across three regions (us-west-2 primarily) during our peak window and is driving a spike in error-rate + supporting calls.
+
+Observations: 
+- Affected endpoints: /v1/realtime/generate (chunked, websocket)
+- Session IDs (examples): sess-8ab3, sess-8ab4, sess-8c11
+- Latency spikes correlate with burst events (200–300 concurrent sessions)
+- We can reproduce locally via a short stress run (attached trace) — the trace shows an initial token burst then a silent gap of ~12s before tokens resume.
+
+We attached a short WebRTC trace (webrtc-trace-20250510.txt) and a brief platform-side log snippet. Can you confirm if this matches anything on your side? We are currently routing some traffic to a fallback model but that has reduced quality. This is high priority for our ops team — please advise next steps and whether you want us to open a support console session.
+
+Thanks,
+Danielle
+Danielle Reed
+SRE Manager, Clarify.ai
+---
+Attachments: webrtc-trace-20250510.txt (text/plain, 54KB)
+From: Karthik Iyer <karthik@redwood.ai>
+To: Danielle Reed <danielle@clarify.ai>
+Cc: Monica Patel <monica@redwood.ai>, Evelyn Hart <evelyn@redwood.ai>
+Date: Sat, 10 May 2025 09:35:00 -0700
+Subject: Re: Production: repeated socket silence during morning burst — impacting orders
+
+Danielle — thanks for the clear summary and the trace. We've opened ticket RED-3192 and started an initial triage. A few quick answers and immediate asks: 
+
+1) We see matching gaps on the ingress side for the session IDs you supplied. Early hypothesis: intermittent KV cache miss/eviction during high-concurrency paths combined with full-token-window kernel stalls on the serving instances.
+2) Can you confirm whether you were on the pinned model variant (gptx-large-quant) or a fallback? If pinned, please share the model_version header.
+3) Please run one more short reproducer with capture of X-Request-Id (we included a small script below). That will let SRE correlate request->worker traces.
+
+Action so far: I’ve looped in Monica (CS) to coordinate customer comms and Evelyn (SRE) for deep-dive. Evelyn — recommend we pull the last 2 hours of kernel hotmetrics + instance-level logs from the affected pool and look for serializing syscalls around the gap windows.
+
+We can stand a 30-min Zoom warroom if you’re available. If this is causing revenue impact we will escalate to execs for a capacity/credit decision.
+
+— Karthik
+Karthik Iyer
+Director, Product Reliability | Redwood Inference
+---
+Attachment references: webrtc-trace-20250510.txt (from Danielle)
+From: Evelyn Hart <evelyn@redwood.ai>
+To: Karthik Iyer <karthik@redwood.ai>, Monica Patel <monica@redwood.ai>, Rishi Malhotra <rishi@redwood.ai>
+Date: Sat, 10 May 2025 11:00:00 -0700
+Subject: Internal: initial triage + proposed mitigations for RED-3192
+
+Folks — quick internal note from a short triage run.
+
+Findings: 
+- The affected worker pool shows brief stalls where the token-generation loop blocks for ~8–14s. Kernel traces point to blocking on memcpy-like ops after a quantized-matrix path switch. This appears at higher concurrency when KV cache rehydration happens.
+- Autoscaler did not create new instances because CPU was not the trigger metric; however, the GPU thread contention rose non-linearly.
+
+Proposed immediate mitigations (ordered):
+1) Redirect Clarify.ai traffic to a warmed pool (we can migrate their traffic to a separate pre-warmed dedicated pool for up to 3 hours).
+2) Apply a temporary routing policy to enforce smaller batch sizes for their account (reduces throughput but eliminates the stall).
+3) Schedule forced instance rotate for the two suspect hosts (drain, reprovision) — low-risk but takes ~12–18m each.
+
+I recommend we mark this P1 and escalate to Vanessa for approval of temporary dedicated capacity and customer credits. Monica — please prep a short customer-facing note offering the mitigation + credit option.
+
+Runbook: https://docs.redwood.com/runbooks/realtime-heartbeat-failure (internal)
+
+Evelyn Hart
+Head of Site Reliability, Redwood Inference
+---
+Attachments: none
+From: Karthik Iyer <karthik@redwood.ai>
+To: Vanessa Ortiz <vanessa@redwood.ai>, Rishi Malhotra <rishi@redwood.ai>; Danielle Reed <danielle@clarify.ai>
+Cc: Monica Patel <monica@redwood.ai>, Evelyn Hart <evelyn@redwood.ai>
+Date: Sat, 10 May 2025 11:30:00 -0700
+Subject: Escalation: Clarify.ai — realtime chunk blackout during peak (RED-3192)
+
+Vanessa / Rishi —
+
+We need executive approval for two short-term remedies for Clarify.ai — this is a revenue-impacting P1; the customer is seeing production user-facing UI hangs and elevated error rates during peak. Summary below.
+
+Brief: during the morning peak Clarify.ai observed silent windows (no tokens) for 6–20s on websocket/chunked streams. Triage points to GPU thread contention + KV rehydration causing token-generation stalls under burst. We have a mitigation ladder from SRE:
+- Option A (fast): Move Clarify traffic to a warmed dedicated pool for 3 hours. Estimated cost delta: ~$2.6k for the window. Expected impact: immediate removal of stalls; no code change.
+- Option B (config): Apply per-account batch cap (reduces throughput, avoids stall) and schedule instance rotate. Cost delta: negligible; degrades tail throughput.
+- Customer impact: currently using fallback model; quality degraded; they have contract clause for SLA credits if platform availability <99.5% for the month.
+
+Recommended: approve Option A + offer one week of service credit (pro-rated) as goodwill. Monica will handle customer note and credit language.
+
+Attachments: diagnostic_logs_20250510.zip (contains worker traces and kernel logs).
+
+If approved I’ll kick off the migration and set up a 30-minute warroom (SRE + CS + customer).
+
+— Karthik
+Karthik Iyer
+Director, Product Reliability | Redwood Inference
+---
+Attachment references: diagnostic_logs_20250510.zip
+From: Vanessa Ortiz <vanessa@redwood.ai>
+To: Karthik Iyer <karthik@redwood.ai>, Rishi Malhotra <rishi@redwood.ai>, Monica Patel <monica@redwood.ai>
+Cc: Danielle Reed <danielle@clarify.ai>, Evelyn Hart <evelyn@redwood.ai>
+Date: Mon, 12 May 2025 16:03:00 -0700
+Subject: Re: Escalation: Clarify.ai — realtime chunk blackout during peak (RED-3192)
+
+Thanks for the triage and clear options. Approve Option A (warmed dedicated pool for up to 3 hours) and the one-week pro-rated credit. Please proceed immediately and keep me posted on the warroom outcomes.
+
+Logistics: Monica — please coordinate the customer-facing note; include estimated timelines and the credit calculation. Evelyn — run the migration at 16:30 PDT and confirm the instance rotates are scheduled for the early maintenance window (22:00 PDT).
+
+This is high-priority — escalate to me if the migration does not eliminate the blackout within 15 mins.
+
+Vanessa Ortiz
+VP, Customer Success | Redwood Inference
+---
+Quoted earlier message:
+On Sat, 10 May 2025 at 09:12 Danielle Reed <danielle@clarify.ai> wrote:
+> Karthik / Monica —
+> 
+> We started seeing repeated live-response silence on our Clarify Retail stream this morning around 08:42 PDT. Clients see the UI hang (no tokens) for ~6–20s, then the stream either recovers or the request fails with a 504. This is happening across three regions (us-west-2 primarily) during our peak window and is driving a spike in error-rate + supporting calls.
+
+---
+Attachments referenced: diagnostic_logs_20250510.zip, webrtc-trace-20250510.txt

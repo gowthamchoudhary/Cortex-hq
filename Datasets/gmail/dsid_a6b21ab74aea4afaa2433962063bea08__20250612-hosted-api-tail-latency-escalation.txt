@@ -1,0 +1,131 @@
+Hosted API: p95/p99 latency spikes & 429 amplification — customer escalation
+
+From: Tom Reynolds <tom.reynolds@saasco.com>
+To: rishi_malhotra <rishi@redwood.ai>
+Cc: SaaSCo Ops <ops@saasco.com>
+Date: Thu, 12 Jun 2025 09:12:00 -0700
+Subject: High p99 latency and 429s this morning
+
+Rishi —
+
+We started seeing widespread 5xx/429s and big p95/p99 spikes from the Hosted API around 08:30 UTC. Our clients experienced timeouts; some of our queued jobs retried and ended up compounding the problem. Graphs here show the jump in p99 and the correlated 429 surge.
+
+This is impacting critical syncs for our customers. Can you confirm if this is an ongoing incident on your side and what immediate mitigation you can offer? We need something that reduces client timeouts within the hour.
+
+Tom
+Senior Ops, SaaSCo
+
+Attachments: grafana-p95-p99-20250612.png
+From: rishi_malhotra <rishi@redwood.ai>
+To: Tom Reynolds <tom.reynolds@saasco.com>
+Cc: monica_patel <monica@redwood.ai>, ethan_park <ethan@redwood.ai>, lauren_bishop <lauren@redwood.ai>, markus_klein <markus@redwood.ai>
+Date: Thu, 12 Jun 2025 09:28:00 -07:00
+Subject: Re: High p99 latency and 429s this morning
+
+Tom — thanks for the alert and the graphs. I'm escalating internally and we'll treat this as a high-priority customer incident. Initial ask: can you confirm whether your client library retried aggressively (no jitter/backoff) or used a standard exponential backoff? Any client logs would help triage.
+
+Immediate steps we're initiating now:
+- Monica (CS) will open a direct line with your ops team to coordinate mitigations.
+- Ethan (Eng) is pulling traces and the rate-limiter logs; we'll look for hot clients and token-bucket saturation.
+- I'll request a temporary quota increase and relaxed rate-limits for SaaSCo while we stabilize.
+
+I'll follow up in ~30 minutes with updates.
+
+—Rishi
+Director, Customer Success
+Redwood Inference
+
+On Thu, Jun 12, 2025 at 09:12 Tom Reynolds <tom.reynolds@saasco.com> wrote:
+> Rishi —
+> 
+> We started seeing widespread 5xx/429s and big p95/p99 spikes...
+From: ethan_park <ethan@redwood.ai>
+To: rishi_malhotra <rishi@redwood.ai>, monica_patel <monica@redwood.ai>
+Cc: markus_klein <markus@redwood.ai>
+Date: Thu, 12 Jun 2025 09:45:00 -07:00
+Subject: RE: High p99 latency and 429s this morning
+
+Quick update from infra: initial traces show a classic amplification pattern. Observations: 
+- Our global rate limiter transitioned to hard 429s for several customer tokens when the token-bucket depth was exhausted.
+- A subset of SaaSCo client processes appear to be retrying immediately (no jitter, low backoff) so we see lots of retry requests arriving within seconds — that created a retry storm.
+- Retry storm increased queueing on front-line workers, amplifying tail latency (p95/p99) and causing timeouts.
+- There were a couple of autoscaling events, but the spike was faster than the scale-up window; some requests got routed to fallback slower workers which worsened p99.
+
+Immediate mitigation we suggest (we're running these now):
+1) Apply customer-specific soft-throttle: change SaaSCo from hard 429s to a 2xx micro-degrade for non-critical routes and add Retry-After header for others.
+2) Apply short-term quota relaxation (10-20%) for SaaSCo token to reduce hard 429s while we analyze.
+3) Blacklist a handful of noisy IPs/instances identified in logs for 30m while we evaluate.
+4) Turn on per-token smoothing (leaky-bucket smoothing) to spread bursts across a 10s window.
+
+Longer term: circuit breakers at the gateway, faster warm-up for autoscaling, and a client library push to encourage exponential backoff + jitter.
+
+I'll attach the incident trace + logs to the ticket. ETA for the soft-throttle change is ~12 minutes.
+
+—Ethan
+SRE, Redwood Inference
+
+Attachments: pagerduty-incident-3456.txt
+From: monica_patel <monica@redwood.ai>
+To: Tom Reynolds <tom.reynolds@saasco.com>
+Cc: rishi_malhotra <rishi@redwood.ai>, lauren_bishop <lauren@redwood.ai>
+Date: Thu, 12 Jun 2025 09:58:00 -07:00
+Subject: Re: Hosted API incident — short term relief plan
+
+Tom —
+
+Thanks for the speedy responses. We're applying the soft-throttle and quota relaxation now. Two operational notes: 
+- We'll publish a recommended retry policy to your team (exponential backoff + full jitter) and a short-term Ask: can you roll that out in a canary subset of your fleet? Even a 10% roll-forward will help.
+- If you want, we can open a temporary Dedicated burst lane for critical routes for the next 48 hours; that would isolate some traffic from the global pool. This will require an authorization from your side (I can fast-track).
+
+I'll stay on this thread and keep you posted.
+
+—Monica
+Customer Success, Redwood Inference
+
+On Thu, Jun 12, 2025 at 09:45 ethan_park <ethan@redwood.ai> wrote:
+> Quick update from infra: initial traces show a classic amplification pattern...
+From: lauren_bishop <lauren@redwood.ai>
+To: markus_klein <markus@redwood.ai>, rishi_malhotra <rishi@redwood.ai>, monica_patel <monica@redwood.ai>
+Date: Thu, 12 Jun 2025 10:22:00 -07:00
+Subject: Heads-up — exec loop requested by SaaSCo
+
+Markus / team — SaaSCo's VP of Product just asked to loop in their execs and requested a credit discussion if the incident isn't resolved quickly. Tom asked for an estimate of time-to-stabilize and whether we can offer a 10% service credit if they see degraded p99s for more than 6 hours.
+
+I propose we offer: 
+- Immediate: prioritized mitigation + SLA guardrails (free Dedicated burst lane for 24h).
+- If p99 remains degraded beyond 4 hours: 5% credit; beyond 8 hours: 15% credit.
+
+Would like exec sign-off on this banded credit approach.
+
+—Lauren
+Enterprise AE, Redwood Inference
+
+On Thu, Jun 12, 2025 at 09:58 monica_patel <monica@redwood.ai> wrote:
+> Tom —
+> 
+> Thanks for the speedy responses...
+From: markus_klein <markus@redwood.ai>
+To: lauren_bishop <lauren@redwood.ai>, rishi_malhotra <rishi@redwood.ai>, ethan_park <ethan@redwood.ai>, monica_patel <monica@redwood.ai>
+Date: Mon, 16 Jun 2025 15:40:00 -07:00
+Subject: Re: Hosted API: p95/p99 latency spikes & 429 amplification — customer escalation
+
+Team —
+
+Thanks for the quick triage and the operational playbook. A few decisions from leadership:
+1) Approve the 24h Dedicated burst lane for SaaSCo (Monica, please coordinate procurement/ops).
+2) Approve the short-term credit band as Lauren proposed but cap at 10% total liability — finance to confirm.
+3) Prioritize three engineering projects on the roadmap: faster autoscale pathing, gateway circuit breakers, and a client library release with recommended retry/backoff. Allocate 2 sprint points each to a hotfix track.
+
+Please update the incident ticket with timelines and owners. Once we have a postmortem, we'll schedule an exec readout with SaaSCo.
+
+—Markus
+VP Product, Redwood Inference
+
+-----Original Message-----
+From: Tom Reynolds <tom.reynolds@saasco.com>
+Sent: Thu, 12 Jun 2025 09:12:00 -0700
+Subject: High p99 latency and 429s this morning
+
+Rishi —
+
+We started seeing widespread 5xx/429s...

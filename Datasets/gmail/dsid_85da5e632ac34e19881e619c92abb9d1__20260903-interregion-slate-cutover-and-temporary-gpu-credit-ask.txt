@@ -1,0 +1,123 @@
+Interregion slate cutover — temporary GPU credit & autoscale exception request
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Jonas Weber <jonas_weber@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>, Sarah Li <sarah.li@atlashealth.com>
+Cc: procurement@atlashealth.com
+Date: 2026-09-03T09:12:00-07:00
+Subject: Interregion slate cutover — temporary GPU credit & autoscale exception request
+
+Team,
+
+AtlasHealth is planning an interregion cutover of their inference slate for a pilot (Q4 prep). They want to switch traffic from us-east-1 to us-west-2 for a 48-hour verification window (tentative: 2026-09-10 00:00 UTC -> 2026-09-12 00:00 UTC). During that window their live traffic pattern will temporarily spike (sustained burst for short periods).
+
+What I'm asking for:
+- A temporary dedicated reservation or GPU-credit allocation (~120 GPU-hours, estimate attached in capacity-forecasts-ATL.csv).
+- An autoscale policy exception to allow bursts up to 2x their usual slice for the window (policy currently caps at 1.2x).
+- Confirmation of ops checklist items for interregion NAT/egress and model binary placement (Atlas has requested no cold-start >300ms).
+
+Attached: interregion-cutover-playbook-v1.pdf (draft), capacity-forecasts-ATL.csv.
+
+Please reply with availability, any blockers, and the cost/chargeback approach so I can pass to Atlas procurement. Sarah — please confirm your side's PO/timing constraints.
+
+Thanks,
+Kimberly Park
+Head of Dedicated Sales | Redwood Inference
+kimberly_park@redwood.ai
+
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Hannah Schmitt <hannah_schmitt@redwood.ai>, Sarah Li <sarah.li@atlashealth.com>
+Date: 2026-09-03T11:03:00-07:00
+Subject: Re: Interregion slate cutover — temporary GPU credit & autoscale exception request
+
+Kimberly — good call flagging this early. A few technical notes from SRE/SE: 
+
+- Can you confirm the model variants that will be in production during the window (fp16 vs int8)? The cost and cold-start characteristics differ substantially. If Atlas can run a quantized variant during the spike we can reduce the requested capacity by ~30%.
+- We should define a hard fallback: if per-token latency breaches 400ms for more than 2 minutes, route 10% traffic to a smaller model variant (we can implement at the routing layer).
+- Autoscale exception: we can approve a temporary policy override but it needs an explicit Jira CAPEX ticket (see CAPEX-812) and an owner who will monitor dashboards during the window.
+
+Can Marcus take runbook confirmation and Laura handle the reservation transaction? If so I will draft the technical checklist.
+
+—Jonas
+Jonas Weber
+Senior Solutions Engineer | Redwood Inference
+jonas_weber@redwood.ai
+
+On Wed, Sep 3, 2026 at 09:12 Kimberly Park <kimberly_park@redwood.ai> wrote:
+> Team,
+>
+> AtlasHealth is planning an interregion cutover...
+From: Sarah Li <sarah.li@atlashealth.com>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Cc: procurement@atlashealth.com, devops@atlashealth.com
+Date: 2026-09-04T08:18:00-07:00
+Subject: Re: Interregion slate cutover — temporary GPU credit & autoscale exception request
+
+Hi Kimberly and team,
+
+Thanks for the heads up — Atlas confirms the cutover window (2026-09-10 -> 2026-09-12) is what we are targeting. A few items from procurement/SRE here: 
+
+- Procurement needs an itemized cost estimate and an invoice/PO path (we prefer a short-term credit note or invoice against account ATL-3491). I attached our standard vendor terms (atlas-procurement-terms.pdf).
+- DevOps: we will require the runbook to include the specific egress/NAT IPs for the us-west-2 region and the fallback routing instructions.
+- We can commit to running an int8 quantized model for the 48-hour spike if Redwood's runtime guarantees that prefix K/V caching will be preserved across region promotion (this is a hard requirement).
+
+We are comfortable with a temporary capacity bump if the cost is scoped and there's a clear rollback plan. Please mark procurement@atlashealth.com on the invoice or credit note.
+
+Regards,
+Sarah Li
+Director, Platform Engineering | AtlasHealth
+sarah.li@atlashealth.com
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Hannah Schmitt <hannah_schmitt@redwood.ai>, Sarah Li <sarah.li@atlashealth.com>
+Date: 2026-09-05T14:22:00-07:00
+Subject: Re: Interregion slate cutover — temporary GPU credit & autoscale exception request
+
+Following up with a proposed ops plan and constraints we need before approving the exception: 
+
+Runbook (high level):
+- Pre-cutover (72h out): warm KV caches for the promoted model variant in us-west-2; deploy quantized binary and validate E2E on a 10% traffic mirror.
+- T-1 hour: enable burst policy (CAPEX-812 will contain exact thresholds) and switch routing weights to promote us-west-2.
+- Monitoring: dedicated Grafana dashboard + PagerDuty escalation on latency > 350ms for 60s.
+- Post-window: rollback to baseline and run a 24h degradation sweep.
+
+Operational constraints:
+- We can commit the 120 GPU-hours as a credit if Atlas signs the short agreement; finance needs the cost center (will charge to the deal ATL-3491 by default).
+- Autoscale exception is time-boxed (48 hours) and will require a named owner to manually revoke if unexpected behavior occurs.
+
+Action items: 
+1) Kimberly: confirm whether Atlas will run int8 during the window (Sarah flagged this as likely).
+2) Laura: if you can open the reservation and create the billing entry, finance will provision the credit.
+3) Jonas: can you create the technical CAPEX ticket with the thresholds and attach the draft checklist?
+
+I can take the runbook edits and own the monitoring config.
+
+Marcus Lin
+Staff Infrastructure Engineer | Redwood Inference
+marcus_lin@redwood.ai
+
+> On Sep 4, 2026, Sarah Li wrote:
+> > We are comfortable with a temporary capacity bump...
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Laura Bennett <laura_bennett@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Cc: Sarah Li <sarah.li@atlashealth.com>, procurement@atlashealth.com
+Date: 2026-09-07T17:45:00-07:00
+Subject: Re: Interregion slate cutover — temporary GPU credit & autoscale exception request
+
+Summary and next steps (agreed):
+- Atlas will run int8 quantized model during the 48-hour window — Kimberly to get final confirmation from Sarah by EOD tomorrow.
+- Redwood will provision a 120 GPU-hour temporary credit charged to deal ATL-3491; Laura to open the reservation and create invoice/credit note for procurement@atlashealth.com.
+- Jonas will open CAPEX-812 and attach the thresholds + the monitoring checklist; Marcus will own the runbook edits and monitor the Grafana dashboard during the window.
+- Autoscale exception approved for 2026-09-10 00:00 UTC -> 2026-09-12 00:00 UTC, manual revoke required if latency > 400ms beyond designed fallback.
+
+Laura — can you confirm once the reservation is in the system and share the invoice link? Sarah — if procurement needs anything else, loop procurement@atlashealth.com and copy me.
+
+Thanks everyone — I’ll send a short ops-readout template once the reservation is visible.
+
+Best,
+Kimberly Park
+Head of Dedicated Sales | Redwood Inference
+kimberly_park@redwood.ai
+
+Attachments referenced: interregion-cutover-playbook-v1.pdf, capacity-forecasts-ATL.csv, atlas-procurement-terms.pdf

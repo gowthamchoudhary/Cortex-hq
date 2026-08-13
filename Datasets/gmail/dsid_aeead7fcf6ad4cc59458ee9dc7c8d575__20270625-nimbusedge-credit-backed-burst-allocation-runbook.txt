@@ -1,0 +1,130 @@
+Proposal: credit-backed burst allocation & failover runbook for NimbusEdge (Dedicated)
+
+From: Alex Chen <alex.chen@nimbusedge.com>
+To: rishi.malhotra@redwood.ai
+Date: Sun, 20 Jun 2027 09:12:00 -0700
+Subject: Dedicated burst window & crediting model (NimbusEdge)
+
+Hi Rishi,
+
+Thanks again for the demo last week — team was impressed with the latency and the cost transparency. We are nearing an internal capacity commitment for Dedicated and have two asks we need to validate before procurement: 
+
+1) A model for short-term burst credits for predictable seasonal spikes (we run nightly ingestion jobs and occasional peak inference windows).
+2) A simple autoscale + failover runbook we can share with ops so they know what to expect during a burst (preemptible fallbacks, regional failover).
+
+Can you share what a credit-backed burst policy would look like (how credits are spent/replenished, example SLAs during burst, any blackout periods), and an ops-runbook we can give our SREs? We have a target go-live by mid-July.
+
+Procurement and I are copied — happy to jump on a quick call.
+
+Thanks,
+Alex Chen
+Head of Platform Engineering
+NimbusEdge
+
+Attachment: (none)
+
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Alex Chen <alex.chen@nimbusedge.com>, Maya Torres <maya.torres@nimbusedge.com>
+Cc: Procurement <procurement@nimbusedge.com>
+Date: Mon, 21 Jun 2027 10:03:00 -0700
+Subject: Re: Dedicated burst window & crediting model (NimbusEdge)
+
+Alex — really appreciate the clear asks. High level we can do a credit-backed burst that: 
+
+- Allocates a baseline committed slab (reserved GPUs) + a burst credit pool that draws down when you exceed baseline.
+- Credits replenish monthly (or on an agreed cadence). Excess burst after credits are consumed can be handled by: automated preemptible nodes (lower-cost, short-lived) or regional fallback to lower-cost model variants.
+
+I will pull together a concise ops runbook and a short pricing example. Looping in our solution leads to size the burst safely.
+
+Next steps:
+- Internal sizing/ops draft (we’ll share by Thu 24 Jun).
+- We’ll attach an initial SLA/credit draft for review.
+- If that looks good we can schedule a 30-min alignment with your SREs next week.
+
+Best,
+Rishi
+Head of Sales, Dedicated
+Redwood Inference
+
+Attachment: autoscale-runbook-v1.md (draft)
+
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Karthik Iyer <karthik.iyer@redwood.ai>, Lauren Bishop <lauren.bishop@redwood.ai>, Priyom Das <priyom.das@redwood.ai>
+Date: Tue, 22 Jun 2027 09:20:00 -07:00
+Subject: Fwd: Dedicated burst window & crediting model (NimbusEdge) — need sizing + runbook
+
+Folks — forwarding NimbusEdge ask. Summary: committed slab + credit-backed burst pool; timeframe mid-July. They want: credit accounting (how we debit credits), example SLA during burst, and an ops-runbook for SREs describing preemptible fallbacks and regional failover behavior.
+
+Can you provide: 
+- Karthik: rough GPU sizing for baseline vs 3 burst scenarios (10%, 50%, 200% over baseline) with expected queueing/latency impact. Put results in a 1-sheet CSV.
+- Lauren: suggested SLA language for a credit-backed burst (uptime targets, credits consumed per minute of excess capacity, allowable throttles).
+- Priyom: a short runbook (bullet points) that operations can follow during a 2-hour high burst window — include playbook for activating preemptible nodes and triggering region-failover.
+
+Target: consolidated draft to share with NimbusEdge by Thu 24 Jun EOD. Anything blocking?
+
+Onwards,
+Rishi
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>, Lauren Bishop <lauren.bishop@redwood.ai>, Priyom Das <priyom.das@redwood.ai>
+Date: Wed, 23 Jun 2027 11:45:00 -07:00
+Subject: Re: Fwd: Dedicated burst window & crediting model (NimbusEdge) — need sizing + runbook
+
+Rishi / team — quick sizing notes (high level):
+
+Assumptions:
+- Baseline committed: 32 80GB GPUs (NVIDIA H100-equivalent). Typical seq length 512, avg tokens/sec per GPU: ~1200 for their model family.
+- Peak scenarios: 10% (3 GPUs), 50% (16 GPUs), 200% (64 GPUs) additional over baseline.
+
+Estimated implications:
+- 10% burst: handled entirely in-cache with negligible latency change; recommend 1:1 mapping to credits (1 credit unit = 1 GPU-minute at baseline perf).
+- 50% burst: recommend 50% of burst served via pre-warmed preemptible slab (24 GPUs preemptible), remaining  (if any) via short-lived ephemeral nodes; expected 95th percentile latency increase ~15–25% under sustained 15-min windows.
+- 200% burst: requires broad scale — propose credit cap + automated throttling to maintain 99.9% control-plane response. Use regional failover to secondary region for non-low-latency tiers (embeddings/async batch).
+
+Autoscale policy (suggested):
+- Scale-up trigger: queue depth > 50 requests/queue OR average utilization > 75% for 2 minutes.
+- Preemptible backfill: activate up to 40% of requested burst as preemptible by default (fast spin-up, lower cost).
+- Hard cap: do not exceed baseline + credit_pool + preemptible_max. If cap reached, circuit-breaker throttles by priority class (foreground low-latency traffic first).
+- Credit accounting: 1 credit = 60 GPU-seconds at baseline throughput; monthly replenish X credits (negotiable).
+
+Cost delta: estimate incremental cost for 50% burst (24 GPUs preemptible for 15 mins daily over month) ~ +12% unit cost vs baseline. Exact numbers in attached capacity-model-approx.csv.
+
+I’ll drop the CSV and a short runbook bullets to Priyom to turn into operational steps.
+
+— Karthik
+Senior Platform Engineer, Inference Runtime
+
+Attachment: capacity-model-approx.csv
+
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Alex Chen <alex.chen@nimbusedge.com>, Maya Torres <maya.torres@nimbusedge.com>
+Cc: Procurement <procurement@nimbusedge.com>, Karthik Iyer <karthik.iyer@redwood.ai>, Lauren Bishop <lauren.bishop@redwood.ai>, Priyom Das <priyom.das@redwood.ai>
+Date: Fri, 25 Jun 2027 16:30:00 -07:00
+Subject: Re: Dedicated burst window & crediting model (NimbusEdge) — proposal and runbook attached
+
+Alex / Maya — thanks for the patience. Attached are three artifacts: 1) short SLA & credit model (nimbusedge_burst_sla_draft.pdf), 2) ops runbook (autoscale-runbook-v1.md), 3) capacity estimate (capacity-model-approx.csv). Highlights below: 
+
+Summary (TL;DR):
+- Baseline: 32 reserved 80GB GPUs.
+- Credit pool: 30,000 GPU-minutes monthly (negotiable) — credits consumed at 1 credit = 60 GPU-seconds at baseline throughput.
+- Preemptible backfill: up to 24 GPUs automatically brought in when credits > 0; preemptible discounted pricing applies.
+- Failure modes: if credits exhausted and preemptible capacity exhausted, automated throttling by priority tier with explicit notification to your SREs; optional region-failover for batch tiers.
+
+Ops runbook (short):
+1) Detection: alert if queue depth > 50 or avg GPU util > 80% for 2 consecutive minutes.
+2) Auto-action A: activate preemptible backfill (up to agreed cap). Notify on-call.
+3) Auto-action B: if credit pool is available, draw credits and continue to scale up to credit cap.
+4) Manual escalation: if sustained >30 minutes and credits near depletion, trigger cross-region fallback for async workloads and open cost-exception with Redwood support.
+
+Next steps:
+- Please review SLA PDF and the runbook. If acceptable, we can swap an MAA (mutual action agreement) and convert to a short addendum to the Dedicated contract.
+- Proposed call: Mon 28 Jun 10am PT to walk through. I’ll send calendar if that works.
+
+Thanks — happy to adjust the credit cadence and caps to match your procurement targets.
+
+Best regards,
+Rishi Malhotra
+Head of Sales, Dedicated
+Redwood Inference
+
+Attachments: nimbusedge_burst_sla_draft.pdf; autoscale-runbook-v1.md; capacity-model-approx.csv

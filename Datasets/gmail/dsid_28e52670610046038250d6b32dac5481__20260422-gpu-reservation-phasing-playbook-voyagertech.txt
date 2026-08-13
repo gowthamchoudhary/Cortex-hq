@@ -1,0 +1,131 @@
+Dedicated GPU reservation phasing: options, minimums, and activation matrix
+
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Eleanor Price <eleanor.price@voyagertech.com>
+Cc: Mateo Alvarez <mateo.alvarez@voyagertech.com>, ben_carter@redwood.ai, karthik_iyer@redwood.ai
+Date: Thu, 22 Apr 2026 09:12:00 -0700
+Subject: Dedicated GPU reservation phasing: options, minimums, and activation matrix
+
+Hi Eleanor —
+
+Thanks again for the run-through yesterday. Per our conversation I pulled together three reservation options that align to VoyagerTech’s target Q3 launch and your traffic profile (high-concurrency inference + bursty nightly batch). I focused on: cluster footprint, minimum guaranteed GPUs, warmup / credits for model warm caches, and graceful-degradation fallbacks. Short summary below; full activation matrix attached.
+
+Option A — Conservative ramp (recommended if you want lowest immediate spend)
+- Initial cluster: 8 A100-equivalent GPUs (1x 8-GPU pool)
+- Min guaranteed: 4 GPUs (baseline SLO)
+- Ramp: 8 -> 16 GPUs over 12 weeks as usage increases
+- Warmup credits: 72 hours of prefix/KV cache warmup credits (applied during onboarding)
+- Fallbacks: automated region failover + scaled-down cheaper model family for non-critical paths
+
+Option B — Balanced (preferred for predictable latency under steady growth)
+- Initial cluster: 16 GPUs (2x 8-GPU nodes)
+- Min guaranteed: 12 GPUs
+- Ramp: capacity buffer of +25% with scheduled activation windows over 8 weeks
+- Warmup credits: 120 hours; recommendation to pre-warm commonly used prefixes nightly
+- Fallbacks: tiered model routing to quantized variant under burst
+
+Option C — Aggressive (fast-growth runway)
+- Initial cluster: 32 GPUs (4x 8-GPU nodes)
+- Min guaranteed: 24 GPUs
+- Ramp: immediate 32, 60-day review for commit smoothing
+- Warmup credits: 240 hours + burst lanes for known batch jobs
+- Fallbacks: cross-region spill + queued batch processing for low-priority jobs
+
+Key asks for you:
+1) Which option matches your procurement comfort (A/B/C)?
+2) Any hard constraints on minimum SLA CPUs per request or max p95 latency?
+3) Preferred cadence for activation windows (weekday evenings vs weekend)?
+
+Attached: activation_matrix.xlsx (node-by-node activation schedule), voyager_draft_sof.pdf (scope-of-work + T&Cs).
+
+If helpful I can spin up an estimate showing per-token economics for each option and a burn-rate projection. I’ll loop in Karthik for the exact warmup runbook and Ben for pricing/credits.
+
+Best,
+Priya Natarajan
+Account Executive | Redwood Inference
+priya_natarajan@redwood.ai
++1 415-555-0182
+
+Attachment stubs: voyager_draft_sof.pdf (PDF, 7 pages), activation_matrix.xlsx (XLSX, 1 sheet)
+
+From: Eleanor Price <eleanor.price@voyagertech.com>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: Mateo Alvarez <mateo.alvarez@voyagertech.com>, procurement@voyagertech.com
+Date: Thu, 22 Apr 2026 13:47:00 -07:00
+Subject: Re: Dedicated GPU reservation phasing: options, minimums, and activation matrix
+
+Thanks, Priya — this is exactly the level of detail we needed. Quick thoughts from our side:
+
+- Likely leaning toward Option B (balanced) given predictable latency needs, but we need the min guaranteed to be strictly met for production-critical endpoints.
+- Curious how warmup credits map to real cache hit-rate improvements. Do you have a runbook for the exact pre-warm procedure?
+- Our procurement lead (procurement@voyagertech.com) asked for a staggered billing schedule (monthly ramp vs annual upfront) — can Redwood accommodate flexible billing for the first 90 days?
+- Can Karthik confirm whether we get per-node isolation for logs and audit streams in the private VPC? That’s a hard compliance ask.
+
+If you can answer those 3 items and send a DocuSign that reflects monthly billing for quarters 1–2 ramp, we can move to signatures.
+
+—Eleanor
+Eleanor Price
+CTO, VoyagerTech
+eleanor.price@voyagertech.com
+
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Eleanor Price <eleanor.price@voyagertech.com>
+Cc: karthik_iyer@redwood.ai, ben_carter@redwood.ai, procurement@voyagertech.com
+Date: Fri, 23 Apr 2026 08:33:00 -07:00
+Subject: Re: Dedicated GPU reservation phasing: options, minimums, and activation matrix
+
+Eleanor —
+
+Great questions. Short answers below and Karthik adds the technical confirmation in the next note.
+
+1) Warmup credits: these are applied as a combination of scheduled prefix replay + accelerated KV cache population. Based on similar workloads we’ve measured an 18–32% p95 latency improvement after a 72-hour focused warmup on repeated prefixes; 120–240 hours tends to approach steady-state hit rates for heavy-tailed distributions. The activation_matrix.xlsx includes expected hit-rate deltas per warmup window.
+
+2) Billing flexibility: we can support a monthly ramp billing for the first 90 days (no penalty) and then switch to the committed cadence you select (monthly or annual). I’ll have Ben attach a billing appendix to the SOF.
+
+3) DocuSign: I’ll prepare a draft DocuSign with the monthly-ramp clause once you confirm Option B.
+
+Karthik will confirm VPC isolation and log segregation next.
+
+Thanks —
+Priya
+
+Attachment referenced: warmup-credit-terms.txt (plain text, short appendix)
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Eleanor Price <eleanor.price@voyagertech.com>, Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: ben_carter@redwood.ai
+Date: Fri, 23 Apr 2026 10:05:00 -07:00
+Subject: Re: Dedicated GPU reservation phasing: options, minimums, and activation matrix
+
+Eleanor —
+
+Quick technical confirmation: in Redwood Private we provide per-customer VPCs and support per-node audit streams. For the Dedicated reservation pools we can configure node-level log forwarding to your Splunk/CloudWatch endpoint (TLS+mutual auth). The isolation guarantees:
+- Network: dedicated VPC with customer-managed subnets and security groups.
+- Logging: per-node audit streams, forwarded to your endpoint with customer-managed keys if desired.
+- Storage: model artifacts and KV caches are encrypted at rest with KMS; we can enable a customer-managed KMS key.
+
+Operational note: if you select Option B and want 12 GPUs guaranteed, we recommend a 2x8 topology (two 8-GPU nodes) with 4 GPUs allocated for warmup and testing so production remains at the min guaranteed during activation windows. I attached a short appendix to the activation matrix showing node-level activation order.
+
+—Karthik
+Senior Solutions Engineer | Redwood Inference
+karthik_iyer@redwood.ai
+
+From: Mateo Alvarez <mateo.alvarez@voyagertech.com>
+To: Priya Natarajan <priya_natarajan@redwood.ai>, Eleanor Price <eleanor.price@voyagertech.com>
+Cc: procurement@voyagertech.com, ben_carter@redwood.ai
+Date: Mon, 26 Apr 2026 11:03:00 -07:00
+Subject: Re: Dedicated GPU reservation phasing: options, minimums, and activation matrix
+
+Hi Priya —
+
+Thanks for the fast follow. VoyagerTech has reviewed Option B internally and procurement is comfortable proceeding with the balanced path with the following confirmations:
+- Min guaranteed: 12 GPUs (we require this in the SOF)
+- Ramp billing: monthly for the first 90 days, then quarterly commit (we will select quarterly once onboarded)
+- Warmup: please apply the 120-hour warmup credits during the first activation window and provide the pre-warm playbook (steps + timing).
+- Compliance: require node-level log forwarding and customer-managed KMS for model artifacts.
+
+Please send the DocuSign reflecting the above and we’ll route to legal and procurement for signature.
+
+Mateo Alvarez
+Head of Platform Engineering | VoyagerTech
+procurement@voyagertech.com

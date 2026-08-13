@@ -1,0 +1,142 @@
+Findly pilot: relevancy / reranker pilot checklist & next steps
+
+From: Claire Huang <claire@findly.com>
+To: Ava Chen <ava@redwood.com>
+Cc: Sam Patel <sam.patel@findly.com>
+Date: Tue, 12 May 2026 09:15:00 -0700
+Subject: Relevancy pilot — notes + data ask
+
+Ava / team — thanks for the demo this morning. Quick recap from our side and a few asks so your engs can scope the pilot: 
+
+- Goal: replace heuristic reordering in our search results with a lightweight reranker for top 50 candidates; target improvement: +10–15% NDCG@10 and measurable reduction in user re-clicks.
+- Data: we can provide ~2.5M query -> candidate lists (JSONL) with click labels for a rolling 90d window. Average candidates per query ~120, median 48.
+- Security: we need an overview of how Redwood handles PII in logs, where embeddings are stored, and whether keys can be scoped to a VPC/private deployment.
+- Integration asks (high level): SDK vs HTTP direct; auth options; support for structured output / tool-calling if we want to attach reranker signals back into our orchestration.
+
+Attached: Findly_Rank_POC_requirements.pdf — sketch of data schema and acceptance criteria.
+
+Next steps: could you share a short checklist of what your eng team will need (auth, sample ingestion path, routing for candidate generation vs rerank call, eval harness)? Also copying infra (infra@findly.com) — they had a couple of low-level questions on allowed IPs for dedicated endpoints.
+
+Thanks,
+Claire Huang
+Head of Search, Findly
+
+---
+
+From: Ava Chen <ava@redwood.com>
+To: Claire Huang <claire@findly.com>
+Cc: Ben Carter <ben@redwood.com>, Rishi Malhotra <rishi@redwood.com>, Kimberly Park <kimberly@redwood.com>
+Date: Tue, 12 May 2026 11:00:00 -0700
+Subject: Re: Relevancy pilot — notes + data ask
+
+Hi Claire — great call, appreciate the detail. High-level replies and an initial engineer checklist below; Ben/rishi/kim will scope and follow up with a proposed timeline.
+
+Quick answers:
+- Pembedding storage / PII: we support customer-controlled key management (KMS) for hosted and Private deployments; we can provide SOC 2 evidence and a short whitepaper on retention controls.
+- Auth: API keys for quick POC, JWT/OIDC for integrations, and mTLS available for Dedicated/Private — we’ll include sample config.
+- SDK vs HTTP: our SDK wraps retry/backoff, streaming, and structured output parsing; direct HTTP is fine for simple calls but SDK will speed up dev time.
+
+Engineer checklist (what we’ll need from Findly):
+1) Sample JSONL (2k rows) with candidate lists + click labels for offline eval.
+2) Volume estimate (QPS) and peak token-length expectations.
+3) Which fields you want returned with structured output / metadata (e.g., reranker_score, provenance_id).
+4) Allowed IP ranges for any dedicated endpoints (if infra needs IP allowlisting).
+5) Contact for infra + SRE for network details.
+
+Ben/Rishi — would you pick this up and propose a pilot runbook (scoping, infra, eval metric baseline) by EOD Thu? Kimberly — can you propose acceptance criteria aligned to Findly’s product KPIs?
+
+Regards,
+Ava Chen
+Enterprise Sales — Redwood Inference
+
+On Tue, May 12, 2026 at 09:15 Claire Huang <claire@findly.com> wrote:
+> Ava / team — thanks for the demo this morning. Quick recap from our side and a few asks so your engs can scope the pilot: ...
+
+---
+
+From: Claire Huang <claire@findly.com>
+To: Ava Chen <ava@redwood.com>, Ben Carter <ben@redwood.com>
+Cc: Findly Infra <infra@findly.com>, Sam Patel <sam.patel@findly.com>
+Date: Wed, 13 May 2026 08:28:00 -0700
+Subject: Re: Relevancy pilot — notes + data ask
+
+Thanks Ava — infra contact (copied) is infra@findly.com. A couple of clarifications from our engineers: 
+
+- Data size confirmation: the 2.5M queries is correct; we can export a 2k-row sample for you by EOD.
+- Candidate generation: we currently return ~120 candidates from our retrieval step; for the pilot we plan to keep the same generator and call a reranker for top 50.
+- Evaluation metrics: we will compute offline MRR, NDCG@10, and also run pairwise preference judgments for a ~500-query human eval tranche. Curious whether Redwood has recommended baselines and tooling for computing these (NDCG variants, bootstrap CI, A/B gating).
+- Top_k behavior: we expect to test k in {10, 20, 50} and measure latency/cost tradeoffs; what's a typical latency impact for your neural reranker at top50?
+
+Claire
+
+On Tue, May 12, 2026 at 11:00 Ava Chen <ava@redwood.com> wrote:
+> Hi Claire — great call, appreciate the detail. High-level replies and an initial engineer checklist below; Ben/rishi/kim will scope and follow up with a proposed timeline.
+
+---
+
+From: Ben Carter <ben@redwood.com>
+To: Claire Huang <claire@findly.com>, Ava Chen <ava@redwood.com>
+Cc: Rishi Malhotra <rishi@redwood.com>, Kimberly Park <kimberly@redwood.com>
+Date: Wed, 13 May 2026 10:12:00 -0700
+Subject: Re: Relevancy pilot — notes + data ask
+
+Claire / team — looping in a short technical plan and recommended defaults from the Redwood side. I'll attach a short playbook.
+
+Top-level architecture (recommended):
+- Candidate-gen service (Findly) => pass top-50 candidates to Redwood Reranker endpoint.
+- Option A (fastest to POC): direct HTTP POST to Redwood ranking API, using API key scoped to a project; SDK not required but recommended.
+- Option B (production): SDK + JWT/OIDC + regional routing to a Dedicated pool (if you need consistent latency).
+
+Auth and networking:
+- POC: API key in header (x-api-key). We log only metadata (request size/tokens); payload retention can be turned off per team.
+- Production: OIDC tokens with short TTL + audience-based routing; mTLS for Dedicated endpoints.
+- IP allowlist: we can provide stable egress IPs for Dedicated; for Hosted we recommend using region-based routing and fallback.
+
+Reranker performance notes:
+- At top_k=10: add ~8–12ms per request per token on an A100-like pod with our optimized kernels (depends on sequence length).
+- At top_k=50: expect 3–4x increase in per-call compute vs top_k=10; batching helps (we can batch multiple rerank calls if QPS justifies).
+- Cost estimate: we’ll model cost based on average candidate length and request rate; Ben will share a simple cost sheet.
+
+Evaluation and metrics:
+- Offline: recommend computing NDCG@10, MRR, and hit-rate@k. Use bootstrap CIs (1k resamples) for significance.
+- Online: canary A/B with Bayesian bandit or fixed-split; we recommend starting with a 5% traffic canary for 2 weeks with predefined success criteria.
+
+Suggested pilot run (milestones):
+1) Week 0–1: sample ingest + offline baseline (Findly provides 2k sample)
+2) Week 2: deploy POC reranker (top50) + offline eval & tuning (k sweep)
+3) Week 3–4: 5% canary with telemetry (latency, NDCG delta, re-click rate)
+
+Attachments: redwood_rerank_playbook.md (short ops checklist); I'll share the cost sheet separately.
+
+Ben Carter
+Solutions Engineer, Redwood Inference
+ben@redwood.com
+
+On Wed, May 13, 2026 at 08:28 Claire Huang <claire@findly.com> wrote:
+> Thanks Ava — infra contact (copied) is infra@findly.com. A couple of clarifications from our engineers: ...
+
+---
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Ava Chen <ava@redwood.com>, Ben Carter <ben@redwood.com>
+Cc: Kimberly Park <kimberly@redwood.com>
+Date: Thu, 14 May 2026 15:22:00 -0700
+Subject: Fwd: Relevancy pilot — notes + data ask
+
+Forwarding my quick internal notes after reading Claire's infra questions and Ben's plan.
+
+- Action items for this week:
+  * Ben: upload redwood_rerank_playbook.md and cost_estimate.xlsx to the shared Drive link and flag any assumptions.
+  * Ava: confirm PO and legal contact for a short POC MSA (we'll aim for a 30d eval window).
+  * Kimberly: draft acceptance criteria mapping to NDCG delta / re-click reduction and add guardrails for latency increase (no more than +60ms p50).
+- Pilot timeline: Ben to spin up a POC endpoint (hosted) by Mon next week; we’ll run offline eval and propose k sweep (10/20/50).
+
+Small note on metrics: for the initial human eval tranche we recommend at least 500 queries with pairwise judgments; that will give a reasonable signal when combined with offline NDCG and online canary.
+
+Rishi Malhotra
+Senior ML Infra, Redwood Inference
+
+On Wed, May 13, 2026 at 10:12 Ben Carter <ben@redwood.com> wrote:
+> Claire / team — looping in a short technical plan and recommended defaults from the Redwood side. I'll attach a short playbook.
+
+---

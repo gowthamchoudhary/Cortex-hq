@@ -1,0 +1,111 @@
+Inference ingress pathways: VPC Peering vs PrivateLink vs S2S VPN
+
+From: Sanjay Rao <sanjay.rao@prismanalytics.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>; Lauren Bishop <lauren.bishop@redwood.com>
+Cc: Priya Singh <priya.s@prismanalytics.com>; netops@prismanalytics.com
+Date: Tue, 30 Nov 2027 09:12:00 -0800
+Subject: Re: Quick: how should Prism link to Redwood Private?
+
+Hi Vivek / Lauren,
+
+Thanks again for the walkthrough this morning. Our security and network teams want a clear set of pros/cons and the operational impacts for three options you mentioned: VPC Peering (cross-account peering), AWS PrivateLink (interface endpoints), and a site-to-site VPN (IPsec).
+
+Context: Prism will run sensitive PII inference workloads and needs predictable latency for inference (p95 < 120ms), pinned egress IPs for allowlists, and audited traffic flows. We are planning to run Redwood Private in a dedicated VPC in us-west-2; Prism's production VPCs are multi-account inside the same region.
+
+Could you outline recommended default for a first-phase deployment (low-risk, fastest onboarding) and what you would choose for long-term (multi-region, high-availability) architecture? Also please attach any network diagrams.
+
+Attachments: 2027-11-30_prism_network_diagram.pdf
+
+Cheers,
+Sanjay
+Senior Cloud Architect, Prism Analytics
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+To: Sanjay Rao <sanjay.rao@prismanalytics.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 30 Nov 2027 11:03:00 -08:00
+Subject: Re: Quick: how should Prism link to Redwood Private?
+
+Hi Sanjay — thanks for the details and diagram. High level first:
+
+- Short answer (first-phase): PrivateLink is generally the lowest-friction and security-friendly pattern for initial onboarding when you want to avoid propagating routes and keep least-privilege exposure.
+- Long-term (HA + multi-region): a hybrid approach — PrivateLink for control-plane/ingress combined with cross-account peering or inter-region transit for low-latency heavy-throughput paths, plus encrypted site-to-site tunnels for DR between on-prem and cloud sites.
+
+I'll enumerate tradeoffs below and call out where Prism's constraints (pinned egress, audited flows, latency SLO) push the recommendation. Karthik — I left some detailed bullets for you on NAT/egress and KV cache impacts.
+
+Short tradeoff summary:
+- VPC Peering: low latency and no bandwidth charges inside region; transitive peering not supported (so multi-account topologies get messy), route table scale and potential blast radius on misconfigs are the primary ops risks. Good for high-throughput lateral traffic if you can manage routing and use separate peering per consumer VPC. Pinning egress IPs requires NAT in the consumer VPC or egress through a transit appliance.
+- PrivateLink (Interface Endpoints): strong security boundary (no route propagation), easy allowlist by service endpoint, and simplified IAM/resource policies. Slightly higher per-GB cost and per-ENI limits to consider. Latency is typically a few milliseconds higher than peering but stable; it also shields you from accidental route propagation. Endpoint-managed traffic uses AWS infrastructure so egress IP pinning is done at the endpoint side (we can provide documented IP ranges or, for stricter needs, a dedicated NAT EIP in our VPC).
+- Site-to-site VPN: quickest to stand up from customer's side and can be good for cross-region or on-prem tie-ins. IPsec VPNs introduce more jitter/latency and need active monitoring; throughput depends on tunnel sizing and vendor appliances. Also, you need to manage BGP/route flaps and key rotation. For production LLM inference with stringent p95 SLOs it's usually a fallback/DR option rather than primary.
+
+Next steps proposition:
+1) Phase 1 (30–60 days): PrivateLink with a single interface endpoint in Prism's prod account; we give you endpoint service details and a small set of fixed IPs for allowlist testing.
+2) Phase 2 (3–6 months): Add a dedicated peering topology for high-throughput routes between core compute clusters if you hit token/sec bottlenecks — with clear route table templates and automation to avoid human error.
+3) Phase 3 (HA/DR): Cross-region peering + IPsec tunnels between regions/on-prem, with automated failover policies in the console.
+
+I'll attach a short diagram for Phase 1/2 and a cost delta spreadsheet (Marissa will follow up with a line-item cost sheet).
+
+— Vivek
+Head of Solutions, Redwood Inference
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Sanjay Rao <sanjay.rao@prismanalytics.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Wed, 01 Dec 2027 08:41:00 -08:00
+Subject: Re: Quick: how should Prism link to Redwood Private?
+
+Quick technical notes (networking + runtime impacts):
+
+- Latency: Peering is lowest (no extra hop), PrivateLink adds ~2–6ms typical overhead inside a region. For large batch inference the per-token delta is negligible, but for low-latency conversational flows at p95 < 120ms you may want peering when tokens/sec is high.
+
+- NAT/Egress/Allowlists: If Prism needs a single egress IP to allowlist on downstream services, best pattern is to terminate traffic through a NAT/EIP we manage in our customer-dedicated VPC (we can reserve an EIP and publish that to you). With peering you would instead NAT within your VPC and maintain your own EIP. PrivateLink gives more control on our side for published IP ranges; however if you need a single fixed IP you should plan for a dedicated NAT in our VPC behind the endpoint service.
+
+- ENI limits & scale for PrivateLink: Account-level ENI quotas can become a throttle; we recommend requesting quota increases if you plan many interface endpoints or high parallelism from many subnets. As a mitigation we can use zonal endpoint placement and fallback routings.
+
+- Security/Audit logging: PrivateLink keeps flows out of route tables and simplifies flow logs correlation (flow logs show interface endpoint). For peering you must stitch VPC flow logs across accounts and ensure centralized log ingestion. We can provide a pre-built CloudWatch/Loki ingestion pipeline if you want.
+
+- Failover: For production HA, combine multiple AZ endpoints or peering links with application-level retries. VPN should be considered only as warm standby — do not depend on IPsec jitter for primary inference traffic unless you have appliance-grade tunnels.
+
+I'll mock up a recommended route/NAT config snippet and share it as a follow-up.
+
+— Karthik
+Senior Infra Engineer, Redwood Inference
+
+From: Priya Singh <priya.s@prismanalytics.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Sanjay Rao <sanjay.rao@prismanalytics.com>, netops@prismanalytics.com
+Date: Wed, 01 Dec 2027 10:22:00 -08:00
+Subject: Re: Quick: how should Prism link to Redwood Private?
+
+Thanks — useful summary. A couple of compliance asks from our InfoSec team:
+
+1) Can Redwood provide a list of stable IP ranges or a plan for pinned EIPs for allowlisting?
+2) We need a narrative describing how traffic is isolated between Prism and other customers in the PrivateLink model (we will include that in our SOC2 scoping).
+3) For the peering option, can you provide a template of the route table and least-privilege security group layout we should apply?
+
+Also, cost is relevant: we will be comparing PrivateLink per-GB charges vs peering (no regional data-transfer) plus the operational costs for NAT/EIP management. Can Marissa send an estimate?
+
+Thanks,
+Priya
+Lead, Cloud Security — Prism Analytics
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Priya Singh <priya.s@prismanalytics.com>, Sanjay Rao <sanjay.rao@prismanalytics.com>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Thu, 02 Dec 2027 16:05:00 -08:00
+Subject: Re: Quick: how should Prism link to Redwood Private?
+
+Hi Priya / Sanjay — attaching the cost estimate workbook. Key bullets:
+
+- Phase 1 (PrivateLink): estimated incremental $0.03/GB for endpoint data-processing + $0.01/GB regional data transfer => ~ $0.04/GB. We included line items for ENI quota increases and endpoint hours per AZ.
+- Phase 2 (VPC Peering): no intra-region data-transfer charge for traffic inside the same AZ/region in AWS — lower per-GB cost. However, operational setup cost (automation, route templates, peer-per-account, egress NAT/EIP) is higher up-front.
+
+Deliverables we are attaching: ingress_cost_estimates.xlsx and a short two-page security narrative describing isolation controls for PrivateLink (how ENIs are scoped to our account, no route propagation, and how flow logs are collected). We'll also provide the NAT/EIP option if you require a single pinned IP.
+
+Attachments: 2027-12-01_ingress_cost_estimates.xlsx
+
+If this looks good, we can schedule a 30-minute runbook review with your netops team next week and provide Terraform snippets for endpoint creation + peering templates.
+
+Best,
+Marissa Cole
+Sr. Product Ops Manager, Redwood Inference

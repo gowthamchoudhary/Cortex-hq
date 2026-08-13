@@ -1,0 +1,143 @@
+Asterion RFP: proposed uptime weighting and evidence plan
+
+From: Olivia Chen <olivia.chen@asterion.com>
+To: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+Cc: procurement@asterion.com
+Date: Mon, 12 Jan 2026 14:03:00 -0500
+Subject: RFP — SLA & measurement questionnaire (Asterion Systems)
+
+Sergio,
+
+Thanks for taking our RFP — attached is the SLA & measurement worksheet Asterion requires for our procurement review. Key items we need answers to by EOD Jan 20:
+
+- Uptime definition and per-region weighting for multi-region deployments
+- Latency commitments per model class (chat / generation / embeddings) and p99 windowing
+- Service credit calculation and the dispute resolution timeline
+- Types of evidence you will accept (telemetry exports, probe samples, signed hashes) and how they will be delivered
+- Private (VPC/on-prem) measurement options and whether measurement tooling can integrate with our synthetic probes
+
+We prefer a concrete measurement methodology rather than broad assertions — please fill the attached spreadsheet and include any sample evidence packages you can share (redacted fine).
+
+Olivia Chen
+Procurement Program Manager
+Asterion Systems
+Attachments: Asterion_RFP_SLA_Questionnaire_v1.xlsx (xlsx, 220KB)
+
+From: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+To: Olivia Chen <olivia.chen@asterion.com>
+Cc: laura_bennett <laura_bennett@redwoodinference.com>, karthik_iyer <karthik_iyer@redwoodinference.com>
+Date: Tue, 13 Jan 2026 09:12:00 -0500
+Subject: Re: RFP — SLA & measurement questionnaire (Asterion Systems)
+
+Olivia — thanks. We received the worksheet and will return a completed version by Jan 20.
+
+Plan:
+- We (Sergio) will draft answers to the measurement and credit sections (deliverable: completed worksheet + short explanatory PDF).
+- Laura (Legal/Contracts) will review proposed credit formula and escalation timelines.
+- Karthik (Reliability) will provide precise telemetry definitions and sample queries for evidence exports.
+
+Clarifications needed to ensure our answers map to your procurement evaluation:
+1) For "per-region weighting": do you want a single blended monthly availability number or per-region SLAs with region-specific credits?
+2) For private deployments, will Asterion permit delivery of signed probe results from your side to reconcile with our telemetry, or do you require Redwood to host the synthetic probes for measurement?
+3) Is a 30-day rolling window acceptable for availability measurement, or do you require X/30 vs calendar month alignment?
+
+We're drafting an interim proposal that leans toward a blended, region-weighted availability (details below) and a hybrid evidence model (Redwood telemetry + customer probe artifacts with signed checks). Sending a short proposal tomorrow for your review.
+
+Best,
+
+Sergio Alvarez
+Enterprise Sales, Redwood Inference
+sergio.alvarez@redwoodinference.com | +1 415-555-0192
+
+From: Marcus Dale <marcus.dale@asterion.com>
+To: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+Cc: Olivia Chen <olivia.chen@asterion.com>
+Date: Thu, 15 Jan 2026 11:27:00 -0500
+Subject: Re: RFP — SLA & measurement questionnaire (Asterion Systems)
+
+Sergio — quick answers to your clarifications:
+
+- Prefer a blended monthly availability for procurement scoring (single number), but our technical stakeholders may request per-region diagnostics during gating.
+- For private deployments: Asterion prefers to run our own synthetic probes and provide signed result bundles to Redwood for reconciliation.
+- Rolling 30-day window is acceptable, but we will run an audit that may reference calendar-month figures during final contract stage.
+
+Also: for latency SLOs we evaluate p50/p95/p99 — our scorecard weights p99 heavily. Please include p99 for each model class and specify the sampling policy (how often you sample, aggregation windows, and how you handle warm-up/kv-cache artifacts).
+
+Marcus
+Director, Infrastructure Procurement
+Asterion Systems
+
+From: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+To: Marcus Dale <marcus.dale@asterion.com>, Olivia Chen <olivia.chen@asterion.com>
+Cc: laura_bennett <laura_bennett@redwoodinference.com>, karthik_iyer <karthik_iyer@redwoodinference.com>, marissa_cole <marissa_cole@redwoodinference.com>
+Date: Mon, 19 Jan 2026 16:02:00 -0500
+Subject: Re: RFP — SLA & measurement questionnaire (Asterion Systems)
+
+Team — attaching Redwood's response and a short evidence plan (see attachment). Highlights below; full answers are in the attached PDF and the completed worksheet.
+
+1) Uptime definition and weighting- We propose a single blended availability metric per billing month computed as a weighted average across regions where:
+   - weight_region = (prod_request_count_region / total_prod_request_count_month) capped with a minimum region floor of 5%
+   - blended_availability = sum(weight_region * availability_region)
+   - Availability_region = 1 - (service_unavailable_seconds_region / region_total_observable_seconds) where observation excludes scheduled maintenance windows with 72-hour advance notice.
+
+2) Measurement window and sampling- Primary measurement = 30-day rolling window (aligns with your preference). Secondary reference = calendar month for final contract reconciliation if needed.
+- Sampling cadence: continuous telemetry captured at 1s resolution in our tracing pipeline; availability sampling uses 30s aggregation (sample window) to reduce transient noise. Latency SLOs reported on request/response times aggregated per minute and then percentile-computed across the 30-day window (p50/p95/p99).
+- Warm-up handling: initial 10 minutes after a model instance start are excluded from p99 calculations; KV cache priming is considered part of normal operation (we document expected cold-starts per model profile).
+
+3) Latency commitments (example classes — full matrix in attachment)
+- Chat (small context, 512 tokens): p95 ≤ 220ms, p99 ≤ 420ms
+- Generation (long context, 4k tokens): p95 ≤ 1.1s, p99 ≤ 2.8s
+- Embeddings (single vector): p95 ≤ 180ms, p99 ≤ 350ms
+
+4) Evidence and reconciliation- Accepted evidence: (a) telemetry exports (pre-specified query set + CSV with signed timestamp ranges), (b) client-side synthetic probe bundles signed by Asterion's probe service, (c) sample request traces (redacted) and hash manifests.
+- We will provide a packaged evidence bundle monthly on request and within 10 business days of a formal incident claim. Each bundle includes: query results, raw samples (redacted), and a signed manifest for tamper-evidence.
+
+5) Service credit formula (proposed, negotiable)
+- Monthly blended_availability >= 99.95%: no credit
+- 99.5% ≤ availability < 99.95%: 10% monthly service credit
+- 99.0% ≤ availability < 99.5%: 25% monthly service credit
+- availability < 99.0%: 50% monthly service credit + joint post-mortem and remediation plan
+- Credits applied to the next billing invoice; dispute window 30 days from delivery of evidence bundle, arbitration clause in Master Services Agreement.
+
+6) Private (VPC/on-prem) measurement- We support hybrid reconciliation: Asterion runs probes and pushes signed bundles to a secure S3 endpoint we provide, or optionally we can deploy a lightweight probe collector in your VPC that will forward signed samples. We do not, by default, require customer data to leave the VPC for measurement artifacts — only signed probe metadata and hash manifests are exchanged.
+
+7) Escalation and dispute process- Initial evidence handoff within 10 business days; Redwood response with counter-evidence in 10 business days; joint review meeting within next 5 business days. If unresolved, binding independent auditor (pre-agreed) step within 30 days.
+
+Attachments: Redwood_Asterion_SLA_Proposal_v1.pdf (pdf, 380KB) and completed spreadsheet.
+
+We can run a 30-minute technical alignment call Wednesday (Jan 21) or Thursday (Jan 22) to walk Asterion infra and procurement through the evidence package and query set. Please confirm a time and if you want any additional telemetry fields in the sample bundle.
+
+Best,
+
+Sergio Alvarez
+Enterprise Sales, Redwood Inference
+sergio.alvarez@redwoodinference.com | +1 415-555-0192
+
+--
+Laura Bennett
+Head of Contracts, Redwood Inference
+laura_bennett@redwoodinference.com
+
+--
+Karthik Iyer
+Senior Reliability Engineer, Redwood Inference
+karthik_iyer@redwoodinference.com
+
+From: Olivia Chen <olivia.chen@asterion.com>
+To: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+Cc: Marcus Dale <marcus.dale@asterion.com>, procurement@asterion.com
+Date: Tue, 20 Jan 2026 09:18:00 -0500
+Subject: Re: RFP — SLA & measurement questionnaire (Asterion Systems)
+
+Sergio — thank you for the detailed proposal and attachments. The approach looks reasonable and aligns closely with our evaluation criteria.
+
+Next steps:
+- We will review the PDF and completed worksheet internally and revert with any edge-case questions by Jan 25.
+- Please send a formal quote and a DocuSign-ready MSA with the proposed credit table and evidence handoff timelines.
+- We accept the proposed Jan 21 tech alignment slot; Marcus will send a calendar invite.
+
+Olivia Chen
+Procurement Program Manager
+Asterion Systems
+
+Attachments referenced: none sent in this thread

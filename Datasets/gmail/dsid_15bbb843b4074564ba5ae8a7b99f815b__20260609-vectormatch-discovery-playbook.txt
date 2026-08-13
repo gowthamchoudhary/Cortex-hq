@@ -1,0 +1,111 @@
+Discovery recap: vector matching & rerank playbook
+
+From: Jasmine Liu <jasmine_liu@redwood.com>
+To: Alex Chen <alex@searchly.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Tue, 9 Jun 2026 15:02:00 -0700
+Subject: Discovery recap: vector matching & rerank playbook
+
+Hi Alex — thanks again for a productive call this morning. Quick recap so we have alignment and clear next steps. I tried to keep this concise; flag anything I missed.
+
+What you told us (top pain points)
+- Retrieval latency spikes during marketing campaigns: p95 currently ~220ms; target p95 <= 80ms for user-facing similarity search.
+- Index scale: ~120M active vectors (dense + sparse metadata), with ~10–15M new vectors added monthly.
+- Current stack: Pinecone for online serving + nightly FAISS rebuilds for experimental ranker (hosted on your infra).
+- Rerank pattern: two-stage flow — top-50 from vector store, then BERT-based reranker for final top-5. Rerank is the cost/latency bottleneck.
+- Traffic patterns: steady baseline ~10 QPS with campaign-driven spikes to ~120 QPS (10–15 minute bursts).
+- Cost target: want query cost (total end-to-end) to be < $0.005 per request on high-volume routes.
+
+Success criteria for a pilot
+- End-to-end median latency for search < 40ms and p95 < 80ms for similarity-only routes.
+- Rerank latency for top-5 under 120ms end-to-end (preferably < 80ms).
+- Throughput support for brief 120 QPS spikes with graceful degradation and fallback.
+- Demonstrated per-request cost <= $0.005 at pilot scale.
+
+Technical notes we need from you
+- Representative query traces and average query token lengths (attached: searchly_query_traces.csv).
+- A small index snapshot or sample vectors for model sizing (attached: index_snapshot_sample.jsonl).
+- Clarify whether PII or regulated data is in the index (you mentioned mostly product titles + user-generated tags).
+
+Next steps (owner / ETA)
+- Karthik to run a sizing + config proposal based on the samples (Karthik: will do by Fri, 6/12).
+- Jasmine/Marissa to propose a 4–6 week pilot SOW and estimated cost (Jasmine: draft SOW & share by Mon, 6/15).
+- Tech deep-dive: 60–90 minute call with your infra/ranking engineers and our SRE/Solutions (propose Tue 6/16 or Wed 6/17).
+- Procurement: Alex to introduce procurement contact and share Po terms (Alex: please loop procurement@searchly.com).
+
+Attachments: searchly_query_traces.csv, index_snapshot_sample.jsonl, SOW_pilot_template.pdf
+
+If that matches your view, we’ll schedule the deep-dive and I’ll get Karthik started on sizing. Appreciate the context — excited to see if we can hit your latency/cost targets.
+
+Thanks,
+Jasmine Liu
+Account Executive | Redwood Inference
+jasmine_liu@redwood.com | (415) 555-0147
+
+--
+At Redwood we prioritize production latency and cost controls. Happy to coordinate a short demo of batching/caching knobs during the tech call.
+
+From: Alex Chen <alex@searchly.com>
+To: Jasmine Liu <jasmine_liu@redwood.com>
+Cc: Rachel Park <rachel@searchly.com>
+Date: Tue, 9 Jun 2026 16:18:00 -0700
+Subject: Re: Discovery recap: vector matching & rerank playbook
+
+Thanks Jasmine — this looks right. A few clarifications and confirmations: 
+- Our index is indeed ~120M vectors; ~80% are dense embeddings, the rest are small metadata vectors for filtering.
+- We do have a small set of fields with user-identifiable info (hashed IDs), but no free-text PII in vectors. Procurement will want to review SOC2 before pilot.
+- For rerank, our current BERT model runs on a small GPU fleet and is the main cost driver — interested in proposals that move rerank off costly GPUs where possible.
+
+Procurement: looped in procurement@searchly.com to this thread (they prefer contract templates). Also adding Rachel (product infra) who will join the technical deep-dive.
+
+For the deep-dive, Tue 6/16 10:00am PT works for Rachel and me.
+
+Appreciate the quick turnaround — I’ll send over a short set of query traces and a link to our internal compliance packet by EOD.
+
+Cheers,
+Alex Chen
+Head of Search Infrastructure | Searchly
+alex@searchly.com | +1 (503) 555-6201
+
+On Tue, Jun 9, 2026 at 15:02, Jasmine Liu <jasmine_liu@redwood.com> wrote:
+> Hi Alex — thanks again for a productive call this morning. Quick recap so we have alignment and clear next steps. I tried to keep this concise; flag anything I missed.
+
+From: Jasmine Liu <jasmine_liu@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Tue, 9 Jun 2026 17:05:00 -0700
+Subject: Fwd: Discovery recap: vector matching & rerank playbook
+
+Karthik / Marissa — forwarding the Searchly recap and initial attachments. Key asks for sizing: sample vectors, top-k recall expectations, and rerank model latency goals. Can you prioritize a sizing pass so we can propose a pilot SOW early next week?
+
+Quick context: 120M vectors, lots of campaign-driven spikes (up to 120 QPS), current rerank on GPUs and expensive. They want per-request cost under $0.005 and p95 similarity < 80ms.
+
+Suggested immediate actions:
+- Karthik: run a preliminary capacity + cost estimate using the attached snapshot, call out batching and cache opportunities.
+- Marissa: prepare an ops-focused SOW template that highlights canary rollouts and fallback policies.
+
+I’ll book the deep-dive for Tue 6/16 10am PT with the Searchly team. Confirm if that collides with any constraints.
+
+Thanks — Jasmine
+
+> On Tue, Jun 9, 2026 at 16:18, Alex Chen <alex@searchly.com> wrote:
+> > Thanks Jasmine — this looks right. A few clarifications and confirmations: 
+> > - Our index is indeed ~120M vectors; ~80% are dense embeddings, the rest are small metadata vectors for filtering.
+>
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Jasmine Liu <jasmine_liu@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Tue, 9 Jun 2026 19:35:00 -0700
+Subject: Re: Fwd: Discovery recap: vector matching & rerank playbook
+
+Thanks — I’ll take the sizing pass this evening and aim to share a short note by Fri 6/12 with:
+- Proposed shard/replica counts for an online serving cluster to handle 120 QPS spikes with p95 <= 80ms.
+- Candidate rerank approaches: (1) lightweight cross-encoder on quantized CPU instances, (2) distillation to a fast re-ranker, (3) hybrid approach where we keep expensive rerank for a small % of queries.
+- Cost estimate per 1MM queries under each approach and suggested fallback policies.
+
+I’m also going to prepare an internal benchmark plan to run a small end-to-end simulation using their sample snapshot. If you can confirm the time for the deep-dive (Tue 6/16 10am PT) I’ll block time on my calendar and invite an SRE.
+
+-Karthik
+Solutions Engineer | Redwood Inference
+karthik_iyer@redwood.com | (415) 555-0199
+
+On Tue, Jun 9, 2026 at 17:05, Jasmine Liu <jasmine_liu@redwood.com> wrote:
+> Karthik / Marissa — forwarding the Searchly recap and initial attachments. Key asks for sizing: sample vectors, top-k recall expectations, and rerank model latency goals. Can you prioritize a sizing pass so we can propose a pilot SOW early next week?

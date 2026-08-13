@@ -1,0 +1,106 @@
+Switchover safety decision & post-commissioning witness plan
+
+From: Tim Schultz <tim.schultz@acme-corp.com>
+To: Jonas Weber <jonas@redwood.com>
+Cc: ops@acme-corp.com
+Date: 2028-07-08T09:12:00-07:00
+Subject: Switchover safety decision & witness plan
+
+Jonas,
+
+Thanks for walking us through the preliminary checklist yesterday. Ops is ready to proceed to the final safety decision meeting tomorrow if Redwood can confirm the following preconditions are met on your side: 
+
+- KV-cache priming plan for the 00:00-02:00 UTC window (expected hit rates, warmup endpoints).
+- Reduced DNS TTL and controlled DNS flipback plan in case of rollback.
+- ACL and egress snapshot showing outbound telemetry ports allowed to our observability endpoints (we've had issues where agents couldn't reach our collector in past runs).
+- A single runbook, versioned and attached with clear rollback triggers and owner names.
+
+Attached: runbook-v2.pdf (please ensure the appendix contains the exact traffic mirrors we'll use). We will have our on-call in place and procurement will have the SLA exception ready if needed.
+
+If Redwood is green on the items above we will serve as smoke witness and coordinate a final 2-hour window.
+
+Cheers,
+Tim Schultz
+Director of Cloud Ops
+Acme Corp
+
+
+From: Jonas Weber <jonas@redwood.com>
+To: Tim Schultz <tim.schultz@acme-corp.com>
+Cc: laura_bennett <laura@redwood.com>, marissa_cole <marissa@redwood.com>
+Date: 2028-07-08T10:05:00-07:00
+Subject: Re: Switchover safety decision & witness plan
+
+Tim — thanks, good list. Quick status from our side (cross-posting for the record):
+
+- KV-cache priming: We will run a staged prefix priming job starting 2028-07-08T22:00:00Z, targeting the hot-prefix set (attached to runbook-v2, section 3.1). Expect >92% local cache hit by 01:00 UTC.
+- DNS: We will pre-stage DNS records with a 60s TTL and a rollback script that flips to the previous CIDR. Doc in runbook-v2, section 5.
+- ACL/Egress: Firewall changes were applied to the test VPC; awaiting laura to confirm the prod egress snapshot.
+- Runbook: runbook-v2.pdf attached. Rollback triggers: error-rate >5% sustained for 3m, CPU >85% on the replica pool for 5m, or BGP-adj loss >30s. Owners: Jonas Weber (rolling decisions), Laura Bennett (network verification), Marissa Cole (operational rollback).
+
+Operational notes:
+- We'll start a low-traffic canary at 00:30 UTC and escalate to full traffic at 01:15 UTC if metrics are stable. Canary will be rate-limited to 20% of baseline.
+- Observability: dashboards linked in the email; we'll instrument a short-lived aggregation on token-latency and error-ratio.
+- KV warmup artifact: priming logs will be posted to the shared drive path.
+
+Attached: runbook-v2.pdf (signed-off draft).
+
+On the call tomorrow I'm planning a short warroom with Laura and Marissa. Can you confirm your witness will attend 00:30-02:30 UTC window?
+
+Thanks,
+Jonas Weber
+Head of Private Deployments
+Redwood Inference
+
+
+From: Laura Bennett <laura@redwood.com>
+To: Jonas Weber <jonas@redwood.com>, Tim Schultz <tim.schultz@acme-corp.com>
+Cc: Marissa Cole <marissa@redwood.com>, Rishi Malhotra <rishi@redwood.com>
+Date: 2028-07-08T16:40:00-07:00
+Subject: Re: Switchover safety decision & witness plan
+
+Jonas / Tim — I validated the prod egress rules this morning and attached a snapshot (egress-rule-snapshot.png). Summary:
+
+- Ports to our telemetry collectors (443/udp and 443/tcp) are allowed to 35.201.0.0/16 and 34.98.0.0/16.
+- SNAT ranges applied as discussed; no outbound NAT gaps.
+- BGP advertisements look stable; next-hop changes within expected tolerances during our test, we did one short BGP flap at 03:12 UTC with no customer impact.
+
+Requests before final greenlight: 
+- Tim: can your team confirm they can receive packet capture from the 10.12.4.0/24 interface for the canary window? We prefer a packet capture pushed to the shared drive rather than remote capture.
+- Marissa: please confirm that the canary will have the additional tracing header so we can filter E2E traces easily.
+
+Attaching: egress-rule-snapshot.png.
+
+Laura Bennett
+Network Reliability Lead
+Redwood Inference
+
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Jonas Weber <jonas@redwood.com>, Laura Bennett <laura@redwood.com>, Marissa Cole <marissa@redwood.com>, Tim Schultz <tim.schultz@acme-corp.com>
+Date: 2028-07-08T20:22:00-07:00
+Subject: Re: Switchover safety decision & witness plan
+
+Green from infra. Verified canary pool boot times, KV priming jobs completed on staging with expected latencies. No blocking issues from infra side.
+
+- Sample infra log: infra-priming-job-20280708-TSK-11 completed; median token-latency 42ms.
+
+Rishi
+Senior Infra Engineer
+Redwood Inference
+
+
+From: Tim Schultz <tim.schultz@acme-corp.com>
+To: Jonas Weber <jonas@redwood.com>, Laura Bennett <laura@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: 2028-07-09T03:48:00-07:00
+Subject: Re: Switchover safety decision & witness plan
+
+All set on our end. Witnessing coverage confirmed for 00:30-02:30 UTC, packet capture workflow verified (we will upload to shared drive immediately after the canary), and procurement has the SLA exception DocuSign link ready for signature if we need it: https://app.docusign.com/ACME-SLA-EXCEPTION.
+
+We will join the warroom 00:15 UTC. See you then.
+
+Regards,
+Tim Schultz
+Director of Cloud Ops
+Acme Corp
+

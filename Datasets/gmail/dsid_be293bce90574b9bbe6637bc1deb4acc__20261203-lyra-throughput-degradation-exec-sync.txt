@@ -1,0 +1,145 @@
+Lyra platform degraded throughput — exec sync & customer update
+
+From: Sara Nguyen <sara.nguyen@lyra.ai>
+To: connor_obrien@redwood.ai
+Cc: eng-ops@lyra.ai, procurement@lyra.ai
+Date: Thu, 03 Dec 2026 08:12:00 -0800
+Subject: Production degradation — increased errors & throughput drop
+
+Connor —
+
+We started seeing a spike in 5xx errors and large tail latency on our Lyra tenant around 07:45 PST. Throughput dropped by ~40% for a few minutes and several critical pipelines retried and backed up. I attached a small sample of request IDs and a chart of p95. This is hitting our core ingestion path.
+
+Can you confirm whether this is on Redwood side or something we should mitigate locally? Our SREs are standing by.
+
+We need an ETA for a fix and any workarounds (model fallback, routing, or rate-limiting) while you investigate. Please escalate to anyone needed — exec visibility required.
+
+Thanks,
+Sara Nguyen
+VP Product, Lyra AI
+
+---
+Attachment: request_id_samples.csv (csv, 14KB)
+Attachment: p95_latency_trend.png (png, 240KB)
+
+-----
+From: connor_obrien@redwood.ai
+To: Sara Nguyen <sara.nguyen@lyra.ai>
+Cc: hannah_schmitt@redwood.ai, marissa_cole@redwood.ai, rishi_malhotra@redwood.ai
+Date: Thu, 03 Dec 2026 08:20:00 -08:00
+Subject: Re: Production degradation — increased errors & throughput drop
+
+Sara —
+
+Thanks for the heads-up and for the samples. Putting this in motion now. Immediate notes:
+- We see the same anomaly on our dashboard (region us-west-2, tenant lyra-prod).
+- Initial hypothesis: a transient kernel-level memory pressure event on a small subset of hosts caused higher scheduling latency and KV-cache misses for long-context flows.
+
+Immediate actions (I’m convening the on-call crew):
+1) Traffic routing: shifting 30% of Lyra traffic to dedicated hot pool (short term)
+2) Autoscale: bumping headroom for the pool by +2 nodes and enabling conservative burst mode
+3) Fallback: enabling a short-lived model variant with smaller context windows for non-critical pipelines (saves KV pressure)
+4) Mitigation monitoring: collecting full request traces + full request_id list (please keep providing samples)
+
+Hannah/minority ops: please coordinate the pool move and post a runbook entry. Marissa, loop in CS/comms to prepare a short customer update for Sara. Rishi, can you validate whether any recent kernel updates or infra deploys correlate?
+
+I’ll follow up with an exec summary in 30 minutes.
+
+—Connor O'Brien
+Director, Customer Reliability — Redwood Inference
+
+-----
+From: hannah_schmitt@redwood.ai
+To: connor_obrien@redwood.ai, marissa_cole@redwood.ai, rishi_malhotra@redwood.ai
+Date: Thu, 03 Dec 2026 08:34:00 -08:00
+Subject: Re: Production degradation — immediate ops actions
+
+On Thu, Dec 3, 2026 at 8:20 AM Connor O'Brien <connor_obrien@redwood.ai> wrote:
+> Hannah/minority ops: please coordinate the pool move and post a runbook entry. Marissa, loop in CS/comms to prepare a short customer update for Sara. Rishi, can you validate whether any recent kernel updates or infra deploys correlate?
+
+Done. Actions taken so far:
+- Shifted 30% traffic to hot pool (started 08:28 PST).
+- Autoscale +2 nodes initiated; nodes are provisioning (ETA ~6 minutes).
+- Enabled conservative burst mode on the hot pool; dropping 10% of the largest context requests temporarily (configured via routing policy) — this is non-disruptive for test tenants but will affect long-history endpoints.
+- Collected traces for 200 sample request IDs; uploaded to the incident bucket.
+
+Preliminary signal: error rate is trending down but p95 remains elevated. We have not observed an immediate deploy or kernel update in the 30-minute window. Rishi is running kernel and host health checks now.
+
+Attaching a short mitigation playbook for CS to use with customers.
+
+—Hannah Schmitt
+Principal SRE, Redwood Inference
+
+---
+Attachment: mitigation_playbook_v1.pdf (pdf, 58KB)
+
+-----
+From: rishi_malhotra@redwood.ai
+To: connor_obrien@redwood.ai, hannah_schmitt@redwood.ai, laura_bennett@redwood.ai
+Date: Thu, 03 Dec 2026 08:45:00 -08:00
+Subject: Re: Production degradation — kernel/host checks
+
+On Thu, Dec 3, 2026 at 8:34 AM Hannah Schmitt <hannah_schmitt@redwood.ai> wrote:
+> Preliminary signal: error rate is trending down but p95 remains elevated. We have not observed an immediate deploy or kernel update in the 30-minute window. Rishi is running kernel and host health checks now.
+
+Checked the node fleet for the lyra-prod shard. Findings: intermittent soft lockups and elevated context-switch counts on a 6-host subset (host ids attached). No user-initiated kernel upgrades in the window; looks like a platform kernel regression between 01:00–06:00 UTC affecting a small NVIDIA driver path on this instance type.
+
+Short-term recommendation: drain the 6 hosts and reprovision with the previous stable driver image (rollback). This is high confidence as it aligns with stack traces and driver logs.
+
+I’ll start the drain and image rollback immediately; estimate 25–30 minutes to return to baseline as nodes rejoin the pool and KV caches rebuild.
+
+—Rishi Malhotra
+Staff Infra Engineer, Redwood Inference
+
+Host list: nw-host-77, nw-host-78, nw-host-79, nw-host-102, nw-host-103, nw-host-104
+
+-----
+From: marissa_cole@redwood.ai
+To: Sara Nguyen <sara.nguyen@lyra.ai>, connor_obrien@redwood.ai
+Cc: hannah_schmitt@redwood.ai, rishi_malhotra@redwood.ai, laura_bennett@redwood.ai
+Date: Thu, 03 Dec 2026 09:05:00 -08:00
+Subject: Re: Production degradation — customer update
+
+Sara —
+
+Quick status update for Lyra: we observed a transient host-level driver regression that impacted a small subset of our US-West hosts. Our engineers have drained the affected hosts and are rolling back to the previous stable driver image. We have shifted a portion of traffic to a hot pool and enabled a temporary model-context fallback for non-critical pipelines to reduce pressure on KV caches.
+
+What to expect:
+- Recovery ETA: ~30 minutes for nodes to rejoin and caches to warm (we will confirm when p95 returns to baseline)
+- Short-term impact: some long-context endpoints may see truncated histories while fallback is active; core ingestion and critical paths are prioritized
+- Next update: I’ll send an operational update in 30 minutes and a post-mortem once we validate root cause and remediation.
+
+If you want an immediate technical bridge, we can stand up a 15-minute join for your SREs and ours (Proposed: 09:15 PST).
+
+Marissa Cole
+Customer Success Manager — Redwood Inference
+Redwood Inference | support@redwood.ai
+
+-----
+From: connor_obrien@redwood.ai
+To: Sara Nguyen <sara.nguyen@lyra.ai>, eng-ops@lyra.ai
+Cc: laura_bennett@redwood.ai, hannah_schmitt@redwood.ai, marissa_cole@redwood.ai, rishi_malhotra@redwood.ai
+Bcc: procurement@lyra.ai
+Date: Fri, 04 Dec 2026 14:22:00 -08:00
+Subject: Re: Production degradation — final update and next steps
+
+Sara —
+
+Final update from Redwood exec/ops: the rollback and node reprovision completed successfully; the affected hosts rejoined the pool at ~13:48 PST yesterday. Post-rollback telemetry shows p95 and error rates returned to baseline within 40 minutes of completion.
+
+Actions taken summary:
+- Drained and reprovisioned 6 hosts with stable driver image (rollback)
+- Shifted 30% traffic to hot pool while nodes were recovering
+- Enabled temporary model-context fallback for long-history calls (disabled now for critical paths)
+- Collected traces and request samples for root-cause analysis
+
+Next steps (internal & customer-facing):
+1) Deep post-mortem scheduled — INF-9456 (link above) — engineer owners: Rishi/Hannah
+2) Permanence: we will pin the stable driver image for the lyra-prod shard until the vendor release is validated and add a preflight driver check to the reprovision pipeline
+3) Customer comms: Laura will send a formal post-incident report and offer a 2-week usage credit against impacted consumption (pending approval)
+
+We regret the disruption and appreciate Lyra’s patience. If you’d like to review the post-mortem live, Laura will coordinate a short exec-level debrief next week.
+
+—Connor O'Brien
+Director, Customer Reliability — Redwood Inference
+

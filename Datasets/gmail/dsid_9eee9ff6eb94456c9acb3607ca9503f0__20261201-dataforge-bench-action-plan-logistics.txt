@@ -1,0 +1,130 @@
+Kickoff: DataForge MAP — benchmarking plan & windows
+
+From: lauren_bishop <lauren_bishop@redwood.ai>
+To: Sarah Nguyen <sarah@dataforge.com>, DataForge Technical Team <infra@dataforge.com>
+Cc: evelyn_hart <evelyn_hart@redwood.ai>
+Date: 2026-11-29T09:15:00-08:00
+Subject: Kickoff: DataForge MAP — benchmarking plan & windows
+
+Hi Sarah / DataForge team,
+
+Thanks for agreeing to run the MAP benchmarking sessions with us. Goal for this thread: lock down logistics (test accounts, keys, whitelisting/IPs), acceptance criteria (latency/throughput/TTFT/concurrency), and final close timeline for the pilot so we can sign off by early December. High-level asks up front:
+
+- Confirm which environment we should test against (dedicated staging cluster vs. shared non-prod).
+- Provide list of test accounts/service emails and a contact for whitelisting (if your infra team prefers IP allowlisting).
+- Confirm preferred load windows (time ranges in PST) and blackout periods.
+- Target acceptance SLOs: please confirm or update (P50 latency <200ms, P95 <500ms; TTFT 95th <900ms; sustain concurrency target 300-500).
+- Confirm whether we should run synthetic traffic or replay sampled production traces.
+
+I've attached a short spec with the MAP test plan and suggested measurement points (map-performance-specs.pdf). Next actions: if you can reply with access details / available windows today we'll schedule engineering load windows and assign the perf run owners.
+
+Thanks — I’ll loop in the bench team after your reply.
+
+—Lauren Bishop
+Account Executive, Redwood Inference
+lauren_bishop@redwood.ai
+(650) 555-0142
+
+Attachment: map-performance-specs.pdf (1 page)
+From: Sarah Nguyen <sarah@dataforge.com>
+To: lauren_bishop <lauren_bishop@redwood.ai>
+Cc: DataForge Technical Team <infra@dataforge.com>
+Date: 2026-11-29T11:02:00-08:00
+Subject: Re: Kickoff: DataForge MAP — benchmarking plan & windows
+
+Hi Lauren — thanks for the clear summary. We’re happy to proceed. Quick answers: 
+
+- Environment: please run against our staging cluster (staging.df.internal). It's isolated from prod but has representative dataset (scrubbed).
+- Test accounts: please use infra@dataforge.com and create a service principal for df-bench-2026. John Park (john@dataforge.com) is our infra lead and will handle whitelisting.
+- Preferred windows: we prefer overnight windows Dec 7 01:00–05:00 PST and Dec 8 01:00–05:00 PST to minimize impact.
+- Traffic: start with synthetic traffic, then we can provide a small replayed trace for a follow-up run if needed.
+- Acceptance SLOs: the suggested numbers look reasonable; we care most about P95 and TTFT under load.
+
+Can you generate temporary test keys tied to the service principal and send IP ranges to John for allowlisting? Also confirm if Redwood needs an NDA or IP policy addendum for the staging access.
+
+Thanks, looking forward to the runs.
+
+—Sarah
+Sr. Engineering Manager, Platform
+DataForge, Inc.
+sarah@dataforge.com
+
+Attachment: none
+From: lauren_bishop <lauren_bishop@redwood.ai>
+To: karthik_iyer <karthik_iyer@redwood.ai>, aditya_rao <aditya_rao@redwood.ai>
+Cc: evelyn_hart <evelyn_hart@redwood.ai>
+Date: 2026-11-30T08:10:00-08:00
+Subject: Fwd: DataForge — action items and access
+
+Folks — forwarding Sarah's responses. TL;DR: staging OK, two overnight windows Dec 7–8 01:00–05:00 PST, infra contact john@dataforge.com for allowlisting. Action items: 
+
+- Karthik: own perf harness and run plan (aggressive window on Dec 7, validation run on Dec 8). See attached load-windows-v1.xlsx for proposed ramp schedule.
+- Aditya: create the service principal / test API key and share the key securely. Provide IP ranges for allowlisting and runbook steps for the DataForge infra team.
+- Evelyn: I’ll need you on the kickoff call to confirm acceptance criteria with procurement if there’s any questions about the MAP milestones.
+
+Please confirm you’ve picked up the items and add any notes on tooling (wrk/locust/custom harness) and metrics we should record.
+
+Thanks — lauren
+
+Attachment: load-windows-v1.xlsx (stub, 1 sheet: ramp profiles)
+From: aditya_rao <aditya_rao@redwood.ai>
+To: lauren_bishop <lauren_bishop@redwood.ai>, karthik_iyer <karthik_iyer@redwood.ai>
+Cc: evelyn_hart <evelyn_hart@redwood.ai>
+Date: 2026-11-30T10:45:00-08:00
+Subject: Re: Fwd: DataForge — action items and access
+
+Lauren / Karthik — I created the service principal and a scoped API key for DataForge: df-bench-2026. Key is short-lived (30d) and restricted to inference endpoints for the MAP project. I’ve uploaded the key to our secure sharing link and put a small text stub here: df-api-key.txt (stub) — please share the secure link with john@dataforge.com (do not email the raw key).
+
+IP ranges for allowlisting (Redwood staging egress):
+- 34.219.112.0/20
+- 52.45.200.0/22
+- 143.244.64.0/20
+
+Runbook excerpt (high level):
+- Harness: we’ll use our internal loader (rbench) which drives continuous streaming workloads and supports token-level latency breakdowns.
+- Concurrency profile: start at 50 concurrent streams, ramp to 400 over 15 minutes, sustain 2 hours, then spike to 600 for 5 minutes to validate failover behavior.
+- Measurements: TTFT (first token) at client-observed start, server-side token latency (per-token histogram), throughput (tokens/sec), error rate, and KV cache warm-up time.
+
+Questions for DataForge: do you want the initial run to include function/tool calling or stick to raw text generation? That will materially affect TTFT numbers.
+
+I’ll post the secure key link in the HubSpot record.
+
+—Aditya Rao
+Solutions Engineer, Redwood Inference
+aditya_rao@redwood.ai
+
+Attachment: df-api-key.txt (stub)
+From: karthik_iyer <karthik_iyer@redwood.ai>
+To: lauren_bishop <lauren_bishop@redwood.ai>, aditya_rao <aditya_rao@redwood.ai>, evelyn_hart <evelyn_hart@redwood.ai>, Sarah Nguyen <sarah@dataforge.com>
+Date: 2026-12-01T16:40:00-08:00
+Subject: Re: Kickoff: DataForge MAP — schedule & acceptance criteria
+
+Hi all — quick summary after the baseline validation runs we completed earlier today against staging.df.internal. Short executive summary (full artifacts attached): bench-results-20261201.pdf
+
+Measured baseline (steady-state, warmed caches):
+- Peak throughput: 12,000 tokens/sec (sustained for 30m during step ramp)
+- Median (P50) latency: 120 ms per token
+- P95 token latency: 420 ms
+- TTFT (client-observed median): 620 ms; TTFT 95th: 890 ms
+- Sustained concurrency: 400 streams for 2 hours without elevated error rates (errors <0.5%)
+
+Observations and notes:
+- KV cache warm-up cost affects first 5–10 minutes of a run; recommend a 20–30 minute warm-up period for MAP rubric measurement.
+- The 600-concurrency short spike produced increased P95 to ~1.1s and token drops at 3% — acceptable for stress validation but outside our acceptance SLOs.
+- Function-heavy prompts increased TTFT by ~150–250 ms due to additional decoding and external call overhead; we recommend scope-limiting function calls during the acceptance run unless DataForge specifically requires them.
+
+Recommended next steps / acceptance checklist for sign-off:
+- DataForge confirms final acceptance SLOs (we recommend P95 token latency <=500ms and TTFT 95th <=900ms after warm-up).
+- Run a final acceptance window on Dec 7 01:00–03:00 PST (warm-up + 2h validation).
+- DataForge infra to confirm whitelist applied to the IP ranges Aditya shared and that the df-bench-2026 key was installed.
+- Redwood to provide the final bench report (attached) and a short appendix with tuning recommendations (batching, KV policy).
+
+If DataForge is comfortable with these results, proposed close timeline is sign-off by Dec 10 to allow engineering to schedule Dedicated capacity for the January rollout. Sarah — can you confirm the Dec 7 window still works for your team and whether you want the final run to include short function-call tests?
+
+Thanks — I’ll be on the Dec 7 run and can iterate in real-time.
+
+—Karthik Iyer
+Perf Lead, Redwood Inference
+karthik_iyer@redwood.ai
+
+Attachments: bench-results-20261201.pdf (10 pages, figures + raw CSVs)

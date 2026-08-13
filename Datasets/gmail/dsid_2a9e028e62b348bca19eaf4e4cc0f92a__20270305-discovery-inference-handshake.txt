@@ -1,0 +1,117 @@
+Discovery recap & next steps — latency/concurrency constraints for PulseMetric POC
+
+From: Rishi Malhotra <rishi@redwood.inference>
+To: Alex Chen <alex.chen@pulsemetric.io>
+Cc: Marissa Cole <marissa@redwood.inference>, Ben Carter <ben@redwood.inference>
+Date: Fri, 05 Mar 2027 15:12:00 -0700
+Subject: Discovery recap & next steps — latency/concurrency constraints for PulseMetric POC
+
+Alex / Priya — thanks again for the time today. Quick recap from our call and proposed next steps so we're aligned before the POC kickoff.
+
+High-level goal
+- Surface: support live anomaly scoring in-app (sub-second UX for analyst flows) while batching higher-throughput backfills.
+
+Pain points you shared
+- Current model endpoint has p95 around ~420ms for single-request scoring in non-batched mode (we saw latency spikes during concurrent bursts).
+- Streaming/interactive UI accepts partial results and needs predictable token-arrival behavior (UX jitter is the blocker).
+- Concurrency: peak interactive concurrency ~120 concurrent analyst sessions, expected to grow to ~200 during business-critical hours.
+
+Current stack (what you told us)
+- Inference endpoints run on ECS with Triton-backed model containers; some bespoke request multiplexing and a Redis-based KV cache for short-term prefixes.
+- No centralized routing for fallback models — teams degrade to an older model when overloaded, causing inconsistent output.
+
+Success criteria for the POC (proposed)
+- Latency: end-to-end p95 <= 110ms for single-request scoring (non-streaming) at 150 concurrent sessions.
+- Streaming UX: first-token latency < 80ms, steady token pacing with max jitter < 40ms for streaming interactions during peak load.
+- Throughput: sustain 600 QPS with <1% request error rate and a graceful fallback policy that maintains user-facing responses within SLOs.
+
+Redwood preliminary suggestions
+1) Route interactive vs batch traffic to different capacity pools to avoid head-of-line blocking.
+2) Use prefix/KV caching on hot prompts and enable small-window continuous batching for background workloads.
+3) Configure a streaming-optimized model variant with reduced KV copy overhead; we can supply a quantized variant for cost testing.
+4) Canary an automatic fallback that prefers an ephemeral CPU-based low-latency model only when GPU tail latency exceeds thresholds.
+
+Requested artifacts from PulseMetric before kickoff
+- Representative traffic trace (CSV) that shows per-request timestamps and payload sizes — format sample attached (pulse_inference_profile.csv).
+- A short list of 8–10 prompt templates we want to consider in the UX-sensitive paths.
+- Any compliance constraints (data retention, keys) for Private deployment considerations.
+
+Next steps
+- You: share the traffic trace and prompt templates by Tue, 09 Mar.
+- Us: we'll provide an initial POC runbook and an SLA-draft for scope + target p95s (attached).
+- Schedule: propose kickoff Tue, 16 Mar if artifacts arrive on time.
+
+I'll loop in Marissa and Ben for capacity and commercial details — thanks again.
+
+—
+Rishi Malhotra
+Enterprise Solutions
+Redwood Inference
+rishi@redwood.inference | +1 (415) 555-0124
+
+From: Alex Chen <alex.chen@pulsemetric.io>
+To: Rishi Malhotra <rishi@redwood.inference>
+Cc: Priya Desai <priya.desai@pulsemetric.io>
+Date: Mon, 08 Mar 2027 09:07:00 -0700
+Subject: Re: Discovery recap & next steps — latency/concurrency constraints for PulseMetric POC
+
+Thanks Rishi — this looks accurate and helpful. A few clarifications and answers below.
+
+Clarifications
+- Our 420ms p95 was observed on the heaviest query type (longer prompt + retrieval augmentation). For shorter prompts typical of the analyst view, p95 is closer to 220–250ms.
+- Peak concurrency for the analyst surface is 120 today; 200 is our 12-month peak forecast — happy to plan for 150 in the POC and then tune autoscaling.
+
+Artifacts: attaching the traffic trace and 10 prompt templates as requested (attached: pulse_inference_profile.csv). We redacted PII.
+
+Compliance: we have a SOC2 Type II report; for the POC we need to understand data retention and whether logs can be redacted (we'd prefer max 7-day retention for inference logs).
+
+Timing: Tue, 16 Mar kickoff works for us. Can you send a calendar invite with agenda + attendees?
+
+Alex
+Alex Chen
+Director of Product
+PulseMetric
+alex.chen@pulsemetric.io | +1 650-555-0199
+
+From: Marissa Cole <marissa@redwood.inference>
+To: Alex Chen <alex.chen@pulsemetric.io>, Rishi Malhotra <rishi@redwood.inference>
+Cc: Ben Carter <ben@redwood.inference>
+Date: Mon, 08 Mar 2027 10:15:00 -0700
+Subject: Re: Discovery recap & next steps — latency/concurrency constraints for PulseMetric POC
+
+Alex — thanks for the artifacts, downloading now. Quick notes from infra/POC perspective: 
+
+- We'll start with a small GPU pool tuned for low p95 (we usually pick an M60-equivalent profile for similar workloads) and include a streaming-optimized config that keeps KV cache pinned across requests.
+- Retention: for the POC we can set logs to 7-day retention and redact request-level identifiers. For Private deployments we can offer customer-controlled retention via KMS/HSM — will detail in the runbook.
+- Can you confirm whether any of the prompt templates include user-sensitive identifiers? If so, mark them in the doc so we can exclude from log capture.
+
+I'll draft an agenda for 16 Mar: 30m technical walkthrough (trace & prompts), 30m POC scope and success metrics, 15m commercial/ops checklist. Rishi/Ben — will you add commercial constraints (max monthly reserved hours, top-line price guardrails) we should prep?
+
+—Marissa
+Marissa Cole
+Solutions Engineering Lead
+Redwood Inference
+marissa@redwood.inference
+
+From: Rishi Malhotra <rishi@redwood.inference>
+To: Alex Chen <alex.chen@pulsemetric.io>, Marissa Cole <marissa@redwood.inference>
+Cc: Ben Carter <ben@redwood.inference>
+Date: Mon, 08 Mar 2027 11:03:00 -0700
+Subject: Re: Discovery recap & next steps — latency/concurrency constraints for PulseMetric POC
+
+Great — thanks both. Alex/Priya: look out for the 16 Mar invite from me (I'll include a Zoom link + the runbook draft).
+
+Ben — can you pull a quick pricing sketch for a 6-week reserved POC (include burst pool and streaming-optimized instance types) and drop in the shared Drive folder? Ben, if you want to reuse the SLA template in the attachments (redwood-poc-sla-draft.pdf) that should speed things up.
+
+Action items summary
+- Alex/Priya: confirm prompt sensitivity and reply with any redaction notes (by Wed, 10 Mar).
+- Alex: confirm kickoff attendees for 16 Mar (we've penciled in product, infra, and security).
+- Ben: draft POC pricing sketch and upload to Drive by Wed, 10 Mar.
+- Marissa: share runbook + technical checklist ahead of the call (EOD Mon, 15 Mar).
+
+I'll follow up with the calendar invite shortly.
+
+—
+Rishi
+
+[Quoted/Previous messages omitted for brevity in later replies]

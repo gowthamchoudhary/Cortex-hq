@@ -1,0 +1,117 @@
+OrchardAI dedicated commit: throughput validation & headroom
+
+From: Elena Park <elena@orchardai.com>
+To: Grace O'Connor <grace.oconnor@redwood.com>
+Cc: Chris Sutton <chris.sutton@orchardai.com>
+Date: Mon, 21 Jul 2025 09:12:00 -0700
+Subject: Dedicated capacity ask — baseline TPS and SLO fit for pilot
+
+Hi Grace,
+
+Thanks again for the demo last week. We need a short write-up with concrete throughput numbers so our procurement and infra teams can sign the PO for a Dedicated slab. High level ask: given our expected workload (many short chat prompts, ~30 tokens in prompt + ~120 tokens generated on average), can you validate tokens/sec estimates, p95 latency fit for a 300ms SLO, and recommended committed GPU count and headroom?
+
+Constraints:
+- Production model: 34B dense (we want to run quantized FP16/INT8 path)
+- Typical peak pattern: 250 concurrent chat sessions with 1.5 requests/sec per session at peak
+- Cold-starts are rare; KV-cache hit expected on ~70% of requests after warmup
+
+Can you return the numbers and any assumptions in an attachment? Procurement wants a single-slide summary + workbook for the math.
+
+Best,
+Elena
+Director of Product, OrchardAI
+
+---
+
+On Mon, Jul 21, 2025 at 10:03 AM Grace O'Connor <grace.oconnor@redwood.com> wrote:
+To: Elena Park <elena@orchardai.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Kimberly Park <kimberly.park@redwood.com>
+Date: Mon, 21 Jul 2025 10:03:00 -07:00
+Subject: Re: Dedicated capacity ask — baseline TPS and SLO fit for pilot
+
+Elena — putting our initial validation together and looping in Ben (sales) for procurement and Kim (runtime lead) for model-level assumptions.
+
+Quick preview of assumptions we’ll validate in the attached workbook:
+- Model runpath: 34B quantized to int8 on H100-like inference profile; baseline per-token compute = ~0.00012s/token on a single H100 instance (shared measurement for our 34B throughput lab)
+- Avg tokens per request: 150 tokens (prompt + gen).
+- Tokenization overhead and RPC add ~15% on top of raw per-token compute for chat responses; effective per-token latency = 0.000138s
+- KV cache hit reduces generated token compute by ~40% on hit (we’ll model 70% hit rate you provided)
+
+We’ll return: p50/p95 tokens/sec at slab sizes, expected p95 tail latencies, recommended committed GPUs with 1.5x headroom for sustained peaks, and a conservative burst allowance.
+
+Draft will be in the workbook; attached slide + workbook to follow.
+
+Thanks,
+Grace
+Senior Customer Solutions, Redwood Inference
+
+---
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Grace O'Connor <grace.oconnor@redwood.com>
+Cc: Kimberly Park <kimberly.park@redwood.com>
+Date: Tue, 22 Jul 2025 11:42:00 -07:00
+Subject: Internal: pricing / committed slab note
+
+Grace / Kim — quick internal note before we send official numbers to OrchardAI: procurement will likely ask for committed cost at 6-month and 12-month terms. For the pricing ask, we should present two commitment tiers: pilot (3 months, smaller slab) and production (12 months, full slab) with clear delta in committed GPUs and burst allowances.
+
+Also call out fallbacks: if p95 latency is missed due to transient peaking in tokens/sec, automatic fallback to a smaller model family (e.g., 13B quantized) is an option — we should show the delta in tokens/sec and cost.
+
+Ben
+Account Executive, Redwood Inference
+
+---
+
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Grace O'Connor <grace.oconnor@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Tue, 22 Jul 2025 14:18:00 -07:00
+Subject: Re: Internal: pricing / committed slab note
+
+Numbers from the runtime lab (summary):
+- Micro-benchmark: 34B int8 on H100 profile -> 7200 tokens/sec per GPU (sustained, prefetched KV cache disabled); with our RPC/IO overlay measured in our stack that maps to ~6200 tokens/sec effective per GPU for a cold request.
+- Effective tokens/sec with KV caching: assuming 70% hit rate and cache reduces generated-token compute 40% on hits, weighted effective tokens/sec per GPU becomes ~7900 tokens/sec during steady-state (more subtle math in workbook).
+
+Assumptions and recommended slab math (conservative):
+- Peak concurrent requests: 250 sessions * 1.5 rps = 375 rps.
+- Average tokens per request = 150 -> peak tokens/sec = 375 * 150 = 56,250 tokens/sec.
+- Required GPUs (raw) = ceil(56,250 / 7,900) = 8 GPUs.
+- Add 1.5x headroom for sustained peaks and operational safety -> 8 * 1.5 = 12 GPUs (recommend committing 12 GPUs).
+- For pilot (3 months) recommend committing 6 GPUs with a 6 GPU burst pool (on-demand) to handle traffic spikes above the committed slab.
+
+Latency SLO validation (300ms p95):
+- Median per-token compute mapped to latency: at 7,900 tokens/sec per GPU -> average response (150 tokens) compute time = 150 / 7,900 = 0.019s = 19ms compute; adding RPC and tokenizer overhead (~40ms in lab) -> p50 ~60ms.
+- p95 tail driven by queuing when slab saturates. With committed 12 GPUs and the peak tokens/sec estimate, utilization at sustained peak is ~56,250 / (12 * 7,900) = 59% — leaves enough headroom to keep p95 under 300ms with standard queuing.
+
+I attached the workbook with detailed rows for varying KV hit rates (50/60/70/80%) and alternate model path (13B quantized) to show sensitivity.
+
+Kim
+Runtime Lead, Redwood Inference
+
+---
+
+From: Grace O'Connor <grace.oconnor@redwood.com>
+To: Elena Park <elena@orchardai.com>, Chris Sutton <chris.sutton@orchardai.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, GCP Sales <gcp-sales@google.com>
+Date: Wed, 23 Jul 2025 15:03:00 -07:00
+Subject: Re: Dedicated capacity ask — baseline TPS and SLO fit for pilot
+
+Elena / Chris — attaching the one-pager and the workbook (orchardai_throughput_model_v2.xlsx) that contains the full math and sensitivity tables. TL;DR recommendation: commit to 12 GPUs for production (12x H100-equivalent inference slots) to meet a 300ms p95 SLO with a 1.5x safety buffer. For the pilot, commit 6 GPUs with a 6-GPU burst policy.
+
+Key bullets for procurement:
+- Peak tokens/sec modeled: 56,250 tokens/sec (250 concurrent sessions x 1.5 rps x 150 tokens).
+- Effective tokens/sec per committed GPU (with 70% KV hit): ~7,900 tokens/sec.
+- Committed GPUs required: 8 raw -> recommended 12 with 1.5x headroom.
+- Pilot ask: 6 committed GPUs + on-demand burst pool; list price / committed discount numbers are in the SOW slide.
+- Fallback path: automated model downgrade to 13B quantized in the event of sustained overcommit; we provide the delta in cost and expected p95 impact in the workbook.
+
+Next steps:
+- Chris: can procurement sign a 3-month pilot PO for 6 GPUs while we run an initial warmup and measure real KV-hit behavior?
+- Elena: if yes, we’ll prepare a formal SOW and DocuSign link.
+
+Thanks — sending attachments now.
+
+Regards,
+Grace O'Connor
+Senior Customer Solutions, Redwood Inference
+
+Attachments: orchardai_throughput_model_v2.xlsx (workbook with per-token math), orchardai_sow_v1.pdf (SOW + pricing slide), orchardai_latency-trace-072125.json (sample trace from lab)

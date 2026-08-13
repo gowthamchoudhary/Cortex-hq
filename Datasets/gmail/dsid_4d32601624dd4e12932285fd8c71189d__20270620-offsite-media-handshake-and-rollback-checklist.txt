@@ -1,0 +1,154 @@
+Offsite media handshake & emergency signer rotation
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Sam Lee <sam.lee@acme-corp.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Dev Patel <dev.patel@redwood.com>
+Date: 2027-06-20T09:14:00-07:00
+Subject: Offsite media handshake & emergency signer rotation
+
+Sam / Jordan —
+
+Thanks for confirming the maintenance window on June 28th. Below is the handshake plan and the small emergency-signer rotation flow we need to validate before we ship the offline image bundle to your staging rack. Aim is to have both parties sign off on the checklist by EOD next Tuesday so we have time for a dry run.
+
+High level:
+- We will deliver a sealed USB A (tamper-evident pouch) containing: signed-image tarball (redwood-core-20270628.tar.gz.sig), manifest (artifact-manifest-v1.txt), and signer public certs.
+- Redwood will provide signed checksums (signed-image-checksums.sha256) and a verification script (redwood-offline-verify).
+- You will validate signatures against the provided public certs in an air-gapped environment and perform checksum verification before install.
+
+Pre-req checklist (please confirm):
+- Physical chain-of-custody contact at Acme: name + phone number
+- On-prem HSM accessible to on-call (if you plan to use HSM for local signing) — otherwise use our escrowed offline signer workflow
+- A verified host in your staging rack that can run the verification script (we recommend ephemeral VM with only verification binaries)
+
+Emergency signer rotation (summary):
+- If the primary signer key is found compromised during transfer or validation, we will: 1) halt install, 2) rotate signer in Redwood HSM, 3) produce a re-signed manifest and a short-form rotation attestation, 4) transfer new signed artifacts via mutually agreed courier.
+- Rotation timeline target: 4–6 hours for attestation + re-sign in standard escalations; expedited window (2–3 hours) if both parties pre-authorize emergency channel.
+
+Attachments included: artifact-manifest-v1.txt, signed-image-checksums.sha256 (stubs).
+
+Questions for Acme before we proceed:
+1) Confirm on-prem verifier host FQDN(s) and point of contact.
+2) Do you require the rotation attestation to be notarized by a 3rd-party (yes/no)?
+3) Any export-control or labelling requirements for the sealed package?
+
+If this looks good I’ll loop in Ops for a dry run and Marissa will share the detailed rotation playbook.
+
+—Karthik
+Karthik Iyer
+Head of Sales Engineering | Redwood Inference
+karthik.iyer@redwood.com
+
+From: Sam Lee <sam.lee@acme-corp.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Jordan Patel <jordan.patel@acme-corp.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: 2027-06-20T11:02:00-07:00
+Subject: Re: Offsite media handshake & emergency signer rotation
+
+Karthik —
+
+Thanks for the plan. A few clarifications from Acme side:
+
+- Chain-of-custody: I (Sam Lee) will be the receiving contact at our data center (cell +1-415-555-0192).
+- HSM: We have an on-prem HSM but it is only accessible via our Ops team during the maintenance window. If your verification requires direct HSM access we need an alternate local-signature acceptance.
+- Notarization: We prefer a basic notarized attestation for emergency rotations; third-party notarization is OK but will add time — can you confirm required fields?
+
+Two technical Qs from our infra lead:
+1) What is the expected output of redwood-offline-verify (exit codes + sample output)? Could you attach a small sample run?
+2) If we opt for the escrowed offline signer, what is the exact trust model? Will the public cert chain be included in the manifest?
+
+We want to do a dry run on June 26th. Can Redwood ship the test manifest to our staging host before the sealed package to validate the verification flow?
+
+—Sam
+Sam Lee
+Platform Ops — Acme Corp
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Sam Lee <sam.lee@acme-corp.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Dev Patel <dev.patel@redwood.com>
+Date: 2027-06-20T13:28:00-07:00
+Subject: Re: Offsite media handshake & emergency signer rotation
+
+Sam —
+
+Appreciate the quick reply. Short answers up front then details below.
+
+- redwood-offline-verify: returns 0 on full-OK (all sigs valid, all checksums match), 1 for signature mismatch, 2 for checksum mismatch, 3 for missing components. We’ll attach offline-verification-sample.txt showing stdout/stderr and exit code.
+- Escrowed offline signer trust model: yes — the public cert chain (root + intermediate) is included in the manifest and the signer public key fingerprint is printed in the rotation attestation. Manifest example attached (artifact-manifest-v1.txt).
+- Dry run: we can provide a test manifest and a signed test-tar.gz ahead of time (encrypted transfer link) — but we need a confirmation that your staging host is not connected to prod networks during the run.
+
+Example verification commands (air-gapped host):
+
+# unpack bundle in staging VM
+$ tar -xzf redwood-core-test.tar.gz
+$ ./redwood-offline-verify --manifest artifact-manifest-v1.txt --certs certs/chain.pem
+
+Expected sample output (attached):
+OK: all signatures verified
+OK: checksums match (12 files)
+Exit code: 0
+
+Fallback (no HSM):
+- If your HSM cannot be used we will rely on our pre-generated escrow signer. The escrow signer’s public key fingerprint is in the manifest; you must verify the fingerprint OOB with our security contact (thumbprint listed in manifest).
+
+We will ship a small test bundle to your staging host by encrypted courier on June 24th for the dry run. If that works we’ll proceed with the sealed package for the 28th window.
+
+—Karthik
+
+On 2027-06-20 11:02, Sam Lee <sam.lee@acme-corp.com> wrote:
+> Karthik —
+>
+> Thanks for the plan. A few clarifications from Acme side:
+> ...
+
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Sam Lee <sam.lee@acme-corp.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Dev Patel <dev.patel@redwood.com>
+Date: 2027-06-20T16:45:00-07:00
+Subject: Re: Offsite media handshake & emergency signer rotation — detailed checklist
+
+Sam / Karthik —
+
+Adding the technical checklist and acceptance gates we’ll use during the dry run and the production window. Please review and confirm by EOD Tuesday. I’m attaching a compact playbook (emergency-rotation-playbook.pdf) that lists escalation contacts and example attestations.
+
+Dry run acceptance criteria (must all be met to greenlight production package):
+1) Verification script exit code 0 and stdout contains "OK: all signatures verified" and "OK: checksums match".
+2) Manifest timestamp matches package generation time and fingerprint of signer public key matches the OOB channel-confirmed fingerprint.
+3) No unexpected files in the tarball (we will provide a file-list you can diff).
+4) Final install step must be performed by your designated Ops contact (Sam/Jordan) and recorded in your local audit log.
+
+Emergency rotation playbook highlights (excerpt):
+- Immediate actions: stop install, isolate package, notify Redwood security + Acme security, take forensic image of staging host.
+- Re-sign flow: Redwood generates new artifacts in HSM, produces rotation-attestation.json (signed), and sends both via designated courier with tamper-evident packaging.
+- Verification on receipt: run redwood-offline-verify, confirm fingerprint, then proceed to install.
+
+Open items for Acme (to confirm):
+- Will you require 3rd-party notarization on rotation-attestation.json? (Yes/No)
+- Confirm OOB channel for fingerprint verification (phone number + PGP-signed email).
+
+Thanks — happy to hop on a quick call if useful.
+
+—Marissa
+Marissa Cole
+Senior Manager, Security & Deployments | Redwood Inference
+marissa.cole@redwood.com
+
+From: Dev Patel <dev.patel@redwood.com>
+To: Sam Lee <sam.lee@acme-corp.com>, Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2027-06-21T15:02:00-07:00
+Subject: Re: Offsite media handshake & emergency signer rotation — final schedule
+
+Sam / team —
+
+All set from our side. Dry-run test package dispatched to your staging host (encrypted container) and courier tracking: TRK-778302. Attached small sample output of the verification run from our CI for your reference (offline-verification-sample.txt).
+
+Quick notes:
+- If you want to exercise the emergency rotation during the dry run, say so now and we'll simulate the rotation (we will not actually re-sign the production bundle, only the test artifact).
+- I’ve also included the exact command hashes we used to generate the manifest so your team can produce identical results during validation.
+
+See you on the 26th for the dry run.
+
+—Dev
+Dev Patel
+Platform Reliability Engineer | Redwood Inference
+dev.patel@redwood.com

@@ -1,0 +1,121 @@
+Concordia Capital — Deterministic request tracing & activation SLO ask
+
+From: Lauren Bishop <lauren.bishop@redwood.ai>
+To: Markus Klein <markus.klein@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>
+Cc: Monica Patel <monica.patel@redwood.ai>, Ellis Hart <ellis@concordiacap.com>
+Date: Wed, 7 Oct 2026 09:12:00 -0700
+Subject: Concordia Capital — Deterministic request tracing & activation SLO ask
+
+Team —
+
+Quick background: Concordia (Ellis copied) is two weeks from contract signature if we can commit to a deterministic request-trace capability and a short-term activation SLO (guaranteed warm pool for first 72 hours after go-live + request-level export for any disputed transactions). This is a gating item for their legal and audit teams.
+
+What they need (scoped ask):
+- A per-request deterministic trace id that persists end-to-end (API gateway -> runtime -> logs/export) for a tenant-scoped timeframe (retention 90 days).
+- A one-time on-demand export of all traces for a given date-range/tenant as CSV/JSON (they will consume into their internal SIEM).
+- A temporary activation SLA: guaranteed warm capacity + priority routing for first 72 hours post-launch.
+
+Customer incentive: Concordia is willing to sign a 6-month premium SLA and pay a one-time engineering surcharge (details in attached SOW). If we can scope an MVP (opt-in feature, export behind an admin route, no global perf regression) we can close the deal this month.
+
+Ask: Can product + eng evaluate feasibility and proposed minimal scope to ship as an opt-in enterprise feature? If yes, please respond with appetite and a rough timeline (ballpark weeks) — we can then schedule a 30-min technical sync with Concordia.
+
+Attachments: Concordia_SOW_v2.pdf (PDF)
+HubSpot: https://app.hubspot.com/deal/HB-2026-1177
+
+— Lauren
+Lauren Bishop
+Enterprise AE, Redwood Inference
+lauren.bishop@redwood.ai
+
+---
+
+From: Markus Klein <markus.klein@redwood.ai>
+To: Lauren Bishop <lauren.bishop@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>
+Cc: Monica Patel <monica.patel@redwood.ai>, Ellis Hart <ellis@concordiacap.com>
+Date: Wed, 7 Oct 2026 10:03:00 -0700
+Subject: Re: Concordia Capital — Deterministic request tracing & activation SLO ask
+
+Thanks for the context, Lauren. A few clarifying questions before we propose scope: 
+
+1) Deterministic trace id — do they need cryptographic immutability, or is a collision-resistant request id that we propagate through existing headers sufficient?
+2) Export format — JSON lines vs CSV? Do they require field-level redaction (PII) prior to export?
+3) Activation SLO — is the request for reserved GPUs/warm pool for the tenant only, or a higher-priority routing across the shared pool?
+
+Notes on feasibility:
+- Propagating a request id through the API gateway and including it in runtime logs is straightforward (low-risk).
+- Generating a deterministic id that remains stable across retries and routing changes requires a small change to the routing layer (seed from upstream metadata) — medium effort.
+- The on-demand export pipeline is the heavier lift: we need a durable index keyed by tenant+date and an admin-run export job. We can do a narrow MVP (store minimal trace payload + token/trace refs) and export that; full fidelity request payloads will take additional storage and redaction work.
+
+If Concordia only needs a stable trace id + lightweight export (timestamp, path, status, latency, trace id) we can likely scope this to a 4–6 week sprint (product + 2 engineers + one infra support). Full trace capture and redact/export pipeline is 10–12 weeks.
+
+I'll draft a minimal spec if folks agree on target MVP.
+
+— Markus
+Markus Klein
+Head of Product, Serving Runtime
+markus.klein@redwood.ai
+
+---
+
+From: Jonas Weber <jonas.weber@redwood.ai>
+To: Markus Klein <markus.klein@redwood.ai>, Lauren Bishop <lauren.bishop@redwood.ai>
+Cc: Monica Patel <monica.patel@redwood.ai>, Ellis Hart <ellis@concordiacap.com>
+Date: Wed, 7 Oct 2026 11:45:00 -0700
+Subject: Re: Concordia Capital — Deterministic request tracing & activation SLO ask
+
+Echoing Markus — technical feasibility looks good for a scoped MVP. Quick engineering take: 
+
+MVP (opt-in tenant flag):
+- Wire a tenant-scoped deterministic id generated at gateway (HMAC over tenant_id + request_ts + nonce) and propagate via X-Redwood-Trace header. (2 dev-weeks)
+- Runtime: record minimal trace envelope {trace_id, ts, route, latency_ms, status_code} into a compact time-partitioned store (append-only). (2–3 dev-weeks + infra config)
+- Admin export endpoint: admin-authenticated job to materialize tenant+range export as ndjson to S3. (1 dev-week)
+- Activation SLO: short-term priority routing by marking requests from tenant as high-priority and allocating from a warm pool for first 72h. This needs a small scheduler change and capacity reservation toggle. (2 dev-weeks infra/ops)
+
+Conservative ETA: 6 weeks end-to-end if we can allocate a small eng pod and get product spec this week. Risk: the export store will add modest write load during peak; we should make the per-tenant opt-in to avoid global perf hit.
+
+Questions for legal/compliance: what retention/PII guardrails are required? If they want full payload capture we need signoff and a short design for redaction.
+
+— Jonas
+Senior Engineering Manager, Runtime
+jonas.weber@redwood.ai
+
+---
+
+From: Ellis Hart <ellis@concordiacap.com>
+To: Lauren Bishop <lauren.bishop@redwood.ai>
+Cc: Monica Patel <monica.patel@redwood.ai>, Markus Klein <markus.klein@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>, Concordia Legal <legal@concordiacap.com>
+Date: Wed, 7 Oct 2026 14:12:00 -0400
+Subject: Re: Concordia Capital — Deterministic request tracing & activation SLO ask
+
+Thanks, Lauren / team — appreciate the clear breakdown. To answer Markus: collision resistance is fine; we do not need cryptographic immutability, but the id must be stable across retries and replays. Export in newline-delimited JSON (ndjson) is preferred; we will handle redaction on our side, but the export should support field-level metadata so we can filter.
+
+On the SLA: Concordia will sign a 6-month premium SLA and agrees to a one-time engineering fee to accelerate this work if Redwood can commit to the 72-hour warm-pool guarantee and provide the export capability within ~6 weeks. Our legal team is ready to fast-track a short addendum once we have a product commitment and an outline of the data retention policy.
+
+I can be on the technical sync this Friday morning ET if you want to schedule.
+
+— Ellis Hart
+Head of Platform Engineering, Concordia Capital
+ellis@concordiacap.com
+
+Attachment: Concordia_SLA_offer.xlsx (XLSX)
+
+---
+
+From: Lauren Bishop <lauren.bishop@redwood.ai>
+To: Markus Klein <markus.klein@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>
+Cc: Monica Patel <monica.patel@redwood.ai>, Ellis Hart <ellis@concordiacap.com>
+Date: Wed, 7 Oct 2026 16:34:00 -0700
+Subject: Re: Concordia Capital — Deterministic request tracing & activation SLO ask
+
+Thanks everyone — sounds like we have alignment on an opt-in MVP and a target ~6-week timeline. Next steps: 
+
+1) Markus: please publish a 1-page spec with the minimal fields we persist (trace_id, ts, route, latency_ms, status_code, tenant_id) and call out retention defaults and redaction exceptions by EOD Thu 10/8.
+2) Jonas: confirm resource allocation (2 engineers + infra support) and whether the work can be split into two parallel tracks (id propagation + trace store/export). ETA for allocation confirmation: Fri 10/9 EOD.
+3) Monica: prep CS/ops playbook for activation window and billing note for the one-time engineering fee.
+4) Lauren: I'll schedule the 30-min technical sync for Fri 10/9 11:00 AM ET with Concordia and share the HubSpot deal link and the SOW.
+
+If we can hit these commitments we'll close HB-2026-1177 this month. Appreciate the quick turnaround.
+
+— Lauren
+Enterprise AE, Redwood Inference
+lauren.bishop@redwood.ai

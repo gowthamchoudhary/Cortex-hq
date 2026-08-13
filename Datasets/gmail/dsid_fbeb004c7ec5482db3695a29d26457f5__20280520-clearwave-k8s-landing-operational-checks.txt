@@ -1,0 +1,150 @@
+Clearwave: Preflight & Node Strategy for Private K8s Landing
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Daniel Pratt <daniel.pratt@clearwavehealth.com>
+Cc: Alice Moreno <alice.moreno@clearwavehealth.com>
+Date: Mon, 20 May 2028 09:12:00 -0700
+Subject: Clearwave: Preflight & Node Strategy for Private K8s Landing
+
+Hi Daniel / Alice,
+
+Thanks again for the demo last week — good alignment on goals. Per our conversation I put together a short preflight checklist and a draft set of questions that will help us converge on node pools, storage model, and the operational gating items we need for an on-prem private deployment. Attached: clearwave-preflight-checklist.xlsx and redwood-mrp-mutual-action-plan.docx.
+
+High-level asks (please reply inline where you can):
+- Physical footprint: how many racks and available U per rack for the initial phase? (power PDU details appreciated)
+- Network: spine/leaf topology, available NIC speeds (25/50/100G), and whether jumbo frames are allowed inside the cluster fabric
+- Storage: primary SAN/NAS vendor and whether there is block storage for PVs; any on-site object store or S3 gateway?
+- Isolation: do you require strict tenant isolation (separate clusters per tenant) or single-tenant cluster with namespace isolation?
+- Compliance/retention: any data-retention or audit-log retention policies that affect PVC lifetimes or backup cadence
+
+Our initial recommendation (for discussion on the preflight call):
+- Node pools: gpu-inference (G), services-cpu (S), infra-ssd (I) — GPU nodes sized for 1–4 model workers per GPU; infra nodes with local NVMe for KV/cache; CPU nodes for control-plane-adjacent services
+- Storage model: persistent model store on SAN (NetApp/CIFS/NFS) with local NVMe as cache for KV and ephemeral artifacts; we recommend a short TTL for ephemeral volumes used by batch/eviction-sensitive components
+
+Next steps: can we schedule a 45-minute preflight call on Wed May 22 or Thu May 23 to walk the checklist? I can loop in Karthik (private deployments) and Dev (runtime).
+
+Thanks — attaching the mutual action plan so procurement has visibility as well.
+
+—
+Marissa Cole
+Solutions Lead, Redwood Inference
+marissa.cole@redwood.com
++1 (415) 555-0123
+
+Attachments: clearwave-preflight-checklist.xlsx, redwood-mrp-mutual-action-plan.docx
+
+From: Daniel Pratt <daniel.pratt@clearwavehealth.com>
+To: Marissa Cole <marissa.cole@redwood.com>
+Cc: Alice Moreno <alice.moreno@clearwavehealth.com>, procurement@clearwavehealth.com
+Date: Mon, 20 May 2028 11:05:00 -0700
+Subject: Re: Clearwave: Preflight & Node Strategy for Private K8s Landing
+
+Marissa — thanks, this is great. Quick answers below and I'm attaching our network inventory (clearwave-network-inventory.csv).
+
+- Physical footprint: initial phase has 2 racks available (42U each). Each rack has redundant PDUs (2 per rack) and per-rack UPS with N+1.
+- Network: spine/leaf configured with 100G spine, 25/100G leaf switches. We can do jumbo frames within the cluster VLAN.
+- Storage: primary is NetApp AFF (NFS/Block LUNs). We do not have an on-site S3-compatible gateway today; object storage is currently off-site (managed).
+- Isolation: single cluster for now with strict namespace & network policy isolation — may evaluate separate clusters later for higher-regulated workloads.
+- Compliance: audit logs must be retained for 2 years; backups for customer data must be kept for 90 days.
+
+Procurement note: procurement@clearwavehealth.com — will coordinate PO and timelines. We'd like an estimated staging window and an outline of the components Redwood will deploy so we can get approvals.
+
+On the call windows you proposed, Wed May 22 @ 10:00 PT works for us.
+
+—
+Daniel Pratt
+CTO, Clearwave Health
+daniel.pratt@clearwavehealth.com
+
+On Mon, May 20, 2028 at 09:12 AM Marissa Cole <marissa.cole@redwood.com> wrote:
+> Hi Daniel / Alice,
+> 
+> Thanks again for the demo last week — good alignment on goals. Per our conversation I put together a short preflight checklist...
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Daniel Pratt <daniel.pratt@clearwavehealth.com>, Alice Moreno <alice.moreno@clearwavehealth.com>, Karthik Iyer <karthik.iyer@redwood.com>, Dev Patel <dev.patel@redwood.com>
+Cc: Laura Bennett <laura.bennett@redwood.com>
+Date: Tue, 21 May 2028 08:22:00 -0700
+Subject: Clearwave: Preflight call confirmed + draft node-pool proposal
+
+Thanks for confirming the call, Daniel — calendar invite sent for Wed May 22 10:00 PT. Looping in Karthik and Dev to validate sizing and operational gating.
+
+I've sketched a draft node-pool layout below (for discussion on the call):
+- gpu-inference (G): 4 nodes, each with 4x A100-40GB (or equivalent), 768GB RAM, 8 x 25Gb NICs. Local NVMe 8TB per node for KV cache (CSI localPV).
+- services-cpu (S): 8 nodes, 32 cores / 256GB RAM, 4TB NVMe per node for ephemeral batch and logs.
+- infra-ssd (I): 3 nodes, 16 cores / 128GB RAM, 24TB SAN-backed PVs for model artifacts and backups.
+
+Storage patterns:
+- Model store: NetApp LUNs exported as block PVs via CSI (ReadMany not required for model loading — we pull to local disk on startup).
+- KV/cache: local NVMe (hostPath/localPV) with TTL-based eviction; snapshots for debugging only (not retained long-term).
+- Backups: nightly incremental to our offsite object store; retention per Clearwave policy (90d for customer data).
+
+Operational asks for Clearwave (helpful to have before staging):
+- VLAN for cluster traffic and a management VLAN for admin access
+- K8s API access: IP allowlist CIDRs for Redwood-managed control-plane tools during staging
+- A short list of service accounts that require elevated network egress (we'll lock down everything else)
+
+Karthik / Dev — can you review the node counts & NVMe sizing and call out any gating items (CSI drivers, KMS/HSM access, or kernel/hugepage tuning)? I've attached network-diagram-v1.png to the invite.
+
+—
+Marissa
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Daniel Pratt <daniel.pratt@clearwavehealth.com>, Alice Moreno <alice.moreno@clearwavehealth.com>, Dev Patel <dev.patel@redwood.com>
+Cc: Laura Bennett <laura.bennett@redwood.com>
+Date: Tue, 21 May 2028 13:45:00 -0700
+Subject: Re: Clearwave: Preflight call confirmed + draft node-pool proposal
+
+Thanks — good starting point. I validated the rack/network constraints from the inventory and have a few adjustments and operational notes below. Quoting the draft where helpful.
+
+On node counts & sizing (recommended):
+- gpu-inference (G): 3–4 nodes, each with 4 x A100-40GB (or 2 x H100 if available), 1.5–2TB RAM recommended if you expect large batched contexts. CPU: 32 physical cores per node (hyperthreads ok). NIC: prefer 100G uplink per node for high-throughput KV sync and multi-GPU RDMA if you enable GPUDirect. Local NVMe: 4 x 2TB NVMe (software RAID0 for cache) — total ~8TB fast local.
+- services-cpu (S): 6–10 nodes, 48 cores / 384GB RAM, 4TB NVMe; these host sidecars, batching workers, and non-model services.
+- infra-ssd (I): 3 nodes on SAN for heavy IO (NetApp LUNs). Keep one node as an admin/ops bastion that also runs Velero and backup jobs.
+
+Storage/Critical configuration:
+- Use CSI driver for NetApp (Block) for model artifacts; mount models read-only into inference pods and copy to local disk on cold-start to avoid NFS saturation.
+- Local PVs via CSI local-volume for NVMe caches. Reclaim policy: Retain for debug, but automated TTL cleanup at the orchestration layer (we manage lifecycle).
+- Backup cadence: nightly incremental, full weekly; retention: 90d for customer data; audit logs: retain 2y (ship to your long-term storage).
+- Kubelet eviction: set evictionHard imagefs.available<15%, memory.available<200Mi to avoid noisy-evictions during bursts. Tune kube-reserved and system-reserved to preserve GPU processes.
+
+Networking and performance gating:
+- MTU 9000 (jumbo) recommended across cluster fabric.
+- Ensure at least 2x100G uplink for GPU nodes; enable SR-IOV if you plan dedicated NICs per GPU worker for lower latency.
+
+Operational runbook highlights:
+- Canary rollout: start with 10% of traffic to a single GPU node pool; wire in canary metrics (latency P95, token throughput, GPU utilization).
+- Chaos tests: drain a GPU node and validate KV cache warmup time and request latency.
+- Upgrade plan: control-plane first, then infra, services, GPU last; 30-minute rollback window per step.
+
+Tests to run during staging:
+- Load: gradual ramp to 2x expected peak for 30 minutes; validate autoscaler behavior and latency SLOs.
+- Failure injection: simulate single rack failure and verify fallback to second rack (we'll validate pod disruption budgets and anti-affinity).
+
+Dependencies we need from Clearwave for staging:
+- Access to NetApp management for provisioning LUNs / storageclass creation
+- A KMS endpoint or certificate exchange procedure for any keys we store (if you require HSM-backed keys, please surface vendor contact)
+- A short-lived VPN tunnel or bastion IP allowlist for Redwood operations (we'll provide IPs).
+
+I'll turn this into a short runbook checklist after the call and share. If you want, we can also include a brief hardware BOM for procurement to use in the PO.
+
+—
+Karthik Iyer
+Head of Private Deployments, Redwood Inference
+karthik.iyer@redwood.com
+
+From: Daniel Pratt <daniel.pratt@clearwavehealth.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Alice Moreno <alice.moreno@clearwavehealth.com>, procurement@clearwavehealth.com, Dev Patel <dev.patel@redwood.com>
+Date: Wed, 22 May 2028 16:05:00 -0700
+Subject: Re: Clearwave: Preflight call confirmed + draft node-pool proposal
+
+Karthik / Marissa — this is very helpful, thank you. We agree with the recommended adjustments: 3 GPU nodes to start, SR-IOV optional but we'll enable jumbo frames and 100G uplinks. Procurement copied here (procurement@clearwavehealth.com) — please provide the BOM and staging scope so we can issue a PO.
+
+Staging window request: June 5–16 works for our ops calendar. Please include a short checklist of actions we must allow on the network and storage side (port openings, LUN provisioning ETA, and a temporary bastion IP).
+
+Let's proceed to the next steps you outlined — Karthik, if you can share the runbook and hardware BOM by Friday May 24, we'll start internal approvals.
+
+—
+Daniel Pratt
+CTO, Clearwave Health

@@ -1,0 +1,101 @@
+CelestiaGrid partner intro + integration framing
+
+Meeting header:
+Date/Time: 2026-05-28 14:30 UTC
+Duration: ~52 minutes
+Attendees: Maya (Redwood AE), Daniel (Redwood SE), Rohan (CelestiaGrid Head of Cloud), Priya (CelestiaGrid Lead Platform Eng), Sam (CelestiaGrid VP Partnerships)
+Links shared: partner-onboarding.pdf (Redwood), quick-bench-template.xlsx (SE), celestiagrid-network-diagram-v1.png (customer)
+
+Summary: Quick partner intro between Redwood Inference and CelestiaGrid to scope initial integration patterns (hosted onramp vs private VPC offering), discuss latency/cost tradeoffs, and identify next steps for a pilot. High-level security posture checked (SOC2, SSO, KMS) and initial perf benchmarking plan agreed.
+
+00:00 Maya Ortiz: uh okay everyone we can maybe start, um thanks for joining — i'm maya ortiz from redwood inference, i'm the account lead on partnerships.
+00:10 Rohan Iyer: hey maya, thanks. sam, priya on this end. short agenda is fine for us — we want to understand how you see integration with a channel partner like celestiagrid.
+00:22 Maya Ortiz: perfect. daniel will jump in on the technical bits — daniel do you want to give a 5 min run through of the runtime and where partners plug in?
+00:30 Daniel Wu: yeah, sure. hi everyone, daniel wu, solutions eng. so at a high level redwood's serving runtime is a gpu-optimized engine, supports streaming, function-calls, embeddings, rerank — common stuff. for partners we have three patterns: 1) hosted api where celestiagrid could resell or route, 2) dedicated pools for reserved capacity, and 3) private deployment — vpc or on-prem. each has slightly different integration surface.
+00:53 Priya Menon: when you say private deployment, is that private control plane or do you ship a package we host?
+01:01 Daniel Wu: good q. both options exist — private control plane where you manage the network and keys, or an on-prem package that we provide images for. most partners start with private vpc peering or private link for low latency.
+01:15 Sam Carter: and from partnership layer — interested in how billing and quotas are visible. we usually need tenant separation and partner-level reporting.
+01:24 Maya Ortiz: we expose usage and token-level cost breakdowns in the console; for reseller partners we can provide partner-aggregated reporting and per-tenant dashboards. the marketplace/reseller contract can include pass-through billing or invoiced resale.
+01:36 Rohan Iyer: great. i'm curious about the perf characteristics — what latency can we expect for a 2k token chat request? and how will that change with batching?
+01:45 Daniel Wu: so latency depends on model family, sequence length, and quantization. rough ballpark: a 2k token generation on a modern 80GB-class GPU with optimized kernels can be mid-100s ms to low seconds depending on decode strategy. continuous batching reduces cost but increases tail latency; we have autoscaling and burst capacity to keep p95s within targets.
+02:08 Priya Menon: can we pin models? sometimes our customers need model versioning and pinned rollouts for compliance.
+02:15 Daniel Wu: yes, pinning by model version is first-class. rollouts support canary and A/B, and there's automatic fallback to lighter quantized variants if a node is saturated. note: fallback changes output distribution so we flag regressions in the optimize/quality monitor.
+02:34 Maya Ortiz: quick note on security — redwood supports SSO/SAML, RBAC, SOC2 attestation, and KMS integration. audit logs are retained per enterprise plan; we can discuss retention windows in the MOU.
+02:45 Sam Carter: that's helpful — compliance is a big check for our customers in regulated finance.
+02:51 Rohan Iyer: network topology question: are you open to direct vpc peering or would you prefer private link? our infra team prefers peering for lower jitter.
+03:01 Daniel Wu: both supported; peering is lower latency but needs routing setup. private link simplifies support and cross-account routing. either way we do NAT/external egress minimization and endpoint whitelisting.
+03:16 Priya Menon: any gotchas on MTU or tcp tune for kv cache traffic? we run heavy kv cache reads for long-context chat.
+03:25 Daniel Wu: KV cache is internal to the runtime; if you host the runtime on your infra the KV traffic is local. for hosted/reseller we use a prefix cache and edge-layer to minimize cross-region fetches — but yes, we should validate MTU and path MTU because mishandled fragmentation can spike latency.
+03:42 Maya Ortiz: i'd like to pause and make sure we surface success criteria — sam/rohan what would a successful pilot look like in 8 weeks?
+03:52 Sam Carter: success for us: validated latency under 500 ms p95 on a 512-token gen workload for our east-coast customers, cost per 1k tokens estimate within 20% of your hosted benchmark, and a documented network/topology pattern.
+04:08 Rohan Iyer: and we need an SLO doc we can show to enterprise prospects — e.g., targeted p95 and failover behavior across regions.
+04:15 Maya Ortiz: ok noted. daniel — is the bench template you mentioned earlier something we can run on celestiagrid infra?
+04:23 Daniel Wu: yes, we have quick-bench-template.xlsx — it lists model configs, sequence lengths, tokenization settings. we can run it with a small client harness we share. proposed approach: run baseline on 1 GPU instance, then on a 4-node cluster to observe scaling and batching impact.
+04:41 Priya Menon: timeline wise we can provision a pilot cluster in one of our edge regions in ~2 weeks if we get the config.
+04:49 Maya Ortiz: perfect — we will send config by Tue.
+05:00 [timestamp skipped ahead]
+08:12 Rohan Iyer: question on data residency — some customers require EU-only residency plus separate audit logs. how do you solve for region isolation?
+08:22 Daniel Wu: region isolation is supported: hosted can provide region-restricted endpoints, dedicated pools can be provisioned in eu-west, and private on-prem removes cloud residency concerns. audit log retention can be set per tenant in dedicated/private plans.
+08:40 Priya Menon: do you have HSM integration for keys?
+08:44 Maya Ortiz: yes — KMS/HSM integrations are available for enterprise and private deployments. we can surface a list of supported KMS providers.
+08:53 Sam Carter: any existing partners doing similar reseller integrations so we can see a reference flow?
+09:00 Maya Ortiz: we have a few — i'll share anonymized diagrams and a short partner case study.
+09:05 Priya Menon: are there known model compatibility quirks with certain GPUs (like older A100 variants or patched drivers)? we've seen issues with kernel mismatches.
+09:14 Daniel Wu: yeah, that's real — driver/kernel combo matters. our runtime auto-selects kernels but older drivers cause fallbacks increasing latency. in pilot we'll run a quick driver/stack check.
+09:28 Rohan Iyer: on the topic of pricing — can you give a sense of reserved vs burst pricing? our customers vary.
+09:35 Maya Ortiz: reserved capacity is contracted monthly with committed throughput, giving a discount vs hosted on-demand. burst capacity allows short-term usage above commit at a premium. for partners we can structure revenue share and pass-through or resell arrangements.
+09:49 Rohan Iyer: revenue share details later but good to know pricing flex.
+09:53 [15:00 marker - mid call technical dive]
+15:02 Daniel Wu: diving deeper: batching strategy — we deploy continuous batching with dynamic batching windows tuned to maintain latency SLOs. for throughput-heavy workloads we recommend batching size tuned to traffic patterns; for chat low-latency workloads we keep small micro-batches and use prefixed KV caching.
+15:26 Priya Menon: do you support prefix caching where we pre-warm user sessions?
+15:30 Daniel Wu: yes we support prefix and kv caching; we can pre-warm popular prefixes. the caching semantics are configurable per-tenant.
+15:40 Rohan Iyer: any automated fallback policies if a model variant becomes unhealthy? we need graceful degradation not complete outage.
+15:46 Daniel Wu: built-in fallbacks to quantized or smaller family models, plus region fallback. the console flags quality regressions and can trigger rollback.
+16:00 Priya Menon: regarding logs — what do you send back in audit logs? we need obfuscated PII; logs should show request metadata not raw content.
+16:09 Maya Ortiz: default logs include request id, model, tokens, latency, error codes. content redaction is supported and we can integrate protocols to scrub or not store payloads depending on plan.
+16:22 Sam Carter: ok that answers our compliance stack.
+16:28 [crosstalk briefly]
+20:30 Maya Ortiz: let's talk pilot scope. recommended minimal pilot: one east-coast region cluster (4 GPUs), run bench for 512 and 2k token profiles, latency and cost capture, and a simple end-to-end flow with your customer identity layer. does that sound realistic?
+20:44 Priya Menon: yes, sounds good. we will need a runbook for ops and escalation.
+20:50 Daniel Wu: we'll include runbook and monitoring hooks; we can send datadog/grafana dashboards or provide metrics via our console's tracing hooks.
+21:01 Rohan Iyer: how invasive is the integration? do we need to modify our networking heavily?
+21:07 Daniel Wu: minimal for private link; heavier for peering (routing changes). we avoid opening public NAT paths by setting up dedicated endpoints.
+21:17 Sam Carter: for a channel agreement — what's typically the timeline from pilot to go-live? 3 months?
+21:24 Maya Ortiz: typical is 8-12 weeks from pilot start to initial go-live, depending on integrations, compliance checks, and contract. some go faster.
+21:33 Priya Menon: any suggestion for benchmarks we should run to prove capacity planning?
+21:38 Daniel Wu: run steady-state throughput tests at 60-80% target utilization, ramp tests, and sustained long-context sessions to exercise KV evaporation. quick-bench-template includes these scenarios.
+21:52 Rohan Iyer: can you run a small smoke test against our infra next week? we can share a bastion and credentials with limited scope.
+21:59 Daniel Wu: yes — we'll need an infra contact and an isolation VPC; priya?
+22:05 Priya Menon: i'll coordinate.
+22:10 Maya Ortiz: i'll put that in the next steps.
+22:20 [longer silence as notes are taken]
+30:05 Sam Carter: question on risk: what happens if a model update causes quality regressions for our customers mid-rollout — what's your rollback process?
+30:16 Daniel Wu: we have auto rollback triggers tied to quality monitors; canary percent and automated rollback if eval metrics drop. we also keep previous versions deployable so rollback is typically minutes.
+30:30 Priya Menon: and change logging for audits?
+30:33 Maya Ortiz: every rollout is recorded with metadata and release notes, and enterprise customers can require approval gates.
+30:40 Rohan Iyer: any pre-existing OCI or helm charts for on-prem?
+30:45 Daniel Wu: yes, we provide helm charts and k8s manifests for private installs. we'll share the repo access in the follow-up.
+30:55 Priya Menon: driver matrix please.
+31:00 Daniel Wu: yep will include driver/kernel matrix in the tech pack.
+35:12 Maya Ortiz: (recap) ok action items: daniel builds perf test plan, maya sends MOU and partner docs, priya shares infra diagram. timeline target — kick pilot first week of june, run 2-4 week bench, then sync.
+35:34 Rohan Iyer: sounds good. any red flags from you folks at redwood?
+35:40 Daniel Wu: the main thing is ensuring the pilot gpu shapes match our performance assumptions and the driver stack is compatible. once that's validated all else is integration work.
+35:52 Sam Carter: we'll prioritize verifying driver/stack and give you a point of contact.
+36:00 Maya Ortiz: for the partner commercial model, we propose a simple revenue share for the first 6 months and then a committed reserved capacity conversation — i'll include options in the MOU.
+36:12 Rohan Iyer: ok that's fine.
+36:16 Priya Menon: one final tech nuance — we have a multi-tenant overlay in celestiagrid that enforces network isolation. will that complicate key exchange?
+36:26 Daniel Wu: we can integrate KMS per tenant or use a partner key-wrap flow; we'll detail options.
+36:35 Maya Ortiz: great. any other questions?
+36:40 [pause]
+40:02 Sam Carter: none from me. looking forward to the technical deep dive.
+40:10 Maya Ortiz: next steps again: send MOU + tech pack (Maya), perf plan (Daniel), infra diag (Priya). schedule deep dive for week of Jun 7.
+40:25 Rohan Iyer: we'll aim to have infra ready by Jun 2.
+40:31 Priya Menon: agreed.
+40:35 Maya Ortiz: okay i'll follow up with calendar invite and share the bench template and runbook links.
+40:42 Daniel Wu: i'll prep the perf harness and a checklist for driver validations.
+40:50 Sam Carter: thanks everyone.
+40:54 Maya Ortiz: thanks — we'll close out here.
+
+Action items (as captured in chat): Daniel Wu: perf test plan; Maya Ortiz: partner MOU + pricing; Priya Menon: infra diagram; Maya to send follow-up invite and links.
+
+End of transcript.

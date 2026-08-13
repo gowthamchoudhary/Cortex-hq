@@ -1,0 +1,128 @@
+Anchored data geofencing — contractual terms & operational Q&A
+
+From: Carlos Vega <c.vega@sigmahealth.com>
+To: Ben Carter <ben@redwood.inference.com>
+Cc: procurement@sigmahealth.com
+Date: Thu, 29 Apr 2027 09:12:00 -0700
+Subject: Residency guarantee + geofencing terms — initial questions
+
+Ben — thanks for the demo last week. Our security team reviewed Redwood's private/VPC options and we need to lock a few things down before procurement moves forward. High-level asks: 
+
+- Can Redwood commit to a contractual geofence for customer-controlled storage (no cross-region replication outside specified region)?
+- How are backups/snapshots handled — are they region-bound or could they be replicated to a different region for DR?
+- What is the deletion guarantee for tenant data (including logs & snapshots) on contract termination? We need both operational description and contract language.
+
+Can you and your security lead walk us through the exact operational controls and the evidence we can expect in the contract (SLA / schedule for wipe / attestation)? We have a draft MSA that references "data locality" but it's vague.
+
+Best,
+Carlos Vega
+Director, Cloud Security
+Sigma Health
+
+
+From: Ben Carter <ben@redwood.inference.com>
+To: Carlos Vega <c.vega@sigmahealth.com>
+Cc: laura_bennett <laura@redwood.inference.com>
+Date: Thu, 29 Apr 2027 10:03:00 -07:00
+Subject: Re: Residency guarantee + geofencing terms — initial questions
+
+Carlos — thanks for the clear list. Happy to run through this. Brief answers up front to unblock procurement: 
+
+- Geofencing: Yes, for Private/VPC deployments we offer region-locked tenant storage that prevents automated cross-region replication. Manual cross-region replication is a customer-configured action and must be explicitly enabled by your infra admins.
+- Backups/snapshots: Snapshots are by default stored in the tenant's chosen region. DR options that replicate snapshots to a secondary region are available as an opt-in add-on and will be called out in the SOW.
+- Deletion: We support a tenant-led wipe that removes active data, KV caches, and service-level artifacts. Snapshots and backups follow a controlled tombstone lifecycle: once the wipe flow is triggered we mark snapshots for deletion and execute the physical purge within the contractual window (we can set 30/60/90 days per SOW). We provide a signed attestation after purge.
+
+I'll loop in Laura (solutions) and Jonas (security) to provide operational detail and sample contract language. Attaching a preliminary term sheet that aligns with what I described.
+
+Attachment: redwood-anchored-residency-term-sheet-v1.pdf (PDF)
+
+Thanks — can we set a 30–45 minute call tomorrow to walk through the operational steps and packet of artifacts?
+
+—Ben
+Ben Carter
+Account Executive, Redwood Inference
+ben@redwood.inference.com
+
+From: Laura Bennett <laura@redwood.inference.com>
+To: Carlos Vega <c.vega@sigmahealth.com>, Ben Carter <ben@redwood.inference.com>
+Cc: laura@redwood.inference.com
+Date: Thu, 29 Apr 2027 14:20:00 -07:00
+Subject: Re: Residency guarantee + geofencing terms — initial questions
+
+Carlos — quick operational summary from a solutions standpoint and proposed next steps: 
+
+1) Region lock controls (what we configure):
+   - Control plane enforces storage affinity by tenant ID. Storage volumes and object stores are created only in the selected region unless an admin enables replication.
+   - Network egress is restricted by VPC routing and security groups (no managed-service egress to alternative regions).
+
+2) Backups & snapshots:
+   - Automated snapshots are stored in-region.
+   - Optional cross-region replication is an explicit feature (documented and billable).
+
+3) Deletion lifecycle (operational flow):
+   - Step 1: Customer initiates tenant offboarding request (API + signed confirmation).
+   - Step 2: System executes a logical wipe and revokes access keys; we capture snapshot metadata and mark snapshots for deletion.
+   - Step 3: Within the agreed purge window we perform physical deletion of blobs and overwrite metadata tombstones.
+   - Step 4: Redwood issues a signed purge attestation with timestamps and dataset identifiers.
+
+4) Evidence we can provide for the contract:
+   - Purge attestation PDF, snapshot IDs + hashes (for non-sensitive metadata), and an audit log extract showing deletion operations.
+
+Suggested next steps:
+- Jonas to confirm encryption/key handling and attestations.
+- We prep three SOW options: 30-day purge, 60-day purge, 90-day purge with corresponding pricing.
+
+I can join the call tomorrow. Ben — please share preferred times.
+
+—Laura
+Laura Bennett
+Director, Solutions Engineering, Redwood Inference
+laura@redwood.inference.com
+
+From: Jonas Weber <jonas@redwood.inference.com>
+To: Carlos Vega <c.vega@sigmahealth.com>, laura_bennett <laura@redwood.inference.com>, Ben Carter <ben@redwood.inference.com>
+Date: Fri, 30 Apr 2027 08:31:00 -07:00
+Subject: Re: Residency guarantee + geofencing terms — operational & cryptographic details
+
+Carlos — adding the security specifics you asked for. Short answers first, followed by proof items we can include in the MSA/SOW.
+
+- Key management: Customer-managed CMKs via the customer's KMS are supported for Private/VPC deployments. If you use your KMS/HSM, snapshots and stored objects are encrypted with keys that you control; Redwood never retains plaintext key material.
+- Backups/snapshots replication: If cross-region replication is enabled, the replication path is logged, and we require explicit change control and approval from the customer's ops owner. By default replication is disabled.
+- Logical vs physical deletion: Logical deletion marks objects and snapshots as tombstoned; physical deletion runs as a purging job that overwrites object storage blocks and removes metadata. For object stores that do not natively support immediate block overwrite, we provide an attestable purge sequence and confirmation of zeroed metadata entries.
+- Evidence items we can provide for contract:
+   1) Signed purge attestation (PDF) with list of dataset IDs and purge timestamps.
+   2) Audit log extract (immutable stream) demonstrating the purge steps.
+   3) Snapshot manifest (IDs + checksums) showing lifecycle state transitions.
+   4) KMS key IDs used for encryption and a confirmation that keys were disabled/rotated per customer request.
+
+Operational caveats to call out in SOW: if customer requests immediate physical byte-level overwrite in air-gapped on-prem configs we may require a brief maintenance window; cloud-provider object stores have eventual consistency semantics that affect instantaneous proof. We'll include precise timing commitments in the SOW.
+
+Happy to provide sample attestation language and a redline for your MSA.
+
+—Jonas Weber
+Head of Security & Compliance, Redwood Inference
+jonas@redwood.inference.com
+
+From: Ben Carter <ben@redwood.inference.com>
+To: Carlos Vega <c.vega@sigmahealth.com>, procurement@sigmahealth.com
+Cc: laura_bennett <laura@redwood.inference.com>, jonas_weber <jonas@redwood.inference.com>
+Date: Mon, 03 May 2027 15:42:00 -07:00
+Subject: Re: Residency guarantee + geofencing terms — proposed SOW options & next steps
+
+Carlos / Procurement team — thanks again. Based on the call and the security notes here we've attached the SOW options and a completed copy of Sigma's questionnaire (filled answers) for your review. Highlights: 
+
+- Three purge windows included: 30 / 60 / 90 days. Each option includes a signed purge attestation and audit log extract on completion.
+- Default: tenant storage is region-locked and snapshots are in-region; any cross-region replication is an opt-in feature requiring admin approval and will be listed as an add-on.
+- KMS: we support customer-managed keys; SOW includes key handling & rotation checklist and the clause that Redwood never exports customer-managed key material.
+- Evidence: sample attestation wording and the DocuSign link to incorporate the residency addendum into the MSA.
+
+Attachment: sigma-questionnaire-answers.xlsx (XLSX)
+DocuSign: https://docusign.com/tx/AB12345
+Deal URL: https://app.redwood.inference.com/deals/DEAL-2027-0193
+
+Please review and let me know which purge window you prefer. Once we have that we can push a revised MSA + SOW for signature.
+
+Best — Ben
+Ben Carter
+Account Executive, Redwood Inference
+ben@redwood.inference.com

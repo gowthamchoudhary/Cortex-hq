@@ -1,0 +1,148 @@
+Intermittent timeouts from rw-sprint4b — mitigation, credit, and RCA timeline
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Elena Ruiz <elena@skylineanalytics.com>
+Cc: Skyline Analytics Support <support@skylineanalytics.com>
+Date: Tue, 10 Jun 2025 09:12:00 -0700
+Subject: Intermittent timeouts from rw-sprint4b — mitigation, credit, and RCA timeline
+
+Elena —
+
+Thanks for flagging this. We observed an elevated rate of 504/timeout responses for requests routed to the rw-sprint4b model beginning ~2025-06-10 07:45 UTC. Impact: increased per-request latencies and a spike in 5xx for a subset of requests that included long prefix contexts and streaming callbacks.
+
+What we’ve done so far:
+- Scaled the dedicated pool serving your account and enabled an emergency autoscale policy to absorb queued requests.
+- Applied a temporary routing rule to prefer rw-sprint4b-v2 (quantized variant with lower batch memory) for your production route while we investigate.
+- Implemented a short-term batching cap (reduced max batch size from 64 -> 32) to limit worker stalls.
+
+Observed effect: error rate fell from ~4.2% to ~0.8% across your route in the last 30 minutes; tail latency improved but we are still monitoring for recurrence.
+
+Next steps and timeline:
+- Ops will continue monitoring for 6 hours; we expect full stability or a rollback to pre-incident behavior within 24 hours.
+- We’ll produce an initial RCA and timeline within 48 hours and a final postmortem within 5 business days.
+- For immediate billing concerns, we’re prepared to apply a usage credit for the affected window; I’ll propose a credit amount after internal review and confirm in the next update.
+
+Attachments: incident-timeline.csv (short timeline), rw-sprint4b-logs.tar.gz (trimmed logs).
+
+I’m sorry for the disruption — I’ll send an update in two hours or sooner if anything changes.
+
+Regards,
+Jordan Blake
+Enterprise Success Manager, Redwood Inference
+jordan.blake@redwood.com | +1 415-555-0134
+
+
+From: Elena Ruiz <elena@skylineanalytics.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Date: Tue, 10 Jun 2025 09:34:12 -0700
+Subject: Re: Intermittent timeouts from rw-sprint4b — mitigation, credit, and RCA timeline
+
+Jordan —
+
+Thanks for the quick note and the mitigation steps. This hit a production batch job for us processing long-context documents and we saw ~6% failures in that window (roughly 22 mins). We need a clear RCA and what you will do to prevent recurrence — this pattern is affecting our SLAs with end customers.
+
+Questions:
+- Can you confirm whether data from failed requests touched persistent logs outside the temporary cache? Any exposure we should be aware of?
+- What credit will Redwood apply for the affected window? Our AR team needs a single-line statement we can attach to the invoice.
+
+We appreciate the immediate actions but need assurance this won’t repeat.
+
+Best,
+Elena
+Head of Platform Reliability, Skyline Analytics
+
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 10 Jun 2025 10:05:00 -0700
+Subject: Fwd: Intermittent timeouts from rw-sprint4b — mitigation, credit, and RCA timeline
+
+Folks — looping you in. Elena is asking for two things: (1) confirmation on whether any user payloads from failed requests were persisted beyond ephemeral logs, (2) a credit statement for accounting. Impact window per their telemetry: ~22 minutes (07:43–08:05 UTC), client-visible failures ~6% for that window.
+
+Operational notes: we already scaled and created a routing override to v2. Ben/Karthik — can ops confirm root cause hypothesis and propose a credit% (suggested range 10–20%)? Marissa — can you own the RCA timeline and delivery (48h initial, 5d final)?
+
+Thanks — Jordan
+
+On Tue, Jun 10, 2025 at 09:12 AM Jordan Blake <jordan.blake@redwood.com> wrote:
+> Elena —
+>
+> [original message trimmed for thread]
+From: Ben Carter <ben.carter@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 10 Jun 2025 10:40:22 -0700
+Subject: Re: Fwd: Intermittent timeouts from rw-sprint4b — mitigation, credit, and RCA timeline
+
+Jordan / team —
+
+Preliminary ops triage: we’re seeing a reproducible backlog on a subset of worker pods serving rw-sprint4b when receiving requests with long prefix lengths + streaming enabled. Symptoms: KV cache contention + a kernel path regression in the quantized glue layer that causes a worker to block during KV lookups under memory pressure. That leads to request queuing and downstream timeouts (504).
+
+Immediate corrective actions taken (already active):
+- Emergency autoscale + temporary routing to v2 (Jordan did this).
+- Batching cap to reduce memory contention.
+- Rolling restart of the affected node group to clear stuck semaphores.
+
+Data exposure: failed requests were only present in ephemeral worker logs and the in-memory KV cache; no persistent store was written for the failed requests. We’ve confirmed no customer payloads were saved to long-term storage.
+
+Credit recommendation: apply a 15% usage credit for the affected 22m window to reflect degraded success rate and operational impact. I think that’s reasonable and defensible.
+
+We’ll continue with a targeted patch to the quantized kernel path and schedule a canary rollout; ETA for code fix + canary: 48–72 hours depending on test outcomes.
+
+—Ben
+Senior Site Reliability Engineer, Redwood Inference
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Wed, 11 Jun 2025 14:20:00 -0700
+Subject: rw-sprint4b RCA summary (initial)
+
+Team —
+
+Initial RCA summary (attached: rw-sprint4b-rca-summary.pdf). High-level: a recent optimizer change intended to reduce memory for quantized forward passes introduced a race in the scheduler when combined with long-context KV lookups and streaming mode. Under load this produced semaphore contention that stalled a subset of workers. Key points:
+
+Timeline:
+- 07:38 UTC: first error spike detected internally by model-health alerts.
+- 07:43–08:05 UTC: customer-visible failures for Skyline Analytics (6% of requests for that period).
+- 07:50 UTC: emergency scale and routing override applied.
+- 08:10 UTC: rolling restart completed; error rate returned to baseline by 08:25 UTC.
+
+Root cause: race condition in quantized kernel scheduling path when interacting with KV cache lookups for long prefix requests.
+
+Immediate fixes implemented:
+- Reverted the optimizer change in the quantized path for the affected runtime build.
+- Added a batching guard for streaming routes to prevent oversized batches.
+- Improved alerting to detect semaphore stalls earlier.
+
+Preventive actions (next 30 days):
+- Full regression suite covering long-context + streaming combos.
+- Canary rollout of the patched quantized kernel with increased telemetry.
+- Update runbook and add a quick mitigation script to switch routing to compatible variants.
+
+I’ll publish the 48-hour initial post with more logs and timeline and a final postmortem in 5 business days.
+
+Attachments: rw-sprint4b-rca-summary.pdf
+
+-Marissa
+Director, Reliability Engineering, Redwood Inference
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Elena Ruiz <elena@skylineanalytics.com>
+Cc: Skyline Analytics Support <support@skylineanalytics.com>, Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Fri, 13 Jun 2025 08:00:00 -0700
+Subject: Resolved: rw-sprint4b timeouts — credit applied and RCA link
+
+Elena —
+
+Following up with a resolution update and next steps. Root cause: transient semaphore contention in a quantized kernel path triggered by long-prefix streaming requests (full RCA attached previously). Remediation steps (already completed): rollback of the optimizer change, batching guard applied, rolling restart of affected nodes, and monitoring improvements.
+
+Credit: we’ve applied a 15% usage credit for the 22-minute affected window (2025-06-10 07:43 UTC — 2025-06-10 08:05 UTC). The credit will appear on your June invoice as a line item: “Service credit — rw-sprint4b incident (2025-06-10) — 15% for affected usage”. If you need a formal accounting statement for AR, I can have our finance team issue one.
+
+RCA & artifacts: https://drive.google.com/file/d/1RCA-summary-placeholder and internal incident: https://redwood.atlassian.net/browse/INC-4452.
+
+We understand the impact to your SLAs and want to offer a 1:1 runbook review with our SREs to walk through the preventative changes and help tune your routing policies. If that’s useful, tell me a couple times that work next week and I’ll schedule.
+
+Again, apologies for the disruption and thanks for your patience.
+
+Best,
+Jordan Blake
+Enterprise Success Manager, Redwood Inference
+jordan.blake@redwood.com | +1 415-555-0134

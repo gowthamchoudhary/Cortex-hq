@@ -1,0 +1,95 @@
+POC weekly: capacity readiness & burst runbook
+
+Meeting header:
+Date: 2026-02-18
+Start: 15:00 PST
+Duration: ~42 minutes
+Attendees: Maya Chen, Carlos Ruiz, Priya Nair (Redwood); Tom Alvarez, Nina Park, Harold Bennett, Aisha Khan, J. Lee (LumenPay)
+
+Auto-summary (auto-generated, optional):
+- Weekly POC sync focused on Dedicated sizing, autoscale policy tuning, and burst capacity rehearsal.
+- Agreed to run a staged 30-minute burst test on staging and iterate autoscale thresholds.
+- Redwood will provide sizing/cost delta doc and a concrete runbook for priming KV cache and graceful degradation.
+
+Topics: Dedicated sizing, autoscale thresholds, burst pool, KV/prefix cache priming, fallback models, SLOs, security checkpoints
+
+Transcript body:
+[00:00] Maya Chen: Hey everyone, thanks for joining. we'll do status and then a focused section on burst planning and autoscale knobs, sound good?
+[00:12] Tom Alvarez: Yup, that'll be great, want to make sure we're comfortable for Friday's spike rehearsal.
+[00:18] Carlos Ruiz: Quick note, I tweaked the autoscale policy based on the telemetry last week, increased the ramp window from 60 to 90 seconds to reduce oscillation.
+[00:26] Nina Park: We saw the jitter but also a small tail at p99, is that related?
+[00:30] Carlos Ruiz: Possibly, the longer ramp helps steady throughput but can add a little tail latency under sudden surges — it's a tradeoff.
+[00:38] Harold Bennett: We're okay with a slightly higher p99 for the demo, but for production we want p95 under 300ms if possible.
+[00:45] Maya Chen: Right, so quick recap of current POC numbers: staging on Dedicated pool, model: opt-6B-q4 (note: shorthand), average throughput ~1.8k tokens/sec across the pool, median latency ~120ms, p95 ~260ms, p99 ~520ms during the 2nd-week surge test.
+[01:05] Aisha Khan: That p99 number is concerning if we hit 3x traffic. What's the plan to handle 3x?
+[01:12] Carlos Ruiz: We have two levers: 1) pre-warm burst pool (reserve extra nodes) and 2) aggressive autoscale with instant burst capacity. The burst pool is basically a hot standby that can accept traffic without cold start.
+[01:22] Tom Alvarez: Can you explain the pre-warm steps? Last time it took longer to warm the KV cache and we saw a lot of regen.
+[01:30] Priya Nair: Yeah so priming the KV/prefix cache is key — if you replay representative traffic first we can populate KV cache and reduce regen cost. We'll include curl examples in the runbook.
+[01:40] J. Lee: From security, are there any extra considerations for a burst pool? e.g., network isolation, KMS keys, audit logs?
+[01:47] Maya Chen: Great point — for Dedicated we can provision burst instances within your VPC and they inherit the same KMS/HSM keys and audit streaming. We'll include the SOC 2 / audit log mapping in the doc.
+[01:57] Nina Park: Awesome. Also can you confirm the instance types? Are we on H100 or A100? That affects warmup time.
+[02:04] Carlos Ruiz: Currently the Dedicated pilot is using A100-80GB equivalents. If you want H100 we can run a variance estimate but that will change cost numbers.
+[02:12] Harold Bennett: Cost is important — we're trying to model the delta between a larger steady pool vs. a smaller steady pool + burst.
+[02:18] Maya Chen: We'll send a spreadsheet with modeled scenarios. Example: steady 6 GPUs vs. steady 4 + burst 3 for peaks. The steady+burst tends to be cheaper by ~18% for your traffic shape, but that assumes good cache hit rates.
+[02:34] Tom Alvarez: What's the cache hit rate threshold to see that saving?
+[02:38] Priya Nair: Generally >60% prefix/KV cache hit gives you the cost leverage because fewer tokens are recomputed. If hit rate drops below ~40% then steady pool is preferable.
+[02:47] Aisha Khan: How do we measure that in our telemetry?
+[02:50] Carlos Ruiz: We'll send the exact metrics: kv_cache_hit_ratio, average_batch_size, token_compute_per_sec, p95_latency_by_route — those are in the Console traces.
+[02:58] Maya Chen: For the runbook itself, propose three phases: 1) staging burst rehearsal (30 min), 2) canary rollout to 10% traffic with live metrics and auto-fallback to a smaller model if latencies creep, 3) full switch.
+[03:12] Tom Alvarez: The fallback to smaller model — you mean model routing to a quantized variant?
+[03:16] Carlos Ruiz: Exactly, e.g., route to opt-6B-8bit or a distilled variant if latency > threshold. That reduces token cost and latency.
+[03:24] Nina Park: Are the model variants pre-installed on the burst pool or do they cold start?
+[03:28] Priya Nair: We recommend pre-pulling the variants used by the fallback. The runbook will include a pre-pull phase to avoid cold-starts.
+[03:35] Harold Bennett: Ok. For the rehearsal, what are the triggers for manual intervention vs automated rollback?
+[03:40] Maya Chen: Triggers we suggest: sustained p95 > 400ms for 3 minutes, error rate above 1%, or queue depth increasing > 30% for 2 minutes. Any of those should trigger automatic rollback or a model fallback.
+[03:52] Aisha Khan: Can we get the exact thresholds editable in the console?
+[03:55] Carlos Ruiz: Yes, those are configurable per-route in the Redwood Console; we'll share screenshots.
+[04:00] Tom Alvarez: About priming — you mentioned a tool to replay traffic. We'll need read-only access to Redwood's staging endpoint and a secure S3 path to drop logs and replay script?
+[04:12] Maya Chen: Correct, we'll set up a short-lived API key scoped to staging endpoints. Tom, please send the S3 path and we will confirm access.
+[04:18] Tom Alvarez: Will do.
+[04:20] [pause - a few seconds of typing/crosstalk]
+[04:28] Maya Chen: Quick run through of autoscale policy parameters: min_replicas, max_replicas, scale_up_threshold (requests/sec per replica), scale_down_cooldown, ramp_window, burst_pool_size, and burst_grace_period.
+[04:40] Nina Park: What did you set scale_up_threshold to for last test?
+[04:43] Carlos Ruiz: We set it to 400 reqs/sec per replica, max_replicas 12, and burst_pool_size 3. That gave us the >1.5k tokens/sec sustained.
+[04:52] Harold Bennett: If we expect 3x traffic, should we set max_replicas higher?
+[04:56] Priya Nair: Depends on budget — the runbook includes two presets: conservative and aggressive. Conservative keeps max_replicas lower but requires larger burst_pool; aggressive raises max_replicas and shrinks burst reliance.
+[05:08] Maya Chen: For Friday's rehearsal we recommend the conservative preset first so we can test priming and warmup. Then next week try aggressive.
+[05:15] Aisha Khan: What's the expected warmup time for the KV cache during priming?
+[05:19] Carlos Ruiz: For your traffic we estimate roughly 8-12 minutes to reach steady-state cache hit above 60% if the replay covers top 80% of routes.
+[05:27] Tom Alvarez: Good to know. We'll schedule the replay to start 20 minutes before the rehearsal window.
+[05:32] Maya Chen: Perfect. Next I want to call out fallback policies — when we hit the threshold, do we prefer model downgrade or region fallback?
+[05:40] J. Lee: Region fallback raises compliance questions for us, prefer model fallback.
+[05:44] Harold Bennett: Agreed. Model fallback first, region fallback only if absolutely necessary.
+[05:48] Priya Nair: We'll add a route-based priority chain in the runbook: 1) throttling (graceful degradation), 2) model fallback, 3) spill to alternative region with explicit approvals.
+[05:58] Maya Chen: On instrumentation, please make sure you have traces for per-token compute time and batch size breakdown per replica so we can correlate latency spikes.
+[06:06] Nina Park: We have Datadog ingest for most metrics — will Redwood export to our DataDog?
+[06:10] Carlos Ruiz: Yes, we can forward metrics to your Datadog API key; we previously set that up in the sandbox. We'll reconfirm the metrics list.
+[06:17] Aisha Khan: Anything about compliance we should be aware of for the burst pool?
+[06:21] Maya Chen: No different from Dedicated; burst nodes are provisioned in your VPC and inherit same KMS and audit log pipelines. We'll include required operation checklist for SOC 2 and data residency.
+[06:30] Tom Alvarez: On costs again — can you give an example run number of cost for a 30-minute burst with 3 A100s?
+[06:36] Carlos Ruiz: Rough back-of-envelope: a 30-min burst with 3 A100s is about X dollars — exact will be in the spreadsheet because it depends on reserved vs on-demand pricing and your commitment level.
+[06:45] Harold Bennett: Okay, we'll review that.
+[06:47] [brief silence, keyboard sounds]
+[06:52] Maya Chen: Let's capture concrete next steps — do we have agreement to run the staging rehearsal Friday at 11:00 PT?
+[06:58] Tom Alvarez: Yes, Friday 11:00 PT works for us.
+[07:02] Nina Park: I'll be on call for the replay and SRE checks.
+[07:05] Maya Chen: Great. I'll send calendar invites and the runbook link. Carlos will attach the priming scripts.
+[07:12] Carlos Ruiz: I'll also include a simple script to generate traffic with ramp profiles and a CSV of the top 200 prefixes to prime the cache.
+[07:20] Maya Chen: Any other blockers?
+[07:22] Aisha Khan: Not from product side. Just need cost numbers and runbook.
+[07:25] J. Lee: Security asks for the ephemeral API key and an access policy doc.
+[07:29] Maya Chen: We'll provide the key with scope limited to the staging cluster and expiration 48 hours.
+[07:34] Tom Alvarez: I'll share the S3 path after this call.
+[07:37] Maya Chen: Perfect. Ok we'll recap at the end.
+[07:40] [wrap-up]
+[07:42] Maya Chen: Recap: Redwood to share Dedicated sizing spreadsheet and cost delta, deliver burst runbook + priming scripts, provision ephemeral staging key, run 30-minute burst rehearsal Friday 11:00 PT. LumenPay to provide S3 replay path and confirm attendance.
+[07:58] Tom Alvarez: Sounds good.
+[08:00] Maya Chen: Thanks everyone, we'll follow up in email with links and next steps.
+
+End of transcript.
+Run 30-minute burst test on staging with 2x concurrent clients (LumenPay to coordinate)
+Redwood to send updated Dedicated sizing spreadsheet and cost delta by 2026-02-20
+Schedule canary rollout window and rollback playbook for 2026-02-24
+Maya: share burst simulation spreadsheet and knobbed autoscale policy examples - due 2026-02-20
+Carlos: prepare step-by-step burst runbook + curl examples for KV cache priming - due 2026-02-21
+Tom: validate traffic replay tooling access and provide S3 path for logs - due 2026-02-19

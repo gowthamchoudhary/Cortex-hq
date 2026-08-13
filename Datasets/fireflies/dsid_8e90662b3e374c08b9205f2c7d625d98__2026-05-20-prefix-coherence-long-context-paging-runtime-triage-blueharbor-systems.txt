@@ -1,0 +1,101 @@
+Prefix Coherence & Long-Context Paging runtime triage - BlueHarbor Systems
+
+Header:
+Date: 2026-05-20 16:00 UTC
+Duration: ~62 minutes
+Attendees: Maya (AE), Sanjay (SE), Lina (SE), Jordan (Head of ML), Priya (Infra), Tomás (SRE)
+
+Auto-summary (auto):
+- Deep dive into unexpected eviction/paging behavior when serving long user sessions; focus on prefix reuse across customers and how prefetch heuristics interact with KV cache TTL and quantized model memory footprints.
+- Agreed next steps: share prefetch heuristics, run benchmark, provide security docs for VPC/on-prem staging.
+
+Topics:
+- KV cache eviction patterns
+- Paging spillover under long-context workloads
+- Prefix reuse vs. prefix hotspotting
+- Batching interplay and quantization memory changes
+- VPC/on-prem deployment constraints (disk/IO, NVMe spillover)
+
+Transcript body:
+[00:00] Maya (AE): All right everyone, thanks for joining, we wanted to get into the weeds on the prefix coherence issue you reported where after about 20k tokens the latency spikes and you see a lot of spill/paging activity. Jordan, do you want to quickly frame the problem?
+[00:18] Jordan (Head of ML): Yeah, sure. So we run multi-turn assistants with long session history, sometimes 10k to 30k tokens. After steady state, the p99 latency climbs, we see eviction logs and then more KV loads, it almost thrashes. We suspect some prefix reuse across different user sessions but not sure why eviction seems correlated with certain quantization settings.
+[00:40] Sanjay (SE): Okay, got it. When you say "eviction" are we seeing full KV eviction events or small per-shard TTL expiries? Can you show a snippet of logs?
+[00:52] Tomás (SRE): We have a sample in the ZIP we uploaded, but here's an excerpt: "kv-evict: shard-7 prefix=usr_47abcd evict_count=120 spike_ms=900" and then later "page-out: nvme0n1: 3.4GB". There's also a line where the runtime says "prefetch miss" a bunch.
+[01:14] Priya (Infra): Important detail: our private deployment is on the VPC appliance - not fully air-gapped but the NVMe backing is a 1.6TB local pool, we configured quantized weights to int8. We also had a model variant with Q4_0 for one lane.
+[01:32] Lina (Solutions Eng): That mix—int8 and Q4_0—can change the memory profile per instance which affects how the KV cache fills. We usually see more frequent prefix evictions when per-model KV footprint fluctuates.
+[01:45] Jordan: Interesting. I thought the KV was independent of quantization? The cache stores KV keys/values for past tokens; why would quant change that?
+[01:55] Sanjay: Two things: model quantization changes per-layer activation sizes and sometimes changes KV element packing (we've seen the runtime pack kv entries differently when the kv-value dtype changes). Second, the allocator and GC heuristics depend on resident memory pressure—so if the quantized model is using a bit more scratch or the model memory isn't aligned with our prefetch assumptions, the cache will see earlier eviction.
+[02:20] Maya: Let's walk through the high-level architecture here so everyone's on the same page. Redwood serving runtime keeps a per-prefix KV in RAM up to a TTL or until memory pressure triggers eviction. We also do prefix-aware prefetch: when a request for prefix P arrives and we've seen a reuse pattern, we try to prefetch the likely next KVs into a hot store. If prefetch guesses are wrong, prefetch blobs can push memory high and force eviction of other prefixes.
+[02:48] Jordan: In our case, I think prefix reuse across tenants is high—users frequently share similar system prompts and templates. Is there mitigation around prefix isolation?
+[03:00] Sanjay: We provide namespace isolation options (per-tenant prefix namespaces) but for your workload you had enabled prefix pooling to boost cache hit rates across tenants. That pooling increases chance of hotspots because shared prefixes become "hot" and then eviction ripple effects occur for long tail prefixes.
+[03:18] Tomás: So turning off pooling would increase miss rate for shared prefixes but might reduce tail thrash. Tradeoff, got it.
+[03:26] Priya: We did try toggling pooling earlier, it helped a little but not enough—latency still increases at ~20k tokens. Also noticed a correlation with batching: when we raise batch size throughput increases but latency spike frequency also increases.
+[03:42] Lina: Right—that's because larger batches cause more concurrent KV accesses and increase working set temporally. Our continuous-batching mechanism aggregates across requests and can hold KV references longer inside the runtime. If the batch contains many different prefixes, you get a temporary combined working set that outstrips available hot memory and triggers eviction/paging.
+[04:05] Jordan: That aligns with our telemetry. We saw p50 still good; p95/p99 drifted once concurrency hits ~180 reqs/sec sustained.
+[04:16] Sanjay: A few immediate debugging checks: 1) confirm per-shard resident set size, 2) check prefetch hit/miss ratio over time, 3) compare quantization profiles across instances. Priya, can you dump the runtime metrics for a problematic window?
+[04:30] Priya: Yes, will share traces. We have histogram outputs and slab occupancy metrics.
+[04:36] Maya: Let's talk about paging details—your logs showed NVMe page-out. Our runtime will spill cold KV pages to local SSD if RAM pressure crosses threshold. Paging works but it's slower and increases token latency. We need to know whether the paging was sustained or bursty.
+[04:55] Tomás: From the sample, it was bursty: a big spill then repeated small writes while the eviction rate climbed. Not continuous.
+[05:03] Sanjay: Bursty spills typically mean a misaligned prefetch window: the prefetch influx created a spike and then the runtime tried to spill the least recently used prefixes. If spills are asynchronous it's okay but repeated spill+read cycles cause thrash.
+[05:18] Jordan: Any heuristics you can recommend for prefetch sizing?
+[05:22] Sanjay: We've had success with adaptive prefetch: start conservative—prefetch the top 2 most likely continuations, monitor hit ratio; if hit ratio > 0.7 for 30s window, increase. For your workload—because prefix reuse is high—set initial concurrency-safe prefetch to 4 with strict upper bound memory caps. We'll share a config.
+[05:42] Maya: Also consider eviction policy tuning: default is LRU per-shard. For your workload we can shift to a frequency-based policy (LFU-ish) to keep stable shared prefixes resident. That helps when a small set of prefixes dominate traffic.
+[05:58] Priya: If we move to LFU does that complicate multi-tenant fairness? We worry hot tenants starving other customers.
+[06:06] Lina: Good point. We support hybrid policies: primary LFU weight on pool-level but with per-tenant fairness quotas. You can cap the max resident prefixes per tenant to avoid starvation.
+[06:18] Tomás: One more question: when you say "prefix"—how granular is that? Is it per prompt template or per conversation id?
+[06:25] Sanjay: Can be either, configurable. For your setup you used conversation-id grouping but many customers opt for prompt-hash grouping. If you hash too coarsely you create bigger hot groups; too fine-grained and you lose hit rate. There's a sweet spot depending on reuse patterns.
+[06:42] Jordan: Our reuse is mostly prompt-template based across users, so maybe we should move to prompt-hash grouping.
+[06:48] Maya: Let's also talk about quantization interaction—Priya you mentioned int8 and Q4_0 mix. The runtime's memory accounting currently approximates KV footprint using a per-model factor. If models change dtype mid-flight (e.g., canary deploys), accounting lags and can under- or over-provision hot store. We recommend uniform quant profile across a deployment pool.
+[07:10] Priya: We had a canary lane for Q4_0 for cost reasons. Do you recommend stopping that?
+[07:15] Sanjay: For production long-context workloads it's safer to maintain a consistent quant profile for the serving pool. If you need mixed precision, isolate them into separate pools with separate cache caps.
+[07:26] Jordan: That makes sense.
+[07:29] Maya: Another angle is batch shaper and KV pinning—if you can pin critical prefixes (system prompts) into a tiny persistent hot slab, those won't be evicted except under extreme pressure. We can configure pin lists via the console or via API.
+[07:44] Tomás: Pinning looks promising. Is pin size small?
+[07:47] Lina: Pins are small; they use reserved hot memory and are accounted separately. You set a pin quota per pool.
+[07:53] Priya: Regarding disk IO—our NVMe configuration is default smoothed lz4 compressed spill files. Do compression settings affect spill/read latency much?
+[08:03] Sanjay: Yes. Compression lowers dump size but increases CPU cost on spill/read. If your NVMe is the bottleneck, reduce compression to minimize CPU overhead; if network/IO is the limit, compress more to reduce bytes written. We'll correlate your CPU vs IO metrics.
+[08:19] Jordan: There was a mention in our logs about "kv prefix shadowing" – what does that mean?
+[08:24] Sanjay: Shadowing is when two prefixes hash-collide in the small fast-access index and the runtime keeps one hot copy shadowed while the other is in cold store. It's rare but when it happens under heavy churn you can get unexpected misses. We can increase index size or change hash function, at cost of memory.
+[08:41] Maya: Ok let's list immediate mitigations: 1) isolate quant profiles into separate pools, 2) enable prefix pinning for system prompts, 3) adopt adaptive prefetch with conservative starting window, 4) consider LFU hybrid policy with per-tenant quotas, 5) tune compression settings for spill files.
+[09:01] Priya: For testing, we'd like a controlled benchmark. We usually replay 1000 sessions with avg 15k tokens and vary concurrency. Can Redwood run a 30-min bench to reproduce the spike?
+[09:12] Lina: Yes we can run a benchmark using your traces if you provide them. We can do it on a staging VPC with identical NVMe and model config.
+[09:21] Jordan: We'll upload the traces.
+[09:23] Sanjay: A few more notes on telemetry you should include in the logs: per-prefix reuse heatmap, slab occupancy over time, per-shard eviction timeline, prefetch hit/miss timeline, and per-instance resident set snapshot. Those help us pinpoint whether it's a single shard or cross-shard correlation.
+[09:41] Tomás: We'll add those metrics.
+[09:43] Maya: Question from my side—do you need us to change anything in your VPC config?
+[09:48] Priya: We have 16GB reserved per runtime container for hot memory and 256GB NVMe. Is that small?
+[09:55] Sanjay: 16GB hot is modest for 30k token sessions when multiple prefixes are hot. You might benefit from bumping hot memory to 24GB or more depending on resident slab size. But that depends on cost and instance type.
+[10:08] Jordan: If we bump hot memory, do we need different instance types?
+[10:12] Lina: Typically yes; more RAM per GPU node or use nodes with more host memory. We can recommend instance families.
+[10:19] Priya: For the on-prem box we have constraints on RAM; NVMe is the preferred buffer. Is there a recommended spill strategy for memory-constrained boxes?
+[10:29] Sanjay: For low-RAM boxes, be conservative on prefetch and pin only the top-critical prefixes; also increase spill throttle so it batches writes rather than many small writes. Use async read-ahead to minimize read latency.
+[10:40] Jordan: Any thoughts on batching strategy — should we throttle batch size instead of concurrency?
+[10:45] Sanjay: Throttle both. Use a batch shaper that caps effective concurrent working set: limit the number of distinct prefixes per batch and set batch timeout so you don't accumulate widely diverse prefixes into a single big batch.
+[10:57] Maya: There's a question that often comes up—fallback to smaller model variants when memory pressure is high, does Redwood support automatic fallback?
+[11:02] Lina: Yes, runtime supports routing rules to fallback to a smaller model variant or to an approximate quantized variant. But fallback changes the token output quality and you should test it.
+[11:12] Jordan: We might consider fallback as last-resort.
+[11:15] Sanjay: Also worth noting—if you fall back mid-session you may break KV compatibility (kv layout differences) unless you use a migration shim. We can configure session pinning to avoid mid-session fallback or have a warm-up path.
+[11:28] Priya: Good to know.
+[11:30] Maya: Let's recap the root cause candidates we agreed on: mixed quant profiles causing accounting variance, prefetch surge creating burst working set, prefix pooling hotspotting, and batch concurrency increasing transient working set. Any others?
+[11:44] Jordan: Maybe hash collisions and NVMe IO contention.
+[11:47] Tomás: Also our custom plugin for session stitching—it may create extra temporary prefixes per request.
+[11:54] Sanjay: Right – if you generate ephemeral prefixes per request that will blow up the unique prefix count. Consider collapsing ephemeral tokens into a single conversation-level prefix to reduce cardinality.
+[12:05] Maya: Action items we captured: Sanjay to draft heuristics doc, Priya to upload logs, Maya to send security + deployment checklist, Redwood to run benchmark once traces are uploaded.
+[12:18] Jordan: Timeline is tight; we'd like the bench by end of next week.
+[12:21] Maya: We'll aim for that.
+[12:23] Tomás: Quick question—do you have any tooling to visualize prefix heatmaps?
+[12:28] Lina: Yes, Console has a prefix telemetry view; we can share a link to a demo dashboard.
+[12:33] Priya: Please share.
+[12:35] Maya: I'll send the dashboard link and the security pack.
+[12:38] Jordan: Thanks everyone, that was helpful.
+[12:41] -- End of recording --
+
+Post-call notes:
+- Customer to provide traces and expanded logs (per action item).
+- Redwood will stage a replicate bench and share prefetch heuristics + LFU hybrid config.
+- Security materials: SOC2, network diagram for VPC, and on-prem checklist to be shared by Maya.
+
+References mentioned during call:
+- link: staging-bench-playbook (we referenced the playbook on internal console)
+- link: prefix-telemetry-dashboard (console demo link)
+

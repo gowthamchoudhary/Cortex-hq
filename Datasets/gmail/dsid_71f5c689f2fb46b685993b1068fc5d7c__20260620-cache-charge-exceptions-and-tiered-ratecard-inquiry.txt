@@ -1,0 +1,108 @@
+Clarify: cache-hit charge exceptions & tiered hosted ratecard for NIM
+
+From: Sara Lim <sara.lim@nimbus.ai>
+To: Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: Procurement <procurement@nimbus.ai>
+Date: Thu, 18 Jun 2026 09:12:00 -0700
+Subject: Hosted rate questions — cache hit charging when we use sessions
+
+Hi Evelyn,
+
+Thanks again for the demo yesterday — the latency looked great. A couple of questions came up while we reviewed the draft ratecard: specifically how Redwood charges for prompt/prefix cache hits for our use case with session affinity. Our engineering lead wants explicit examples we can pass to finance.
+
+Two scenarios we need clarity on:
+- If a user conversation hits the prefix KV cache and returns from cache for all tokens, do you treat that as zero billed generation tokens, or is there a minimum per-request token charge?
+- In cases where the cache partially satisfies the response and you stitch model tokens for the remaining portion, how is that split reported and billed on the invoice?
+
+We have a high session-dup ratio (estimated 65% full-hit), and that materially affects our landed unit cost. Also: any procurement-friendly language you can add around retrospective credits if a billing mismatch is discovered would help us get through internal approvals.
+
+Attached is a short spreadsheet of expected monthly volumes. Can you walk through example math and any enterprise exceptions?
+
+Thanks,
+Sara
+Sara Lim
+Head of Platform | Nimbus Analytics
+---
+Attachment: 2026-06-18_Nimbus_ratecard_questions.pdf (pdf)
+
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Sara Lim <sara.lim@nimbus.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>
+Date: Thu, 18 Jun 2026 12:06:00 -0700
+Subject: Re: Hosted rate questions — cache hit charging when we use sessions
+
+Hi Sara — thanks for the clear examples and the spreadsheet; that helps. Looping in Marissa (sales pricing) and Aditya (billing/product) so they can give concrete math and contract language.
+
+Quick answers at a high level:
+- Full prefix/KV cache hits: we do not bill for generation tokens produced entirely from the cache — you will see zero generation tokens for those responses. There is still a small per-request routing/ingress tier fee for API calls (listed as "request unit" on the ratecard) to cover networking/metadata, but it's a fixed low amount and waivable at enterprise tiers.
+- Partial hits: billing is prorated. The invoice separates tokens served from cache vs model-generated tokens; you'll only be charged for the model-generated portion. We also expose a per-request breakdown in the Console so you can reconcile at token-level.
+
+Marissa/Aditya — Sara asked about grandfathering/exception language for a signed enterprise committed contract. They want: 1) waiver of the request-unit fee once commit thresholds are met; 2) a retrospective credit path in case of meter mismatch; and 3) a clear example calculation to include in the SOW.
+
+Evelyn
+Senior Sales Engineer | Redwood Inference
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Evelyn Hart <evelyn.hart@redwood.ai>, Sara Lim <sara.lim@nimbus.ai>
+Cc: Aditya Rao <aditya_rao@redwood.ai>, Procurement <procurement@nimbus.ai>
+Date: Fri, 19 Jun 2026 10:34:00 -0700
+Subject: Re: Hosted rate questions — cache hit charging when we use sessions
+
+Sara — thanks for the spreadsheet. I built two short billing scenarios below based on your volume estimates. Please find an example invoice attached.
+
+Scenario A — conservative (65% full-hit, 20% partial, 15% miss)
+- Monthly incoming requests: 12,000,000
+- Request-unit fee: $0.0001 per request (waived at commit >= $50k/mo)
+- Cache full-hit: 65% -> 7.8M requests billed at request-unit only (if not waived)
+- Cache partial: 20% -> 2.4M requests, of which average 40% of tokens require model generation -> billed tokens = model_token_rate * (avg_generated_tokens * 2.4M)
+- Miss: 15% -> fully billed on generation tokens
+
+Scenario B — enterprise commit (waived request-unit, 70% hit, 20% partial, 10% miss)
+- Same incoming requests, request-unit fee waived at your committed tier
+- We apply a tiered discount to generated-token rates starting at month 1 per the deal (see attached ratecard: 8% discount at $70k, 12% at $120k monthly commit)
+
+Retrospective credit policy (proposed):
+- If Nimbus identifies a meter mismatch within 90 days, we will investigate. If error is on our side, credits are issued for the affected invoice period up to the verified overcharge amount.
+- If the issue is ambiguous, we do a joint reconciliation; if the difference exceeds 2% of billed tokens for the month, Redwood issues a pro-rata credit while investigation proceeds.
+
+Attachment: example-invoice-nimbus-q2.xlsx (xlsx)
+
+Marissa
+Account Executive | Redwood Inference
+
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Sara Lim <sara.lim@nimbus.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Evelyn Hart <evelyn_hart@redwood.ai>, Procurement <procurement@nimbus.ai>
+Date: Sat, 20 Jun 2026 08:15:00 -07:00
+Subject: Re: Hosted rate questions — cache hit charging when we use sessions
+
+Hi Sara — a few product-level clarifications to make auditing straightforward:
+
+1) Invoice breakdown: every invoice line includes: request-count, cache_full_hit_count, cache_partial_count, model_generation_tokens, model_context_tokens, and effective token_rate applied. Exportable CSV in Console.
+
+2) Partial-hit accounting: we report the cached-token-count separately and the generated-token-count separately; the charge is model_token_rate * generated-token-count. For transparency we can add a brief appendix to the SOW showing the formula we will use.
+
+3) Minimum bill floor: for hosted API customers below a $1,000/mo commit we enforce a small monthly minimum to cover baseline infra; for enterprise-tier SOWs this is removed and replaced with commit/discount language.
+
+4) Performance SLA and credits: cache-hit behavior doesn't affect latency SLA, but if there is an operational bug causing stale KV cache returns or incorrect hit attribution, we will treat it as a severity event and offer SLA credits per contract.
+
+If you want, I can generate a sample two-month invoice that applies your spreadsheet volumes and shows the line-by-line math. Give me the three figures you want to see: (1) assume request-unit waived? (yes/no), (2) committed monthly $ amount, (3) whether you want the 90-day retrospective clause tightened to 30 days.
+
+-Aditya
+Billing & Product Ops | Redwood Inference
+
+From: Sara Lim <sara.lim@nimbus.ai>
+To: Evelyn Hart <evelyn.hart@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>
+Cc: Procurement <procurement@nimbus.ai>, Legal Team <legal@nimbus.ai>
+Date: Sat, 20 Jun 2026 15:48:00 -0700
+Subject: Re: Hosted rate questions — cache hit charging when we use sessions
+
+Thanks — that is really helpful. Quick replies inline: 
+1) Please waive the request-unit fee at our target commit of $75k/mo.
+2) Commit we can propose: $75k/mo for a 12-month term (happy to discuss escalation banding).
+3) Keep the 90-day retrospective clause for now, but add the 30-day fast-path where we automatically credit amounts if discrepancy > 5% and the cause is Redwood-internal.
+
+Sara
+Sara Lim | Nimbus Analytics
+
+-- End of thread --

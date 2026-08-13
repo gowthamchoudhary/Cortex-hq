@@ -1,0 +1,128 @@
+Post-call: Deployment playbook & SLO alignment — Nova Financial
+
+From: Rachel Kim <rachel.kim@redwoodinference.com>
+To: Liam O'Connor <liam.oconnor@novafin.com>; Priya Desai <priya.desai@novafin.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Thu, 1 Apr 2027 16:10:00 -0700
+Subject: Post-call: Deployment playbook & SLO alignment — Nova Financial
+
+Hi Liam / Priya —
+
+Thanks again for carving out time today. Quick recap from our discovery so we have alignment and clear next steps before the technical deep dive: 
+
+Pain points you described:
+- Unpredictable inference tail latencies during end-of-day reconciliation jobs (spikes to >2s occasionally) that break upstream workflows.
+- High per-request cost on your current managed endpoints, especially for reranking flows.
+- Need for auditability and key controls (KMS integration + detailed request logs) for internal compliance.
+
+Business goals we heard:
+- Stabilize interactive latency: target p50 <= 120ms, p95 <= 400ms for the interactive rerank/generate routes.
+- Throughput: sustained ~80 req/s during business hours with 200 concurrent user sessions; occasional bursts up to 200 req/s for batch runs.
+- Cost objective: reduce token cost by ~35% vs current provider through batching/quantization/caching.
+- Private-control requirement: preference for VPC deployment with customer-managed KMS and audit logs retained per your policy.
+
+Model / workload notes from the call:
+- Primary: 13B-class open model for standard generation and chat.
+- Reranking/precision: 70B (or equivalent) used for top-K rerank; interested in quantized 4-bit runs if quality validated.
+- Typical request sizes: generation ~150 tokens average; rerank payloads ~3-5 candidates, small input sizes.
+
+Suggested immediate next steps (we agreed on these on the call):
+1) Marissa to run a quick topology feasibility checklist with your infra constraints (network egress, available subnets, HSM/KMS endpoints).
+2) Nova to share representative payloads for generation and rerank (sample JSON) + peak windows logs (30-day).
+3) Redwood to propose two topology options and a short perf-test matrix (latency-first and throughput-first).
+4) Schedule technical deep dive next week with your infra/security and our infra SREs — target 60 minutes.
+
+Attachments: I attached a lightweight SLO template and a starter network diagram for discussion (see attached).
+
+I'll coordinate timing for the deep dive — suggested times in a follow-up. Thanks again — nice kickoff.
+
+Best,
+Rachel Kim
+Senior Account Executive | Redwood Inference
+rachel.kim@redwoodinference.com
++1 (415) 555-0192
+
+Attachment stubs: nova_slo_table.xlsx (xlsx), network_diagram_v1.pdf (pdf)
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: Rachel Kim <rachel.kim@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>
+Cc: Liam O'Connor <liam.oconnor@novafin.com>, Priya Desai <priya.desai@novafin.com>
+Date: Fri, 2 Apr 2027 01:05:00 +0000
+Subject: RE: Post-call: Deployment playbook & SLO alignment — Nova Financial
+
+Thanks Rachel — adding some technical clarifications / asks from the infra side before the deep dive so we can optimize the agenda.
+
+Preliminary topology notes (things we'll validate during the deep dive):
+- For p50 <= 120ms on generation with ~150 tokens, we'll need a latency-focused cluster. Recommended starting point: 4xH100 (dedicated) with continuous KV-cache support and small batching window (10-30ms).
+- If Nova prefers a cost-first topology, 8xA10G or A100-based setup with 4-bit quantization on the 70B variant tends to hit cost targets while still meeting p95 <= 400ms for many workloads.
+- Rerank flow: prefer running the 70B quantized model pinned on a dedicated pool with a warm persistent KV-cache + synchronous batched scoring for top-K candidates. That avoids repeated cold starts.
+- Autoscaling: use concurrency-based autoscale with a burst buffer (burst capacity ~2x baseline) and route-level circuit-breaker to degrade to a smaller model when load or inference error rates exceed thresholds.
+
+Measurements & test matrix we want from Nova prior to perf tests:
+- Representative request corpus (JSON) for generation and rerank.
+- Peak concurrent sessions and typical session duration.
+- Any network constraints (NAT, private endpoints, egress limits, VPC endpoints for KMS).
+- Allowed maintenance windows for private/Dedicated changes.
+
+Operational controls / security considerations:
+- KMS/HSM endpoints, which cipher suites you require, and whether you need Bring-Your-Own-Key (BYOK).
+- Audit log retention: confirm retention window (we can support customizable retention buckets, but need baseline).
+- Data residency: confirm if all inference must remain in us-east-1 or if multi-region fallback is allowed for DR.
+
+I'll attach a small CSV with the initial perf-test matrix suggestions for the deep dive so we can lock the targets.
+
+--Marissa
+Marissa Cole
+Solutions Engineer | Redwood Inference
+marissa.cole@redwoodinference.com
+Attachment stub: performance_matrix.csv (csv)
+From: Priya Desai <priya.desai@novafin.com>
+To: Rachel Kim <rachel.kim@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Cc: Liam O'Connor <liam.oconnor@novafin.com>, Anil Kapoor <anil.kapoor@novafin.com>
+Date: Fri, 2 Apr 2027 09:12:00 -0400
+Subject: Re: Post-call: Deployment playbook & SLO alignment — Nova Financial
+
+Thanks Rachel and Marissa — this is helpful and aligned with what we discussed. A few clarifications from our side before the deep dive: 
+
+- SLO windows: we need p50/p95 goals listed in the SLO doc to be evaluated over 24-hour rolling windows (not just business hours), because downstream reconciliation jobs run offshore.
+- Audit/compliance: we require KMS integration and immutable request logs for at least 3 years; anything longer we can discuss with compliance but 3 years is the minimum. Also need SOC2 Type II evidence for the deployment path (hosted vs dedicated vs private).
+- Network: we'll provide our VPC CIDR ranges and NACL rules. We have throughput caps on our transit gateway (peak aggregate 10 Gbps) that may influence topology choices.
+
+We can provide the sample payloads and 30-day peak window logs by COB Monday. For the deep dive, Anil (infra) and I can do 10am–11am ET on Wednesday (2027-04-07) or Thursday (2027-04-08) — whichever fits your team.
+
+Forwarded for context: On Thu, 1 Apr 2027 at 23:10 +0000, Rachel Kim <rachel.kim@redwoodinference.com> wrote:
+> Thanks again for carving out time today. Quick recap from our discovery so we have alignment and clear next steps before the technical deep dive:
+> 
+> Pain points you described:
+> - Unpredictable inference tail latencies during end-of-day reconciliation jobs (spikes to >2s occasionally) that break upstream workflows.
+> - High per-request cost on your current managed endpoints, especially for reranking flows.
+> - Need for auditability and key controls (KMS integration + detailed request logs) for internal compliance.
+>
+Looking forward to the next steps.
+
+Priya Desai
+Director, ML Infrastructure | Nova Financial
+priya.desai@novafin.com
+
+From: Rachel Kim <rachel.kim@redwoodinference.com>
+To: Priya Desai <priya.desai@novafin.com>, Liam O'Connor <liam.oconnor@novafin.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Fri, 2 Apr 2027 14:23:00 +0000
+Subject: RE: Post-call: Deployment playbook & SLO alignment — Nova Financial
+
+Great — thanks Priya. Wednesday 2027-04-07 10:00am ET works for our infra + SRE folks. I've booked the slot and attached the prep materials.
+
+Action items (owners / due dates):
+- Nova: share sample payloads + 30d peak-window logs (Priya / Anil) — due COB Monday 2027-04-05.
+- Redwood: perf-test matrix + two topology options (Marissa) — will send Tue 2027-04-06 EOD.
+- Redwood: verify KMS/BYOK options and SOC2 evidence path (Ben) — update in the deep dive.
+- Both: confirm VPC connectivity constraints and maintenance windows (Anil + Ben) — bring to deep dive.
+
+Links: HubSpot deal (https://hubspot.company/deal/NV-2027-041), Drive prep folder (https://drive.google.com/drive/folders/1a2b3c-nova-deploy-playbook).
+
+Attachments included: nova_slo_table.xlsx, network_diagram_v1.pdf, performance_matrix.csv.
+
+If anything changes on timing, please flag. Otherwise see you Wednesday.
+
+Best,
+Rachel
+Senior Account Executive | Redwood Inference

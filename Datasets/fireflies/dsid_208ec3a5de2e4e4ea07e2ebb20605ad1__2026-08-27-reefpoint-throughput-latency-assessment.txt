@@ -1,0 +1,106 @@
+ReefPoint Throughput & Latency Assessment
+
+Intro + workload profile. Customer wants p95 < 200ms for streaming chat, 1000 concurrent users, fallback to cheaper quantized model under heavy burst. Discussed hosted vs dedicated vs private (VPC) tradeoffs and benchmarking plan.
+Meeting header:
+Date: 2026-08-27
+Start: 15:00 PT
+Duration: 52m
+Attendees: Jared (Redwood AE), Priya (Redwood SE), Lina (ReefPoint CTO), Marcus (Head ML Infra), Sasha (SRE), Tomas (Data Eng)
+
+[00:00] Jared: Hey everyone, thanks for making time. Quick intro — Im Jared, AE at Redwood, and Priya our senior SE is here to dig into your latency and throughput goals. Lina, want to kick us off with the big picture?
+
+[00:18] Lina: Sure. Quick context: ReefPoint is building a clinician-facing chat assistant, mostly server-side streaming to UI. Goal is p95 latency that feels instant — rough target is under 200ms for streaming token delivery in typical sessions. We also need to support sustained spikes during morning rounds, estimate up to 1,000 concurrent sessions with avg 20 tokens/sec each during peak bursts.
+
+[00:44] Priya: Thanks. Couple clarifying q's: when you say streaming p95 <200ms is that end-to-end from request to first token, or per-token increment? Also how big are your typical prompts and completions?
+
+[01:03] Lina: Good point. We mean first-byte latency for streaming (first token) should be under 200ms p95, and subsequent token churn ideally low-latency as well. Average prompt length: 120 tokens, expected completion ~60 tokens on average, but some sessions hit 400-600 tokens if a clinician is doing long notes.
+
+[01:29] Marcus: I also want to call out infra constraints. We're keen to avoid data egress if possible — prefer VPC/private deployment. We have on-prem KMS via HashiVault and strict firewall rules; any hosted solution needs to support private peering or a private deployment. Cost is a factor — we looked at Megalith and QuickServe but their hosted pricing blew past our forecasts.
+
+[02:00] Jared: Understood. We can run hosted, dedicated reserved capacity, or private (VPC/on-prem). For your p95 targets and concurrency, Dedicated or Private typically gives the most predictable tail latency. Hosted can work if we provision the right instance shapes and use pinning. For streaming, small batch sizes are important to keep first-token latency low.
+
+[02:23] Priya: A few engineering notes — streaming latency is dominated by model kv-cache warmup and kernel scheduling at small batch sizes. For p95 under 200ms we'll look at: model variant (quantized vs fp16), continuous batching window, and whether we can use prefix caching for repeated prompts. Do you have a high-percentile prompt reuse pattern?
+
+[02:47] Tomás: Some reuse, yes. About 15% of sessions reuse templates. Also important: our traffic pattern is spiky — long tails during morning rounds and more sparse evenings. We can supply 72h logs.
+
+[03:05] Sasha: From SRE perspective, we need graceful degradation. If we hit capacity we want an automatic fallback to a smaller quantized model with slightly lower quality rather than throttling users. Also audit logs and per-request tracing is non-negotiable.
+
+[03:22] Priya: Makes sense. Redwood has a fallback routing policy — we can route to a cheaper quantized variant or to a queue with fast 429/retry semantics. And we have token-level audit logging and tracing hooks for integrations. We'll share the docs.
+
+[03:40] Marcus: On the KMS side, can we bring our HashiVault keys? We need envelope encryption with customer-managed keys.
+
+[03:48] Jared: Yes, for private deployments you can bring your own keys (BYOK) and we support HSM-backed flows. Hosted requires managed keys but we support tenant-level customer KMS integrations for Dedicated. We'll include the KMS matrix in the security brief.
+
+[04:06] Lina: For benchmarking we care about both steady-state throughput and burst p95. Can you propose a test harness? We want a token/sec baseline and p95 per-token latency at multiple concurrencies — 100, 500, 1k, and 2k if possible.
+
+[04:25] Priya: We'll share an ops-benchmark.csv and a test harness we usually use (Griffin harness) — it's a small runner that simulates streaming clients and measures first-byte and per-token latency. Plan: run the harness against a hosted endpoint with synthetic prompts, then repeat on Dedicated and a Private sandbox if you want. We'll collect p50/p95/p99 and tail token throughput.
+
+[04:52] Tomas: How do you handle KV cache across requests? We're worried about cold starts hurting p95 when users jump into long sessions.
+
+[05:00] Priya: The runtime supports prefix/KV caching on a per-session basis; persistent session caches can be pinned to a warm instance to avoid cold starts for frequent users. For less frequent sessions we rely on fast kernel paths — quantized execution can be faster per token in some model variants but sometimes increases first-token latency due to dequantization steps. So there's a tradeoff.
+
+[05:28] Marcus: Cost question: what's the unit cost difference between hosted and dedicated for a workload like ours? Ballpark is fine.
+
+[05:34] Jared: Ballpark — hosted pay-as-you-go will be higher per-token in heavy steady-state compared to Dedicated reserved pools. With Dedicated you commit to GPUs and get better unit economics, and Private is similar but adds infra & support fees. We'll put together a cost estimate after we see your traffic sample.
+
+[05:50] Sasha: Are there known cases where streaming p95 <200ms doesn't hold despite using Dedicated? What usually breaks?
+
+[05:58] Priya: Common failure modes: very long sequences that cause KV cache pressure, sudden spikes that overwhelm a single instance group before autoscaling kicks in, and suboptimal batching windows that aggregate too many requests. We mitigate with autoscale policies, pre-warming, and smaller batching windows for low-latency routes. We can configure canary flows so critical traffic goes to pinned capacity.
+
+[06:22] Lina: For our compliance team, do you have SOC2 + ISO docs? Also need an audit log format example.
+
+[06:30] Jared: Yes, we'll attach SOC2 and an example audit log export. We can also show log entries with request ids and token counts.
+
+[06:38] Tomás: One last technical: do you support model quantization mixes? Like running 8-bit for streaming but 4-bit for background batch reranking?
+
+[06:46] Priya: Yes, the runtime supports multiple quantization profiles and we can route requests based on policy (latency-sensitive vs cost-sensitive). Background reranking can use heavier quantization or CPU-backed evaluation depending on the pipeline.
+
+[07:00] Jared: Let's outline the benchmark plan so everyone's aligned. Step 1: Customer sends 72h traffic and prompt set. Step 2: Redwood runs a hosted sim to get a baseline. Step 3: If baseline shows deficits, we spin up Dedicated pool sized for your 1k concurrency and run comparison. Step 4: If private is required, we'll mirror the Dedicated config into your VPC and run the same sims.
+
+[07:28] Marcus: Sounds good. For the Dedicated sizing, do you have a formula or rule-of-thumb we can use before the sim?
+
+[07:35] Priya: Rule-of-thumb: estimate tokens/sec at peak, then map to model tokens/sec capability per GPU for your chosen model. Example: a ada-like open model might do X tokens/sec on a T4, but modern Llama variants on A100 do far better. We'll provide a matrix with tokens/sec per GPU for common models. That'll let you rough out GPU counts.
+
+[07:58] Lina: Can you also include streaming p95 numbers per model in that matrix? We need to see first-byte p95 at 1k concurrency.
+
+[08:07] Priya: We'll include first-byte p95 and per-token throughput measured under the harness. Important caveat: p95 scales with sequence length distribution. We'll run multiple distributions.
+
+[08:22] Jared: Operational questions: do you want dedicated ingress endpoints per region for lower latency to clinicians?
+
+[08:29] Sasha: Yes, multi-region closer to our primary hospitals would help. We have priority regions in West-US and EU-West. Private deployment must support cross-region peering or we do separate private pods.
+
+[08:45] Priya: Cross-region can be done with smart routing and model variants. We can pin capacity in both regions and sync model artifacts; failover works with automatic fallback if one region is overloaded.
+
+[09:01] Tomás: About the benchmark artifacts — how will results be shared? Simple csv + graphs? We prefer a short slide with p95/p50/p99 and a raw csv.
+
+[09:10] Jared: We'll share csv plus a one-pager and a short recording of the run. We'll also push the raw harness logs.
+
+[09:17] Lina: Ok timeline — we want results before our procurement review on Sept 14. Is that feasible?
+
+[09:23] Jared: Yes: collect logs by Sept 3, run hosted baseline the week of Sept 6, and Dedicated run the week of Sept 13. That gives you numbers before the 14th. We'll confirm scheduling offline.
+
+[09:35] Brief pauses and some cross-talk about calendar slots...
+
+[10:02] Priya: Quick technical nit — when we measure token/sec please ensure we capture p95 of the inter-token arrival times for streaming clients; that often shows microbursts.
+
+[10:15] Marcus: Will the benchmarking also measure cold-start tail latency after a scale-to-zero event? We need to understand cold path in off-hours.
+
+[10:22] Priya: Yes we'll include cold-start tests; we'll simulate a cold pool with reclaimed KV cache and measure full session p95. We'll annotate which numbers are warm vs cold.
+
+[10:36] Tomás: Any limitations on prompt types? We have some structured JSON prompts and also free-text notes.
+
+[10:43] Priya: That's fine. We'll run both structured and free-text distributions. If you can highlight the few heavy prompts that are 400-600 tokens that will help tune caching.
+
+[10:58] Sasha: For security review — we'll need an architecture diagram showing where logs are stored and how PII is redacted.
+
+[11:06] Jared: We'll include a redaction example and where logs live for each deployment mode.
+
+[11:14] Lina: Great. Any other blockers?
+
+[11:18] Marcus: None from infra side besides confirming KMS and peering but that's in the action items.
+
+[11:24] Jared: Ok final recap: Redwood to share benchmark harness and ops-benchmark template, security + SOC2 + KMS doc, and a rough tokens/sec per-GPU matrix. Customer to share logs and prompt sets by Sept 3. Priya will schedule benchmark runs.
+
+[11:41] Meeting ends with thanks and agreement to sync on calendar invites.
+
+Notes: Transcript has minor ASR errors — some proper nouns normalized. References: shared: ops-benchmark.csv, shared: redwood-soc2-brief.pdf

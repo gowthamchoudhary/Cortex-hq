@@ -1,0 +1,109 @@
+Urgent: reserved capacity throughput shortfall affecting ACME production
+
+From: Sara Jenkins <sara.jenkins@acme.ai>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Cc: ops@acme.ai
+Date: Sun, 7 Mar 2026 09:12:00 -0700
+Subject: Production throughput drop on Dedicated pool (pool-id: dp-17)
+
+Vivek,
+
+We're seeing sustained elevated latency and 5xx error spikes on our Dedicated pool dp-17 starting ~08:45 PT. Throughput is capped well below our committed vCPU/GPU throughput; CPU/GPU graphs attached. Tail latency for short requests jumped from ~120ms to 1.2s, and overall successful token throughput is ~60% of our committed baseline.
+
+This is impacting live traffic for the recommendations flow — customers are noticing. Can someone from Redwood take immediate ownership? We need a plan for mitigation (temporary capacity, routing, credits) and an ETA for full remediation.
+
+I've attached a short error sample and a couple of charts.
+
+Sara Jenkins
+Head of Platform Engineering
+Acme AI
+Attachments: acme-error-sample.txt, usage-graphs-03-07.png
+From: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+To: Sara Jenkins <sara.jenkins@acme.ai>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Connor O'Brien <connor.obrien@redwood.com>
+Date: Sun, 7 Mar 2026 09:25:00 -0700
+Subject: Re: Production throughput drop on Dedicated pool (pool-id: dp-17)
+
+Sara — thanks for the heads up and sorry for the disruption. I'm escalating to our SRE and engineering teams now (cc'ed). We will:
+
+- Stand up an immediate bridge to triage (I will DM a bridge link)
+- Apply short-term mitigations to restore throughput within the hour if possible
+- Provide a timeline for root cause and permanent fix
+
+I'm looping Marissa to coordinate credits/SLA conversation with ACME and Connor/Eng to lead the tech work. I'll update you on next steps in 15 minutes.
+
+-Vivek
+Director, Strategic Accounts
+Redwood Inference
+From: Connor O'Brien <connor.obrien@redwood.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Aditya Rao <aditya.rao@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: Sun, 7 Mar 2026 09:33:00 -0700
+Subject: Re: Production throughput drop on Dedicated pool (pool-id: dp-17)
+
+Quick summary from infra side (initial triage):
+
+- dp-17 reserved pool is at ~95% GPU utilization and sustained queuing.
+- Error pattern: transient OOM/retry errors in the runtime for requests exceeding the cached KV window; these surface as 5xx spikes.
+- Recent change: ACME deployed a model variant last week that increased median sequence length and slightly changed batching characteristics.
+
+Immediate mitigations I'm proposing now:
+1) Evict non-critical background batch jobs running in dp-17 (30-min action).
+2) Temporarily allow burst routing to hosted pool to handle excess QPS (we have legal/contract implications, need Marissa's OK).
+3) Tighten autoscaler to trigger earlier (threshold 85% -> reduces headroom loss).
+4) Roll back the new variant for ACME to previous model if we see no subsiding after steps 1-3.
+
+Attaching the incident runbook and initial CPU/GPU utilization snapshots.
+
+-Connor
+SRE Lead
+Attachments: incident-runbook.pdf
+From: Aditya Rao <aditya.rao@redwood.com>
+To: Connor O'Brien <connor.obrien@redwood.com>, Vivek Kulkarni <vivek.kulkarni@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: Sun, 7 Mar 2026 10:05:00 -0700
+Subject: Re: Production throughput drop on Dedicated pool (pool-id: dp-17)
+
+Adding engineering context from model-serving side:
+
+- Root cause hypothesis: the model variant that ACME rolled last week changed the KV cache pressure and switched to a different kernel path in our runtime for that architecture. That path has a regression when sequence distribution shifts upward; it increases per-token GPU cycles by ~30% for some request shapes.
+- There was also an unscheduled load spike from ACME's orchestration test at 08:40 PT that compounded utilization.
+
+Immediate plan (engineering):
+A) Back out the variant for ACME to the previously validated commit (we can stage a rollback + canary in 20–30 min).
+B) Apply a temporary quantization/compilation profile that uses the older kernel set for dp-17 (hotfix; ~2–3 hours to rollout safely).
+C) Increase priority scheduling for ACME's critical routes and throttle non-critical endpoints.
+
+If we proceed with A+B now, we should see throughput recover to near-contract levels within the 2–3 hour window. I'll own the rollout and report progress on the bridge.
+
+- Aditya
+Principal Engineer
+From: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+To: Sara Jenkins <sara.jenkins@acme.ai>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Connor O'Brien <connor.obrien@redwood.com>, Aditya Rao <aditya.rao@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: Sun, 7 Mar 2026 11:30:00 -0700
+Subject: Re: Production throughput drop on Dedicated pool (pool-id: dp-17)
+
+Sara — thank you for reporting this and apologies for the impact. Executive summary and immediate actions we are taking on behalf of ACME: 
+
+1) Ownership: Redwood SRE + Eng will own this incident end-to-end until normal service is restored.
+2) Immediate mitigations (in-flight): evicting background jobs, tightened autoscaler thresholds, and enabling burst routing to hosted fallback for excess QPS.
+3) Engineering hotfix: we will roll back ACME's recent variant and apply a compilation/quantization hotfix. ETA for visible recovery: 2–3 hours.
+4) Business path: Marissa will coordinate any contractual remedies/credits once we stabilize.
+5) Exec attention: I have flagged this to our CTO and the account exec team; we'll provide a formal RCA within 48 hours and a remediation timeline.
+
+I'll keep you updated on the bridge. If you have SLA/credit expectations ahead of our follow-up, please send them and Marissa will work through next steps.
+
+Regards,
+Vivek Kulkarni
+Director, Strategic Accounts
+Redwood Inference
+Phone: +1 415 555 0123
+From: Sara Jenkins <sara.jenkins@acme.ai>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 8 Mar 2026 09:15:00 -0700
+Subject: Re: Production throughput drop on Dedicated pool (pool-id: dp-17)
+
+Thanks for the quick response and the plan. We saw partial recovery after the eviction step but are still below our committed throughput overnight. We need a formal RCA and a proposed credit schedule — our platform leads are expecting a written summary. Please include the timeline for the rollback and the hotfix, and confirm whether burst routing to hosted pool will be sustained while your hotfix deploys.
+
+Sara
+Head of Platform Engineering
+Acme AI

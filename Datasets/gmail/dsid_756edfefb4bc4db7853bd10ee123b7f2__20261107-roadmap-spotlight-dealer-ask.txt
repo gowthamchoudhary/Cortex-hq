@@ -1,0 +1,112 @@
+Feature spotlight request: per-tenant prompt-transform pipeline for Harbor Capital
+
+From: Olivia Gray <olivia.gray@harborcapital.com>
+To: laura_bennett@redwood.ai
+Cc: Samir Iqbal <samir.iqbal@harborcapital.com>, platform@harborcapital.com
+Date: 2026-11-05T15:14:00Z
+Subject: Request: tenant-specific prompt transforms for PoC
+
+Hi Laura,
+
+Thanks again for the demo yesterday. We loved the latency numbers, but one blocker for our security/compliance team is the need to apply deterministic transformations to incoming prompts (PII redaction + token normalization) on a per-tenant basis before inference.
+
+We are preparing a short PoC and need to know whether Redwood can (1) expose a configurable pre-processing pipeline per tenant, and (2) keep that transform logic inside our VPC so we can attest to audit requirements.
+
+Attached is a lightweight requirements sheet — the ask is: can you confirm feasibility and whether this is something your team would prioritize within the next 6 weeks for our pilot? If not, we need to understand workarounds (edge preprocess, customer-side) asap so we can adjust timelines.
+
+Best,
+Olivia
+VP, Platform Engineering
+Harbor Capital
+
+Attachments: Harbor_PoC_requirements.xlsx (spreadsheet)
+From: laura_bennett@redwood.ai
+To: Olivia Gray <olivia.gray@harborcapital.com>
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai
+Date: 2026-11-06T09:02:00Z
+Subject: Re: Request: tenant-specific prompt transforms for PoC
+
+Olivia — thanks for the details and the clear ask. Looping in Marissa (product) and Ben (solutions) so we can scope.
+
+Short answer: technically feasible, but there are trade-offs we need to call out:
+- VPC/private deployment: we can host transform logic next to inference in Redwood Private, but that increases onboarding effort and may push the PoC by ~2–3 weeks for packaging and security review.
+- Hosted + customer-side transform: fastest path, but customer must operate transform code and we won't surface it in Console.
+- Per-tenant config surface: Product would need a small UI/API to register transforms and a safe execution runtime (sandboxed JS/WASM or declarative rules).
+
+Marissa — can you advise on whether Product can commit a scoped implementation for the PoC (minimal API + routing) in the 6-week window? Ben — can Solutions align on a delivery plan if Product can commit a minimal scope?
+
+-Laura
+Director, Solutions Enablement
+Redwood Inference
+From: marissa_cole@redwood.ai
+To: laura_bennett@redwood.ai, ben_carter@redwood.ai
+Cc: priyom_das@redwood.ai
+Date: 2026-11-06T13:45:00Z
+Subject: Re: Request: tenant-specific prompt transforms for PoC
+
+Thanks Laura — quick thoughts from Product.
+
+We understand the commercial pressure (Harbor is a high-ACV prospective). For a scoped PoC we can offer:
+1) API flag 'preprocess_profile' which maps to a small set of declarative transforms (redact, normalize whitespace, token bucket) — no arbitrary code execution in week 1.
+2) Routing: for Private deployments, we can add a config toggle to enable the preprocess pipeline inside the VPC boundary.
+
+Constraints and impact:
+- Engineering estimates: ~4 dev-weeks (1 PM, 2 Engs half-time, 1 SRE) to deliver the API surface + basic Console exposure + QA. That pushes to ~5–6 weeks given security review and an initial staging deploy.
+- UX: minimal console work for profile creation; we ship a simple JSON editor.
+- Future roadmap: arbitrary per-tenant code execution (WASM) is non-trivial and would be a separate initiative.
+
+Priyom — I want your input on whether the runtime changes conflict with our current kernel/quantization schedule. If aligning requires deprioritizing a backfilled ticket, call that out.
+
+-Marissa
+Product Director, Platform
+Redwood Inference
+From: priyom_das@redwood.ai
+To: marissa_cole@redwood.ai, laura_bennett@redwood.ai
+Cc: ben_carter@redwood.ai
+Date: 2026-11-07T10:18:00Z
+Subject: Re: Request: tenant-specific prompt transforms for PoC
+
+Marissa — from Eng/Runtime perspective: the declarative transforms are straightforward and can be implemented as a light pre-tokenization stage. Two notes:
+1) Perf: Adding an inline transform will add variable CPU time per request; we should add a small headroom to SLO calculations and validate impact on 99th percentile latency in staging.
+2) KV/Batching interactions: if transforms change tokenization significantly we should ensure cache keys remain stable (we can namespace by preprocess_profile).
+
+Estimate: 3 dev-weeks of eng work (1 backend, 1 infra) + 1 week test/ops. The 4-week engineering window plus Product/PM tasks fits under Marissa's estimate if we schedule immediately.
+
+Ben — Solutions should prepare an interim architecture and a communication plan for Harbor's security reviewers. Laura — can you push for a pilot commitment (small MRR commit or PO) to prioritize the work? Harbor indicated readiness to sign a short-term pilot SOW if we can meet the timing.
+
+—Priyom
+Senior Staff Engineer, Runtime
+From: laura_bennett@redwood.ai
+To: marissa_cole@redwood.ai, priyom_das@redwood.ai, ben_carter@redwood.ai
+Date: 2026-11-08T16:05:00Z
+Subject: Re: Request: tenant-specific prompt transforms for PoC
+
+Quick update: I spoke with Olivia and Harbor is willing to sign a 3-month pilot SOW (covers baseline usage and a small engineering onboarding fee) if we can (A) deliver the minimal API + Console flag inside their VPC boundary and (B) provide a security checklist and runbook. They want a commitment within 48 hours so they can start internal procurement.
+
+Decision needed: Can Product sign a scoped commitment (4 weeks delivery) and can Eng accept the sprint pull (Priyom - backfill?) or do we propose an alternative (hosted customer-side transform + extended contract start)?
+
+Ben has sketched a delivery plan and can produce a one-page mutual action plan if we greenlight. Attaching SOW draft and the Harbor requirements sheet to the thread (see attachments).
+
+Laura
+Director, Solutions Enablement
+Redwood Inference
+
+Attachments: SOW-draft-HC-0457.docx (document)
+From: marissa_cole@redwood.ai
+To: laura_bennett@redwood.ai, priyom_das@redwood.ai, ben_carter@redwood.ai, camila_reyes@redwood.ai
+Date: 2026-11-09T09:30:00Z
+Subject: Re: Request: tenant-specific prompt transforms for PoC
+
+Okay — after quick check with roadmap and bandwidth, Product will greenlight a scoped PoC commitment:
+- Scope: declarative preprocess_profile API + Console flag + VPC config to run transforms inside Private. No arbitrary code execution.
+- Timeline: 4 weeks dev + 1 week staging/security QA (target delivery: 2026-12-14).
+- Conditions: Harbor signs the 3-month pilot SOW and SOW includes a security review window and support hours.
+- Tradeoffs: we will push a low-priority perf instrumentation ticket into next quarter to free cycles.
+
+Camila — Solutions + CS, please finalize the mutual action plan and get the signed SOW. Ben — please coordinate a short kickoff with Priyom and Engs tomorrow. Laura — please update Olivia with the commitment and the conditions.
+
+Thanks team — good example of a high-ACV scope that fits a tight, scoped Product delivery.
+
+-Marissa
+Product Director, Platform
+Redwood Inference

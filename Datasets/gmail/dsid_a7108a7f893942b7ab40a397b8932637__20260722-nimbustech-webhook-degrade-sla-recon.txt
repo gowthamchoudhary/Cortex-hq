@@ -1,0 +1,110 @@
+Urgent: NimbusTech webhook failures — SLA reconciliation and short-term mitigation
+
+From: Elaine Park <elaine.park@nimbustech.io>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: Camila Reyes <camila_reyes@redwood.com>
+Date: Thu, 22 Jul 2026 09:14:00 -0700
+Subject: Webhook 502 spike: multiple customers failing deliveries
+
+Jonas / Camila —
+
+We started seeing a spike of 502 / backend errors from Redwood's webhook endpoint around 08:50 PDT this morning. The deliveries are intermittently failing for ~27% of events; we get back 502s and then Nimbus retries which creates duplicate processing for some customers. Impact: three mid-market customers reported missed events and one partner integration timed out.
+
+Quick details:
+- First observed: 2026-07-22 08:50 PDT
+- Error signature: 502 Bad Gateway, short response (<500ms) followed by circuit-break retries
+- Our logs show payloads reach the edge but fail on handshake with your gateway (attached screenshot).
+
+Attachments: screenshot-502-wave.png (single-frame capture of retries from our side).
+
+Can you confirm whether any recent routing changes, canary deploys, or rate-limiting adjustments were applied to the webhook cluster? We need initial triage, an ETA for mitigation, and whether we should flip to the older webhook endpoint you mentioned in the docs. This is causing active customer incidents on our side.
+
+Elaine
+Elaine Park
+Sr. Integrations Manager, NimbusTech
+elaine.park@nimbustech.io
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Elaine Park <elaine.park@nimbustech.io>
+Cc: Camila Reyes <camila_reyes@redwood.com>, Rafael Mendes <rafael_mendes@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Thu, 22 Jul 2026 09:27:00 -07:00
+Subject: Re: Webhook 502 spike: multiple customers failing deliveries
+
+Thanks for the quick heads-up, Elaine — and sorry for the disruption. We're pulling the on-call runbook now.
+
+Immediate notes:
+1) No deliberate routing or rate-limit changes were rolled this morning from Hosted infra teams, AFAIK; I'll confirm with infra.
+2) Rafael (partner ops) — can you take primary triage and check edge gateway metrics (5xx rate, upstream timeouts) and trace the 08:45-09:10 window?
+3) Camila — please coordinate a short war room with Nimbus if Rafael needs deeper logs.
+
+Short-term mitigation options:
+- We can enable the documented legacy webhook endpoint (https://hooks.redwood-inference.com/v1/legacy) for your traffic while we root-cause. That will avoid retries but is not ideal long-term.
+- If the issue looks like transient upstream overload, we can temporarily increase concurrency and apply a routing shim to prefer healthy pods.
+
+Elaine — could you share a sample X-Request-ID or the exact timestamps for a failed delivery (one or two examples) so we can pull traces quickly? I see the PagerDuty ticket PD-33421 referenced in your Slack — I'll attach our incident there.
+
+I'll follow up in 30 minutes with initial triage.
+
+—Jonas
+Jonas Weber
+Head of Partner Engineering, Redwood Inference
+jonas.weber@redwood.com
+
+From: Rafael Mendes <rafael_mendes@redwood.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Camila Reyes <camila_reyes@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>, Elaine Park <elaine.park@nimbustech.io>
+Date: Thu, 22 Jul 2026 10:05:00 -07:00
+Subject: Re: Webhook 502 spike: multiple customers failing deliveries
+
+On Thu, Jul 22, 2026 at 9:27 AM Jonas Weber <jonas.weber@redwood.com> wrote:
+> Thanks for the quick heads-up, Elaine — and sorry for the disruption. We're pulling the on-call runbook now.
+
+I've pulled the gateway metrics for the 08:40–09:15 window. Observations:
+- 5xx rate spiked from baseline 0.2% to 6.8% between 08:48–08:58.
+- Error class: 502 returned from our upstream auth-proxy; stack traces indicate short-lived connection resets (net/http: connection reset by peer).
+- No config rollouts in the last 12 hours to that cluster.
+
+Proposed immediate plan:
+1) Flip Nimbus traffic to legacy webhook endpoint (Jonas please authorize) — TTL for flip: 3 hours while we stabilize.
+2) Kick off a deeper trace between edge -> auth-proxy -> model-gateway; ops will collect headers and request-ids.
+3) Camila to coordinate a 30-min war room with Nimbus (please confirm 10:30 or 11:00 PDT).
+
+SLA / partner ops note: Given this is cross-system impact, we should formalize an interim operational SLA addendum to Nimbus that covers:
+- Severity definitions and response time (we propose Sev2 = acknowledge within 1 hour, mitigation plan within 4 hours)
+- Escalation contacts and war-room windows
+- Temporary credit / goodwill process for customer impact (handled by commercial)
+
+I've attached a draft we can iterate on (nimbustech-sla-draft-v2.pdf). Also creating PD incident PD-33421 and will add logs.
+
+Attachments: nimbustech-sla-draft-v2.pdf
+
+Rafael Mendes
+Partner Operations Lead, Redwood Inference
+rafael_mendes@redwood.com
+
+From: Elaine Park <elaine.park@nimbustech.io>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: Camila Reyes <camila_reyes@redwood.com>, Rafael Mendes <rafael_mendes@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Sat, 24 Jul 2026 16:02:00 -07:00
+Subject: Re: Webhook 502 spike: multiple customers failing deliveries
+
+Thanks, team — appreciate the fast triage and the SLA draft. Quick update from Nimbus: after switching to the legacy endpoint Friday morning the error rate dropped to baseline and our customers recovered. We validated three replayed events that were previously failing.
+
+We reviewed Rafael's SLA draft and have two commercial asks before we sign:
+1) Add a clause for operational credit for incidents where retries lead to duplicate billable processing (we can propose dollar amounts per impacted customer).
+2) Add a one-time expedited signature/DocuSign path for urgent addenda to avoid the 30-day legal cycle.
+
+I'll have Nimbus legal review the draft and send redlines by Monday. Could you also create a short runbook (2–3 bullets) we can pin in our integration docs that tells Nimbus engineers how to fall back to the legacy endpoint and what headers to preserve? That would prevent scope creep during incidents.
+
+If you prefer, we can do a 30-minute wrap-up call Monday 11:00 PDT — Camila / Jonas / Rafael / Vanessa can you confirm availability?
+
+Elaine Park
+Sr. Integrations Manager, NimbusTech
+elaine.park@nimbustech.io
+
+---
+Jonas Weber <jonas.weber@redwood.com>
+Fri Jul 24 16:20:00 PDT 2026
+Replying to confirm: Monday 11:00 PDT works for me. Rafael — please prepare the 2-3 bullet fallback runbook and attach to the HubSpot deal. Camila — coordinate the DocuSign path with Legal and Commercial. I'll own the post-incident run and the formal SLA addendum sign-off with our CRO.
+
+Thanks all,
+—Jonas

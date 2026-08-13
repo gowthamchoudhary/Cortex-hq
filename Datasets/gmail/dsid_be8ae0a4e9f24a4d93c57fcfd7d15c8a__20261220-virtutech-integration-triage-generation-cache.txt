@@ -1,0 +1,124 @@
+Integration: intermittent generation truncation when embeddings cache is enabled
+
+From: Caroline Wu <caroline.wu@virtutech.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Date: Mon, 20 Dec 2026 09:12:00 -0800
+Subject: Strange truncation in prod when embeddings cache ON
+
+Hi Jordan,
+
+We rolled the new embeddings + generation integration into staging yesterday. When the embeddings cache is enabled on the client, some long generations are being truncated at ~580 tokens (we expect ~2.5k). The output looks abruptly cut — not a streaming termination, more like the model stopped. We do see the final token ids in the call trace but the response body is missing the tail.
+
+Attached are a short log and an API trace that show one failing request and the exact timestamps. This is causing a few failing E2E tests for our summarization microservice. Can your team take a look? We can do a debug window today between 1–4pm PT.
+
+Thanks,
+Caroline
+Senior Platform Engineer
+VirtuTech
+
+Attachments: virtutech-error-sample-1.log (text), api-call-trace-20261220.json (json)
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Dev Patel <dev.patel@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Cc: Caroline Wu <caroline.wu@virtutech.com>, Adam Lee <adam.lee@virtutech.com>
+Date: Mon, 20 Dec 2026 09:40:00 -08:00
+Subject: Fwd: Strange truncation in prod when embeddings cache ON
+
+Looping platform/runtime and PM in — customer (VirtuTech) is seeing intermittent truncation when embeddings cache is enabled. They can reproduce in staging.
+
+Quick context: VirtuTech is evaluating dedicated capacity and is in late-stage POC (deal VT-2026-Q4-EXP-09). This is blocking their ability to validate summarization quality. Ask: are there known interactions between prefix/KV caching for embeddings and generation streaming that could prematurely terminate text output?
+
+Proposed debug window: today 1–4pm PT. Caroline included traces. If we need a hotfix, priority is high (customer POC).
+
+Jordan Blake
+Senior Sales Engineer | Redwood Inference
+jordan.blake@redwood.com | +1 415-555-0124
+
+--- Forwarded message attached from customer ---
+From: Dev Patel <dev.patel@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Cc: Caroline Wu <caroline.wu@virtutech.com>
+Date: Mon, 20 Dec 2026 10:06:00 -08:00
+Subject: Re: Fwd: Strange truncation in prod when embeddings cache ON
+
+Thanks for the ping — I can take the lead on reproducing. Initial thoughts: caching layers should not affect final token emission unless the KV cache pointer or sequence-length accounting gets stale. Two quick asks for Caroline before the debug window:
+
+- Can you confirm the exact model variant (name + quantization bits) and the client config for cache TTL and max_cache_entries?
+- Can you paste the full request headers for the failing call (we want to see any custom retry/proxy headers and streaming flags)?
+
+I'll try to spin up a mirrored staging with embeddings cache enabled and the same request rate. Marcus — can you look at recent runtime releases around sequence-length accounting? I will attach whatever I get from staging.
+
+Dev Patel
+Software Engineer, Runtime
+dev.patel@redwood.com
+
+On a related note, I see a few internal logs where streaming chunk assembly will drop trailing bytes on a specific socket close sequence (I'm chasing a flaky condition).
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Dev Patel <dev.patel@redwood.com>, Jordan Blake <jordan.blake@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Mon, 20 Dec 2026 11:22:00 -08:00
+Subject: Re: Fwd: Strange truncation in prod when embeddings cache ON
+
+Thanks — quick summary from runtime: we shipped a micro-optimization three weeks ago that changes how we flush cached KV segments for prefix-heavy workloads. In most cases it reduces latency, but we introduced a guard that can race with final chunk emission when an upstream cache read returns an EOF-like sentinel. That could explain the deterministic ~580 token cutoff (same buffer size across requests).
+
+Immediate mitigation: temporarily disable the embeddings client-side cache or set cache TTL to 0 for the integration while we triage. Longer term: I'll prepare a small runtime patch to change the sentinel handling and add a safe drain step on the flush path.
+
+Marcus
+Senior Engineering Manager, Runtime
+marcus.lin@redwood.com
+
+P.S. Dev — can you collect a sample trace with socket-level timestamps (we need to see whether the runtime is sending the final chunk and the client is dropping it, or if the final chunk is never emitted).
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Caroline Wu <caroline.wu@virtutech.com>, Adam Lee <adam.lee@virtutech.com>
+Cc: Dev Patel <dev.patel@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Mon, 20 Dec 2026 11:45:00 -08:00
+Subject: Re: Fwd: Strange truncation in prod when embeddings cache ON
+
+Caroline — quick ask: can you toggle the client embeddings cache off for the staging route and run the failing E2E job once? Marcus suspects a runtime sentinel/caching flush race and wants to eliminate the cache as a variable. If you see the tail content come back with cache off, that’s a strong signal for our internal fix.
+
+If you prefer, we can do the toggle together during the debug window.
+
+Jordan
+
+On Mon, 20 Dec 2026 at 10:06, Dev Patel <dev.patel@redwood.com> wrote:
+> Thanks for the ping — I can take the lead on reproducing. Initial thoughts: caching layers should not affect final token emission unless the KV cache pointer or sequence-length accounting gets stale. Two quick asks for Caroline before the debug window:
+>
+> - Can you confirm the exact model variant (name + quantization bits) and the client config for cache TTL and max_cache_entries?
+> - Can you paste the full request headers for the failing call (we want to see any custom retry/proxy headers and streaming flags)?
+>
+> I'll try to spin up a mirrored staging with embeddings cache enabled and the same request rate. Marcus — can you look at recent runtime releases around sequence-length accounting? I will attach whatever I get from staging.
+
+From: Caroline Wu <caroline.wu@virtutech.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Dev Patel <dev.patel@redwood.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>
+Date: Tue, 21 Dec 2026 13:02:00 -08:00
+Subject: Re: Integration: intermittent generation truncation when embeddings cache is enabled
+
+Jordan / Dev — we disabled embeddings cache for staging at 12:35pm PT and re-ran the summarization E2E suite. All previously failing tests passed (same input corpus), and the full summaries returned (~2.3k tokens).
+
+Attached is a short run log showing the successful call. We also included the model metadata: model: redwood-3-large-16k, quant: 8bit. Client cache config prior to change: ttl=3600, max_entries=2000.
+
+If you confirm this root-cause direction, we need a short note to our engineering lead before we flip anything on the production integration. We have a one-week POC window left and would like a timeline for a runtime fix.
+
+Thanks,
+Caroline
+
+Attachments: virtutech-success-20261221.log
+From: Laura Bennett <laura.bennett@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Dev Patel <dev.patel@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Cc: Caroline Wu <caroline.wu@virtutech.com>, Adam Lee <adam.lee@virtutech.com>
+Date: Wed, 22 Dec 2026 16:34:00 -08:00
+Subject: Re: Integration: intermittent generation truncation when embeddings cache is enabled
+
+Great catch everyone — thanks for the quick repro.
+
+Plan:
+- Marcus: please ship the sentinel-handling patch to staging by EOD 2026-12-23 with a targeted runtime canary and smoke tests. Add the safe drain step and a unit test that simulates early EOF on cache reads.
+- Dev: reproduce the post-patch behaviour with the VirtuTech trace and verify full token emission.
+- Jordan: communicate to VirtuTech that disabling client-side embeddings cache is an effective mitigation, and that we plan a runtime patch with an ETA of 24–36 hours. Offer a 2-hour support window for the deploy.
+
+I'll create a short roadmap item (RN-2027-015) to track changing cache sentinel semantics and add a follow-up to Evaluate: we should also add an observable metric around 'kv_flush_drain_time' so customers can see the condition in Console.
+
+Laura Bennett
+Product Manager, Redwood Inference
+laura.bennett@redwood.com
+
+On a related note, Jordan — please record this as a field bug in the deal record and flag for high priority renewal impact.

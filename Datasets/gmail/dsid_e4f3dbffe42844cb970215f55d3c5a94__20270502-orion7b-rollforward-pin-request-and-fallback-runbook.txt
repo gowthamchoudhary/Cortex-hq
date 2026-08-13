@@ -1,0 +1,122 @@
+Orion-7B-v2x onboarding — rollforward pin request & fallback runbook
+
+From: Sam Green <sam.green@acme.ai>
+To: Monica Patel <monica.patel@redwood.com>
+Cc: Lydia Park <lydia.park@acme.ai>
+Date: Mon, 2 May 2027 09:12:00 -0700
+Subject: Inquiry: Onboarding Orion-7B-v2x for Dedicated Pilot
+
+Hi Monica,
+
+Thanks for taking the meeting last week. We're ready to start the dedicated pilot and would like to onboard a custom-tuned fork of Orion-7B (tag: orion7b-v2x). Key asks:
+
+- Can you pin that variant in our Dedicated pool during the pilot window (target: May 10–24)?
+- We expect streaming chat usage with median response latency <= 240ms and peak sustained RPS of ~60
+- We plan to use an 8-bit quantized variant for cost reasons — need compatibility confirmation for KV cache and streaming
+
+I've attached the model spec and sample load profile (acme-orion-spec.pdf). Lydia Park (cc) will coordinate model artifacts.
+
+Can you advise on the pinning process, potential gating, and a fallback plan if we see quality regressions?
+
+Best,
+Sam
+Director of Product
+Acme AI
+
+Attachments: acme-orion-spec.pdf
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Cc: Sam Green <sam.green@acme.ai>, Lydia Park <lydia.park@acme.ai>
+Date: Mon, 2 May 2027 10:05:00 -07:00
+Subject: Fwd: Inquiry: Onboarding Orion-7B-v2x for Dedicated Pilot
+
+Folks, forwarding Acme's ask — they want a short pilot with orion7b-v2x pinned in their Dedicated pool. Please see Sam's note and the attached spec.
+
+What I need from product/eng for tomorrow EOD (May 3):
+
+1) Compatibility checklist: tokenizer differences, KV cache behavior, streaming output consistency, attention/kernel compatibility with 8-bit quantization.
+2) Proposed pin policy: TTL, canary % of traffic, rollback triggers (quality and latency thresholds). Suggest initial TTL = 14 days but open to engineering input.
+3) Quick fallback plan: which model variant to automatically route to on regression (e.g., full-precision variant or earlier pinned variant).
+4) Estimated runway (ETA to turn up in Staging and then Dedicated) and cost delta vs our standard models.
+
+Acme has asked for an expedited timeline — they're targeting a pilot start next week. HubSpot deal: https://app.hubspot.com/deals/ACME-2027-Q2-0023. I've attached the spec they sent.
+
+Thanks — please reply inline with concrete asks if you need artifacts or access.
+
+- Monica
+Monica Patel
+Senior Sales Engineer, Redwood Inference
+monica.patel@redwood.com | +1 415-555-0198
+
+Attachments: acme-orion-spec.pdf
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Cc: Sam Green <sam.green@acme.ai>, Lydia Park <lydia.park@acme.ai>
+Date: Mon, 2 May 2027 14:20:00 -07:00
+Subject: Re: Fwd: Inquiry: Onboarding Orion-7B-v2x for Dedicated Pilot
+
+Thanks for the context — quick engineering read. We can run a staged compatibility pass but we'll need the following to proceed ASAP:
+
+- HF/registry link or model tarball (weights + tokenizer config + model card)
+- Representative prompt set and ~5k request sample (for perf and cache warmup)
+- Expected sequence lengths and max generations to replicate streaming behavior
+
+Planned checks (we'll kick these in Staging):
+- Tokenizer parity test (ensures tokenization-based context alignment)
+- KV cache correctness for prefix caching (unit tests + long-context run)
+- Streaming pipeline: ensure chunked responses align with existing streaming API hooks
+- Quantization pass: run inference with 8-bit variant and compare logprobs and nll delta vs FP16 baseline
+- Throughput & latency: run synthetic load to validate median P95 under expected RPS
+
+I'll create SUP-1234 and attach a compatibility-checklist template. ETA: 48–72 hours after artifacts are available for an initial go/no-go. If we hit issues, we'll propose a pinned rollforward with automated rollback triggers (latency > 300ms or quality score drop > 6% on the eval set).
+
+Attaching: compatibility-checklist.csv, staging-perf-results-template.csv
+
+- Karthik
+Karthik Iyer
+Lead, Inference Engineering
+karthik_iyer@redwood.com
+
+Attachments: compatibility-checklist.csv, staging-perf-results-template.csv
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Cc: Sam Green <sam.green@acme.ai>
+Date: Tue, 3 May 2027 11:33:00 -07:00
+Subject: Re: Fwd: Inquiry: Onboarding Orion-7B-v2x for Dedicated Pilot
+
+Quick policy note from platform: we can approve a short rollforward pin for pilot customers with these guardrails:
+
+- Pin TTL: 14 days by default, with a one-time 7-day extension possible via exec approval.
+- Canary rollout: start at 5% traffic for 24 hours, then 25% for 48 hours, then 100% traffic if no alerts.
+- Monitoring: automated quality sampling (daily) and latency SLOs (P95 latency target <= 300ms for pilot).
+- Automatic rollback triggers: P95 latency > 350ms for 3 consecutive hours OR quality regression > 8% on the agreed eval prompts.
+
+I'll drop a rollback-runbook.md in the drive folder which includes standard steps: disable pin, route to fallback variant, preserve cached KV for rollback, and postmortem template. Also, let's make sure the fallback is a minimal reconfiguration (either fp16 or a known golden variant).
+
+If everyone agrees, I'll sign off on a conditional pin and coordinate canary schedule with infra. We should also require Acme sign DPA before we start ingesting artifacts.
+
+- Vivek
+VP, Platform & Reliability
+vivek_kulkarni@redwood.com
+
+Attachments: rollback-runbook.md
+
+From: Sam Green <sam.green@acme.ai>
+To: Monica Patel <monica.patel@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Lydia Park <lydia.park@acme.ai>
+Date: Tue, 4 May 2027 16:03:00 -07:00
+Subject: Re: Fwd: Inquiry: Onboarding Orion-7B-v2x for Dedicated Pilot
+
+Thanks — this is great detail and aligns with our internal expectations. Lydia will upload the model tarball and a 5k-sample request file to the drive folder you linked by EOD tomorrow: https://drive.google.com/drive/folders/1a2b3c-orion-onboard. We'll also countersign the DPA today.
+
+Two quick asks from Acme: can the initial canary be bumped to 10% for faster signal (we're willing to accept tighter monitoring) and can the rollback window preserve the last good KV cache for a warm rollback?
+
+If that's acceptable, consider this our formal request to proceed against deal ACME-2027-Q2-0023.
+
+Best,
+Sam
+Director of Product, Acme AI
+Sam.Green@acme.ai

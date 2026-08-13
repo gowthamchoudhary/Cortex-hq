@@ -1,0 +1,103 @@
+Model compatibility matrix and hourly token sampling — Novagen onboarding
+
+From: Evelyn Hart <evelyn@redwoodinference.com>
+To: Marco Rossi <marco@novagen.com>
+Cc: Grace O'Connor <grace@redwoodinference.com>, Ben Carter <ben@redwoodinference.com>
+Date: 2026-06-19T09:12:00-04:00
+Subject: Model compatibility matrix and hourly token sampling — Novagen onboarding
+
+Hi Marco —
+
+Thanks for taking the time yesterday. As discussed, the next step for a smooth CS -> implementation handoff is a short compatibility check and a small hourly-sample of expected traffic so our infra team can validate capacity and recommend model variants.
+
+I attached a first-pass model_shortlist_v1.csv with three candidate families (small/medium/large quantized variants) and a very rough mapping to your expected context lengths. Could you confirm two things:
+
+1) Typical context length for the assistant flows we saw in the demo (median and 95th pct) — are you expecting multi-document context used for retrieval-augmented answers, or mostly single-prompt queries?
+2) An hourly spread for a representative weekday and peak hour (requests/hr and average tokens/request). If you don't have tokens handy, a typical mapping we use is: short summary ~ 150 tokens, multi-paragraph answer ~ 600 tokens.
+
+Proposed mutual action plan (quick):
+- You: share an hourly snapshot (or give an estimate) and confirm context percentiles — by Tue 6/23
+- Us (redwood): run compatibility check + quantitative throughput sketch and return a recommended model shortlist + cost/latency tradeoffs — by Fri 6/26
+- Schedule kickoff with implementation leads (30–45m) once shortlist agreed
+
+Attachments: model_shortlist_v1.csv (list of builds/quantized variants we expect to try).
+
+If easier, reply with an attached traffic sheet — a quick sample is fine.
+
+Thanks —
+Evelyn Hart
+Customer Success Manager
+Redwood Inference
+
+---
+Attachment: model_shortlist_v1.csv (CSV, 4 rows: model_family, variant, quantization, recommended_max_context)
+
+From: Marco Rossi <marco@novagen.com>
+To: Evelyn Hart <evelyn@redwoodinference.com>
+Cc: Lucie Tran <lucie@novagen.com>
+Date: 2026-06-19T10:08:00+02:00
+Subject: Re: Model compatibility matrix and hourly token sampling — Novagen onboarding
+
+Hi Evelyn —
+
+Thanks — attached is a quick export from our analytics: novagen_traffic_snapshot.xlsx. High level:
+- Representative weekday (Tue): avg 420 req/hr, peak hour ~ 1,100 req/hr
+- Request distribution: ~65% short prompts (expected ~120 tokens), ~30% medium replies (~450 tokens), ~5% long multi-doc (~1,800 tokens)
+- We use retrieval for some flows; typical retrieved context adds ~1,200 tokens for the long requests (not always).
+
+Lucie (copied) is our product lead and will coordinate scheduling the kickoff.
+
+Marco
+CTO, Novagen
+
+---
+Attachment: novagen_traffic_snapshot.xlsx (XLSX, 2 tabs: hourly_sample, request_breakdown)
+
+From: Ben Carter <ben@redwoodinference.com>
+To: Evelyn Hart <evelyn@redwoodinference.com>, Grace O'Connor <grace@redwoodinference.com>, Marco Rossi <marco@novagen.com>
+Date: 2026-06-19T11:05:00-04:00
+Subject: Re: Model compatibility matrix and hourly token sampling — Novagen onboarding
+
+Thanks Marco — this is exactly the shape we needed. A couple of clarifying points and a quick sketch of what we'd recommend: 
+
+Quick clarifications:
+- For the 5% long multi-doc calls, is the retrieved context (the ~1,200 tokens) included in the token counts you sent, or should we treat it as additional to the response tokens?
+- Peak concurrency: do you know simultaneous active sessions during the 1,100 req/hr peak? (helps sizing endpoints for concurrency vs batching).
+
+Preliminary guidance (compatibility & shortlist):
+- Given mixed load (majority short, small long tail), we'll test two routes: a latency-optimized small quantized model for short prompts and a higher-capacity model for long multi-doc answers. Suggested candidates (first-pass):
+  * redwood-7b-q4 (low-latency, good for 120–450 token responses)
+  * community-13b-q4 (balanced latency/capacity)
+  * open-30b-q4 (for the 1,800-token multi-doc answers; likely higher cost but needed for fidelity)
+
+Token arithmetic (example):
+- Baseline weekday (420 req/hr): assume weighted average tokens/request = 0.65*120 + 0.30*450 + 0.05*(1800+1200) = 78 + 135 + 150 = 363 tokens/request (rounded)
+- Tokens/hour = 420 * 363 = ~152k tokens/hr (baseline)
+- Peak hour (1,100 req/hr) assume same mix -> ~399k tokens/hr
+
+Operational notes:
+- For cost/latency smoothing we'll recommend automatic prefix/KV cache for the retrieval layer and a split-route policy: small model for short flows, fallback to larger model for long context requests. That reduces per-token spend and keeps 95th percentile latency low.
+
+I'll transform Marco's sheet into a simple hourly-token projection and include it in the delivery doc. Do you want me to include approximate pricing bands for each candidate model in the first draft?
+
+Ben
+Senior Solutions Engineer
+Redwood Inference
+
+---
+
+From: Marco Rossi <marco@novagen.com>
+To: Ben Carter <ben@redwoodinference.com>, Evelyn Hart <evelyn@redwoodinference.com>, Grace O'Connor <grace@redwoodinference.com>
+Date: 2026-06-19T14:03:00+02:00
+Subject: Re: Model compatibility matrix and hourly token sampling — Novagen onboarding
+
+Thanks Ben — the retrieved context is additional (so include it on top of response tokens). Peak concurrency: roughly 35–40 concurrent active sessions during the peak hour.
+
+Lucie will coordinate the kickoff — copying her again. We're happy for you to include pricing bands. Also attaching a provisional SOW (SOW-provisional.pdf) for planning.
+
+Best,
+Marco
+CTO, Novagen
+
+---
+Attachment: SOW-provisional.pdf (PDF, 8 pages; provisional scoping for pilot)

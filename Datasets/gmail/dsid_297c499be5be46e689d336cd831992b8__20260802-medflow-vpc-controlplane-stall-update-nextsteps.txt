@@ -1,0 +1,134 @@
+MedFlow VPC control plane stall — update & next steps
+
+From: Stephanie Nguyen <stephanie@redwood.ai>
+To: Tara Singh <tara@medflow.com>
+Cc: Dev Patel <dev@redwood.ai>, Laura Bennett <laura@redwood.ai>, Markus Klein <markus@redwood.ai>
+Date: 2026-08-02T08:15:00-07:00
+Subject: MedFlow VPC control plane stall — update & next steps
+
+Tara — thanks again for your patience. I wanted to summarize where we are and the immediate actions our team is taking after the control plane connectivity stall you saw this morning.
+
+What happened (brief):
+- At ~07:58 PDT your private control plane entered a degraded state where agent heartbeats failed to reach our control-plane proxies across two availability zones.
+- The surface impact was a brief inability to accept new deploy-related requests and some stalled health checks; existing inference traffic continued serving from local runtime caches.
+
+Immediate actions taken:
+1) We initiated a targeted rollback of the rolling control-plane update to stop further churn.
+2) We scaled the proxy pool + increased health-check timeouts for the affected instance group.
+3) Collected connectivity traces and auth logs (attached).
+
+What you can expect next:
+- We’ll share a short postmortem and a permanent mitigation plan by EOD 2026-08-05.
+- If you see any residual errors, please forward logs/timestamps and we’ll prioritize.
+
+Attachments: medflow_connectivity_traces_08022026.zip (contains tcpdump + proxy logs)
+
+Apologies for the disruption — we know this impacts your deployment flow and are focused on preventing recurrence.
+
+— Stephanie Nguyen
+Account Executive, Redwood Inference
+stephanie@redwood.ai
+
+From: Tara Singh <tara@medflow.com>
+To: Stephanie Nguyen <stephanie@redwood.ai>
+Cc: Alan Cho <alan@medflow.com>
+Date: 2026-08-02T08:22:00-07:00
+Subject: Re: MedFlow VPC control plane stall — update & next steps
+
+Thanks Stephanie — this was rough for the team here. We lost a scheduled deployment window and had to delay the release. Can you confirm how long our control plane was unreachable and whether any data was routed outside our VPC? We need specifics for our audit.
+
+Also, why were we on the plan that included the rolling update during our peak window? We had flagged Aug 2 as a no-upgrade period in earlier correspondence.
+
+Tara
+Head of Platform, MedFlow Health
+
+On Mon, Aug 2, 2026 at 8:15 AM Stephanie Nguyen <stephanie@redwood.ai> wrote:
+> Tara — thanks again for your patience. I wanted to summarize where we are...
+
+From: Rishi Malhotra <rishi@redwood.ai>
+To: Stephanie Nguyen <stephanie@redwood.ai>, Laura Bennett <laura@redwood.ai>
+Cc: Tara Singh <tara@medflow.com>
+Date: 2026-08-02T09:10:00-07:00
+Subject: Re: MedFlow VPC control plane stall — update & next steps
+
+Looping in Laura and copying Tara so we have the commercial context. Tara — sorry about the timing and impact. We’ll work on a proposed credit for the missed deployment window, but need Stephanie and Laura to confirm impact duration so we can model the credit against committed usage.
+
+Stephanie: can you confirm the total downtime window for control-plane operations (start/end) and whether any API calls were retried by user workloads?
+
+Rishi
+Senior Account Executive, Redwood Inference
+
+From: Dev Patel <dev@redwood.ai>
+To: Markus Klein <markus@redwood.ai>, Stephanie Nguyen <stephanie@redwood.ai>, Laura Bennett <laura@redwood.ai>
+Date: 2026-08-02T09:35:00-07:00
+Subject: [Internal] MedFlow VPC — initial mitigation notes and ask for infra logs
+
+Markus — quick recap from our side:
+- We observed a coordinated spike in TLS handshake failures between control-plane proxies and the VPC customer-facing proxy from 07:56–08:04.
+- The rolling control-plane update (cert rotation + proxy version bump) started at 07:50 in two AZs; health-check backoffs caused a reconnection storm when certificates rotated and agents retried aggressively.
+
+Immediate ask: can you pull full proxy auth logs and the cluster manager events for those timestamps? Also include HAProxy stats and the NLB connection error rates.
+
+I’ve validated that runtime inference traffic remained serving from node-local caches (no inference drops reported from the runtime logs), so the primary impact was control-plane orchestration.
+
+— Dev Patel
+Senior SRE, Redwood Inference
+
+From: Markus Klein <markus@redwood.ai>
+To: Dev Patel <dev@redwood.ai>, Stephanie Nguyen <stephanie@redwood.ai>, Laura Bennett <laura@redwood.ai>
+Date: 2026-08-02T10:40:00-07:00
+Subject: [Internal] Re: MedFlow VPC — initial mitigation notes and ask for infra logs
+
+Pulled the logs and attached a condensed diff of the control-plane agent backoff behavior (controlplane_patch_v2.diff). Preliminary RCA:
+- Root cause: a race between certificate rotation and agent connection backoff logic that, under our current backoff settings, caused a concentrated connection retry burst and exhausted the proxy worker thread pool in two AZs.
+- Why it reached customer impact: the proxy worker exhaustion caused health-check responses to timeout, which the cluster manager interpreted as unresponsive nodes and triggered additional reconciling operations.
+
+Short-term fix (applied 08:05):
+- Increased agent jitter/backoff window and scaled proxy worker pool by 40% for the MedFlow instance group.
+- Rolled back the in-progress cert rotation where safe.
+
+Longer-term actions (tracked in infra backlog):
+- Change cert rotation orchestration to stagger by AZ with per-agent cooldown windows.
+- Harden proxy worker pool with a soft limit and circuit breaker so retries don’t fully exhaust resources.
+
+I’ll prepare a small patch for staggered rotation (attachment) and schedule a targeted test with MedFlow in our staging VPC next week.
+
+— Markus Klein
+Director, Infrastructure Engineering
+
+From: Stephanie Nguyen <stephanie@redwood.ai>
+To: Tara Singh <tara@medflow.com>, Alan Cho <alan@medflow.com>
+Cc: Dev Patel <dev@redwood.ai>, Laura Bennett <laura@redwood.ai>, Markus Klein <markus@redwood.ai>, Rishi Malhotra <rishi@redwood.ai>
+Date: 2026-08-05T11:00:00-07:00
+Subject: Final postmortem and next steps — MedFlow VPC control plane incident (Aug 2)
+
+Tara / Alan — thanks again for working through this with us. Attached is the concise postmortem (medflow_postmortem_0805.pdf) and the action plan we will execute. Summary below:
+
+Timeline (summary):
+- 07:50 PDT: rolling control-plane update (cert rotation + proxy version bump) started.
+- 07:56–08:04 PDT: spike in TLS handshake failures and agent reconnect storm.
+- 08:05 PDT: short-term mitigation applied (proxy worker scale + backoff adjustments); rollback of cert rotation where safe.
+- 08:20 PDT: cluster stabilized; orchestration reconciles completed.
+
+Root cause: a race between cert rotation and agent reconnect behavior that produced a concentrated retry storm and exhausted proxy worker capacity in two AZs.
+
+Impact: brief control-plane orchestration stall that blocked new deploy-related operations; runtime inference continued to serve from local caches (no data exfiltration or inference data left the VPC).
+
+Planned permanent mitigations (high level):
+- Staggered cert rotation by AZ with per-agent cooldowns.
+- Circuit breakers on proxy worker pools and improved health-check heuristics.
+- A scheduled pre-rotation validation run for any future cert/agent updates.
+
+Commercial note: Rishi will follow up on credit modeling for the missed deployment window; Laura will help correlate usage impact.
+
+Attachments: medflow_postmortem_0805.pdf (official postmortem), medflow_connectivity_traces_08022026.zip (reference traces)
+
+Next steps / asks for MedFlow:
+- Please confirm a convenient 1-hour window next week for a staging run of the staggered-rotation test.
+- Confirm whether you want us to begin drafting formal contract language about maintenance blackout windows.
+
+We appreciate the urgency here and will prioritize the infra backlog items. If you need a call to walk through the postmortem, we’re available this week.
+
+— Stephanie Nguyen
+Account Executive, Redwood Inference
+stephanie@redwood.ai

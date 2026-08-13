@@ -1,0 +1,120 @@
+Edge VPC SLOs — post-demo technical playback & next steps
+
+From: Sanjay Rao <sanjay.rao@cortado.com>
+To: Ben Carter <ben_carter@redwood.com>
+Cc: Priya Menon <priya.menon@cortado.com>
+Date: Sat, 04 Mar 2028 09:12:00 -0700
+Subject: Edge VPC SLOs — post-demo follow-up
+
+Ben / team — thanks again for the demo earlier. Cortado's engineering leadership liked the streaming demo and the fallback model routing, but we surfaced a few performance questions that we need to close before procurement can move forward. Quick list from our side: 
+
+- End-to-end streaming latency targets: we want 95th pct token latency <= 120ms for sessions under 2s and <= 200ms for longer sessions (10–30s). Can Redwood meet this over a VPC peering + transit path?
+- Throughput / concurrency: expected baseline concurrency is ~60 concurrent streams (live transcription). Bursts to 250 streams expected during peak 10–15 minute windows — what's the recommended Dedicated profile / on-prem sizing?
+- VPN vs. direct peering: we prefer IPsec VPN initially; are there known performance degradations (MTU, reassembly) that would impact streaming?
+- Egress bandwidth: estimate per-stream egress for 16k audio sampling + tokens? Any guidance on burst sizing and shaping?
+
+We attached our current network diagram (vpc-topology-v2.pdf) — can you reply with a short playback of target SLOs and a concrete acceptance test plan (what we'll run, who runs it, pass/fail criteria)? We have a tentative procurement timeline: internal signoff by 2028-03-20 if the acceptance criteria are achievable.
+
+Thanks,
+Sanjay
+Sanjay Rao
+Head of Platform Engineering, Cortado Systems
+
+Attachment: vpc-topology-v2.pdf (application/pdf, 240KB)
+From: Ben Carter <ben_carter@redwood.com>
+To: Sanjay Rao <sanjay.rao@cortado.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Sat, 04 Mar 2028 11:05:00 -07:00
+Subject: Re: Edge VPC SLOs — post-demo follow-up
+
+Sanjay — really appreciate the clear list. Short playback below and proposed next steps. Attaching a draft acceptance checklist to make this concrete.
+
+Playback (high level)
+- E2E streaming latency: we aim to deliver P95 token latency <= 100–140ms on well-provisioned peering paths for short sessions; 95th <= 200ms is achievable with careful batching + KV cache tuning for longer sessions. Targets depend heavily on RTT across your peering path (see tests below).
+- Concurrency/throughput: for 60 steady concurrent streams we recommend a 1x Dedicated pool (N GPU baseline) with headroom to burst to 4x for peaks — exact GPU count depends on model/quantization. We will provide a sizing worksheet during the technical deep-dive.
+- VPN considerations: IPsec will add asymmetric path overhead and can reduce MTU; expect ~1–3ms additional per-packet processing on top of network RTT. Larger tokens / audio chunks can amplify reassembly delays — we'll propose packetization guidance.
+- Egress: per-stream egress varies by sampling rate and payload; rough rule of thumb: 120–220 KB/min audio + tokens, but we will run sample traces against your audio profile.
+
+Proposed acceptance tests (summary)
+1) Baseline RTT measurement: run traceroute/ICMP and tcping from your NATed egress to our staging peering IPs (we'll provide IPs). Capture p50/p95 RTT over a 24h window.
+2) Streaming token latency test: replay 10-minute prerecorded sessions to generate steady-state and burst windows; measure per-token timestamps (client and server). Goal: p95 <= 120ms under steady load, p95 <= 200ms during burst window.
+3) Concurrent stream soak: ramp from 10 -> 60 -> 250 streams over 30 minutes and observe tail latency, CPU/GPU utilization, and packet drop.
+4) VPN MTU/fragmentation validation: run iperf3 + MTU probing to surface reassembly issues.
+
+Next steps
+- Marissa to run model-specific sizing and share recommended Dedicated config + expected token throughput.
+- Karthik to coordinate peering test IPs and a staging window (we suggest 48–72 hour POC).
+- Ben (me) will coordinate logistics and HubSpot / procurement artifacts.
+
+Can we schedule the technical deep-dive on Mon 2028-03-06 (11:00–12:00 PT)? If that works I'll send an invite.
+
+Thanks — attaching: slo-acceptance-checklist.xlsx
+
+Best,
+Ben Carter
+Sr. Solutions Engineer, Redwood Inference
+
+Attachment: slo-acceptance-checklist.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, 18KB)
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Sanjay Rao <sanjay.rao@cortado.com>, Ben Carter <ben_carter@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>
+Date: Sat, 04 Mar 2028 13:47:00 -07:00
+Subject: Re: Edge VPC SLOs — post-demo follow-up
+
+Sanjay — quick technical clarifications and concrete numbers from the runtime team so your network folks can validate: 
+
+- Latency budget breakdown (p95 target 120ms for short sessions):
+  * Client -> Cortado egress NAT: variable (measured by you)
+  * Cortado egress -> Redwood peering hop: target <= 30ms p95
+  * Our network + kernel processing + decryption + batching: 25–40ms p95 on well-provisioned nodes
+  * Model token gen (small Llama-variant @ int8 + KV cache warmed): 20–40ms p95 per token under streaming mode
+  => Total p95 budget ~95–140ms depending on your RTT.
+
+- VPN specifics: IPsec adds CPU-bound encryption/decryption; for AES-GCM on modest CPU instances expect 0.5–3.0ms per packet. MTU: recommend path MTU >= 1400 to avoid frequent fragmentation for audio payloads.
+
+- Concurrency sizing: assuming our Llama-7B-int8 baseline, approximate throughput: 12–18 tokens/sec per stream. For 60 steady streams budget ~1.2–1.6M tokens/min. Peak bursts to 250 concurrent will require autoscale headroom: plan for 3–4x baseline capacity. We'll provide exact GPU counts after we know token lengths and sampling cadence.
+
+- Instrumentation we want from your side during the POC: per-stream timestamps (client-send, server-receive, server-token-emit, client-ack), network interface drops, and egress shaping logs. We'll correlate with our trace IDs.
+
+Test commands (suggested)
+- traceroute -w 2 -q 1 <redwood-staging-ip>
+- iperf3 -c <redwood-staging-ip> -t 60 -P 10
+- tcping -i 0.2 <redwood-staging-ip> 443
+
+I'll prepare a short test-playbook (steps + expected outputs) and drop it in the Drive link Ben shared.
+
+-Marissa
+Marissa Cole
+Principal Performance Engineer, Redwood Inference
+
+Attachment: latency-trace-sample.txt (text/plain, 6KB)
+From: Ben Carter <ben_carter@redwood.com>
+To: Sanjay Rao <sanjay.rao@cortado.com>, Priya Menon <priya.menon@cortado.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Sat, 04 Mar 2028 16:33:00 -07:00
+Subject: Re: Edge VPC SLOs — post-demo follow-up (action items & timeline)
+
+Sanjay / Priya — thanks for the quick review. To keep things actionable, here's a concise list of owners and timelines: 
+
+Action items
+- Provide staging peering IPs and a 72-hour POC window (Owner: Cortado networking) — due: 2028-03-07
+- Redwood to provide GPU sizing worksheet + Dedicated config options (Owner: Marissa) — due: 2028-03-08
+- Run baseline RTT and MTU probes and share p50/p95 over 24h (Owner: Cortado networking) — due: 2028-03-09
+- Execute streaming token-latency replay (Ben/Marissa to support; Cortado to run recordings) — POC window: 2028-03-10 -> 2028-03-12
+- Meet to review POC results and procurement next steps (Owners: Ben + Sanjay) — proposed: 2028-03-13 10:00 PT
+
+Acceptance criteria (short)
+- P95 token latency <= 120ms for short sessions (see Marissa breakdown)
+- No sustained packet loss >0.5% during steady-state windows
+- Concurrency ramp shows graceful autoscale with <10% request failures at peak
+
+I will open the HubSpot deal record and attach the acceptance checklist and Drive playbook. If you confirm the POC window we will block the staging capacity.
+
+Thanks — looking forward to the deep-dive on Mon 3/6 if that works; sending calendar invite now.
+
+-Ben
+Ben Carter
+Sr. Solutions Engineer, Redwood Inference
+
+Related links: https://app.hubspot.com/contacts/12345/deal/RED-2028-CORT-09
+Attachments referenced: slo-acceptance-checklist.xlsx, vpc-topology-v2.pdf, latency-trace-sample.txt

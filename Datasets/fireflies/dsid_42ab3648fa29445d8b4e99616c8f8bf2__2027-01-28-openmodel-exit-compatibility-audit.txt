@@ -1,0 +1,78 @@
+Open-model Exit & Compatibility Audit - Heliotrope Systems
+
+Meeting header:
+Date: 2027-01-28
+Start: 15:00 PST
+Duration: 54 minutes (scheduled)
+Attendees: Maya Chen (Redwood AE), Diego Morales (Redwood SE), Aisha Patel (CTO, Heliotrope), Luca Romano (ML Infra), Sara Kim (SRE), Tom Erickson (Product)
+
+Auto-summary (auto gen, may be rough):
+Heliotrope is evaluating an exit from their current managed provider stack toward a mix of hosted and private Redwood deployments. Key concerns: eval parity (quality differences across OpenAI/Anthropic and self-hosted vLLM/TGI), tokenization and embedding divergence, latency vs cost tradeoffs, and compliance (KMS, audit logs, region). Agreed next steps: run parity eval with Heliotrope prompts, share security/compliance docs, schedule deep-dive for private deployment architecture.
+
+Topics: evaluation parity, quantization and KV cache behavior, dedicated vs private hosting, streaming/function calling compatibility, compliance/KMS, benchmark runbook
+
+Transcript:
+[00:00] Maya Chen: Hey everyone thanks for carving out time, um we wanted to kick off a short audit to understand where Heliotrope is today and what the migration constraints are. Aisha, do you want to open with current state?
+[00:12] Aisha Patel: Sure yeah, thanks Maya. So we've been on a managed stack — some mixing of OpenAI and Anthropic APIs — and more recently experimenting with vLLM hosts for cost reasons. Our driver is predictability and control; we need lower unit costs but can't regress on answer quality for our core summarization and retrieval tasks.
+[00:28] Luca Romano: To add, our infra has a vLLM fleet behind TGI for some lightweight inference. It's fine for batch but we're seeing tokenization differences and, uh, embedding drift between providers which breaks downstream similarity searches.
+[00:42] Diego Morales: Makes sense. When you say tokenization differences — are you seeing consistent length inflation or are prompts being split differently?
+[00:48] Luca Romano: Mostly inflation; for certain models the token counts go up 10-18% compared to OpenAI, which throws off our promt-ratelimit calculations and cost estimates. Also embedding vectors from Anthropic have a different normalization which affects our cosine thresholding.
+[01:02] Tom Erickson: And function calling — we've architected product features around tool-calling from the model, so the semantics need to be close. We've had to write provider-specific glue which is becoming a maintenance burden.
+[01:12] Maya Chen: That's exactly the kinds of gaps Redwood tries to address at the runtime and API abstraction layer. Quick question: for the vLLM/TGI pieces, are you running quantized models or FP16?
+[01:23] Luca Romano: Mostly 4-bit quantized on commodity GPUs to save cost; occasional FP16 on p4s for latency-sensitive endpoints.
+[01:30] Diego Morales: Noted. So two immediate risk vectors: quality parity (tokenization, embeddings, decoding/formats) and perf parity (KV cache behavior, batching, cold-start latency on quantized stacks).
+[01:42] Sara Kim: Also SRE perspective — we need audit logs, KMS integration, and the ability to lock down egress to specific cloud regions. We have regulatory needs for EU residency for a subset of customers.
+[01:52] Maya Chen: Good — Redwood Private supports VPC and on-prem, and our private control plane can be co-located in EU regions. We have KMS and HSM options plus audit log exports. I'll share the compliance packet after the call.
+[02:02] Aisha Patel: Great. Can you walk through what parity evaluation looks like from Redwood's side? How invasive is it?
+[02:10] Diego Morales: Yeah so we typically ask for a representative prompt set — ideally a few hundred prompts across the primary use-cases (summarization, retrieval-augmented generation, code-gen, classification). We run those prompts across the candidate models and variants: hosted redwood catalog models, reserved Dedicated variants, and your on-prem vLLM/TGI configs if you provide artifacts or container images.
+[02:31] Diego Morales: We'll produce metrics: token counts, latency p50/p95, exact/soft match scores against your golden outputs, and embedding cosine distributions. We'll also run structural checks for function calling and streaming behavior — e.g., whether chunked streaming reassembles into identical outputs.
+[02:49] Luca Romano: For the on-prem side we can give Docker images and a small sample of our vLLM config; there's some custom kernel flags in our fork though, hope that's okay.
+[02:58] Diego Morales: Usually fine; we can run parity in a customer-provided environment or in our lab if we need to instrument. For private deployments we can mirror your kernel flags to reproduce behavior.
+[03:07] Tom Erickson: What about model variants? We sometimes use a smaller Mistral variant for cost. How granular are your rollouts?
+[03:15] Maya Chen: You can pin endpoints to model versions, do canary rollouts, and set automated fallback policies. For Dedicated we also give capacity pools so you can reserve throughput. For private you keep control of the images but Redwood's control plane can orchestrate rollouts.
+[03:29] Aisha Patel: One of our immediate fears is hallucination increase after quantization. How do you quantify that?
+[03:35] Diego Morales: We'll use a mix of automated NLI-based hallucination detectors, prompt-specific heuristics, and manual spot-checks for high-risk categories. We'll tie regressions back to prompts so you can decide to pin to alternative variants or apply different quantization profiles.
+[03:49] Sara Kim: From ops, we need to know the rollback path. If a canary shows regressions, how quickly can we flip back?
+[03:55] Maya Chen: Rollbacks are immediate at the routing layer; in Dedicated and Hosted we maintain fallbacks to a compatible model family. In Private, the control plane supports quick reconfigure but exact time depends on your deployment topology — Diego can follow up with a runbook.
+[04:10] Diego Morales: Yep I'll write a rollback playbook. Also, we often see subtle divergence from tokenizers; one mitigation is to add an SDK shim that normalizes tokenization and prompt pre-processing across providers. That reduces surprise token inflation.
+[04:24] Luca Romano: That could help. Our stack is already doing whitespace normalization and some prompt templating, but not a full shim.
+[04:30] Tom Erickson: Can you speak to pricing expectations for Dedicated vs Hosted for our traffic profile? We're heavy on inference for summarization with spikes at EOD.
+[04:38] Maya Chen: We'll do a sizing exercise after you share representative traffic. Hosted tends to have faster time to value and lower ops overhead, Dedicated gives predictable per-token economics at a commit, and Private gives the most control but with higher runbook/ops overhead. We'll model a 3-month and 12-month cost projection for the prompt set you share.
+[04:55] Aisha Patel: On the legal side, we'll need data retention, audit trail, and the ability to egress logs. Can you export audit logs to our SIEM?
+[05:02] Maya Chen: Yes, audit logs are exportable to Splunk/Datadog or via S3 on a schedule; Redwood's Private can also stream logs to your SIEM through secure connectors.
+[05:12] Sara Kim: KMS / HSM — do you have integrations with major providers? We want to use our existing AWS KMS keys.
+[05:18] Diego Morales: We integrate with AWS KMS, GCP KMS, and customer-managed HSMs. We also support BYOK flows for private deployments.
+[05:25] Luca Romano: Fine. A few technical nitty-gritty things: how do you handle KV cache persistence across restarts? In our vLLM fleet we lose warm caches on node churn which spikes latencies.
+[05:36] Diego Morales: Redwood runtime keeps an LRU-backed KV cache and can optionally shard persistent caches to local NVMe for warm-starts; for Dedicated we can provision sticky worker pools or stateful pods to preserve hot caches. For Private you can opt into the same persistence layer.
+[05:52] Tom Erickson: Are embeddings stable across quantization? We rely on embedding similarity for reranking.
+[05:57] Diego Morales: Quantization can affect embeddings. We compare embedding cosine distributions and if we detect drift we recommend either post-hoc re-normalization, using a float-embedding-only pipeline, or a retrain of the reranker thresholds. We'll surface per-model guidance in the benchmark report.
+[06:12] Aisha Patel: What's the timeline for an initial parity run? We want results before our budget meeting mid-Feb.
+[06:18] Maya Chen: If you can deliver the prompt set and traffic profile by end of this week, Diego can start and deliver a first pass in 7-10 business days. That should put you before mid-Feb.
+[06:27] Luca Romano: We can do that. We'll redact PII from the prompts but keep representative structure.
+[06:32] Diego Morales: Perfect. For instrumentation we'll capture p50/p95, tokens per response, embedding cosine histograms, and a small human review sample for edge cases.
+[06:42] Tom Erickson: Any gotchas with function calling? We've seen mismatch in argument encoding with Anthropic vs OpenAI.
+[06:49] Diego Morales: Yeah function-call semantics differ; Redwood's SDK normalizes the call/response shape and can wrap provider-specific quirks. For Private setups, you can maintain your own runtime hooks to keep the exact contract.
+[06:59] Sara Kim: We also need SLA language and uptime targets for Dedicated.
+[07:04] Maya Chen: Our Dedicated contracts include SLA tiers; I'll include draft SLA language in the packet. For Private deployments we offer enterprise support levels but SLA specifics depend on the support package.
+[07:14] Aisha Patel: One more thing — data residency. Some EU customers require model inputs not leave region at any point. Can Redwood enforce strict regional routing?
+[07:22] Maya Chen: Yes, you can set routing policies by region and customer tier; for the strictest case we recommend Private in-region with local KMS so data never leaves the EU.
+[07:33] Luca Romano: Ok that's helpful. Are there any reference customers who've done a similar transition from Anthropic/OpenAI to Redwood Private?
+[07:40] Maya Chen: We have a few enterprise case studies; I'll anonymize and share them, and include a short architecture diagram showing the private control plane.
+[07:48] Tom Erickson: Regarding benchmark artifacts, what format will you share results in? We prefer a spreadsheet so we can slice by prompt type.
+[07:54] Diego Morales: We'll produce a spreadsheet plus a short summary deck. The spreadsheet will include per-prompt rows with tokens, latency, score, embedding vector hash, and drift metrics.
+[08:05] Aisha Patel: Sounds good. Any questions from your side, Luca?
+[08:08] Luca Romano: Not right now — Diego, we'll send the prompt set and a docker tarball of our vLLM config. Keep in mind there are kernel-level flags.
+[08:16] Diego Morales: Got it — we'll treat it as a customer-hosted environment if you prefer.
+[08:20] Maya Chen: Quick recap before we close: Luca will share prompt set and traffic profile by 2027-01-31; Diego kicks off parity run and delivers results within 7-10 business days; Maya to send compliance and SLA materials by 2027-01-31; schedule private-deploy deep-dive week of 2027-02-07. Anything else?
+[08:37] Aisha Patel: That covers it. Appreciate the clarity.
+[08:40] Tom Erickson: Thanks everyone.
+[08:42] Maya Chen: Thanks all — we'll follow up via email with links to the shared spreadsheet and a calendar invite for the deep-dive.
+
+(ends at approx 15:54 PST)
+
+References shared during call:
+- parity-runbook.xlsx (will be created by Redwood)
+- security_compliance_packet_v2.pdf (Redwood)
+- demo-sprint-runbook.md (link to internal doc)
+
+Notes about transcript: occasional transcription artifacts, speaker labeling approximated, and timestamps are coarse.

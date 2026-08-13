@@ -1,0 +1,102 @@
+Defense-in-Depth: Isolation Snapshot for Dedicated & Private
+
+From: Tina Lopez <tina.lopez@acme.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: acme-security@acme.com
+Date: Mon, 3 May 2027 10:12:00 -0700
+Subject: Request: high-level isolation snapshot for Dedicated/Private
+
+Hannah,
+
+Thanks again for the walkthrough last week. As part of our SIG review we're collecting short, high-level architecture snapshots that explain the defense-in-depth approach across Redwood's Dedicated and Private offerings. The external auditor would like a 1–2 page narrative and a network diagram that highlights:
+
+- Customer tenancy boundaries (control plane vs. data plane)
+- Approved egress paths and where egress filtering is enforced
+- How KMS/HSM boundaries are represented for Private deployments
+- Fallbacks/rollbacks and cross-region failover behavior
+
+Can you provide a concise snapshot we can include in the SIG/CAIQ packet? A diagram PNG and a one-page narrative is ideal. If there's an internal reference ID we can link in the packet, please include that.
+
+Best,
+Tina Lopez
+Senior Security PM, Acme Corp
+
+---
+Attachments: none
+
+From: Hannah Schmitt <hannah_schmitt@redwood.com>
+To: Tina Lopez <tina.lopez@acme.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Tue, 4 May 2027 09:38:00 -0700
+Subject: Re: Request: high-level isolation snapshot for Dedicated/Private
+
+Tina — thanks for the clear ask. Attaching a compact snapshot and an updated diagram (see attachment stubs below). I kept the language intentionally short so it can be dropped into the SIG/CAIQ.
+
+Quick narrative (summary):
+- Tenant isolation: Customers on Dedicated get reserved GPU pools and network namespaces. The control plane (hosted by Redwood) is logically separated from the customer data plane; control plane communications are authenticated with mTLS and limited to management endpoints. Private (VPC/on‑prem) customers run a customer-managed control plane or a customer-provisioned control-plane connector; in that case, our control-plane calls are tunneled over a customer-approved management channel.
+
+- Data plane boundaries: Model serving occurs in isolated tenant pools. For Dedicated, tenant pods run in separate node pools with enforced network policies; for Private, we rely on customer VPCs and subnets. KV cache and model artifacts are stored in tenant-scoped volumes; shared caches are disabled unless explicitly opted-in and logged.
+
+- Egress & filtering: All outbound traffic from serving instances is routed through an egress proxy (Dedicated edge) where outbound allowlists and content-name-based filtering apply. For Private, egress is controlled by the customer's network; we provide recommended firewall rules and an egress ACL template.
+
+- KMS/HSM boundaries: For hosted control plane we integrate with a Redwood-managed KMS; customers can opt for a customer-managed KMS via cross-account key grants. For Private deployments we support KMS/HSM inside the customer's network — keys never leave the customer's HSM.
+
+- Failover & fallback: Routing policies allow automatic fallback to a lower-cost model variant in a different region or to an on-prem replicate if network partitioning occurs. Rollbacks are orchestrated via a canary-first rollout with automatic health checks; critical traffic shifts to a pre-provisioned standby pool during incidents.
+
+Deliverables attached: dedicated-private-isolation-diagram-v1.png (diagram stub), segmentation-matrix-20270504.pdf (matrix + short controls mapping).
+
+If you need a single-paragraph extract or a labeled diagram with numbered callouts for the SIG, tell me which format (PDF/PNG) you prefer and I can produce it by EOD tomorrow.
+
+Hannah Schmitt
+Manager, Trust & Security
+Redwood Inference
+
+Attachments: dedicated-private-isolation-diagram-v1.png (image/png, 1.2MB) — diagram stub; segmentation-matrix-20270504.pdf (application/pdf, 240KB) — controls matrix
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: Tina Lopez <tina.lopez@acme.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: Tue, 4 May 2027 11:05:00 -0700
+Subject: Re: Request: high-level isolation snapshot for Dedicated/Private
+
+Hannah — adding a couple technical clarifications for the auditor's checklist. Quoting your bullets above for context:
+
+> - Tenant isolation: Customers on Dedicated get reserved GPU pools and network namespaces. The control plane (hosted by Redwood) is logically separated from the customer data plane; control plane communications are authenticated with mTLS and limited to management endpoints.
+
+- Implementation note: for Dedicated we use node-pool level taints + Kubernetes NetworkPolicies to prevent cross-tenant pod-to-pod communication. The NVMe-backed model artifacts are scoped via per-tenant IAM roles; access is tokenized with short TTLs.
+
+> - Data plane boundaries: Model serving occurs in isolated tenant pools. For Dedicated, tenant pods run in separate node pools with enforced network policies; for Private, we rely on customer VPCs and subnets. KV cache and model artifacts are stored in tenant-scoped volumes; shared caches are disabled unless explicitly opted-in and logged.
+
+- Implementation note: cache isolation for Dedicated uses namespaced redis instances with ACLs; we instrument cache-hit telemetry for auditing. For Private on-prem installs we provide a config profile that disables cross-tenant cache sharding by default.
+
+> - Egress & filtering: All outbound traffic from serving instances is routed through an egress proxy (Dedicated edge) where outbound allowlists and content-name-based filtering apply. For Private, egress is controlled by the customer's network; we provide recommended firewall rules and an egress ACL template.
+
+- Implementation note: egress proxy supports TLS inspection and SNI-based allowlists for outbound model artifact fetches. We also surface egress logs to the customer's logging collector (Syslog/ELK) for compliance audits.
+
+> - KMS/HSM boundaries: For hosted control plane we integrate with a Redwood-managed KMS; customers can opt for a customer-managed KMS via cross-account key grants. For Private deployments we support KMS/HSM inside the customer's network — keys never leave the customer's HSM.
+
+- Implementation note: we support both envelope encryption (customer key wrapping) and direct HSM integration for Private; documentation includes examples for AWS CloudHSM, Azure Key Vault HSM, and Transit HSM patterns.
+
+Attaching a single-slide cheat sheet I used in recent SOC2 calls — happy to prune for the SIG packet.
+
+-karthik
+
+Attachment: segmentation-matrix-20270504.pdf (referred)
+
+From: Tina Lopez <tina.lopez@acme.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: Wed, 5 May 2027 16:45:00 -0700
+Subject: Re: Request: high-level isolation snapshot for Dedicated/Private
+
+Hannah/Karthik — this is exactly what we need, thank you. The auditor asked for two small follow-ups before we close the ticket:
+
+1) Can you add a labeled callout on the diagram showing where tenant audit logs are collected and retained (we need retention and forwarding behavior documented)?
+2) In the narrative, can you explicitly call out the default retention period for egress logs and how customers can change retention for Private deployments (a one-line sentence is fine).
+
+If you can add those two items to the diagram PDF and a 1-line addition to the narrative, that will let us mark the SIG item resolved. If EOD Friday (2027-05-07) is workable, that would be great.
+
+Thanks again — Tina
+
+---
+Acme Security (acme-security@acme.com)

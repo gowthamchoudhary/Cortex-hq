@@ -1,0 +1,135 @@
+Storage and deletion: default treatment of requests, streams, and generated artifacts
+
+From: Laura Simmons <laura.simmons@brightbank.com>
+To: Jordan Blake <jordan.blake@redwoodinference.com>
+Date: 2025-05-19T09:12:00-07:00
+Subject: Quick clarifications — what does Redwood keep by default?
+
+Hi Jordan,
+
+As part of our procurement and security review I need a plain-English summary of what Redwood stores by default for hosted API customers. Specifically:
+- Are customer prompts / inputs retained by default? If so, how long?
+- Are model-generated outputs stored and for how long?
+- How do streamed responses (fragmented tokens) differ from final outputs?
+- Are attachments or file uploads captured in logs?
+
+We need this to justify the retention clause in our contract. If you have a single matrix or short doc you can attach that would be great.
+
+Thanks — Laura
+Laura Simmons
+Sr. InfoSec Manager, BrightBank
+laura.simmons@brightbank.com
+
+
+From: Jordan Blake <jordan.blake@redwoodinference.com>
+To: Laura Simmons <laura.simmons@brightbank.com>
+Cc: Kimberly Park <kimberly.park@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: 2025-05-19T11:03:00-07:00
+Subject: Re: Quick clarifications — what does Redwood keep by default?
+
+Hi Laura — thanks for the clear list. Short answers first, then a one-page summary below. Attaching a compact retention matrix (retention_matrix_v2.pdf).
+
+Short answers (hosted API default):
+- Prompts / requests (user inputs): retained for 30 days by default for operational debugging and abuse analysis.
+- Model outputs (final generated completions): retained for 90 days by default (helps with quality monitoring and regression detection).
+- Streamed fragments: transient; we keep short-lived buffers for up to 7 days for debugging partial-stream issues, but these are not used for long-term analytics.
+- File uploads / attachments referenced in requests: metadata (filename, mime type) is captured; file content should be stored in customer-managed storage or passed to Redwood via signed URLs — Redwood does not persist uploaded binary content by default.
+
+What customers can change:
+- Opt-out: customers can request no retention on inputs and outputs (zero retention) via an account setting or API flag; for hosted customers this is subject to technical verification and billing implications.
+- Region/residency: hosted customers can choose a region; retention still follows the same time windows unless an enterprise contract specifies otherwise.
+- Dedicated/Private: for Dedicated and Private deployments, retention defaults can be set by the customer and enforced by config (often zero or short TTLs).
+
+See the attached matrix for a compact view and a couple of example timeline scenarios.
+
+--
+Jordan Blake
+Head of Sales Engineering | Redwood Inference
+jordan.blake@redwoodinference.com
+
+Attachment: retention_matrix_v2.pdf (1 page, table)
+
+
+From: Laura Simmons <laura.simmons@brightbank.com>
+To: Jordan Blake <jordan.blake@redwoodinference.com>
+Date: 2025-05-19T13:45:00-07:00
+Subject: Re: Quick clarifications — what does Redwood keep by default?
+
+Thanks Jordan — that helps. A couple of follow ups:
+1) For EU customers, are the retained records stored only in-region?
+2) Will you provide evidence of deletion (proof of purge) if we ask? We need something we can show auditors.
+3) Does the 90-day outputs retention include mini-debug logs, token traces, or only final completions?
+
+Can you loop in your security/product folks? I want everything documented so procurement can proceed.
+
+Laura
+
+
+From: Kimberly Park <kimberly.park@redwoodinference.com>
+To: Laura Simmons <laura.simmons@brightbank.com>
+Cc: Jordan Blake <jordan.blake@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: 2025-05-20T09:02:00-07:00
+Subject: Re: Quick clarifications — what does Redwood keep by default?
+
+Hi Laura — adding more detail from Security/Product. Short answers to your follow-ups: 
+
+1) Residency (EU customers):
+- Hosted customers may select an EU region at account creation. For accounts pinned to an EU region, persisted logs (requests/outputs) are stored in that region.
+- For customers requiring strong residency guarantees we recommend Dedicated or Private deployments where the entire stack (control plane + data plane) is under the customers region/VPC.
+
+2) Proof of deletion: 
+- We can provide deletion evidence for hosted accounts: timestamped purge logs and S3 object lifecycle events (or equivalent) showing the purge operation. For enterprise contracts, we can add a contractual deletion attestation clause and provide periodic reports.
+
+3) What counts as outputs: 
+- Final completions means the canonical final text returned to the API caller.
+- Token traces and extensive debug traces are considered debug artifacts and are not part of the standard 90-day retention unless a customer enables enhanced logging for debugging; enhanced logging is off by default.
+
+Operational notes:
+- Encryption: all persisted logs are encrypted at rest with customer keys available for Dedicated/Private or Redwood-managed KMS for hosted.
+- Access controls: log access is limited to an internal, audited service role and sent to customer SSO ACLs for enterprise.
+
+I've uploaded a short DPA redline with suggested deletion language for procurement to review (attached). Happy to join a call with procurement & legal to walk through.
+
+Regards,
+Kimberly Park
+Director, Security & Compliance | Redwood Inference
+kimberly.park@redwoodinference.com
+Attachment: DPA_redline.docx
+
+
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: BrightBank Procurement <procurement@brightbank.com>, Jordan Blake <jordan.blake@redwoodinference.com>
+Cc: Laura Simmons <laura.simmons@brightbank.com>, Kimberly Park <kimberly.park@redwoodinference.com>
+Date: 2025-05-21T10:17:00-07:00
+Subject: Re: Quick clarifications — what does Redwood keep by default?
+
+Hi Laura / Procurement team —
+
+Thanks for the questions. From a procurement perspective, the next practical step is: 
+1) Please confirm whether you want the standard hosted defaults (30d inputs / 90d outputs) OR the conservative option (zero retention on inputs + outputs retained only for 7 days).
+2) If you choose conservative option we'll prepare a short contract addendum (DPA clause + SLA note) and schedule a redline review.
+
+If you want, we can also include a mutual action plan:
+- Today: confirm retention profile choice
+- By EOD next week: DPA redline accepted
+- Two weeks: evidence-of-deletion process confirmed and pilot report delivered
+
+I'm available Wednesday for a 30-min sync to finalize language.
+
+Best,
+Marissa Cole
+Sr. Manager, Commercial Contracts | Redwood Inference
+marissa.cole@redwoodinference.com
+
+
+From: Laura Simmons <laura.simmons@brightbank.com>
+To: Marissa Cole <marissa.cole@redwoodinference.com>
+Cc: Jordan Blake <jordan.blake@redwoodinference.com>, Kimberly Park <kimberly.park@redwoodinference.com>
+Date: 2025-05-21T16:03:00-07:00
+Subject: Re: Quick clarifications — what does Redwood keep by default?
+
+Marissa — thanks, that timeline works. Procurement prefers the conservative option (zero retention on inputs). Please send the addendum and we'll target the Wednesday call for final sign-off.
+
+Laura
+Sr. InfoSec Manager, BrightBank
+

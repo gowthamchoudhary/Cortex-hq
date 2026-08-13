@@ -1,0 +1,131 @@
+SDK quickstart & local test plan — next steps for ACME Health integration
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Tom Bell <tom.bell@acmehealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: 2026-09-22T10:15:00-07:00
+Subject: SDK quickstart & local test plan — next steps for ACME Health integration
+
+Hi Tom — thanks again for the call this morning. Quick recap and proposed next steps so we can get your engineers running locally and validate the end-to-end flows you care about.
+
+Recap (high level)
+- Primary goals: 1) embed triage/summarization into clinician notes, 2) provide a low-latency reranker for search results, 3) instrument structured tool calls for downstream EHR lookups.
+- Constraints: PHI-in-transit only for now (no long-term storage), prefer US-region execution, SSO to sandbox later this week.
+
+Technical plan (SDK + env)
+1) SDK quickstart (Python + TypeScript)
+   - Python: pip install redwood-sdk; sample app uses local env var API_KEY for sandbox.
+   - TS: npm i @redwood/inference; example serverless function included.
+2) Auth & access
+   - Sandbox uses scoped API key initially (short-lived). We’ll enable SSO + workspace-level domain allowlist for production.
+3) Routing / model variants
+   - Route short latency requests to small-v2 models; heavy context summarization to llama-extended quantized variants. We’ll provide a routing policy example in the repo.
+4) Structured output & tool calling
+   - We recommend function schemas for EHR lookup (JSON schema provided). SDK supports tool-calling primitives with explicit input/output types.
+5) Embeddings & rerankers
+   - Provide an embeddings pipeline (512-d) for your note vectors; reranker can run a small cross-encoder on top of top-K retrieved results for precision.
+
+Local testing checklist (minimal)
+- Node: 16+ / Python: 3.9+ installed
+- Clone repo: redwood/example-acme-integration
+- Copy sample .env (attached acme-sandbox-variables.env) and set API_KEY
+- Run python app/sample_cli.py --smoke or npm run start:dev for TS
+- Test endpoints for: generation, embeddings, rerank (sample tests included)
+
+Attachments: redwood-sdk-quickstart.pdf (walkthrough), acme-sandbox-variables.env (env examples)
+
+Ask: Can you confirm we can provision a sandbox workspace for ACME Health (region: us-west-2) and grant initial API keys to tom.bell@acmehealth.com and sunil@acmehealth.com? Also let us know if your infra team prefers SSO this week or next.
+
+I’ve added a short mutual action plan draft to the Drive link; happy to iterate. Proposed times for a 60-minute tech onboarding: Thu 9/24 10am PT or Fri 9/25 1pm PT.
+
+Thanks — looking forward to getting your team running locally.
+
+—
+Karthik Iyer
+Senior Solutions Engineer | Redwood Inference
+karthik_iyer@redwood.com
+(Attachment: redwood-sdk-quickstart.pdf, acme-sandbox-variables.env)
+From: Tom Bell <tom.bell@acmehealth.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Sunil Rao <sunil@acmehealth.com>
+Date: 2026-09-22T14:08:00-07:00
+Subject: Re: SDK quickstart & local test plan — next steps for ACME Health integration
+
+Karthik — thanks for the clear summary. A few clarifications from our side:
+
+1) Data residency: we need assurance that embeddings and reranker artifacts for test data in the sandbox remain in the us-west-2 region and are not replicated to other regions. Is that possible with the sandbox?
+2) Embedding size: our initial plan is up to ~3M note vectors; will the 512-d pipeline handle that at reasonable cost, or should we prototype 256-d first?
+3) Reranker latency: target p95 under 250ms for interactive search. Which model variants do you recommend we test for that SLA?
+4) Sample apps: our infra team prefers TypeScript samples first (we run Node functions in Azure). Could you share a minimal TS example that calls generation + an embeddings precompute job?
+
+We can do the onboarding on Thu 9/24 at 10am PT. Please provision keys for tom.bell and sunil.
+
+Thanks — Tom
+Tom Bell
+Director, Clinical IT | ACME Health
+(Attachment: none)
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Tom Bell <tom.bell@acmehealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: 2026-09-22T16:40:00-07:00
+Subject: Re: SDK quickstart & local test plan — next steps for ACME Health integration
+
+Tom — great questions. Answers inline below, plus action items.
+
+> Data residency: can sandbox keep artifacts in us-west-2?
+Yes — we can pin the sandbox workspace to us-west-2. We’ll also disable cross-region replication for that workspace and note it in the mutual action plan.
+
+> Embedding size: 3M vectors — recommended dimension?
+For cost/throughput tradeoffs we suggest prototyping with 256-d to validate recall and infra sizing, then benchmark 512-d if quality needs improvement. We’ll include scripts to convert and reindex.
+
+> Reranker latency: p95 <250ms
+Start with a distilled cross-encoder (rerank-small-v1) and run it only on top-100 retrieved candidates. We’ve seen p95 ~180–220ms on a dedicated small GPU instance with batching tuned; we’ll provide tuning knobs in the playbook.
+
+> TS sample app
+Marissa will share a minimal TypeScript example that does: 1) embed a small corpus, 2) run a retrieval+rerank call, 3) demonstrates a structured tool call for an EHR lookup. Repo + instructions are attached below.
+
+Action items
+- Redwood: provision sandbox workspace (us-west-2) + generate two scoped API keys for Tom & Sunil (ETA: EOD 9/23). We’ll attach the keys in a secure link. (OWNER: Karthik)
+- Redwood: push TS minimal example to the shared Drive and link repo (OWNER: Marissa).
+- ACME: confirm if you want 256-d or 512-d for initial prototyping (OWNER: Tom)
+- Schedule: onboarding Thu 9/24 10am PT confirmed — invite to follow.
+
+Attachments: mutual-action-plan.xlsx (draft) — I’ve added the region pin and replication settings.
+
+Thanks — see you Thursday.
+
+—
+Karthik
+(Attachment: mutual-action-plan.xlsx)
+
+On Tue, Sep 22, 2026 at 02:08 PM Tom Bell <tom.bell@acmehealth.com> wrote:
+> Karthik — thanks for the clear summary. A few clarifications from our side:
+> 
+> 1) Data residency: we need assurance that embeddings and reranker artifacts for test data in the sandbox remain in the us-west-2 region and are not replicated to other regions. Is that possible with the sandbox?
+> 2) Embedding size: our initial plan is up to ~3M note vectors; will the 512-d pipeline handle that at reasonable cost, or should we prototype 256-d first?
+> 3) Reranker latency: target p95 under 250ms for interactive search. Which model variants do you recommend we test for that SLA?
+> 4) Sample apps: our infra team prefers TypeScript samples first (we run Node functions in Azure). Could you share a minimal TS example that calls generation + an embeddings precompute job?
+> 
+> We can do the onboarding on Thu 9/24 at 10am PT. Please provision keys for tom.bell and sunil.
+> 
+> Thanks — Tom
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Tom Bell <tom.bell@acmehealth.com>, Laura Bennett <laura_bennett@acmehealth.com>
+Date: 2026-09-23T09:02:00-07:00
+Subject: Re: SDK quickstart & local test plan — next steps for ACME Health integration
+
+Karthik — I pushed a minimal TypeScript sample to the shared Drive: https://drive.google.com/drive/folders/1a2b3c-example-sdk-playbook (files: ts/minimal-retriever/index.ts, ts/package.json, scripts/embed-batch.js).
+
+Notes for the TS sample:
+- Uses @redwood/inference client (v0.9.1)
+- Local precompute script demonstrates parallel batching and writes vector files to ./vectors (local FS).
+- Included README with run commands and a smoke test (npm run smoke).
+
+I also added a short runbook for local test tuning (runbook/local-tuning.md) that covers batch sizes, token-limit settings, and a small snippet for using the SDK’s structured-tool API.
+
+I’ll attach the repo link to the HubSpot deal and send over the sandbox keys once Karthik confirms provisioning.
+
+—Marissa
+Solutions Architect | Redwood Inference
+(Attachment: none)

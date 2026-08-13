@@ -1,0 +1,218 @@
+Quality gates: override policy escalation (post near-miss)
+
+From: Ava Chen <ava.chen@redwoodinference.com>
+To: Aditya Rao <aditya.rao@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Kevin Osei <kevin.osei@redwoodinference.com>
+Date: Tue, Feb 3, 2026 at 9:12 AM PST
+Subject: Quality gates: override policy escalation (post near-miss)
+
+Team,
+
+After yesterday’s near-miss (Optimize change nearly promoted without meeting gates), we need to tighten the override policy immediately.
+
+Two goals:
+1) Overrides remain possible for true emergencies (e.g., rollback unblockers), but
+2) They cannot be a “convenience button” that bypasses quality and compliance.
+
+Please reply today with:
+- Who should be allowed to approve overrides (roles + named groups)
+- Time bounds (how long an override can live)
+- What must be recorded for audit (who/what/why + artifacts)
+- Where enforcement lives (Optimize apply boundary vs rollout controller vs both)
+
+We should also assume this will come up in enterprise security reviews. If our answer is “it’s logged somewhere,” that’s not sufficient.
+
+Ava
+
+—
+Ava Chen
+VP, Product & Platform
+Redwood Inference
+
+
+From: Aditya Rao <aditya.rao@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Kevin Osei <kevin.osei@redwoodinference.com>
+Date: Tue, Feb 3, 2026 at 9:46 AM PST
+Subject: Re: Quality gates: override policy escalation (post near-miss)
+
+Proposed policy (MVP → tighten further at GA if needed):
+
+Approvers:
+- Only “Optimize Override Approver” role (not general admin), initially: Optimize oncall (rotation) + Optimize PM lead (me) as backup.
+- For enterprise accounts, require a second approver (SRE oncall or Security) depending on reason code.
+
+Time bounds:
+- Default 24h expiration.
+- Max 72h (requires escalation beyond oncall).
+
+Required evidence (must be attached/linked in the override request):
+- Gate run id + summary (pass/fail deltas + flake score)
+- The exact config diff hash
+- Reason code (prod incident, capacity, false positive/flaky suite, customer block)
+- Ticket reference (INC/SUP/INT)
+
+Audit:
+- Emit audit events on: override requested, override approved/denied, override expired, override revoked.
+- Include approver identity + RBAC role + timestamps.
+
+Enforcement:
+- Block at Optimize “apply config” boundary AND rollout controller should refuse canary promotion without gate=passed OR override=active.
+
+If we align on this today, we can update PM-482 and coordinate RBAC via INT-3391.
+
+Aditya
+
+—
+Aditya Rao
+Product, Optimize
+
+
+From: Marcus Lin <marcus.lin@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>, Aditya Rao <aditya.rao@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Kevin Osei <kevin.osei@redwoodinference.com>
+Date: Tue, Feb 3, 2026 at 10:18 AM PST
+Subject: Re: Quality gates: override policy escalation (post near-miss)
+
++1 on defense-in-depth.
+
+Security requirements I’d like to see explicitly:
+
+1) Two-person rule when the override would allow production traffic to run on a config that failed quality gates.
+   - One approver can be Product (Optimize), second should be SRE or Security (depending on reason). This avoids “PM approves their own ship.”
+
+2) No permanent overrides.
+   - 24h default is good. I’d push max to 48h unless a VP signs off.
+
+3) Audit trail must be exportable (not only UI).
+   - Audit log event must include: account_id, route_id, model_id, config_diff_hash, baseline reference, gate_run_id(s), reason code, approver(s), expiry.
+   - Kevin: please confirm we can route these events into the enterprise audit export / SIEM pipeline.
+
+4) “Break-glass” access should be rare.
+   - If we need an emergency knob (e.g., to restore service during an incident), it must be separate from the normal override path and auto-notify #incidents.
+
+Marcus
+
+—
+Marcus Lin
+Security & Compliance
+Redwood Inference
+
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>, Aditya Rao <aditya.rao@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Kevin Osei <kevin.osei@redwoodinference.com>
+Date: Tue, Feb 3, 2026 at 11:02 AM PST
+Subject: Re: Quality gates: override policy escalation (post near-miss)
+
+From SRE POV:
+
+- Agree on two-person approval if the gate is failing.
+- We should distinguish “override because gates are flaky/infra broken” vs “override because we accept regression.” Those have different blast radius.
+
+Operational asks:
+1) Any override must require a ticket id (INC- / SUP- / INT-). No ticket, no override.
+2) Auto-expire and auto-revoke. No “forgotten override” risk.
+3) Post to #incidents (or at least #eng-sre) when an override is granted for production routes.
+4) Add a dashboard panel: active overrides by route/account + time to expiry.
+
+Also, I’d rather we keep max duration short (48h) and require Ava/Priya for anything longer.
+
+Sean
+
+—
+Sean Gallagher
+SRE Lead
+Redwood Inference
+
+
+From: Priya Natarajan <priya.natarajan@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>, Aditya Rao <aditya.rao@redwoodinference.com>, Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Kevin Osei <kevin.osei@redwoodinference.com>
+Date: Tue, Feb 3, 2026 at 12:24 PM PST
+Subject: Re: Quality gates: override policy escalation (post near-miss)
+
+Couple implementation notes so we don’t end up with a policy that’s unenforceable:
+
+- Enforcement should be in *both* places:
+  (a) Optimize service blocks apply unless (gate==passed) OR (override==active)
+  (b) Rollout controller blocks promotion unless (gate==passed) OR (override==active)
+  This covers UI/API clients and any drift in rollout workflows.
+
+- RBAC needs to be role-based, not “admins.” Let’s implement a dedicated role:
+  QUALITY_GATE_OVERRIDE_APPROVER
+  and keep membership narrow.
+
+- Override object needs to include: scope (account/route/model), diff hash, expiry, reason code, ticket ref, and approver set.
+
+- Please avoid “VP in the loop for every override” unless we can make it asynchronous.
+  Suggestion: two-person rule (PM + SRE/Sec) for <=48h, VP escalation only for >48h.
+
+Priya
+
+—
+Priya Natarajan
+VP Engineering, Platform
+Redwood Inference
+
+
+From: Ava Chen <ava.chen@redwoodinference.com>
+To: Aditya Rao <aditya.rao@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>, Mateo Alvarez <mateo.alvarez@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Kevin Osei <kevin.osei@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Tue, Feb 3, 2026 at 1:37 PM PST
+Subject: Re: Quality gates: override policy escalation (post near-miss) — decision
+
+Decision (effective immediately for Hosted API routes; extend to Dedicated as we roll out):
+
+1) Two-person approval REQUIRED for any override that permits applying/promoting a config change when the quality gate is failing.
+   - Approver A: Optimize PM oncall OR Optimize product lead (Aditya as backup)
+   - Approver B: SRE oncall (primary) OR Security (Marcus delegate) if reason code is security/compliance-critical
+
+2) Time bounds:
+   - Default expiration: 24 hours
+   - Maximum: 48 hours
+   - >48 hours requires VP escalation (Priya or me) AND a written plan to resolve (e.g., fix flaky suite, adjust prompt coverage) + follow-up owner.
+
+3) Required fields/evidence (no exceptions):
+   - Ticket id (INC/SUP/INT). No ticket, no override.
+   - Gate run id(s) + artifact links
+   - Config diff hash + scope (account_id / route_id / model)
+   - Reason code (choose from a fixed list)
+   - Free-text justification (1–3 paragraphs) including risk assessment
+
+4) Audit & notification:
+   - Emit audit log events for request/approve/deny/expire/revoke.
+   - Events must include: account_id, route_id, model_id, config_diff_hash, gate_run_id(s), reason code, both approvers, expiry timestamp.
+   - Overrides granted for production must post to #incidents and be visible in Console audit view.
+   - Kevin: ensure these events are included in audit export (enterprise ask).
+
+5) Enforcement must be defense-in-depth:
+   - Optimize apply boundary AND rollout controller promotion checks must enforce gate==passed OR override==active.
+
+Talia: please capture this as an update in PM-482 / the Confluence policy doc and track the RBAC change in INT-3391.
+
+Ava
+
+
+From: Talia Benson <talia.benson@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>, Aditya Rao <aditya.rao@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>, Mateo Alvarez <mateo.alvarez@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Kevin Osei <kevin.osei@redwoodinference.com>
+Date: Tue, Feb 3, 2026 at 2:41 PM PST
+Subject: Re: Quality gates: override policy escalation (post near-miss) — decision
+
+Captured. Action items I’m tracking:
+
+- Update override policy doc + link decision section (PM-482)
+- RBAC: create QUALITY_GATE_OVERRIDE_APPROVER role + limit membership (INT-3391)
+- Console: add “Active overrides” view + expiry + ticket ids
+- Observability: add metric + alert for active overrides > N hours remaining / unexpected spikes
+- Incident comms: confirm #incidents posting format
+
+I’ll send a short status update EOD with owners/dates.
+
+Talia
+
+—
+Talia Benson
+Program Manager
+Redwood Inference

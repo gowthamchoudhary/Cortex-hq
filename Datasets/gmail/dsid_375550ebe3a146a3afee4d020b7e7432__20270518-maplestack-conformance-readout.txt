@@ -1,0 +1,140 @@
+MapleStack conformance readout and runbook alignment
+
+From: Danielle Park <danielle@maplestack.com>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: Wei Zhang <wei.zhang@maplestack.com>
+Date: Wed, 12 May 2027 10:23:00 -0700
+Subject: Redwood compatibility check + request for conformance runbook
+
+Hi Stephanie —
+
+Thanks again for the demo last week. Our engineering lead (Wei) raised a few follow-ups around runtime behaviour when using Redwood Dedicated and some of the quantized variants. We'd like to run a short conformance exercise focused on: token-level latency at 2k contexts, KV cache correctness across reconnects, and fallback behavior when a pinned model variant is not available.
+
+Could you share a suggested runbook and a short checklist so our SREs can align tests with your team? Target window from our side: week of May 17.
+
+Thanks,
+Danielle
+Customer Success — MapleStack Consulting
+
+Attachments: compat-questions-0507.pdf (application/pdf, 210KB)
+From: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+To: Danielle Park <danielle@maplestack.com>
+Cc: Sergio Alvarez <sergio_alvarez@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Wed, 12 May 2027 11:02:00 -0700
+Subject: Re: Redwood compatibility check + request for conformance runbook
+
+Danielle —
+
+Appreciate the clear asks. I'm looping in Sergio and Karthik (solutions) and Laura (onboarding) to own the runbook and schedule. High level we propose:
+
+- Day 0: onboarding + shared test harness (we'll provide a small harness container and the compatibility matrix)
+- Day 1: KV cache and reconnect tests (deterministic prompts + reconnect stress)
+- Day 2: 2k context latency sampling + burst throughput profile
+- Day 3: fallback & variant mismatch tests + short readout
+
+I'll attach our baseline runbook and a compatibility matrix. Can you confirm the SRE contacts and whether you need a Redwood engineer on-call during tests?
+
+Best,
+Stephanie
+Enterprise Partnerships — Redwood Inference
+
+Attachments: initial-runbook-draft.pdf
+From: Wei Zhang <wei.zhang@maplestack.com>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.com>, Danielle Park <danielle@maplestack.com>
+Date: Thu, 13 May 2027 09:10:00 -0700
+Subject: Re: Redwood compatibility check + request for conformance runbook
+
+Thanks Stephanie. Our SREs are: Alex Chu (alex.chu@maplestack.com) and Priya Mistry (priya@maplestack.com). We'll need Redwood on-call for KV cache reconnection edge cases (we have seen drift in other runtimes). Also, a note — we will run tests against a quantized 4-bit variant (Q4) and an fp16 variant side-by-side.
+
+Can Redwood share the exact model identifiers and any recommended kernel/quantization flags so we can mirror runtime configuration?
+
+— Wei
+Lead Eng, MapleStack
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Wei Zhang <wei.zhang@maplestack.com>, Danielle Park <danielle@maplestack.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: Sergio Alvarez <sergio_alvarez@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Fri, 14 May 2027 08:17:00 -0700
+Subject: Re: Redwood compatibility check + request for conformance runbook
+
+Wei / Danielle —
+
+Thanks — we've put together a concrete conformance runbook (attached) and a compatibility CSV that maps Redwood model variants to our kernel/quantization recommendations. Highlights:
+
+- Model IDs: rwd-7b-fp16-v2, rwd-7b-q4-v1 (we'll surface exact hashes before tests)
+- Runtime flags: --kv-reconnect=preserve --batch-mode=continuous --kv-cache-ttl=30s (these are defaults we recommend for deterministic behavior)
+- KV test: scripted reconnect at intervals 30s/60s/120s with seeded prompts and a checksum on KV state
+- Latency: sample N=200 requests at sequence lengths 512/1024/2048; report p50/p95/p99
+- Fallback: configure route policy to fallback to rwd-7b-fp16-v2 when q4 variant not available — verify de-dup and token continuity
+
+We also included a small Docker image (link) with the test harness. Please let us know if you need us to run a remote session on day 1.
+
+Regards,
+Karthik
+Principal Solutions Engineer — Redwood Inference
+
+Attachments: maplestack-redwood-runbook-v1.pdf, compat-matrix-20270512.csv
+From: Danielle Park <danielle@maplestack.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: Wei Zhang <wei.zhang@maplestack.com>, Alex Chu <alex.chu@maplestack.com>, Priya Mistry <priya@maplestack.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Mon, 17 May 2027 14:05:00 -0700
+Subject: Re: Redwood compatibility check + request for conformance runbook
+
+Thanks Karthik — we've scheduled internal SRE time and pulled the harness. A couple quick clarifications before we kick off:
+
+1) For the KV reconnect checksum, do you have an example script or expected checksum function?
+2) When you say "de-dup and token continuity" on fallback — can you confirm whether the runtime will emit duplicate tokens at boundaries (we've observed this in other setups)
+
+If Redwood can run the first KV reconnect cycle live with our SREs, that will help us iterate faster. Proposed slot: Tue May 18, 09:00 PT.
+
+Danielle
+
+On Tue, May 18, 2027 at 08:21 Redwood SRE (automated) wrote:
+> Test harness pulled by MapleStack at 2027-05-17T21:12:43Z
+> Image: redwood/test-harness:v1.2
+
+
+From: Sergio Alvarez <sergio_alvarez@redwood.com>
+To: Danielle Park <danielle@maplestack.com>, Wei Zhang <wei.zhang@maplestack.com>, Karthik Iyer <karthik_iyer@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 18 May 2027 16:07:00 -0700
+Subject: Re: Redwood compatibility check + request for conformance runbook
+
+Danielle / Wei —
+
+Thanks for scheduling. We'll be on the call Tue 09:00 PT. Quick answers inline:
+
+1) KV checksum: see attached script (simple SHA256 over serialized KV entries sorted by key). We'll run it live during reconnect cycles so you can see the state.
+2) Fallback token continuity: Redwood's runtime includes a token continuity shim that avoids duplicate emission on model switch; that said we ask you to run the boundary test we included (short prompt that ends mid-token) — we will record token streams and reconcile.
+
+I've attached the live-run checklist (maplestack-redwood-runbook-v1.pdf) and the test outputs will be uploaded to the Drive link shared earlier. If we see any drift during today's run we'll capture a mitigations log and follow up with a patch plan.
+
+See you on the call,
+Sergio
+Senior Solutions Architect — Redwood Inference
+
+Attachments: test-results-20270518.log
+
+> On Tue, 18 May 2027 at 09:12 Danielle Park <danielle@maplestack.com> wrote:
+> > Thanks — joining now.
+> >
+> > On Tue, May 18, 2027 at 08:58 Wei Zhang <wei.zhang@maplestack.com> wrote:
+> > > KV checksum looks good locally. Starting reconnect cycle 2.
+> > >
+> > > On Tue, May 18, 2027 at 08:45 Redwood SRE (automated) wrote:
+> > > > Reconnect cycle 2 completed: 0 dropped KV entries.
+> > > >
+> > > > Test harness note: logging level=debug; collecting p95 latencies.
+> > >
+> > > On Tue, May 18, 2027 at 09:02 Sergio Alvarez <sergio_alvarez@redwood.com> wrote:
+> > > > Observed behavior: q4 replay matches fp16 baseline for sample prompts; no duplicate tokens at model switch.
+> > > >
+> > > > Final: all checks green for the scoped tests. Uploading artifacts.
+> > > >
+> > > > — Sergio
+> > >
+> > >
+Partner conformance exercise with MapleStack to validate KV cache reconnect behavior, 2k-context latency sampling, and fallback continuity. Runbook and compatibility matrix provided by Redwood; live run on May 18 confirmed no duplicate tokens and matching Q4/fp16 behavior for scoped tests. Artifacts uploaded and next step is follow-up on broader perf sampling.
+Redwood provided model IDs and runtime flags used during test: rwd-7b-fp16-v2, rwd-7b-q4-v1; --kv-reconnect=preserve
+KV checksum uses SHA256 over serialized entries (script attached in runbook)
+Test harness image: redwood/test-harness:v1.2
+Next step: expanded perf sampling (N=1000) across 3 regions; owner: Laura Bennett

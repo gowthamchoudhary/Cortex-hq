@@ -1,0 +1,145 @@
+PRD review request: Workload-aware batching defaults (fast / standard / cost-efficient tiers)
+
+From: Aditya Rao <aditya.rao@redwoodinference.com>
+To: Nikhil Sharma <nikhil.sharma@redwoodinference.com>, Lauren Bishop <lauren.bishop@redwoodinference.com>
+Cc: Ava Chen <ava.chen@redwoodinference.com>
+Date: Fri, Jan 10, 2026 at 9:18 AM PT
+Subject: PRD review request: Workload-aware batching defaults (fast / standard / cost-efficient tiers)
+
+Hi Nikhil + Lauren — looping you in for PRD review. Ava FYI since this is part of the runtime cost optimization / 1.22 train.
+
+Draft PRD (Confluence):
+https://redwoodinference.atlassian.net/wiki/spaces/PROD/pages/184221329/PRD+Batching+profiles+SLO+tiers+(Draft)
+
+Linear tracking ticket:
+PM-612 (https://linear.app/redwood/issue/PM-612/workload-aware-batching-defaults-prd)
+
+What I’m looking for from you both (by Tue 1/14 if possible):
+
+1) Tier semantics / customer-facing behavior
+- Is the tier selected at route policy level only, or do we allow a request-level override (header/SDK param) for Hosted?
+- For Hosted: if customer does nothing, do we default to “standard” or do we recommend “fast” for streaming chat routes?
+- Any red flags on naming (fast/standard/cost-efficient) given customer expectations?
+
+2) SLO targets and how we communicate them
+- Are we comfortable publishing tier targets as guidance (p95/p99) vs only internal guardrails?
+- For streaming: should we define separate targets for time-to-first-token vs steady-state token rate, or keep it simplified?
+
+3) Overrides & precedence (Dedicated)
+- Dedicated needs a clear override story. Proposed precedence in PRD is:
+  customer override > route policy > tier default > runtime fallback.
+  Please sanity check based on your roadmap / expected support load.
+
+4) Rollout / kill switch expectations
+- Hosted staged rollout: internal canary → 5% of orgs (opt-out) → 25% → 100%.
+- Dedicated: explicit opt-in first.
+- I’m proposing a “kill switch” that reverts to existing manual batching defaults if any tier blows p99 gates for >15m in a region.
+
+5) Observability / “why this profile”
+- Need agreement on what we show to customers in Console vs what stays internal.
+- Proposed in PRD: tier label + reason codes (default/override/model-constraint/overload-mode), but no raw queue depth exposed by default.
+
+Specific questions I’m stuck on (and would love your POV):
+- Should we treat streaming endpoints as “fast” by default (seems right for support-agent/chat) OR keep standard as default to avoid surprising throughput deltas and let customers choose fast explicitly?
+- How strict should we be about allowing a per-request tier selection in Hosted? (pro: experimentation; con: support/debug complexity + higher cardinality in metrics)
+
+Thanks — please comment directly in Confluence if easier. If you’d rather do a 20 min sync, I can make time Monday afternoon.
+
+Aditya
+
+—
+Aditya Rao
+PM, Redwood Optimize
+Redwood Inference
+
+
+On Fri, Jan 10, 2026 at 1:42 PM Nikhil Sharma <nikhil.sharma@redwoodinference.com> wrote:
+From: Nikhil Sharma <nikhil.sharma@redwoodinference.com>
+To: Aditya Rao <aditya.rao@redwoodinference.com>
+Cc: Lauren Bishop <lauren.bishop@redwoodinference.com>, Ava Chen <ava.chen@redwoodinference.com>
+Date: Fri, Jan 10, 2026 at 1:42 PM PT
+Subject: Re: PRD review request: Workload-aware batching defaults (fast / standard / cost-efficient tiers)
+
+Reviewed and left comments in the PRD (mostly in the “Hosted API behavior” section).
+
+My takes (summary here):
+
+- Default tier for Hosted if unspecified: I strongly prefer STANDARD across the board.
+  Rationale: we already have streaming routes with customer-provided prompt distributions; if we default to FAST for “streaming=true” we’ll get a support wave when customers see cost/throughput shift (even if latency improves). Better to keep predictable and message FAST as recommended for “realtime/chat UX”.
+
+- Request-level override (header/SDK param): OK to have, but I’d frame it as “experimental” and/or feature-flagged initially.
+  Concern is operational: a lot of customers will try to do per-request fast/standard toggles and then file tickets when they can’t explain tail behavior. Also metric cardinality risk if we let arbitrary tier tagging appear on every route.
+
+- How to talk about targets: I’d avoid publishing hard p99 commitments in public docs initially. I’m fine with “expected behavior” guidance and keeping the strict gates internal (esp. early rollout).
+
+- Naming: fast/standard/cost-efficient is fine. Avoid “realtime” (customers interpret as hard guarantee). Also please add one sentence in docs/Console copy that cost-efficient may add queueing under burst.
+
+If helpful I can provide suggested copy for the “What happens if I don’t pick a tier?” FAQ.
+
+Nikhil
+
+—
+Nikhil Sharma
+Product, Hosted API
+Redwood Inference
+
+
+On Fri, Jan 10, 2026 at 2:28 PM Lauren Bishop <lauren.bishop@redwoodinference.com> wrote:
+From: Lauren Bishop <lauren.bishop@redwoodinference.com>
+To: Aditya Rao <aditya.rao@redwoodinference.com>
+Cc: Nikhil Sharma <nikhil.sharma@redwoodinference.com>, Ava Chen <ava.chen@redwoodinference.com>
+Date: Fri, Jan 10, 2026 at 2:28 PM PT
+Subject: Re: PRD review request: Workload-aware batching defaults (fast / standard / cost-efficient tiers)
+
++1 to Nikhil’s point on defaulting to STANDARD.
+
+Dedicated-specific notes (also added inline comments):
+
+- Precedence: customer override > route policy > tier default makes sense, but we need to define what “customer override” means concretely.
+  For Dedicated, customers will expect:
+  (a) per-tenant override (applies to all routes for that tenant), and
+  (b) route-level override (applies only to a specific endpoint).
+  If we support both, we should state the order explicitly (route override should win over tenant default).
+
+- SLAs: if a Dedicated customer selects FAST, we should be careful not to imply the platform will “meet fast SLO” regardless of their capacity sizing.
+  Request: add a sentence that tier behavior is bounded by provisioned capacity, and mention recommended sizing guidance lives in Dedicated onboarding docs.
+
+- Rollout: opt-in first is required. Also I’d like the kill switch to be per-cluster (not global) so we don’t penalize healthy regions/clusters.
+
+- Supportability: please ensure the “effective profile” view includes whether a customer is pinned to a tier or using default, and whether any overload mode was entered. That’s the first question support will ask.
+
+Happy to sync with you + the runtime folks next week if needed.
+
+Lauren
+
+—
+Lauren Bishop
+Product, Redwood Dedicated
+Redwood Inference
+
+
+On Fri, Jan 10, 2026 at 4:37 PM Ava Chen <ava.chen@redwoodinference.com> wrote:
+From: Ava Chen <ava.chen@redwoodinference.com>
+To: Aditya Rao <aditya.rao@redwoodinference.com>
+Cc: Nikhil Sharma <nikhil.sharma@redwoodinference.com>, Lauren Bishop <lauren.bishop@redwoodinference.com>
+Date: Fri, Jan 10, 2026 at 4:37 PM PT
+Subject: Re: PRD review request: Workload-aware batching defaults (fast / standard / cost-efficient tiers)
+
+Thanks for driving this, Aditya.
+
+Two asks to incorporate before we socialize broadly:
+
+1) Go/No-Go criteria: please make the launch gates unambiguous.
+- What metrics must be green (by tier) and for how long?
+- What is the rollback trigger vs “investigate but continue canary” trigger?
+
+2) Customer promise vs internal gates: align with Nikhil. Keep the public messaging focused on trade-offs and recommended usage. We can publish tighter targets later once we have stable baselines across top models/regions.
+
+If you update the PRD with those items, I’m comfortable using it for the next exec staff checkpoint.
+
+Ava
+
+—
+Ava Chen
+VP Product
+Redwood Inference

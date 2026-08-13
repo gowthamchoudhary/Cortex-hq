@@ -1,0 +1,143 @@
+Load characterization & backpressure MAP — schedule + initial results
+
+From: Nikhil Sharma <nikhil@redwood.com>
+To: Lucas Trent <lucas.trent@nimbusanalytics.com>, Susan Park <susan.park@nimbusanalytics.com>
+Cc: Marissa Cole <marissa@redwood.com>, Neha Kapoor <neha@redwood.com>
+Date: Thu, 15 Oct 2026 09:12:00 -0700
+Subject: Load characterization & backpressure MAP — kickoff + file attached
+
+Hi Lucas / Susan —
+
+Thanks again for the quick demo yesterday. As discussed, I put together a compact MAP focused on the performance validation pieces your infra team asked for (latency, throughput, TTFT, and concurrency behavior). The attached spreadsheet has a proposed test matrix and acceptance gates we should use during evaluation. High-level notes: 
+
+- Goal: Validate production behavior for the top 3 endpoints (chat, streaming generation, embedding lookup) at your expected 95th-percentile request sizes.
+- TTFT targets: 350ms median, 900ms 95th (chat token generation) under steady-state baseline.
+- Concurrency focus: explicit burst scenarios (sudden 10x short spikes) vs steady-state ramp to target concurrency. We’ll measure queueing/backpressure, tail latency, and token throughput.
+- Rate-limit tuning: recommend starting with conservative per-tenant RPS + token/sec cuts and iterate; we’ll provide suggestions based on early runs.
+
+Please review the MAP sheet (attached) and confirm whether the endpoints/sequence lengths match your production mix. Once we align, I’ll schedule the engineering-run window (we propose Oct 24–25 for initial runs) and loop in Marissa and Neha for execution.
+
+Attachments: 2026-10-15-Redwood-MAP-v1.xlsx (MAP, test matrix)
+
+Thanks,
+Nikhil Sharma
+Account Executive — Redwood Inference
+nikhil@redwood.com
+
+---
+
+From: Lucas Trent <lucas.trent@nimbusanalytics.com>
+To: Nikhil Sharma <nikhil@redwood.com>
+Cc: Susan Park <susan.park@nimbusanalytics.com>
+Date: Fri, 16 Oct 2026 08:04:00 -07:00
+Subject: Re: Load characterization & backpressure MAP — kickoff + file attached
+
+Thanks, Nikhil —
+
+Quick clarifications from our side before the runs: 
+
+1) Sequence lengths — our median chat request is ~110 tokens, but we have a fat tail up to 900 tokens for batch summarization. Should we add a long-run test at 800–900 tokens?
+2) Burst shape — our on-demand analytic jobs spike quickly and then decay over ~5 minutes; the 10x spike you mentioned seems reasonable but can you confirm the ramp profile you’ll use?
+3) Measurement hooks — we need KV/caching metrics surfaced (cache hit rate) and any inferred token-level retries. Can Redwood include those metrics in the run exports?
+
+If you can sketch answers to the three items, we’ll confirm the Oct 24–25 slot.
+
+On a separate note — we’re tracking budget approvals for Dedicated capacity; I’ll loop finance if we see promising run numbers.
+
+— Lucas
+Lucas Trent
+CTO, Nimbus Analytics
+lucas.trent@nimbusanalytics.com
+
+On Thu, Oct 15, 2026 at 09:12 AM Nikhil Sharma <nikhil@redwood.com> wrote:
+> [original message truncated]
+
+From: Nikhil Sharma <nikhil@redwood.com>
+To: Lucas Trent <lucas.trent@nimbusanalytics.com>, Susan Park <susan.park@nimbusanalytics.com>
+Cc: Marissa Cole <marissa@redwood.com>, Neha Kapoor <neha@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Mon, 19 Oct 2026 10:30:00 -0700
+Subject: Re: Load characterization & backpressure MAP — schedule + test shapes
+
+Lucas — good questions, answered inline: 
+
+1) Sequence lengths: yes, adding a long-run at 800 tokens is prudent. Updated test matrix will include (110 median, 300 p90, 800 p99) buckets.
+
+2) Burst shape: proposed burst shape = immediate step to 10x baseline over 10s, hold for 2 minutes, then exponential decay to baseline over 5 minutes (we’ll also run a trapezoid ramp variant). I included a small diagram in the MAP sheet.
+
+3) Measurement hooks: engineering will emit cache hit-rate, per-request KV lookup counts, and retry counts. We’ll include those fields in the CSV exports and dashboard snapshots.
+
+Execution plan: Oct 24 — baseline steady-state ramps and single-node TTFT measurements; Oct 25 — burst scenarios and rate-limit tuning experiments. We’ll run a set of A/B variants for quantized model profiles (q8_128 vs q4_0) to show unit-cost impact.
+
+Requested acceptance gates for the MAP: 
+- TTFT: median <= 350ms, p95 <= 900ms for chat token gen under steady-state.
+- Throughput: sustain target token/sec within 10% variance for 15 minutes.
+- Queueing: queue depth must remain below 2s of added latency for 95% of requests; any persistent backpressure triggers incident post-mortem.
+
+I’m scheduling a 30-minute pre-run sync with your infra team on Oct 23 (invite to follow). If Oct 24–25 works, I’ll send calendar invites and attach the updated MAP.
+
+Attachments: updated MAP will be posted (see Drive link)
+
+— Nikhil
+
+
+From: Marissa Cole <marissa@redwood.com>
+To: Nikhil Sharma <nikhil@redwood.com>, Neha Kapoor <neha@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Mon, 26 Oct 2026 11:05:00 -0700
+Subject: Internal: initial concurrency runs (Oct 25) — findings and next steps
+
+Team — notes from the lab runs we executed against Nimbus staging on Oct 25 (summary first, details attached):
+
+Summary (short):
+- Baseline steady-state (target concurrency 120): met TTFT gates (median 320ms, p95 860ms) for median/90-token mixes using q8_128 profile.
+- Burst test (10x step for 2m): observed transient queueing; at peak we saw queue depth equivalent to ~1.9s added latency p95, but token throughput stayed within 15% of target. A small percentage (~0.6%) of requests retried due to transient 429s when we hit scheduler soft limits.
+- Rate-limit tuning: increasing per-tenant token/sec bucket by 15% during burst windows removed most 429s, at cost of higher peak GPU slot utilization; suggested compromise is an adaptive burst window that increases token/sec by 20% for up to 2 minutes, then decays.
+- Cache: KV cache hit rate remained ~72% during steady-state, dipped to ~58% during burst.
+
+Attachments: burst-steady-report-2026-10-25.csv (raw metrics), concurrency-runbook-2026-10-25.md (runbook + recommended rate-limit policy)
+
+Action items: 
+- We should propose an MAP amendment with the adaptive burst policy and the quantified rate-limit knobs.
+- Product/infra (Karthik) to assess client-side retry behavior with the new 20% adaptive window.
+- Nikhil to share the post-run summary with Lucas/Susan and propose the final close timeline if Nimbus signs for Dedicated capacity after validation.
+
+Marissa Cole
+Senior PM, Performance Engineering — Redwood Inference
+marissa@redwood.com
+
+
+From: Nikhil Sharma <nikhil@redwood.com>
+To: Lucas Trent <lucas.trent@nimbusanalytics.com>, Susan Park <susan.park@nimbusanalytics.com>
+Cc: Marissa Cole <marissa@redwood.com>, Neha Kapoor <neha@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Tue, 27 Oct 2026 15:45:00 -0700
+Subject: MAP update: runs complete — summary, recommended rate-limit policy, and close timeline
+
+Lucas / Susan —
+
+Thanks for approving the Oct run window. Quick summary of what we learned and proposed next steps. Full artifacts attached and linked.
+
+Key takeaways: 
+- Steady-state: TTFT gates met for expected production mix on q8_128.
+- Bursts: brief transient 429s at scheduler soft limits; rate-limit tuning (adaptive +20% token/sec for 2 minutes) eliminated most retries in our follow-up run while keeping average cost within expected bounds.
+- Cache behavior: expected drop during bursts; recommend warmup pre-burst where possible.
+
+Recommended MAP amendment (one-liner): adopt the adaptive burst window (token/sec +20% for up to 2m) and a short client-side exponential backoff (max 3 retries, jittered) to smooth transient 429s. We’ll provide a parameterized policy you can drop into your gateway.
+
+Proposed commercial close timeline: if Nimbus signs Dedicated pilot by Nov 5, we’ll reserve the requested capacity and target production readiness by Dec 10 (rollout + two-week soak). If you want to accelerate, we can discuss a partially reserved burst pool to start earlier.
+
+Attachments (for your review):
+- concurrency-runbook-2026-10-25.md (recommended rate-limit policy + knobs)
+- burst-steady-report-2026-10-25.csv (raw metrics)
+- 2026-10-15-Redwood-MAP-v1.xlsx (MAP with amended policy)
+
+Next steps: 
+1) Lucas/Susan — confirm whether you accept the adaptive burst policy and the proposed close-by-Nov-5 target.
+2) We'll schedule a short handoff with infra and finance the week of Nov 1 if you confirm.
+
+Appreciate the partnership — happy to jump on a call to walk through the runbook in detail.
+
+Best,
+Nikhil Sharma
+Account Executive — Redwood Inference
+nikhil@redwood.com
+
+---

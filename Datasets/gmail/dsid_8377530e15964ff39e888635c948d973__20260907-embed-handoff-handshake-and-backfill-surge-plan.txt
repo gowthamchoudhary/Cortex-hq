@@ -1,0 +1,139 @@
+Embeddings cutover — operational handshake & staggered backfill windows
+
+From: Avery Johnson <avery.johnson@redwood.com>
+To: Ryan Cole <ryan.cole@cartflow.com>
+Cc: Monica Patel <monica.patel@redwood.com>, Connor O'Brien <connor.obrien@redwood.com>
+Date: 2026-09-07T09:12:00-07:00
+Subject: Embeddings cutover — operational handshake & staggered backfill windows
+
+Hi Ryan —
+
+Thanks again for the demo yesterday. Per our conversation, I wanted to start an operational thread to lock down two things before the kickoff call: the backfill windows for your existing index and a short checklist for Vectorstore compatibility so we can avoid surprises during the cutover.
+
+Proposed plan (high level):
+- Week 0 (prep): exchange sample queries, schema, and cardinality summary (you mentioned ~8M documents).
+- Week 1 (seed): run a staggered seed of high-priority collections (10% of corpus) to validate embedding sizing and latency at your target QPS.
+- Week 2 (backfill wave A): bulk backfill for user-facing indices (overnight window, 2–4AM PT) with monitoring hooks.
+- Week 3 (backfill wave B): async/backfill lower-priority indexes; rerank smoke tests and A/B traffic canary.
+
+Questions for you before we finalize windows:
+1) Confirm total document count and average tokens per doc (attachment: dataset-summary-heatmap.csv would be great).
+2) Which vector DB are you planning to use in prod? (You mentioned self-hosted Milvus in the demo; confirm version.)
+3) Any procurement/maintenance blackout dates in September we should avoid for nightly backfills?
+
+I'll attach a mutual action plan template (CF_MutualActionPlan_avery_v1.xlsx) — please fill the contact owners and blackout dates column.
+
+Next steps from our side: Monica will draft a rerank evaluation checklist (what to sample, acceptance thresholds) and Connor will propose the canary route and tags we'll use in Redwood Console.
+
+Thanks — talk soon.
+
+Best,
+Avery Johnson
+Senior Customer Success Manager
+Redwood Inference
+
+Attachments: CF_MutualActionPlan_avery_v1.xlsx (spreadsheet), dataset-summary-heatmap.csv (CSV)
+
+From: Ryan Cole <ryan.cole@cartflow.com>
+To: Avery Johnson <avery.johnson@redwood.com>
+Cc: Sara Nguyen <sara.nguyen@cartflow.com>
+Date: 2026-09-07T11:03:00-07:00
+Subject: Re: Embeddings cutover — operational handshake & staggered backfill windows
+
+Thanks Avery — great recap. Quick answers inline: 
+
+- Total docs: ~7.9M (mostly product descriptions + UGC). Average 420 tokens/doc. I'll push a small extract and the token parity stats to the Drive folder by EOD.
+- Prod vector store: yes, Milvus 3.2 self-hosted on their infra (we're managing). We may experiment with a FAISS fallback for read-heavy endpoints.
+- Blackouts: none in Sept, but our infra team has monthly maintenance on 2026-09-16 (low risk but please avoid heavy backfills that day).
+
+One operational question: does Redwood support a hybrid model where embeddings live in an external vector DB but Redwood keeps a local priming index for rerank caching? If so, we'd like to use that pattern for lower latency queries.
+
+I'll also invite our data lead, Sara, to the kickoff so she can confirm backfill resources.
+
+—Ryan
+
+On Tue, Sep 7, 2026 at 09:12 AM Avery Johnson <avery.johnson@redwood.com> wrote:
+> Hi Ryan —
+> 
+> Thanks again for the demo yesterday. Per our conversation...
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Ryan Cole <ryan.cole@cartflow.com>, Sara Nguyen <sara.nguyen@cartflow.com>
+Cc: Avery Johnson <avery.johnson@redwood.com>, Connor O'Brien <connor.obrien@redwood.com>
+Date: 2026-09-08T07:45:00-07:00
+Subject: Re: Embeddings cutover — operational handshake & staggered backfill windows
+
+Hi Ryan / Sara —
+
+Short answers and a proposed rerank acceptance checklist attached below. Yes, Redwood supports hybrid topologies: we can route live queries to your Milvus cluster while keeping a small warmed-in-memory priming index (KV cache + prefix embeddings) inside the Redwood serving runtime for low-latency tail. That hybrid approach is what we usually recommend for read-sensitive endpoints.
+
+Proposed rerank acceptance checklist (draft):
+- Sample set: 1k production queries + 5 candidate docs each (golden set flagged by CartFlow SME).
+- Metrics: MRR@5, Precision@1, and human QA score (0–3) on a 200-query random sample.
+- Thresholds: MRR@5 improvement >= 12% vs current baseline OR no >5% regression on baseline NDCG for top queries.
+- Smoke tests: latency P95 <= 220ms end-to-end (embedding lookups + rerank), and no tokenization mismatch errors.
+
+Operational knobs we'll exercise during backfills:
+- Staggered batching policies (start at 8K batch tokens)
+- KV cache TTLs for priming segments
+- Canary traffic split: 5% -> 20% -> 50% over 48h windows with rollback triggers on error rate >1.5% or latency regressions >30%.
+
+I uploaded a short runbook and the checklist to the Drive folder: https://drive.google.com/drive/folders/1a2b3cCartFlowOnboard
+
+If Milvus index parameters are available (efConstruction, nlist, index type) please paste them in the Drive doc so we can size the search lanes.
+
+Cheers,
+Monica Patel
+Customer Success Engineer, Redwood
+
+---
+Quoted message:
+> From: Ryan Cole <ryan.cole@cartflow.com>
+> Date: 2026-09-07 11:03:00 -0700
+> Subject: Re: Embeddings cutover — operational handshake & staggered backfill windows
+> 
+> Thanks Avery — great recap. Quick answers inline: ...
+
+From: Connor O'Brien <connor.obrien@redwood.com>
+To: Avery Johnson <avery.johnson@redwood.com>, Monica Patel <monica.patel@redwood.com>, Ryan Cole <ryan.cole@cartflow.com>
+Date: 2026-09-10T10:20:00-07:00
+Subject: Re: Embeddings cutover — operational handshake & staggered backfill windows
+
+Hey all —
+
+Two operational notes from infra/ops:
+1) Canary plan: we'll create a dedicated route in Redwood Console named cartflow-emb-rerank-canary. We'll apply tags so your SRE can filter traces and token-level cost for the canary traffic.
+2) Backfill safety: recommend enabling automatic throttling on bulk writes to Milvus and a retry budget of 3. We can surface write rejections in the Console as incidents.
+
+I'll prepare the route and a dashboard template ahead of the kickoff. Proposed kickoff: 2026-09-14 11:00AM PT — Zoom link attached in the Drive.
+
+Connor O'Brien
+Platform Reliability Engineer
+Redwood Inference
+
+Attachments referenced: dashboard-template.json (in Drive)
+
+On Tue, Sep 8, 2026 at 07:45 AM Monica Patel <monica.patel@redwood.com> wrote:
+> Hi Ryan / Sara —
+> 
+> Short answers and a proposed rerank acceptance checklist attached below...
+
+From: Ryan Cole <ryan.cole@cartflow.com>
+To: Avery Johnson <avery.johnson@redwood.com>, Monica Patel <monica.patel@redwood.com>, Connor O'Brien <connor.obrien@redwood.com>
+Date: 2026-09-14T16:03:00-07:00
+Subject: Re: Embeddings cutover — operational handshake & staggered backfill windows
+
+Thanks everyone — confirmed for the 9/14 11:00AM PT kickoff. Sara will join from our infra team. We've uploaded Milvus index params to the Drive doc (Milvus 3.2, IVF_FLAT, nlist=4096, efConstruction=256).
+
+A couple quick clarifications before the call: 
+- For the priming index size, Monica, can you propose an initial memory target (e.g., percentage of corpus) so our infra can provision?
+- Connor: will the Console incident be able to surface per-index write failures (we want to correlate writes to observed QPS dips)?
+
+I'll fill the mutual action plan today and add owners. Looking forward to the kickoff.
+
+—Ryan
+
+On Wed, Sep 10, 2026 at 10:20 AM Connor O'Brien <connor.obrien@redwood.com> wrote:
+> Hey all —
+> 
+> Two operational notes from infra/ops...

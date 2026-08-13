@@ -1,0 +1,121 @@
+Intermittent egress failures after private deployment cutover — path mismatch & MTU/SNAT impact
+
+From: Alex Garcia <alex.garcia@acme-cloud.com>
+To: rishi_malhotra@redwood.ai
+Cc: laura_bennett@redwood.ai, karthik_iyer@redwood.ai
+Date: Sat, 10 Oct 2027 08:14:00 -0700
+Subject: Partial egress failures following cutover to private VPC — packets dropping on path 
+
+Hi Rishi,
+
+We completed the cutover to the private deployment (VPC) in us-west-2 at 06:30 PDT. Since then we've seen intermittent failures for outbound flows to a handful of customer endpoints (mainly over TLS port 443). Symptoms:
+- TCP connections stall during handshake (server SYN+ACK not completing) for ~10-20s then succeed on retry
+- Some flows work consistently (small responses), larger responses are truncated or reset
+- Traceroutes show differing egress nexthops for the same source IP across retries
+
+Attached are a short MTU/probe trace (pmtu_trace.txt) and a tcpdump capture of a failing session (tcpdump_cutover.pcap).
+
+Initial observations from our side: path looks asymmetric after the new egress gateway (different NAT device on some retries), and we suspect an MTU mismatch or a NAT port exhaustion/translation churn. Can your team help triage? We'll need:
+- Confirmation on Redwood's egress SNAT behaviour during the cutover
+- Any recent route changes or NAT gateway scaling events
+- Recommended quick mitigations we can apply before we open a maintenance window
+
+Thanks — Alex
+Network Engineer, Acme Cloud
+
+----
+Attachments:
+- pmtu_trace.txt (text)
+- tcpdump_cutover.pcap (pcap, 1.2MB)
+
+From: rishi_malhotra@redwood.ai
+To: Alex Garcia <alex.garcia@acme-cloud.com>
+Cc: laura_bennett@redwood.ai, karthik_iyer@redwood.ai, vivek_kulkarni@redwood.ai
+Date: Sat, 10 Oct 2027 09:02:00 -07:00
+Subject: Re: Partial egress failures following cutover to private VPC — path mismatch & MTU/SNAT impact
+
+Alex — thanks for the quick heads-up and the captures. Putting the team on it now. Short answers up front: we run per-tenant SNAT at the egress gateway and we recently scaled a second NAT pool during the cutover which could explain inconsistent nexthops. We also have a default PMTU path MTU discovery (no forced MSS clamp) on the gateway.
+
+Immediate next steps I propose (can be done without full maint window):
+1) We'll fetch conntrack and NAT translation tables from the egress nodes matching your source IPs (karthik on this).
+2) Enable per-flow MSS clamp on the egress gateway (temporary) to stop fragmentation if PMTU is the issue.
+3) Increase ephemeral port range on the gateway nodes if NAT port availability looks constrained.
+4) If we see asymmetric egress nexthop changes, we'll pin traffic for a short canary to a single NAT instance.
+
+Can you confirm 3 example source IPs and the exact timestamps for the tcpdump so we match on our side? Also, please keep tcpdump running for another 15 minutes if you can while we start collecting.
+
+Looping in Laura and Karthik to own the infra collection and apply the MSS clamp (temporary change) if we can coordinate with you. Vivek — we may need an emergency rollback plan for the new NAT pool if translation churn is high.
+
+-Rishi
+Sr. SRE, Redwood Inference
+
+> On Sat, Oct 10, 2027 at 08:14 AM Alex Garcia <alex.garcia@acme-cloud.com> wrote:
+> > We completed the cutover to the private deployment (VPC) in us-west-2 at 06:30 PDT...
+
+
+From: laura_bennett@redwood.ai
+To: rishi_malhotra@redwood.ai, karthik_iyer@redwood.ai
+Cc: vivek_kulkarni@redwood.ai
+Date: Sat, 10 Oct 2027 09:18:00 -07:00
+Subject: Re: Partial egress failures following cutover to private VPC — path mismatch & MTU/SNAT impact
+
+Team — I'll coordinate infra steps and will be the single point for scheduling changes with Acme. Action plan (owned):
+- Karthik: pull conntrack, iptables NAT tables, and interface counters from egress gateway nodes matching the timestamps Alex provided. Please include /proc/net/nf_conntrack counts and iptables-save output. (ETA: 20m)
+- Vivek: hold rollback runbook and stand by to remove the new NAT pool or reassign BGP next-hops if we see route instability.
+- Rishi: confirm we should apply MSS clamp on the egress gateway (I suggest a conservative 1360) and increase ephemeral port range to 49152-65535 on affected nodes.
+
+I'll send a single change ticket to Acme with the proposed imposition window for 11:00-11:30 PDT for the MSS clamp and port range bump; will target canary subset first (5% of sessions).
+
+Laura Bennett
+Director, Platform Operations
+Redwood Inference
+
+> On Sat, Oct 10, 2027 at 09:02 AM rishi_malhotra@redwood.ai wrote:
+> > Alex — thanks for the quick heads-up and the captures...
+
+
+From: karthik_iyer@redwood.ai
+To: laura_bennett@redwood.ai, rishi_malhotra@redwood.ai
+Cc: vivek_kulkarni@redwood.ai, Alex Garcia <alex.garcia@acme-cloud.com>
+Date: Sat, 10 Oct 2027 09:34:30 -07:00
+Subject: Re: Partial egress failures following cutover to private VPC — path mismatch & MTU/SNAT impact
+
+Laura / Rishi / Alex — digging in now. Early findings (quick logs attached: conntrack_stats.log, iptables-save.txt):
+- conntrack table at 09:30 shows 157k entries on gw-egress-2 (max configured 180k); however translation churn rate spiked immediately after cutover (conntrack match failures rising).
+- iptables NAT table shows two active SNAT pools (gw-egress-1 and gw-egress-2) with per-pool ephemeral allocation. A subset of flows observed in your pcap (Alex) hit gw-egress-2 which was cycling translations faster.
+- interface counters on gw-egress-2 show a burst of ICMP Fragmentation Needed messages towards the egress path (indicating PMTU discovery requests).
+
+Interpretation: we have two orthogonal issues: (1) translation churn/ephemeral exhaustion on gw-egress-2 causing transient connection stalls, and (2) PMTU/fragmentation along one of the nexthops which causes larger responses to be dropped until the DF/ICMP handshake completes — this explains smaller responses succeeding.
+
+Immediate remediation I can apply now if approved:
+- Increase conntrack hash size and max entries on gw-egress-2 (temporary bump to 300k).
+- Apply MSS clamp at 1360 on gw-egress-2 FOR THE CANARY SEGMENT only.
+- Expand ephemeral port range on gw-egress-2 to 49152-65535 and restart the SNAT allocator service (non-disruptive to established flows).
+
+I attached logs: conntrack_stats.log and iptables-save.txt. Recommend we push the canary changes at 11:00 PDT as Laura suggested, watch for reduced SYN retries and no increase in fragment ICMPs. If stable for 15 minutes we'll roll to 50% and then full.
+
+-Karthik
+Senior Network Engineer, Redwood Inference
+
+> On Sat, Oct 10, 2027 at 09:18 AM laura_bennett@redwood.ai wrote:
+> > Team — I'll coordinate infra steps and will be the single point for scheduling changes with Acme...
+
+
+From: Alex Garcia <alex.garcia@acme-cloud.com>
+To: laura_bennett@redwood.ai, rishi_malhotra@redwood.ai
+Cc: karthik_iyer@redwood.ai
+Date: Sun, 11 Oct 2027 11:02:00 -07:00
+Subject: Re: Partial egress failures following cutover to private VPC — path mismatch & MTU/SNAT impact
+
+Laura / Rishi / Karthik — thanks, that summary matches what we've been seeing. We can run the canary window 11:00–11:30 PDT tomorrow (Mon 10/11) and will keep tcpdump running on our side. Confirming the three example source IPs we saw in the pcap: 10.204.21.9, 10.204.21.14, 10.204.21.22 (timestamps 06:32:17–06:37:05 PDT).
+
+Please proceed with the canary MSS clamp + ephemeral port bump on gw-egress-2 only. If you need any BGP next-hop pinning from our side for the canary, let us know and we'll coordinate. We'll provide live feedback during the 30m window and share updated captures if we still see failures.
+
+Appreciate the quick triage.
+
+Alex
+Network Engineer, Acme Cloud
+
+> On Sat, Oct 10, 2027 at 09:34 AM karthik_iyer@redwood.ai wrote:
+> > Laura / Rishi / Alex — digging in now. Early findings (quick logs attached...)
+

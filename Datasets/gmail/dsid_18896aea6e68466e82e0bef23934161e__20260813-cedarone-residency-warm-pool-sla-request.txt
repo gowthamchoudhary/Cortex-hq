@@ -1,0 +1,108 @@
+Urgent: CedarOne residency SLA + warm pool guarantee needed for production go-live
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Dev Patel <dev.patel@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 10 Aug 2026 09:12:00 -0700
+Subject: CedarOne: production go-live ask — warm pool / residency SLA
+
+Hi Dev and Grace,
+
+Quick summary: CedarOne confirmed a Sept 15 production cutover but it's contingent on a hard guarantee that model instances serving their tenant will be resident in-region and that we can provide a guaranteed "warm-pool" window (i.e., <100ms cold-start penalty for first N requests after idle) for business hours. Their platform team says their compliance controls require documented residency and an operational SLA for cold-starts or they will not move token traffic.
+
+Why this matters: this is a $1.2M annual contract (see attached PO draft) and they will pay an up-front integration fee if we can commit to the residency + warm-pool SLA for the first 12 months. If we miss this timeline they will delay the rollout and likely opt for a competitor.
+
+Ask: can Eng/Product provide an estimate and feasibility note by EOD Thu (Aug 13) on:
+- Feasibility of region-bound model residency for a named tenant (CedarOne) for both hosted and dedicated routing paths
+- Implementation approach for a warm pool guarantee (pre-warmed instances + proactive caching) and the operational cost delta
+- Concrete SLAs we could safely offer (SLO numbers + penalties or credits if applicable)
+
+Attachments: CedarOne_WarmPool_Reqs.xlsx (customer ask matrix), CedarOne_PO_and_MOA.pdf (draft MOA)
+
+Marissa — FYI on the account economics; please keep CS looped.
+
+Thanks,
+Evelyn
+Evelyn Hart
+Account Executive, Enterprise Sales
+Redwood Inference
+
+From: Dev Patel <dev.patel@redwood.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 10 Aug 2026 11:03:00 -07:00
+Subject: Re: CedarOne: production go-live ask — warm pool / residency SLA
+
+Thanks for the context, Evelyn — this is actionable but there are a few technical clarifications we need before we can commit:
+
+1) Residency: are they insisting on tenant-dedicated nodes (single-tenant residency) or region-affinity (multi-tenant nodes pinned to us-west-2 but shared)? Their compliance wording was a little fuzzy.
+2) Traffic profile: what are the expected qps peaks and the idle window after which cold starts happen? Warm-pool sizing depends heavily on expected concurrency distribution during business hours.
+3) RTO/RPO expectations: besides cold-start ms, do they want guaranteed failover behavior across AZs / regions?
+
+Prelim thoughts from runtime side: region-affinity (pinned placement in us-west-2) is doable without heavy infra changes — it’s a routing policy plus placement constraint. Exclusive single-tenant nodes (full isolation) requires tenant scheduling and capacity reservation; we can do it but it adds provisioning lead time and cost.
+
+Warm-pool approaches:
+- Pre-warmed long-lived instances reserved per tenant for business hours (fastest, predictable latency, higher cost)
+- Proactive KV/prefix caching + background keepalive (lower cost, variable guarantees)
+
+I'll scope a rough estimate (engineering hours + incremental monthly compute cost) and open a Jira (INF-4982) for the work items. Grace — can you confirm the commercial tolerance for a monthly fee delta (they indicated willingness to pay) and whether Product would accept a pilot-scoped SLA first?
+
+I'll follow up with a short tech note by EOD Thu.
+
+—Dev
+Principal Engineer, Serving Runtime
+Redwood Inference
+
+From: Grace O'Connor <grace.oconnor@redwood.com>
+To: Dev Patel <dev.patel@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 11 Aug 2026 15:28:00 -07:00
+Subject: Re: CedarOne: production go-live ask — warm pool / residency SLA
+
+Appreciate the quick analysis, Dev. I ran this past product strategy and CS. Proposed path to balance risk/cost/time-to-value:
+
+Option A — Pilot (recommended):
+- Offer region-affinity with a dedicated warm-pool sized to expected peak concurrency during business hours. No single-tenant node guarantee initially.
+- SLA: 99.9% request-level availability and a max cold-start penalty of 150ms for first request after idle for the warm-pool window (we back it with credits capped at X% of monthly bill).
+- Timeline: ~6 weeks to implement routing + warm-pool orchestration + test harness. Engineering estimate: 3 devs x 4 weeks + 2 SREs x 3 weeks (detailed breakdown in Jira INF-4982).
+
+Option B — Dedicated tenancy (higher guarantee):
+- Single-tenant reserved nodes in-region with strict residency and tighter cold-start SLA (<100ms).
+- Timeline & cost: ~12 weeks + higher run-rate; requires procurement for dedicated capacity and SLA language with penalties.
+
+Commercial ask to CedarOne: sign a short MOA (attachment) that covers the pilot fee and explicit go/no-go criteria tied to latency tests. We can offer an upgrade path to Option B if pilot metrics show sustained traffic and they accept the higher monthly fee.
+
+Next steps for us:
+- Dev: post the technical breakdown and estimated infra cost as a line item in INF-4982 by Thu EOD.
+- Marissa: confirm whether sales can get MOA countersigned and if CedarOne will commit to the pilot fee.
+- Evelyn: I'd like a brief call with CedarOne SRE to validate expected qps and peak shape before we size the warm-pool.
+
+If everyone agrees, I'll prepare a short Product Requirements Note we can share with CedarOne and attach to the Jira ticket.
+
+—Grace
+Director, Product Management
+Redwood Inference
+
+From: Jane Liu <jane.liu@cedarone.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>
+Cc: CedarOne SRE Team <sre@cedarone.com>, Grace O'Connor <grace.oconnor@redwood.com>, Dev Patel <dev.patel@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Thu, 13 Aug 2026 16:05:00 -07:00
+Subject: Re: CedarOne: production go-live ask — warm pool / residency SLA
+
+Thanks, all — appreciate the quick internal review. To clarify: compliance requires both region residency (us-west-2) and an operational cold-start guarantee for business hours. We would prefer Option B long-term, but are open to the Pilot (Option A) if Redwood will:
+
+1) Guarantee region-residency for the pilot (routing pinned to us-west-2)
+2) Provide a warm-pool SLO of <= 150ms cold-start penalty during 0800–2000 PST business hours for a pilot-sized warm pool (we can share our peak qps and historical distribution)
+3) Sign the MOA and pay the pilot integration fee up front — we will also sign an upgrade option to Option B within 90 days if pilot metrics meet agreed thresholds.
+
+We will attach the peak traffic spreadsheet later today (CedarOne_WarmPool_Reqs.xlsx) and we can schedule an SRE call tomorrow at 10am PST. We need confirmation of feasibility and a short technical contact list for the SRE call.
+
+If Redwood can commit to the above, CedarOne will proceed with the Sept 15 cutover plan.
+
+Best,
+Jane Liu
+Head of Platform Engineering
+CedarOne Financial
+
+--
+Attachment stubs: CedarOne_WarmPool_Reqs.xlsx (customer traffic profile), CedarOne_PO_and_MOA.pdf (signed by CedarOne exec pending Redwood countersignature)

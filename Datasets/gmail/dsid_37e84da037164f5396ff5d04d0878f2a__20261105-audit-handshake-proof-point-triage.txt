@@ -1,0 +1,122 @@
+Novamed audit: evidence & KMS/retention handshake - triage
+
+From: Alex Li <alex.li@novamed.com>
+To: grace_oconnor@redwood.com, marissa_cole@redwood.com
+Cc: gwen.price@novamed.com
+Date: 2026-11-05T09:15:00-08:00
+Subject: Evidence request for upcoming SOC2 — KMS + retention clarifications
+
+Grace / Marissa —
+
+Thanks again for the quick kickoff last week. Our audit window is late Nov and the auditor sent a follow-up asking for a concise evidence pack covering: KMS usage for customer-managed keys, audit log retention (retention windows and granularity), and how SSO events are surfaced for forensic review. They also want to understand exceptions or short-term retention carveouts (we have a short-lived pilot storing ephemeral tokens).
+
+Attached are the auditor's questions (audit-scope-questions.xlsx) and a one-page list of the documents they expect. Can you confirm:
+- If we use Redwood Private with BYOK, what evidence do you provide to show key rotations and access history?
+- What level of per-request audit log (token, request, user-id) is captured and for how long by default?
+- Is there an established exception path for temporary retention windows during POCs and what evidence do you keep when exceptions are granted?
+
+We need a short summary (1 page) and any artifacts (signed logs, rotation ledger, or screenshots) by Nov 12 to hand to the auditor. Happy to jump on a 20-min call if easier.
+
+Alex
+Alex Li
+Senior Security Engineer, Novamed Health
+
+From: grace_oconnor@redwood.com
+To: Alex Li <alex.li@novamed.com>
+Cc: marissa_cole@redwood.com, ben_carter@redwood.com
+Date: 2026-11-05T12:02:00-08:00
+Subject: Re: Evidence request for upcoming SOC2 — KMS + retention clarifications
+
+Alex — thanks for the clear asks and the spreadsheet. Forwarding to product and security to triage (see thread below). My priorities:
+1) Short summary for the auditor (one page) with one-line answers and pointers to artifacts.
+2) A PSR (packaged evidence set) we can hand off (signed logs, KMS rotation ledger, retention policy snippet).
+3) If an exception path is needed for Novamed's pilot, define the temporary retention gating and required approvals.
+
+Marissa — can you confirm the product-side behaviour for audit-log granularity and any UI/console screenshots we can include? Ben — can you pull the KMS rotation ledger and note whether we can time-bound an exception with an audit trail?
+
+If helpful I can schedule a 30-min triage tomorrow; otherwise please reply with a bullet plan and owners.
+
+—Grace O'Connor
+Director, Security & Compliance Programs
+Redwood Inference
+
+From: marissa_cole@redwood.com
+To: grace_oconnor@redwood.com, Alex Li <alex.li@novamed.com>
+Cc: karthik_iyer@redwood.com
+Date: 2026-11-06T10:30:00-08:00
+Subject: Re: Evidence request for upcoming SOC2 — product/ops notes and options
+
+Grace / Alex — quick product summary and options (high level):
+
+Current default behaviour (hosted & private control plane):
+- Audit events captured: request-level metadata (timestamp, client IP, model, route, token-id hash), auth events (SSO login, token issuance), and KMS API interactions (encrypt/decrypt/rotate ops).
+- Retention: default 90 days for detailed request logs; 1 year for auth/KMS operation summaries; longer-term archival available by request.
+
+Two practical evidence paths for the auditor (pick one):
+A) Standard evidence pack (fastest) — export request-level logs (7–90 days per Novamed preference), KMS operation logs (show rotation timestamps and IDs), and console screenshots of SSO audit view. Target: Nov 12 deliverable.
+B) Exception + timebound retention (if Novamed's pilot requires ephemeral retention >90 days) — product needs a signed exception request and we enable a short retention carveout with explicit TTL, retention reason, and audit trail. This takes longer (needs infra change and approvals).
+
+Karthik — can ops produce the request-level export and confirm exact fields (we'll need to map to the auditor spreadsheet)?
+
+Ask: Alex — which option do you prefer? If A, confirm the time window to export (we'll default to 90 days unless you instruct otherwise).
+
+Thanks — Marissa
+Principal Product Manager, Redwood
+
+From: ben_carter@redwood.com
+To: marissa_cole@redwood.com, grace_oconnor@redwood.com
+Cc: Alex Li <alex.li@novamed.com>
+Date: 2026-11-07T14:10:00-08:00
+Subject: Re: Evidence request for upcoming SOC2 — KMS details + exception notes
+
+Marissa / Grace / Alex — security notes below. Forwarding relevant attachments (proposed-evidence-pack.zip) with redacted samples.
+
+KMS rotation and access evidence: we maintain a rotation ledger (immutable entries) with rotation_id, operator_id (internal service principal), and rotation timestamp. For BYOK customers using Redwood Private, we record: key material import events, rotation API calls (with request IDs), and KMS access errors. We can include a signed ledger excerpt for Novamed.
+
+Audit log granularity: request-level logs contain a token-id hash (not raw tokens), timestamp, route, and user-id when available. For SSO, we capture login/logout and token issuance events with timestamps and subject identifiers.
+
+Exception path: we can support a temporary retention carveout for pilots but require:
+- A signed exception request (customer + account exec)
+- Defined TTL and start/end dates
+- A mitigation plan (who can access, monitoring during exception)
+
+Blockers: if we need exports beyond current retention windows (e.g., 180 days of raw-level detail), infra will need a short config change and an ops runbook for evidence delivery. That takes ~5 business days to complete and requires a scoped change request.
+
+I'll prepare:
+- signed_ledger_excerpt.pdf (in attached zip)
+- sample_request_log.csv (fields mapped to auditor sheet)
+
+If Alex confirms option A, we can assemble and send by Nov 12. If B, please confirm exception request and we'll start the change runbook (ETA Nov 16 if approved today).
+
+—Ben Carter
+Sr. Security Engineer, Redwood Inference
+
+From: grace_oconnor@redwood.com
+To: Alex Li <alex.li@novamed.com>, marissa_cole@redwood.com, ben_carter@redwood.com
+Cc: karthik_iyer@redwood.com
+Date: 2026-11-09T16:04:00-08:00
+Subject: Re: Evidence request for upcoming SOC2 — audit deliverable plan and owners
+
+Alex — thanks for the patience. Short plan below and actions assigned.
+
+Plan (deliverable by Nov 12 unless you ask otherwise):
+- One-page summary (Grace) — scope, what we provide for BYOK, short explanation of retention defaults and exception path.
+- Evidence pack (Marissa + Karthik) — product/ops will export 90-day request logs and KMS operation logs; include console screenshots. (artifact: proposed-evidence-pack.zip)
+- Signed ledger excerpt (Ben) — rotation ledger excerpt + explanation of how ledger integrity is maintained.
+
+If Novamed needs >90 days or raw-level exports, we will need the exception path and a scoped infra change (Ben outlined ETA Nov 16). Alex, please reply with: 1) preferred export window (default 90 days), and 2) whether you want us to start an exception request now.
+
+I scheduled a 30-min triage slot for Mon Nov 10 11:00 PST — invite on the way. If you prefer an earlier call say so and we'll shift.
+
+Links & artifacts: HubSpot HS-78412, Drive: https://drive.google.com/drive/folders/1a2B_novamed-audit-asks
+
+Thanks —
+Grace O'Connor
+Director, Security & Compliance Programs
+Redwood Inference
+Phone: +1 415 555 0173
+
+-- Forwarded attachments manifest --
+1) novamed-evidence-ask.pdf (pdf) — auditor's original questions
+2) audit-scope-questions.xlsx (xlsx) — spreadsheet mapping fields requested
+3) proposed-evidence-pack.zip (zip) — sample artifacts (signed_ledger_excerpt.pdf, sample_request_log.csv)

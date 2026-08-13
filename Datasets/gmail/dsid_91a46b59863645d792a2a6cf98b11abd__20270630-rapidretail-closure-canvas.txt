@@ -1,0 +1,128 @@
+RapidRetail - Production latency & error surge — closure canvas
+
+From: Bethany Cole <bethany@rapidretail.com>
+To: Diego Fernandez <diego_fernandez@redwood.com>
+Cc: Aaron Li <aaron.li@rapidretail.com>
+Date: Mon, 28 Jun 2027 08:12:00 -0700
+Subject: Urgent: Increased latency and 5xx errors hitting checkout
+
+Diego —
+
+We just saw a sharp spike in 95th-percentile latency for our checkout API and a correlated rise in 500 responses starting ~07:45 PDT. This has affected about 12% of checkout requests during the spike window and caused customer-facing timeouts. We already switched to the reserve capacity but still see errors for some regions. Can you confirm what Redwood observed on your side and whether this is a configuration or autoscaling gap?
+
+Attached: bridge-logs-20270628.txt (excerpts)
+
+Bethany
+Bethany Cole
+Head of Platform Engineering, RapidRetail
+bethany@rapidretail.com
+
+--
+
+
+From: Diego Fernandez <diego_fernandez@redwood.com>
+To: Bethany Cole <bethany@rapidretail.com>
+Cc: Aaron Li <aaron.li@rapidretail.com>, Monica Patel <monica_patel@redwood.com>
+Date: Mon, 28 Jun 2027 09:03:00 -07:00
+Subject: Re: Urgent: Increased latency and 5xx errors hitting checkout
+
+Bethany —
+
+Thanks for the heads up and the logs. We saw the same spike from ~07:40–08:20 PDT originating from two serving clusters in us-west-2 that momentarily exhausted ephemeral KV cache memory during a burst of long-tail sequences (avg seq len + 3x expected). Autoscaling did not trigger fast enough because the spike pattern looked like short-lived tail burst rather than sustained CPU/GPU load.
+
+Immediate steps taken (in-bridge):
+- Throttled non-critical background requests for RapidRetail routing to free KV pool.
+- Pinned a hot-fix kernel path to reduce per-token memory amplification.
+- Scaled an extra dedicated pool and re-routed 15% of live traffic (manual) to it.
+
+We are preparing a short RCA and a proposed mitigation timeline. Monica is working on the mitigation worksheet and will share a timeline for permanent fixes (KV guardrails + adaptive burst autoscaler).
+
+Diego Fernandez
+Account Engineering Lead, Redwood Inference
+diego_fernandez@redwood.com
+
+Attachments referenced: bridge-logs-20270628.txt
+
+On Mon, Jun 28, 2027 at 08:12 AM Bethany Cole <bethany@rapidretail.com> wrote:
+> Diego —
+>
+> We just saw a sharp spike...
+
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Bethany Cole <bethany@rapidretail.com>, Diego Fernandez <diego_fernandez@redwood.com>
+Cc: Aaron Li <aaron.li@rapidretail.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Tue, 29 Jun 2027 10:15:00 -07:00
+Subject: RapidRetail RCA draft + mitigation timeline (first pass)
+
+Hi Bethany / Aaron —
+
+Attached is the preliminary RCA PDF and a mitigation timeline workbook (mitigation-timeline-rapidretail.xlsx). High-level summary:
+
+- Root cause: transient KV cache exhaustion on two us-west-2 clusters triggered by a combination of (a) longer-than-expected sequence lengths from a small percentage of requests and (b) a recent kernel change that increased intermediate memory usage under certain attention patterns.
+- Immediate mitigations (already applied): pinning fallback kernel, temporary throttling, manual scale-up and traffic split (no data left RapidRetail seats).
+- Short-term fixes (1–2 weeks): KV guardrail thresholding, emergency adaptive autoscaler that watches KV pressure, and a change to kernel selection heuristics.
+- Long-term (4–8 weeks): quantization profile rollback for this family + end-to-end regression tests on sequence-length distributions for customer workloads.
+
+Ask / next steps:
+1) Exec readout with RapidRetail on Friday (Jul 2) to confirm commitments and timing.
+2) Redwood to request an SLA exception window and a credit proposal (we will propose 10% service credit for the affected day).
+3) Procurement & legal: If RapidRetail needs a formal amendment for the SLA terms, loop procurement.
+
+I'll be on the Friday readout alongside Diego and Marissa. Diego — can you pull the linked SERV ticket and attach logs for the exec pack?
+
+Thanks,
+Monica Patel
+Senior Reliability Engineer, Redwood Inference
+monica_patel@redwood.com
+
+Attachments: RCA-RapidRetail-20270629.pdf, mitigation-timeline-rapidretail.xlsx
+
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Bethany Cole <bethany@rapidretail.com>, Diego Fernandez <diego_fernandez@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Fri, 02 Jul 2027 09:30:00 -07:00
+Subject: Exec readout today — confirming agenda and deliverables
+
+Bethany / Aaron —
+
+Thank you for joining the readout this morning. Quick note to confirm the deliverables we committed to during the call: 
+
+- Redwood will deliver the finalized RCA PDF and a one-page executive summary by EOD today (attached).
+- Implementation plan: KV guardrail + autoscaler rollout schedule to RapidRetail staging by 2027-07-09, production rollout by 2027-07-16, with measurable KPIs (95th pct latency < 350ms, 5xx rate < 0.2%).
+- Compensation: Redwood submitted a credit proposal to procurement (sla-exception-request.pdf).
+- Follow-through cadence: weekly status emails until production rollout complete + an operations handoff to RapidRetail SREs for monitoring thresholds.
+
+Diego / Monica / Marissa — please track action owners in SERV-1123 and update the mitigation workbook with exact deployment windows. Bethany — please confirm the post-change monitoring dashboard access details so we can validate KPIs after rollout.
+
+Laura Bennett
+VP, Customer Reliability, Redwood Inference
+laura_bennett@redwood.com
+
+Attachments: exec-summary-rapidretail.pdf, sla-exception-request.pdf
+
+
+From: Bethany Cole <bethany@rapidretail.com>
+To: Laura Bennett <laura_bennett@redwood.com>, Diego Fernandez <diego_fernandez@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Cc: Aaron Li <aaron.li@rapidretail.com>, procurement@rapidretail.com
+Date: Fri, 02 Jul 2027 16:45:00 -07:00
+Subject: Re: Exec readout today — confirming agenda and deliverables
+
+Laura —
+
+Thanks — the readout was clear and the plan gives us confidence. We accept the proposed timeline and will review the credit proposal with procurement next week. A couple quick asks: 
+
+- Please flag any post-rollout validation samples so we can cross-check with our telemetry.
+- If the production rollout needs to move outside the July 16 window, notify us 48 hours in advance; we may need to coordinate a mitigation page.
+
+Appreciate the responsiveness from the Redwood team during the bridge. Look forward to the final RCA and the staging rollout.
+
+Best,
+Bethany
+
+On Fri, Jul 2, 2027 at 09:30 AM Laura Bennett <laura_bennett@redwood.com> wrote:
+> Bethany / Aaron —
+>
+> Thank you for joining the readout...
+

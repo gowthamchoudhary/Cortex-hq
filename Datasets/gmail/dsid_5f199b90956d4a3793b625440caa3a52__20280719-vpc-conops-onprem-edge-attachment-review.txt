@@ -1,0 +1,114 @@
+Private VPC: edge attachment and on‑prem control/data ConOps review
+
+From: Sarah Wong <sarah.wong@acme.com>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: eng@cloudopssolutions.com
+Date: 2028-07-19T09:05:00Z
+Subject: Private VPC: edge attachment + control/data plane conops
+
+Hi Marissa,
+
+Thanks for taking this on. Attached is an early ConOps sketch for our private VPC + on‑prem edge attachment we discussed during the partner call. High level asks from our infra team:
+- Control-plane API traffic (k8s-style admin calls + metrics) should be outbound-only to Redwood control endpoints; we prefer no inbound open management ports.
+- Data plane nodes (inference workers) will live in our customer-managed subnets with an egress NAT and a dedicated peering attachment to Redwood.
+- We need guidance on BGP or static routing for the edge link, and recommended firewall rules for minimum ports.
+
+Attachments: acme_vpc_conops_v1.pdf (sketch), reference diagram request
+
+Can your architecture team review and call out any blockers or security concerns? We can be flexible on peering method (AWS Transit, Azure ExpressRoute, IPsec), but want a clear operational runbook and rollback plan before we start procurement.
+
+Thanks —
+Sarah Wong
+Sr. Platform Engineer, ACME Corp
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Sarah Wong <sarah.wong@acme.com>
+Cc: irene_choi@redwood.ai, jonas_weber@redwood.ai, kimberly_park@redwood.ai, stephanie_nguyen@redwood.ai, eng@cloudopssolutions.com
+Date: 2028-07-19T10:22:00Z
+Subject: Re: Private VPC: edge attachment + control/data plane conops
+
+Sarah — thanks for the doc. Looping in our architecture and ops leads for a focused read and concrete next steps. High level plan from Redwood:
+
+1) ConOps review (this thread) — identify control plane boundary, required ports, and routing method.
+2) Reference diagram update (we will supply a Redwood‑annotated diagram for your team to review).
+3) Ops playbook: canary attach, firewall rule template, incident rollback steps, and monitoring hooks.
+
+I attached a first-pass diagram (redwood_reference_diagram_v2.png) and a draft firewall rules spreadsheet (vpc-firewall-rules-draft.xlsx). Please review and highlight anything ACME cannot accept. Internal owners: Irene (control plane), Jonas (data plane / ops), Kim (security), Steph (program / runbook).
+
+Proposed meeting: Tue 2028-07-24 16:00 ET (30m) — will publish calendar once we confirm.
+
+Marissa Cole
+Head of Solutions Engineering, Redwood Inference
+marissa_cole@redwood.ai
+Attachments: redwood_reference_diagram_v2.png, vpc-firewall-rules-draft.xlsx
+
+From: Irene Choi <irene_choi@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>; Sarah Wong <sarah.wong@acme.com>
+Cc: jonas_weber@redwood.ai, kimberly_park@redwood.ai, stephanie_nguyen@redwood.ai
+Date: 2028-07-19T13:40:00Z
+Subject: Re: Private VPC: edge attachment + control/data plane conops
+
+Quick technical notes after skimming ACME's ConOps and our annotated diagram:
+
+- Control plane: must be treated as "outbound-only" from the customer's VPC. We will use mTLS over port 443 to our control endpoints. No inbound management ports should be required on customer NAT. If ACME requires private peering for control-plane API, we can map a dedicated control VIF but that increases operational surface.
+
+- Data plane (inference workers): live in customer subnets behind a NAT gateway or equivalent. We recommend a dedicated subnet per environment (canary/staging/prod) to enable traffic shaping and quota enforcement on our side.
+
+- Routing: prefer BGP over IPsec for dynamic failover if you have a Direct Connect / ExpressRoute equivalent. For simpler setups, static routes over IPsec are fine but include keepalive and route health checks.
+
+- Firewall / ports (minimum):
+  * Outbound 443 TCP to control.redwood.ai (mTLS)
+  * Outbound 5222 TCP for health-check pubsub (if you opt in)
+  * Outbound 80/443 to S3/OSS for model artifact pulls (or use VPC endpoints)
+  * If you use model-serving esystems with vector indexes, allow outbound 9200/9300 to our managed index endpoints (TLS only).
+
+- KMS integration: if ACME uses a customer KMS/HSM for key unwrap, we need the KMS endpoints reachable from worker subnets. Consider a dedicated KMS subnet with strict egress.
+
+I'll prepare a short appendix with port/route examples and a suggested NAT/egress policy.
+
+—Irene
+Irene Choi
+Principal Infra Architect, Redwood Inference
+
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>; Irene Choi <irene_choi@redwood.ai>; Sarah Wong <sarah.wong@acme.com>
+Cc: kimberly_park@redwood.ai, stephanie_nguyen@redwood.ai
+Date: 2028-07-20T09:15:00Z
+Subject: Re: Private VPC: edge attachment + control/data plane conops
+
+Ops checklist / canary suggestion below — adding details so ACME can validate against procurement timeline:
+
+Canary plan (recommended):
+- Step 0: Pre-checks: validate IP ranges, ACLs, and identify a /26 dedicated subnet for canary workers.
+- Step 1: Deploy 2 worker instances in canary subnet, use NAT egress to control.redwood.ai; ensure mTLS handshake completes.
+- Step 2: Gradually shift 5–10% of traffic via route injection (BGP community or traffic steering at load balancer).
+- Step 3: Monitor latency, error-rate, and token cost; rollback via BGP withdraw / route priority change.
+
+Firewall template (columns in attached spreadsheet): source, destination, protocol, port, justification, monitoring. We should lock down SSH and other admin ports; any admin debugging should be run from a bastion with time-limited access and recorded sessions.
+
+Operational notes:
+- Logging: we require flow logs (S3 or Log Analytics), and API request logs forwarded to our Ops SaaS for SLA correlation.
+- Alerting: set an early-warning on 5xx spikes and elevated tail latency (>95th percentile threshold).
+
+I'll add these to the shared Drive doc.
+
+Jonas Weber
+Sr. Production Engineer, Redwood Inference
+
+From: Sarah Wong <sarah.wong@acme.com>
+To: Marissa Cole <marissa_cole@redwood.ai>, Irene Choi <irene_choi@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>
+Cc: eng@cloudopssolutions.com, kimberly_park@redwood.ai
+Date: 2028-07-20T11:50:00Z
+Subject: Re: Private VPC: edge attachment + control/data plane conops
+
+All — appreciate the quick turnaround and concrete checklist. A few follow-ups from ACME infra:
+- We'll allocate a /26 for the canary and another /24 for prod workers.
+- We prefer BGP over our ExpressRoute for dynamic failover; the security team will confirm acceptable ASN/communities.
+- On the KMS note — we'll share internal endpoints; expect to validate key unwrap flow during canary.
+
+Can we confirm the Tue 7/24 16:00 ET meeting? We want a short 30m run-through and then we'll hand this to procurement for network ordering. Also confirm any required NDA or SOC forms before we share deeper network specifics with CloudOps partner.
+
+Thanks —
+Sarah
+Sr. Platform Engineer, ACME Corp
+Attachments referenced: acme_vpc_conops_v1.pdf

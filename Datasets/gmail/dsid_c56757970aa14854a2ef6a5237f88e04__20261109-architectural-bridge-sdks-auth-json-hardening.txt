@@ -1,0 +1,127 @@
+Architectural bridge: SDK/auth, routing & JSON output hardening
+
+From: Soojin Lee <soojin.lee@redwood.ai>
+To: Alex Moreno <alex.moreno@datumx.com>
+Cc: Priya Shah <priya.shah@datumx.com>, laura_bennett <laura.bennett@redwood.ai>, dev_patel <dev.patel@redwood.ai>
+Date: Mon, 09 Nov 2026 16:18:00 -0800
+Subject: Post-call recap & next technical steps (SDK/auth + JSON schema hardening)
+
+Hi Alex / Priya — thanks again for the call today. Quick recap and recommended next steps so we can keep momentum on the POC: 
+
+1) Goals you confirmed: replace current ad-hoc generation with a constrained JSON output that our downstream pipelines can reliably parse; fast embedding-based retrieval for candidate passages; and a reranker to surface top-3 items with a deterministic scoring tag.
+2) Low-risk rollout approach: start with Redwood hosted endpoint + SDK integration for prototyping, then move to Dedicated if latency tests require it.
+
+Technical next steps (owners & timing):
+- Hands-on SDK onboarding: Redwood SDK quickstart + auth setup (dev_patel) — goal: working call from your staging in 48 hours.
+- JSON schema + constrained decoding checklist (laura_bennett) — deliver initial schema + validation patterns by Wed EOD.
+- Routing & fallback plan (soojin_lee/rishi_malhotra) — define policy for model fallbacks and region routing before first load test.
+- Embeddings + reranker tuning (DatumX + Redwood) — initial embedding spec and example queries to evaluate recall by next demo.
+
+Attachments: I’ve uploaded the SDK quickstart and a draft JSON schema stub to the Drive and attached a zip for quick reference. See attached: redwood_sdk_quickstart.zip, json-schema-v1.json.
+
+Immediate asks for DatumX:
+- Give us one representative prompt -> expected JSON fields and an example golden output (even a few rows) so we can author the schema.
+- Confirm which environments (IP ranges or VPC) we should whitelist for auth and whether you require KMS/HSM token flows for Private mode.
+
+I’ll loop in engineering (Dev) and Solutions (Laura) separately with step-by-step onboarding. Can we target a quick staging call tomorrow 11/10 at 10:00am PT?
+
+Thanks — Soojin
+Soojin Lee | Senior AE — Redwood Inference
+redwood.ai | +1 (415) 555-0199
+
+[Attachment: redwood_sdk_quickstart.zip (archive)]
+[Attachment: json-schema-v1.json (text)]
+From: Dev Patel <dev.patel@redwood.ai>
+To: Priya Shah <priya.shah@datumx.com>, Alex Moreno <alex.moreno@datumx.com>
+Cc: Soojin Lee <soojin.lee@redwood.ai>, laura_bennett <laura.bennett@redwood.ai>
+Date: Mon, 09 Nov 2026 17:02:00 -0800
+Subject: Re: Post-call recap & next technical steps (SDK/auth + JSON schema hardening)
+
+Hi Priya / Alex — quick tech note following Soojin’s message. I’ll run the SDK walkthrough with your team tomorrow. A few practical items to unblock before the session: 
+
+- API keys vs. OAuth: For quick staging we'll use API keys scoped to a staging tenant. If you need VPC/HSM, we’ll map to Redwood Private flows but that requires an account-level onboarding window (~2–3 weeks).
+- Network: Please confirm CIDR IPs for outbound calls if you have strict egress rules; otherwise the SDK will fall back to token-based auth over TLS.
+- SDK bits: the attached quickstart contains a sample for continuous batching and token streaming. Important for your JSON constraint work: the SDK supports an enforce_schema flag that instructs the runtime to apply constrained decoding and surface a structured parse error if decoding fails. We recommend: schema-first development + a 2-layer validation (runtime + client-side JSON schema validation).
+
+Runtime patterns I recommend for reliability:
+- Constrained decoding at runtime (strict) -> if failure, return a structured error payload (400-like internal format) with a deterministic backoff token for retries.
+- Client-side validation: run ajv (or equivalent) against the raw output and, if validation fails, trigger a bounded retry with added context (higher temperature 0.0 -> for deterministic decoding, we actually bump decoding constraints — see below).
+- Idempotency: include a request_id so retries are deduplicated server-side.
+
+I’ll bring a working script illustrating: 1) call via SDK, 2) validate with schema, 3) on validation fail = do a single soft retry with constrained beam search and fallback to a more permissive model only if both attempts fail.
+
+Quick ask for your golden outputs: circulate 3 representative prompts + expected JSON outputs (best/easy/edge). I’ll author regression tests.
+
+—Dev
+Principal Engineer, Redwood Inference
+
+[Attachment: (none)]
+From: laura_bennett <laura.bennett@redwood.ai>
+To: Soojin Lee <soojin.lee@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Alex Moreno <alex.moreno@datumx.com>, Priya Shah <priya.shah@datumx.com>
+Date: Tue, 10 Nov 2026 09:14:00 -0800
+Subject: Re: Post-call recap & next technical steps (SDK/auth + JSON schema hardening)
+
+Hi all — attached is a first-pass JSON schema (json-schema-v1.json) for the endpoint we discussed. Key decisions called out in the schema comments:
+
+- Use explicit enums for status fields and typed arrays for the candidates array (maxItems: 10) so the downstream pipeline never sees an unexpected shape.
+- Include a `metadata.version` field that we increment per rollout to make regression detection easier.
+- Recommend returning `candidate_scores` as an array of objects with explicit `score_normalized` in [0,1] to avoid float-precision assumptions.
+
+Validation + retry pattern (concrete):
+1) SDK call -> runtime returns structured JSON or a parse error with code: OUTPUT_SCHEMA_VIOLATION and payload containing raw_text and tokenizer offsets.
+2) Client runs ajv; if ajv fails, call a special `/retry-decode` route (same request_id) that triggers constrained decoding with the runtime using a deterministic beam (k=4) and a lower temperature.
+3) If `/retry-decode` fails after 2 attempts, mark the item for manual review and increment a metric `schema.failures` for alerting.
+
+I’ve included sample curl and Node snippets in the Drive link. For the reranker: supply a labeled set of ~200 pairs and we’ll do a quick cross-eval (embedding similarity + learned rerank) and return a stability score.
+
+I’ll be on the staging call tomorrow for the live demo.
+
+—Laura
+Solutions Engineer, Redwood Inference
+
+[Attachment: json-schema-v1.json (text)]
+From: Alex Moreno <alex.moreno@datumx.com>
+To: Soojin Lee <soojin.lee@redwood.ai>
+Cc: Priya Shah <priya.shah@datumx.com>, laura_bennett <laura.bennett@redwood.ai>, dev_patel <dev.patel@redwood.ai>
+Date: Wed, 11 Nov 2026 08:07:00 -0800
+Subject: Re: Post-call recap & next technical steps (SDK/auth + JSON schema hardening)
+
+Thanks everyone — this is helpful. A couple of clarifying Qs from our eng lead: 
+
+1) On the constrained decoding retry: when you call `/retry-decode`, do you maintain the same model variant or will it try a more permissive model by default? We want to avoid silently changing model semantics across retries.
+2) For embedding tuning: what vector dims and quantization do you recommend for near real-time reranking when searching a 10M doc corpus?
+
+We’ll upload three golden outputs to the Drive by EOD and confirm CIDR ranges for staging. Tomorrow 10am PT works for the call — please send calendar invite.
+
+—Alex
+VP, Product — DatumX
+
+On Tue, Nov 10, 2026 at 09:14 AM -0800 laura_bennett <laura.bennett@redwood.ai> wrote:
+> Hi all — attached is a first-pass JSON schema (json-schema-v1.json) for the endpoint we discussed. Key decisions called out in the schema comments:
+> 
+> - Use explicit enums for status fields and typed arrays for the candidates array (maxItems: 10) so the downstream pipeline never sees an unexpected shape.
+> - Include a `metadata.version` field that we increment per rollout to make regression detection easier.
+> - Recommend returning `candidate_scores` as an array of objects with explicit `score_normalized` in [0,1] to avoid float-precision assumptions.
+> 
+> Validation + retry pattern (concrete):
+> 1) SDK call -> runtime returns structured JSON or a parse error with code: OUTPUT_SCHEMA_VIOLATION and payload containing raw_text and tokenizer offsets.
+> 2) Client runs ajv; if ajv fails, call a special `/retry-decode` route (same request_id) that triggers constrained decoding with the runtime using a deterministic beam (k=4) and a lower temperature.
+> 3) If `/retry-decode` fails after 2 attempts, mark the item for manual review and increment a metric `schema.failures` for alerting.
+
+
+From: Priya Shah <priya.shah@datumx.com>
+To: Soojin Lee <soojin.lee@redwood.ai>, Alex Moreno <alex.moreno@datumx.com>, laura_bennett <laura.bennett@redwood.ai>, dev_patel <dev.patel@redwood.ai>
+Date: Thu, 12 Nov 2026 09:22:00 -0800
+Subject: Re: Post-call recap & next technical steps (SDK/auth + JSON schema hardening)
+
+Hi team — quick notes after internal review: 
+
+- Constrained decoding retry behavior: we prefer deterministic retries on the same model variant first (k=4 beam, temperature 0.0) so we don’t change semantics mid-flight. If that fails twice, safe fallback is a more permissive but tagged variant (e.g., `gptx-lite-v1`) with explicit `fallback_reason`. Keep both attempts idempotent and attach the `request_id`.
+- Embedding recommendations: 768 dims with 8-bit quant (for ANN index memory savings) looks like a good balance; we’ll sanity-check recall on 2000 sample docs. If latency is tight, consider productizing a hybrid index (ANN + filt) and pushing reranking to GPU.
+
+We uploaded 3 golden outputs to the Drive (folder link attached) and shared CIDR ranges for staging. Tomorrow 10am PT confirmed — invite received. 
+
+Thanks — Priya
+Head of Search & Relevance — DatumX
+
+[Attachment: datumx_mutual_action_plan.xlsx (spreadsheet)]

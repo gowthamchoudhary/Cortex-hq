@@ -1,0 +1,159 @@
+Post-call recap: streaming latency definition & reporting (Catalyst AI)
+
+From: Vanessa Ortiz <vanessa@redwood.com>
+To: Oliver Grant <oliver@catalystai.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: Fri, 18 Sep 2026 14:12:00 -0700
+Subject: Post-call recap: streaming latency definition & reporting (Catalyst AI)
+
+Hi Oliver — thanks again for the demo and the call today. Quick recap and proposed next steps so we’re aligned on measurement and reporting expectations before we follow up with procurement/legal: 
+
+What we heard (your asks):
+- Streaming-first-token latency target (client-facing) and end-to-end full-response latency for longer responses
+- Concurrent session targets and sustained throughput numbers
+- Clear definitions for how latency is measured (first-byte vs last-byte) and what counts as exclusions
+- Reporting cadence (SLO dashboard access, weekly SLA digest, monthly formal report) and remediation policy for breaches
+
+Open items / asks for Catalyst:
+1) Confirm the latency targets you expect (p50/p95/p99) for both first-token (streaming) and full-response (end-to-end).
+2) Provide a representative payload (sample prompt) and expected output size (tokens) we can use for bench validation.
+3) Share a short list of request IDs / timestamps from a few production calls (or a synthetic run) so we can validate measurement methodology against your traffic shape.
+4) Tell us whether the SLA needs to include streaming-first-token as a discrete SLO (yes/no).
+
+How Redwood measures (proposal):
+- First-token (streaming): time between ingress request timestamp (server-received) and the first chunk sent to the client.
+- Full-response (end-to-end): time between ingress request and final-byte egress.
+- Percentiles: we report p50/p95/p99 on both metrics over a rolling 7-day and 30-day window; monthly SLA uses calendar-month aggregates.
+- Exclusions we commonly propose: scheduled maintenance (with 72h notice), customer client-side network outages, documented abusive traffic spikes / DDoS, and force majeure.
+
+Attachments: I’ve included a short measurement template (slo-measurement-template.xlsx) to capture sample payloads, token lengths, and any client-side constraints.
+
+Proposed next steps:
+- Oliver: confirm targets + share sample payloads and a few trace IDs (item 1-3 above) by end of next week.
+- Karthik: will propose specific measurement wording we can include in the draft SLA.
+- Marissa: will prepare a first-pass SLA redline once we have the targets.
+- Schedule a 30-min technical walkthrough after we receive samples.
+
+Thanks —
+Vanessa
+Vanessa Ortiz
+Senior Solutions Engineer, Redwood Inference
+vanessa@redwood.com
+Redwood Inference
+
+Attachment: slo-measurement-template.xlsx (Excel / sample fields)
+
+From: Oliver Grant <oliver@catalystai.com>
+To: Vanessa Ortiz <vanessa@redwood.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: Fri, 18 Sep 2026 15:03:00 -07:00
+Subject: Re: Post-call recap: streaming latency definition & reporting (Catalyst AI)
+
+On Fri, Sep 18, 2026 at 2:12 PM Vanessa Ortiz <vanessa@redwood.com> wrote:
+> Hi Oliver — thanks again for the demo and the call today. Quick recap and proposed next steps so we’re aligned on measurement and reporting expectations before we follow up with procurement/legal: 
+
+Thanks Vanessa — great summary. A few clarifications from our side so you can draft concrete wording: 
+
+1) Targets (our initial ask):
+   - Streaming first-token (client-visible): p50 <= 150ms, p95 <= 400ms, p99 <= 700ms
+   - Full-response (typical 512-token generation): p50 <= 220ms, p95 <= 700ms
+   - Sustained throughput: 120 req/s (512-token baseline); peak concurrency target: 200 concurrent sessions
+
+2) Measurement nuances:
+   - We care about first-token for streaming (user experience) and also want the full-response p95 for billing/latency SLAs.
+   - For streaming, if Redwood can provide both first-token and median chunk spacing that would be helpful.
+
+3) Reporting cadence preferred by procurement/legal:
+   - Live SLO dashboard access for our engineers (read-only).
+   - Weekly automated digest with p50/p95/p99 and incident flags.
+   - Monthly formal SLA report for procurement with cumulative availability metrics and any credit calculations.
+
+4) Remedies: procurement prefers a clearly tiered credit scale tied to monthly SLO breaches rather than ad-hoc credits. We’ll accept standard caps but need the math transparent.
+
+I’ll pull a short set of traces (we’ll anonymize) and a representative prompt set and drop them in the S3 link by next Wed. Also attaching our infra diagram so you have context on client-side proxies (attachment: catalyst_infra_v1.pdf).
+
+— Oliver
+Oliver Grant
+Head of Platform, Catalyst AI
+oliver@catalystai.com
+
+Attachment: catalyst_infra_v1.pdf
+
+From: Karthik Iyer <karthik@redwood.com>
+To: Oliver Grant <oliver@catalystai.com>, Vanessa Ortiz <vanessa@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: Mon, 21 Sep 2026 09:07:00 -07:00
+Subject: Re: Post-call recap: streaming latency definition & reporting (Catalyst AI)
+
+Thanks — helpful numbers, Oliver. A few notes on how Redwood operationalizes measurement and a proposed set of SLA clauses you can expect in the draft: 
+
+Measurement definitions (concrete):
+- Ingress timestamp: when the Redwood edge (TLS terminated) acknowledges the full request headers.
+- First-token (streaming): delta between ingress timestamp and time first chunk of model output leaves Redwood’s egress (first-byte).
+- Full-response: delta between ingress timestamp and final-byte egress for that request.
+- Percentiles computed on successful requests only (2xx application-level responses). Failed and timed-out requests are counted separately and factored into availability.
+
+Common exclusions (we recommend):
+- Scheduled maintenance windows with >=72 hours notice; maintenance windows are excluded from monthly SLA calculations.
+- Client-induced delays (e.g., request retries that arrive after initial connection closed).
+- Network blackholes or third-party CDN outages upstream of Redwood.
+- Traffic anomalies attributable to customer misconfiguration or malicious activity.
+
+Reporting cadence options (we can support all):
+- Live dashboard (real-time) for engineers
+- Weekly rolling digest (auto-email) with p50/p95/p99 and top latency contributors
+- Monthly formal report (calendar month) used for credit calculations and procurement review
+
+Suggested remedy language (draft excerpt we will expand):
+- Monthly Service Credit = min(MaxCreditCap, base_credit_rate * number_of_breached_days), where breached day = day where calendar-month p95 > agreed threshold.
+- Cap the credit at 10% of monthly invoice unless otherwise agreed.
+- Credits applied after a coordination window (we require a 5-business-day validation window to review instrumentation vs customer-supplied traces).
+
+Action items:
+- Oliver: drop sample traces and the representative prompt set to your S3 link by EOD Wed.
+- Vanessa / Marissa: I’ll draft two short measurement paragraphs (streaming-first-token + full-response) for inclusion in the SLA.
+
+Karthik
+Karthik Iyer
+Principal Solutions Architect, Redwood Inference
+
+
+From: Marissa Cole <marissa@redwood.com>
+To: Oliver Grant <oliver@catalystai.com>, Vanessa Ortiz <vanessa@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Tue, 22 Sep 2026 08:14:00 -07:00
+Subject: Re: Post-call recap: streaming latency definition & reporting (Catalyst AI)
+
+Oliver / team — moving to legal/ops context here. A few practical items from our side before procurement issues a PO/contract: 
+
+1) SLA redline: I’ve attached a first-pass SLA redline (SLA_redline_v1.docx) that includes the measurement wording Karthik described plus a tiered credit table. Please review and flag any business- or security-driven exceptions.
+2) Force majeure / maintenance: we propose explicit language that scheduled maintenance (>=72h notice) is excluded and that force majeure pauses credit calculations for the impacted period.
+3) Validation window: we will require a 5-business-day validation period after a reported breach to reconcile instrumentation and customer traces before credits are applied.
+4) Procurement ask: please share the billing entity and any PO details you’ll need so Finance can map credits properly.
+
+If you want, we can bake the streaming-first-token as a separate SLO line-item (explicitly called out in the SLO table) to make reporting and credits simpler. Let me know preference.
+
+Marissa Cole
+Director, Customer Ops & Contracts, Redwood Inference
+marissa@redwood.com
+
+Attachment: SLA_redline_v1.docx (redline / suggested wording)
+From: Vanessa Ortiz <vanessa@redwood.com>
+To: Oliver Grant <oliver@catalystai.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: Tue, 22 Sep 2026 09:31:00 -07:00
+Subject: Re: Post-call recap: streaming latency definition & reporting (Catalyst AI)
+
+Perfect, thanks all. Oliver — once you drop the sample traces and prompts I’ll schedule the 30-min technical walkthrough with Karthik. Proposed slots: Wed 09/23 10:00-10:30 or Thu 09/24 14:00-14:30 PT — pick one and I’ll send the invite.
+
+Next steps summary:
+- Catalyst: share traces + prompts (S3 link) by EOD Wed 09/23
+- Redwood (Karthik): measurement wording and test plan
+- Redwood (Marissa): first-pass SLA redline provided (attached), will await any redlines from Catalyst procurement/legal
+- Schedule walkthrough after traces are posted
+
+Calendly: https://calendly.com/redwood/30min-tech-walkthrough
+HubSpot: https://app.hubspot.com/contacts/12345/deal/67890
+
+Talk soon —
+Vanessa
+

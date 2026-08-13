@@ -1,0 +1,138 @@
+Invoice FR-2049: request for token breakdown and VAT reconciliation
+
+From: Martha Lee <martha.lee@fastretail.com>
+To: Kimberly Park <kimberly.park@redwood.ai>
+Date: Fri, 9 Jun 2028 09:12:00 -0400
+Subject: Invoice FR-2049 unexpected overage — token counts + VAT
+
+Hi Kimberly,
+
+We just received invoice FR-2049 and see an unexpected overage line that looks inconsistent with our internal logs. Redwood's invoice shows 1,508,420 generated tokens for May (and VAT applied at 20%), but our telemetry only records ~1,210,000 tokens for the same period. This is a material delta and it's pushing us over our committed band.
+
+Can you provide:
+- A per-day token breakdown for May (UTC) that maps to the invoice buckets
+- Any sampling/export that shows the spike(s) you used to compute the 1.5M tokens
+- Clarification on VAT: we are VAT-registered in Ireland (IE12345678) and expect reverse-charge handling — why was VAT charged on the invoice?
+
+We need this for our finance team to approve payment. If there's an ingest duplication on our side we can reconcile, but we need the evidence. Attaching our internal summary (billing@fastretail.com also on this).
+
+Thanks,
+Martha
+Martha Lee
+Head of Finance — FastRetail
+attachments: fastretail-summary-may.xlsx (referenced)
+
+From: Kimberly Park <kimberly.park@redwood.ai>
+To: Martha Lee <martha.lee@fastretail.com>
+Cc: ben.carter@redwood.ai, marissa.cole@redwood.ai
+Date: Fri, 9 Jun 2028 13:05:00 -0400
+Subject: Re: Invoice FR-2049 unexpected overage — token counts + VAT
+
+Hi Martha — thanks for the note and the summary. I've looped in Ben (billing ops) and Marissa (finance) so we can get you a clear breakdown and resolve the VAT treatment quickly.
+
+Ben/Marissa — customer reports ~1.21M tokens vs our billed 1.508M for May (FR-2049). Customer says they are VAT-registered (IE12345678) and expect reverse-charge. Customer's finance needs: per-day UTC token export, sampled request IDs around any spikes, and confirmation whether any automated dedup or ingest jobs could have produced duplicate requests on our side.
+
+Action items:
+- Ben: can you pull the per-day token tallies and the sampling export for 2028-05-01 -> 2028-05-31? Please include request IDs and model variant used.
+- Marissa: please advise on VAT reverse-charge next steps and whether we can issue a corrected invoice once we confirm.
+
+I'll follow up to Martha once we have the evidence.
+
+Best,
+Kimberly Park
+Account Exec, Americas
+Redwood Inference
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Kimberly Park <kimberly.park@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Fri, 9 Jun 2028 13:42:00 -0400
+Subject: RE: Invoice FR-2049 unexpected overage — token counts + VAT
+
+Kimberly/Marissa — I pulled the usage ledger and a sampled ingest export. High-level findings:
+
+1) Per-day billed tokens (UTC):
+   - 2028-05-01: 38,210
+   - 2028-05-02: 36,980
+   - ...
+   - 2028-05-12: 45,120
+   - 2028-05-19: 372,540 (spike)
+   - 2028-05-20: 378,900 (spike)
+   - 2028-05-31: 40,300
+   Total (billed): 1,508,420
+
+2) The spike on 19-20 May correlates with a high-volume bulk ingest job coming from two API keys tied to the same tenant id. Sampled rows (from ingest-sample-20280608.csv):
+   - req_id: r-7b9c2a, timestamp: 2028-05-19T02:14:37Z, prompt_len: 1,231, model: rdw-turbo-4x, response_len: 1,450
+   - req_id: r-7b9c2b, timestamp: 2028-05-19T02:14:38Z, prompt_len: 1,230, model: rdw-turbo-4x, response_len: 1,449
+   - req_id: r-8a1d0f, timestamp: 2028-05-20T03:45:12Z, prompt_len: 2,100, model: rdw-turbo-4x, response_len: 2,050
+   Observations: several near-duplicate request payloads within one-second windows.
+
+3) Root cause candidates:
+   - Duplicate client retries from FastRetail's ingestion pipeline (same payload repeated across two API keys) OR
+   - An idempotency key not being set causing parallel retries to be treated as distinct requests.
+
+4) VAT: our invoice engine charged 20% VAT because the billing address on record is Ireland and our system defaulted to local VAT application. If FastRetail provides the VAT ID and indicates they are the recipient for reverse charge, we can reissue without VAT. That is a Finance workflow (Marissa).
+
+Proposed immediate remediation:
+- Offer a one-time partial credit to cover clearly duplicated tokens. From sampling, I estimate ~298,000 duplicated tokens across the spike window. Using the customer's rate (EUR 0.00375 / token generated in their band), that equates to ~EUR 1,117.50.
+- Reissue corrected invoice to remove VAT upon receipt of valid EU VAT ID and the reverse-charge confirmation.
+
+I'll attach the sampled extract and the per-day CSV to this thread for audit.
+
+Attachments: ingest-sample-20280608.csv, usage-export-202805.zip
+
+—Ben
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Kimberly Park <kimberly.park@redwood.ai>
+Date: Fri, 9 Jun 2028 14:10:00 -0400
+Subject: RE: Invoice FR-2049 unexpected overage — token breakdown and VAT reconciliation
+
+Thanks Ben — quick clarifying Qs before I approve reissue:
+- Are the duplicated request IDs identical payloads or only similar lengths? We need evidence of exact duplication for audit (hash or full payload sample).
+- Confirm the date range for the credit to ensure we don't double-credit if there are legitimate bursts earlier/later.
+
+If you can paste a small hashed payload snippet (sha256) of the duplicated requests and a short script output showing dedup detection, that's ideal. I'll also draft language for the corrected invoice (credit line + VAT reversal dependent on VAT ID).
+
+—Marissa
+
+On Fri, Jun 9, 2028 at 13:42, Ben Carter <ben.carter@redwood.ai> wrote:
+> Kimberly/Marissa — I pulled the usage ledger and a sampled ingest export. High-level findings:
+> ...
+> Attachments: ingest-sample-20280608.csv, usage-export-202805.zip
+
+From: Kimberly Park <kimberly.park@redwood.ai>
+To: Martha Lee <martha.lee@fastretail.com>
+Cc: ben.carter@redwood.ai, marissa.cole@redwood.ai
+Date: Sun, 10 Jun 2028 14:22:00 +01:00
+Subject: Re: Invoice FR-2049 unexpected overage — token counts + VAT
+
+Hi Martha — thank you for your patience while we investigated. Summary and proposed resolution below.
+
+What we found:
+- Redwood's ledger confirms the billed total of 1,508,420 tokens for May.
+- A concentrated spike on 19–20 May accounts for ~751k of those tokens. Sampled requests show multiple near-identical payloads across two API keys tied to FastRetail's tenant (see attached sample).
+- Our evidence indicates duplicate client-side retries / parallel submissions rather than a server-side counting bug.
+
+What we propose:
+1) One-time billing credit of EUR 1,117.50 to cover the estimated duplicated tokens (we will apply this as a credit on the next invoice).
+2) VAT handling: we will reissue a corrected invoice without VAT once we receive FastRetail's EU VAT ID and written confirmation that reverse-charge applies (please send the registration number and a short email confirming reverse-charge).
+3) We're including the per-day token CSV and a small sample extract for your audit. If you'd like, our solutions engineer can run a short joint session to validate request traces with your ingestion team.
+
+Next steps for you:
+- Send VAT registration (IE12345678) and confirm reverse-charge in reply to this thread.
+- If you want the joint session, propose two 45-minute windows next week and we'll coordinate.
+
+Attachments: invoice-FR-2049.pdf (original), ingest-sample-20280608.csv, usage-export-202805.zip
+
+If that plan sounds acceptable I'll queue the credit and coordinate the corrected invoice with Finance once we have the VAT documentation.
+
+Best regards,
+Kimberly Park
+Account Executive, Americas
+Redwood Inference
+phone: +1 415-555-0123
+
+On Sun, 10 Jun 2028 at 14:22:00 +01:00 Kimberly Park <kimberly.park@redwood.ai> wrote:
+> Hi Martha — thank you for your patience while we investigated. Summary and proposed resolution below.
+> ...
+> Attachments: invoice-FR-2049.pdf (original), ingest-sample-20280608.csv, usage-export-202805.zip

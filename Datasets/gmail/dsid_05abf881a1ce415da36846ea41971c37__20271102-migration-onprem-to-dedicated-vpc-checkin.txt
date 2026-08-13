@@ -1,0 +1,113 @@
+Next steps: on-prem origin -> Dedicated + VPC requirements
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Sam Patel <sam.patel@mediqhealth.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Tue, 2 Nov 2027 09:12:00 -0700
+Subject: Recap + proposed next steps (deployment preference: Dedicated + VPC)
+
+Hi Sam —
+
+Thanks again for the call this morning. Quick recap to make sure we’re aligned and to capture the immediate next steps: 
+
+Summary of what you told us
+- Preferred deployment: Dedicated capacity with private VPC peering to satisfy PHI controls.
+- Migration origin: Existing on-prem GPU cluster running a mix of proprietary wrappers + calls to another LLM API for safety checks.
+- Hard constraints: SOC2 evidence for our hosting/control plane, inbound/outbound egress rules blocked except approved endpoints, and a 99.9% latency SLO for <200ms p50 on short prompts for critical flows.
+
+Open questions (we’ll own answers):
+1) Exact GPU footprint and concurrency expectations — helps us size Dedicated pool and propose burst plan.
+2) Which model families you want served inside the VPC vs. routed to hosted (cost/latency tradeoffs).
+3) Data residency: do any requests need to stay in your VPC entirely (no logs/metadata leaving)?
+
+Proposed next steps
+- Karthik: technical deep-dive to map network/firewall needs and confirm sizing — sometime this week.
+- Marissa: will send a short mutual action plan and draft timeline for procurement/PO.
+- Ben (me): share SOC2 and network req template (attached) + a proposed slot-sizing sketch once Karthik confirms concurrency.
+
+Can you confirm availability for a 45-minute technical call Thurs or Fri (11/4 or 11/5) and whether Priya should join for compliance questions?
+
+Attachments: mutual_action_plan_RW-8421.csv (MMP stub), network_requirements_template.xlsx, SOC2_report_Redwood_v2.pdf
+
+Cheers,
+Ben
+Ben Carter | Account Executive, Redwood Inference
+ben.carter@redwood.ai | +1 (415) 555-0124
+
+---
+This message is a summary of our 11/02 discovery call. If anything above needs correction, please reply and I'll update the plan.
+From: Sam Patel <sam.patel@mediqhealth.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Priya Rao <priya.rao@mediqhealth.com>
+Date: Tue, 2 Nov 2027 11:03:00 -0700
+Subject: Re: Recap + proposed next steps (deployment preference: Dedicated + VPC)
+
+Ben —
+
+Thanks for the concise recap. Correct on the main points. A couple clarifications from our side: 
+
+- We are leaning strongly toward Dedicated with VPC peering. PHI/PII rules push us away from hosted unless you can guarantee no logs leave our VPC.
+- Migration origin: our infra team runs an on-prem cluster (NVIDIA A100s) and a set of wrappers that perform pre/post-processing. We currently proxy through another LLM API for safety checks; we'd like to move that traffic into our VPC too if possible.
+- Concurrency: rough estimate is 120 concurrent short requests during peak window (08:00–10:00 PT), with bursts to 250 for short periods.
+
+Priya will own compliance questions and should be on the tech call. Thu 11/4 10:00–11:00 PT works for us.
+
+Sam
+Sam Patel | Head of Platform Engineering, Mediq Health
+sam.patel@mediqhealth.com | +1 (617) 555-3344
+
+On Tue, Nov 2, 2027 at 09:12 AM Ben Carter <ben.carter@redwood.ai> wrote:
+> (see above)
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Sam Patel <sam.patel@mediqhealth.com>, Ben Carter <ben.carter@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Tue, 2 Nov 2027 12:18:00 -0700
+Subject: Re: Recap + proposed next steps (deployment preference: Dedicated + VPC)
+
+Sam / Ben —
+
+Thanks for confirming. A few technical notes ahead of Thursday's deep dive so we can keep the call focused: 
+
+1) Sizing validation: your 120 steady / 250 burst recommendation — is that measured in concurrent open inference sessions or requests/sec? If sessions, what is the typical prompt length (tokens) for the critical flows?
+
+2) VPC requirements we’ll want to review on the call: 
+   - Desired CIDR ranges and whether you need bi-directional peering or private endpoints.
+   - Egress policy: do you allow outbound to redwood-managed control plane endpoints for metrics/health checks, or do you require a full offline/control-plane-in-VPC option?
+
+3) Migration path: to minimize downtime we typically suggest a phased cutover: dry-run inside Dedicated + VPC (traffic mirrored), then progressive traffic shift, then decommission of the on-prem endpoint. For the mirrored run we need a short list of representative prompts and a safety/QA checklist.
+
+I’ve attached our network_requirements_template.xlsx and a short checklist we use for on-prem migrations. Ben — I’ll sync with you on recommended Dedicated pool sizes after Sam confirms session vs rps and avg token length.
+
+Karthik
+Karthik Iyer | Solutions Architect, Redwood Inference
+karthik.iyer@redwood.ai | +1 (650) 555-0789
+
+Attachments: network_requirements_template.xlsx
+
+> On Nov 2, 2027, at 11:03 AM, Sam Patel <sam.patel@mediqhealth.com> wrote:
+> > (see above)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Sam Patel <sam.patel@mediqhealth.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Priya Rao <priya.rao@mediqhealth.com>
+Date: Tue, 2 Nov 2027 15:42:00 -0700
+Subject: Re: Recap + proposed next steps (deployment preference: Dedicated + VPC)
+
+Perfect — locking 11/4 10:00 PT for the technical deep dive. Agenda for the 45–60 min call:
+- 10 min: quick architecture review (your on-prem cluster + ingress)
+- 20 min: network peering / VPC options + egress controls
+- 15 min: sizing and migration phases (mirror/dry-run plan)
+- 10 min: compliance questions / SOC2 evidence review and procurement timeline
+
+Pre-call asks (small favors):
+- Priya: if you can bring any specific SOC2 questions or a short list of compliance checkpoints, we’ll prepare answers / evidence.
+- Sam: confirm whether 120/250 is sessions or rps + average prompt token estimate (if unknown, ballpark is fine).
+
+I’ve re-attached SOC2_report_Redwood_v2.pdf and the mutual_action_plan_RW-8421.csv (MMP contains a preliminary timeline and owners for procure -> delivery). Marissa will follow up with the formal MMP and procurement checklist after the call.
+
+Look forward to Thursday.
+Ben
+
+---
+Redwood Inference — contact for support: support@redwood.ai

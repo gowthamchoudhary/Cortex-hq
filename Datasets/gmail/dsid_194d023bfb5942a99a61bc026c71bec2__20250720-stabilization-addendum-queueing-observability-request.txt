@@ -1,0 +1,113 @@
+Request: Stabilization addendum & queueing observability for reserved GPU pools
+
+From: Eliot Shaw <eliot.shaw@torrencorp.com>
+To: Lauren Bishop <lauren.bishop@redwood.com>
+Cc: Maria Santos <maria.santos@torrencorp.com>
+Date: Sun, 20 Jul 2025 09:12:00 -0700
+Subject: Unexpected tail latency — request for stabilization addendum and observability export
+
+Hi Lauren,
+
+We saw a significant tail-latency spike on Friday night (20:34 UTC) that affected several customer-facing models running on our reserved GPU pool. The SLO breach lasted roughly 18 minutes and coincided with a batch job kicking off from our analytics side; our teams suspect queueing amplification.
+
+We want to request two things:
+- A short stabilization addendum to our Dedicated contract that grants temporary headroom (we're proposing +15% reserved capacity for 4 weeks) to cover this immediate window while we tune our batching.
+- Full telemetry/observability export for the affected time range (20:15–21:00 UTC) — queue traces, request routing metadata, and any notes on preemption/fallback events for the pool.
+
+I can share an anonymized trace; attaching what we captured on our side (queue_trace_20250719.log). Can Redwood provide a matching export and a short write-up of what the serving runtime saw? We want to avoid jumping to conclusions locally before we sync.
+
+Happy to jump on a quick call — Friday afternoon PDT works for me.
+
+Thanks,
+Eliot Shaw
+Head of Platform Engineering, TorrentCorp
+
+---
+On Mon, Jul 21, 2025 at 08:35 AM Lauren Bishop <lauren.bishop@redwood.com> wrote:
+
+> From: Lauren Bishop <lauren.bishop@redwood.com>
+> To: Eliot Shaw <eliot.shaw@torrencorp.com>
+> Cc: Ben Carter <ben.carter@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, Jordan Blake <jordan.blake@redwood.com>, Maria Santos <maria.santos@torrencorp.com>
+> Date: Mon, 21 Jul 2025 08:35:00 -0700
+> Subject: Re: Unexpected tail latency — request for stabilization addendum and observability export
+>
+> Hi Eliot — thanks for the heads up and for sending your trace.
+>
+> We're looking into the queue traces now. Ben, can you pull the serving-side traces for TorrentCorp's reserved pool for 2025-07-19 20:15–21:00 UTC and confirm if there were any preemptions or fallback model switches?
+>
+> Commercially, I'll start a stabilization addendum draft so we can move quickly if the technical team recommends temporary headroom. Kimberly, please advise on the shortest path to an amendment and any procurement constraints (DocuSign, PO wording).
+>
+> Proposed immediate plan:
+> 1) Technical correlation: Redwood to provide telemetry export and a short RCA summary by EOD tomorrow.
+> 2) Interim headroom: If Redwood sees evidence of queueing amplification, we propose a 4-week +15% reserved headroom while TorrentCorp tunes batching.
+> 3) Formal amendment: Kimberly to share draft and timeline for signature.
+>
+> If that works, I'll book a 30-minute sync for Thursday 10:00 PDT.
+>
+> Lauren Bishop
+> Senior Sales Manager, Redwood Inference
+> (Attachment: queue_trace_20250719.log — from TorrentCorp)
+
+---
+On Mon, Jul 21, 2025 at 09:06 AM Ben Carter <ben.carter@redwood.com> wrote:
+
+> From: Ben Carter <ben.carter@redwood.com>
+> To: Lauren Bishop <lauren.bishop@redwood.com>, Eliot Shaw <eliot.shaw@torrencorp.com>
+> Cc: Kimberly Park <kimberly.park@redwood.com>, Jordan Blake <jordan.blake@redwood.com>
+> Date: Mon, 21 Jul 2025 09:06:00 -0700
+> Subject: Re: Unexpected tail latency — request for stabilization addendum and observability export
+>
+> Hi all — I pulled the serving runtime logs for the requested window and correlated them with our scheduler traces. Quick summary up front: we observed a short window of elevated queue depth and longer token-generation tails for a subset of requests that matched your timestamps. No preemption events from our preemptible pools occurred in that window; however, there was an increased batching burst from the analytics tenant which amplified queueing for the shared I/O path on that host group.
+>
+> What I recommend technically:
+> - Export: I'll attach our exported artifacts (see s3 stub below) and a one-page summary. Expect: per-request queue_time, batch_id, host_id, KV-cache-hit, model_variant.
+> - Immediate mitigation: temporary +15% reserved headroom + enable request-level tracing for the next 7 days to capture fine-grained behavior.
+> - Follow-up: If TorrentCorp's analytics can shift large batch jobs to a defined nightly window (or use a different pool), we should see tail reduction without continued headroom.
+>
+> I've prepared a draft SLO addendum that formalizes the temporary headroom, monitoring thresholds, and a sunset clause. Attachment: slo-draft-stabilization-addendum.pdf (draft).
+>
+> Ben Carter
+> Solutions Architect, Redwood Inference
+> (Attachment: slo-draft-stabilization-addendum.pdf — draft addendum)
+>
+> Notes: S3 artifact stubs: s3://redwood-telemetry/torrentcorp/20250719/serving_export.tar.gz
+
+---
+On Mon, Jul 21, 2025 at 10:14 AM Kimberly Park <kimberly.park@redwood.com> wrote:
+
+> From: Kimberly Park <kimberly.park@redwood.com>
+> To: Lauren Bishop <lauren.bishop@redwood.com>, Eliot Shaw <eliot.shaw@torrencorp.com>
+> Cc: Ben Carter <ben.carter@redwood.com>, Jordan Blake <jordan.blake@redwood.com>
+> Date: Mon, 21 Jul 2025 10:14:00 -0700
+> Subject: Re: Unexpected tail latency — request for stabilization addendum and observability export
+>
+> Hi Eliot, Lauren —
+>
+> Commercial options: we can do a short-term stabilization addendum (4 weeks) that grants the +15% reserved headroom at no additional charge, provided we agree on the monitoring acceptance criteria and a firm sunset date. The amendment will include:
+> - Scope: affected reserved GPU pool ids and tenant tags for TorrentCorp.
+> - Duration: 4 weeks from activation date, auto-expires unless renewed.
+> - Acceptance: if tail latency remains above the agreed SLO for >72 cumulative minutes during week 3, we will reconvene to evaluate extension or alternative mitigations.
+> - Signatures: we can route via DocuSign; PO amendments are acceptable if you need a formal addendum line.
+>
+> Timeline: I can have a DocuSign-ready addendum by EOD Tuesday if Ben's technical summary lines up. Please let me know if you need specific PO language.
+>
+> Kimberly Park
+> Director, Enterprise Sales Operations, Redwood Inference
+>
+---
+On Tue, Jul 22, 2025 at 14:45:00 -0700 Eliot Shaw <eliot.shaw@torrencorp.com> wrote:
+
+> From: Eliot Shaw <eliot.shaw@torrencorp.com>
+> To: Kimberly Park <kimberly.park@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>
+> Cc: Ben Carter <ben.carter@redwood.com>, Jordan Blake <jordan.blake@redwood.com>, Maria Santos <maria.santos@torrencorp.com>
+> Date: Tue, 22 Jul 2025 14:45:00 -0700
+> Subject: Re: Unexpected tail latency — request for stabilization addendum and observability export
+>
+> Thanks — that all sounds reasonable. We accept the temporary +15% headroom for 4 weeks under the proposed acceptance criteria. Please send the DocuSign link and the telemetry export when available; Maria (cc) will route the PO internally once the addendum is signed.
+>
+> Thursday 10:00 PDT for a kickoff works for us. Looking forward to the telemetry correlation and Ben's one-page summary.
+>
+> Best,
+>Eliot
+>
+>Attachments referenced: queue_trace_20250719.log (TorrentCorp), slo-draft-stabilization-addendum.pdf (Redwood draft)

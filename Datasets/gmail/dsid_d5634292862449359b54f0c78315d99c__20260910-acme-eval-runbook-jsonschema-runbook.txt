@@ -1,0 +1,146 @@
+Post-call: ACME eval runbook & JSON-schema retry plan
+
+From: Neha Kapoor <neha@redwood.inference>
+To: Alex Johnson <alex.j@acmecommerce.com>
+Cc: Priya Shah <priya.shah@acmecommerce.com>, Ben Carter <ben_carter@redwood.inference>
+Date: Fri, 10 Sep 2026 15:12:00 -0700
+Subject: Post-call: ACME eval runbook & JSON-schema retry plan
+
+Hi Alex / Priya —
+
+Thanks again for the call today — great to hear more about ACME Commerce's catalog matching and post-purchase classification use cases. Quick recap and proposed next steps so we stay aligned: 
+
+1) Problem scope: you want a lightweight endpoint for structured classification of post-purchase notes (3-5 fields) plus an extraction path for merchant IDs (low cardinality) and a reranking step for match confidence.
+2) Constraints: 95th pct latency target ~120ms, 99% accuracy bar on our internal test prompts for the classification fields, and strict logging/retention requirements (HIPAA false positive: none; GDPR retention requests).
+3) Proposed immediate work: a 2-week eval focusing on model fit + structured-output reliability:
+   - Week 1: Sanity benchmarks on ~2k synthetic+real prompt set you shared; measure JSON-schema compliance and toolcall success rate.
+   - Week 2: Stability and regression checks (prefix caching on warm path, 1k sequences at 128 tokens) and retry/backoff experiments for failed tool calls.
+
+Attachments: I attached the prompt set you shared (acme-prompt-set-v1.json) and a draft JSON Schema for the tool-calling response (acme-jsonschema-toolcall-v1.json). Also added a short benchmark plan PDF.
+
+Immediate asks from ACME: can you confirm the synthetic dataset we sampled is representative (you mentioned 3 merchants dominate 70% of volume)? Also confirm whether procurement needs an SOW or simple PO to start the eval.
+
+Next steps I propose:
+- ACME: confirm dataset + procurement route (this week)
+- Redwood: we will spin the model/eval run and share an initial benchmark link by next Thursday (2026-09-17).
+
+I'll schedule a 30-min technical kickoff once procurement is aligned.
+
+Cheers,
+Neha Kapoor
+Senior Account Executive | Redwood Inference
+neha@redwood.inference
+(attachment: acme-prompt-set-v1.json - application/json)
+(attachment: acme-jsonschema-toolcall-v1.json - application/json)
+From: Alex Johnson <alex.j@acmecommerce.com>
+To: Neha Kapoor <neha@redwood.inference>
+Cc: Priya Shah <priya.shah@acmecommerce.com>
+Date: Fri, 10 Sep 2026 18:08:00 -0400
+Subject: Re: Post-call: ACME eval runbook & JSON-schema retry plan
+
+Thanks Neha — helpful summary. A couple quick clarifications from our side: 
+
+- Dataset: yes, the sample you have is skewed; the three merchants you mentioned do cover ~70% of orders. We'll flag an extra 500 examples for the long-tail merchants and drop those into the shared Drive later today.
+- Procurement: for an initial eval we can do a PO; procurement prefers a one-page SOW. I'll loop procurement if you can send a lean SOW template.
+
+Tech questions for Redwood team (cc'ing Priya):
+1) For the JSON schema you attached, how do you treat optional fields vs. required fields when the model returns partial results? Will Redwood flag schema violations in the response stream so we can apply a deterministic fallback?
+2) Does Redwood's runtime expose per-token latency breakdowns (tokenize -> kv cache hit -> decode) for us to correlate compliance failures with tail latency?
+
+Appreciate the quick response —
+Alex
+Product Lead, ACME Commerce
+On Sep 10, 2026, at 15:12, Neha Kapoor <neha@redwood.inference> wrote:
+> [original message truncated]
+From: Neha Kapoor <neha@redwood.inference>
+To: Ben Carter <ben_carter@redwood.inference>, Marissa Cole <marissa_cole@redwood.inference>
+Date: Mon, 13 Sep 2026 09:06:00 -0700
+Subject: Fwd: Post-call: ACME eval runbook & JSON-schema retry plan
+
+Folks — forwarding ACME's clarifying questions (below). Key asks: schema violation signaling and per-token latency breakdowns. They also want a lean SOW template for procurement.
+
+Ben: can you draft a 1-page SOW + PO guidance? Keep it procurement-friendly and include a start date window (we suggested 9/20).
+Marissa: can you propose a small matrix of candidate models (open LLMs + quantized variants) and a short plan for JSON-schema compliance checks and retry/backoff logic? 
+
+I'll loop Alex once we have internal recs.
+
+Neha
+Senior AE
+
+> From: Alex Johnson <alex.j@acmecommerce.com>
+> Date: Fri, 10 Sep 2026 18:08:00 -0400
+> Subject: Re: Post-call: ACME eval runbook & JSON-schema retry plan
+>
+> [external reply truncated]
+From: Marissa Cole <marissa_cole@redwood.inference>
+To: Neha Kapoor <neha@redwood.inference>, Ben Carter <ben_carter@redwood.inference>
+Date: Mon, 13 Sep 2026 11:42:00 -0700
+Subject: Re: Post-call: ACME eval runbook & JSON-schema retry plan
+
+Thanks — I put together a short plan and model recommendations. Summary below (full notes in the Drive link).
+
+Model recommendations (fast shortlist):
+- gpt-small-quant (16-bit quantized rev A) — best cost/latency for short structured outputs (expected median latency 45–70ms on p4d-like nodes).
+- llama-2-13b-q4f — stronger accuracy on entity extraction, will need 1.5x cost but fewer regressions on merchant IDs.
+- fallback: open-instruct-7b — lower cost fallback for burst capacity; expect looser schema strictness without stricter decoding constraints.
+
+JSON-schema compliance plan:
+1) Synchronous schema validation: after model finishes, runtime runs a JSON schema validator and returns a compliance flag (schema_ok: true/false) plus an errors array when false. This is the default path.
+2) Streaming/schema fail-fast: for streaming outputs we will emit partial chunks and insert an inline compliance_annotation event when a chunk breaks declared schema (example event: {"type":"schema_violation","offset":347,"reason":"missing required field 'merchant_id'"}).
+3) Deterministic fallback: when schema_ok:false and errors include missing required fields, the runtime can: 1) retry with a tighter decoding temperature + sampling constraints; 2) call a helper function (reranker) to repair; or 3) fall back to a smaller deterministic parser. We'll instrument all three and capture metrics.
+
+Retry/backoff specifics:
+- Default retry policy: up to 2 retries with exponential backoff (200ms -> 600ms) for schema failure or tool-call timeouts.
+- For network or infra nacks we treat as transient and use immediate retry with jitter.
+- We will record per-retry success and increased latency to produce an SLO impact table.
+
+Observability artifacts we'll provide in the eval: per-request schema_ok, errors, retry_count, model_variant, decode_time_ms, total_latency_ms, kv_cache_hit (true/false). We'll also include a dashboard link and a CSV export for offline analysis.
+
+Benchmarks: I ran a quick pass on the prompt set you gave — attached is a short PDF with model-level precision/recall and schema compliance. Highlights: gpt-small-quant hits schema_ok 92% out of box; llama-2-13b-q4f hits 97% but with higher p50 latency. Full results: https://benchmarks.redwood.ai/acme-summary-202609 (internal link).
+
+I'll draft a concise runbook that details: input preflight checks, schema validation ordering, retry policy, and when to invoke the deterministic parser. Marissa attached a draft runbook and an example instrumentation snippet (acme-jsonschema-toolcall-v1.json).
+
+Cheers,
+Marissa Cole
+Applied ML Engineer | Redwood Inference
+marissa_cole@redwood.inference
+(attachment: redwood-benchmarks-acme-202609.pdf - application/pdf)
+From: Ben Carter <ben_carter@redwood.inference>
+To: Alex Johnson <alex.j@acmecommerce.com>, Neha Kapoor <neha@redwood.inference>
+Cc: Priya Shah <priya.shah@acmecommerce.com>
+Date: Tue, 14 Sep 2026 09:05:00 -0400
+Subject: Re: Post-call: ACME eval runbook & JSON-schema retry plan
+
+Alex / Priya — attaching a lean SOW and PO guidance as discussed. High level: 2-week eval, no charge, Redwood provides runbook + evaluation artifacts; ACME provides dataset and a PO for a pilot window if procurement requires it.
+
+Proposed start: 2026-09-20
+Deliverables: initial benchmark link (day 5), full eval report + dashboard (end of eval).
+
+If that's good I'll send the SOW as a DocuSign-ready PDF and loop procurement.
+
+Regards,
+Ben Carter
+Head of Sales, SMB & MidMarket | Redwood Inference
+ben_carter@redwood.inference
+(attachment: redwood-sow-acme-1page.docx - application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+
+> On Mon, Sep 13, 2026 at 11:42 AM Marissa Cole <marissa_cole@redwood.inference> wrote:
+> > [internal recommendations and benchmarks attached]
+From: Alex Johnson <alex.j@acmecommerce.com>
+To: Neha Kapoor <neha@redwood.inference>, Ben Carter <ben_carter@redwood.inference>
+Cc: Priya Shah <priya.shah@acmecommerce.com>, Marissa Cole <marissa_cole@redwood.inference>
+Date: Tue, 14 Sep 2026 11:05:00 -0400
+Subject: Re: Post-call: ACME eval runbook & JSON-schema retry plan
+
+Thanks everyone — this is very clear and helpful. A few quick confirmations: 
+
+- We confirm the PO route; procurement says the one-pager SOW is fine. Please send the DocuSign link and we'll return a signed PO by next Monday.
+- We'll upload the 500 long-tail examples to the Drive by EOD today (link will be in the HubSpot record).
+- Tech: the proposed retry/backoff and schema_ok instrumentation meets our needs — we'd like one additional metric if possible: the proportion of schema_failures that are corrected by the first retry (helpful for cost modelling).
+
+Can we lock the kickoff for Monday 2026-09-20 at 10:00am PT? If so, Neha please send a calendar invite and the short technical agenda.
+
+Appreciate the speedy turnaround —
+Alex
+Product Lead, ACME Commerce
+(quoted text omitted)

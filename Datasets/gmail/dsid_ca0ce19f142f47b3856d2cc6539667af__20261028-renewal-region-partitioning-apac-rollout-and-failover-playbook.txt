@@ -1,0 +1,130 @@
+Renewal: region partitioning, APAC rollout and EU data residency transition
+
+From: Sophie Turner <sophie.turner@medquest.com>
+To: Lauren Bishop <lauren.bishop@redwood.com>
+Cc: Ben Carter <ben.carter@redwood.com>
+Date: 2026-10-28T09:12:00-07:00
+Subject: Renewal planning — residency & APAC rollout
+
+Hi Lauren,
+
+Hope you're well. We're coming up on our Feb 2027 renewal and two new items have been elevated from our security and ops teams:
+
+1) EU primary residency: we need the next contract to guarantee that EU customer traffic and storage are anchored to the EU region (GDPR controls and local audit trail) rather than the default global residency.
+2) APAC pilot: we want a warm-standby APAC node for burst failover during business hours in APAC (initial traffic cap ~5k reqs/day, 95th pct latency target 220ms).
+
+Attached is our internal brief with the specific controls and timeline. Can Redwood provide an amendment that combines residency language + staged APAC capacity with a 12-month runway? Also, can you surface expected cost delta and any SLA implications?
+
+Thanks — Sophie
+Sophie Turner
+Director, Platform Ops
+MedQuest Health
+
+Attachment: medquest-data-residency-reqs.pdf (pdf)
+
+From: Lauren Bishop <lauren.bishop@redwood.com>
+To: Sophie Turner <sophie.turner@medquest.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Priyom Das <priyom.das@redwood.com>
+Date: 2026-10-28T10:03:00-07:00
+Subject: Re: Renewal planning — residency & APAC rollout
+
+Sophie — thanks for the clear brief and timeline. We can absolutely scope an amendment that covers both EU primary residency and a staged APAC warm-standby. Quick answers up front:
+
+- Residency: we can add a contract addendum to make the EU region the default for your EU-labeled tenant and persisted data. This will include KMS key residency and audit-log retention in the EU.
+- APAC warm-standby: we propose a two-phase approach — Phase 1 (pilot): warm-standby with burst capacity up to 5k reqs/day; Phase 2 (scale): production routing and SLA uplift once we validate latency/throughput in the pilot window.
+
+Im looping in Marcus for the ops plan and Priyom for commercial terms (pricing/contract language). Ben will continue to own the renewal timeline.
+
+Next steps: Marcus, can you sketch a rollout ETA and a short ops runbook (staging, cutover, cross-region KV caching strategy)? Priyom, please prepare a draft amendment and a delta estimate we can share with MedQuest today. Sophie, if you can confirm the preferred production cutover quarter (Q2 2027 vs Q3 2027) that helps sizing.
+
+Best,
+Lauren
+Account Executive, Redwood Inference
+
+---
+On Tue, Oct 28, 2026 at 09:12 Sophie Turner wrote:
+> (original message quoted)
+
+From: Sophie Turner <sophie.turner@medquest.com>
+To: Lauren Bishop <lauren.bishop@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Daniel Cho <daniel.cho@medquest.com>
+Date: 2026-10-28T11:05:00-07:00
+Subject: Re: Renewal planning — residency & APAC rollout
+
+Lauren — thanks. Q2 2027 is our preference for production cutover (internal compliance window closes end of May). A few clarifications from our side:
+
+- Residency scope: must include persisted customer payloads, embeddings, and audit logs. Transient compute (request routing) can be multi-region as long as persisted copies are EU-resident.
+- Warm-standby failover: failover must be controlled via a Canary policy we can trigger; automatic failover only for partial outage scenarios.
+- Proof points: our auditors will want an ops runbook + SOC2 artifact showing how failover is executed and the chain of custody for keys.
+
+I've attached the compliance checklist. Happy to hop on a technical call if Marcus or Ben want to go deeper.
+
+Thanks — Sophie
+
+Attachment: medquest-compliance-checklist.xlsx (xls)
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Lauren Bishop <lauren.bishop@redwood.com>, Ben Carter <ben.carter@redwood.com>, Priyom Das <priyom.das@redwood.com>
+Date: 2026-10-28T14:20:00-07:00
+Subject: Re: Renewal planning — residency & APAC rollout (ops plan)
+
+Team — sketching an ops-level plan to map to Sophie's asks. High level:
+
+1) EU Primary Residency (deliverables):
+- Tenant-level routing rule: label EU tenant and pin storage/KMS to eu-west-1 region.
+- KV/prefix caching: deploy prefix cache with EV cache TTL; ensure cache miss writes replicate to EU storage only.
+- Audit log routing: collector forwarding to EU log bucket with separate retention policy.
+
+2) APAC Warm-standby (phase approach):
+Phase 1 (pilot, Q1 2027):
+- Warm node in ap-southeast-1 with locked config, reduced token quota. Manual canary trigger.
+- Traffic shaping: cap to 5k requests/day; monitoring hooks for 95th pct latency and error budget.
+- Ops verification: 2-week soak test with synthetic traffic.
+Phase 2 (Q2->Q3 2027):
+- If pilot passes, enable automatic partial failover for preset incident classes with runbook-controlled escalation.
+
+3) Security & compliance artifacts:
+- SOC2 excerpt + runbook draft for failover steps.
+- Key custody: customer-managed KMS or dedicated managed keys in EU (depends on MedQuest preference).
+
+4) Timelines & dependencies:
+- Pre-req: SOW amendment signed by Nov 30, 2026 to secure capacity for Q1 provisioning windows.
+- Provisioning lead time: EU tenancy/tenant-pin: ~3 weeks after SOW; APAC warm node provisioning: ~4-5 weeks.
+
+Ive opened an internal ticket: https://redwood.atlassian.net/browse/INF-4742 with tasks for infra, security, and QA. Priyom, I'll need a firm budget cap to size Phase 1.
+
+Marcus
+Staff Engineer, Runtime & Ops
+
+> On Oct 28, 2026, Lauren Bishop wrote:
+> > (previous message quoted)
+
+From: Lauren Bishop <lauren.bishop@redwood.com>
+To: Sophie Turner <sophie.turner@medquest.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Priyom Das <priyom.das@redwood.com>
+Date: 2026-10-29T14:05:00-07:00
+Subject: Re: Renewal planning — residency & APAC rollout
+
+Sophie — thanks for the confirmation and for sharing the checklist. Weve pulled this together into a short commercial and legal path forward:
+
+- Amendment: a single renewal amendment (v2) will add an EU Residency Addendum (pins persisted data, KMS, audit logs) and a staged APAC Warm-Standby Addendum.
+- Commercials (high level): Phase 1 pilot (APAC warm) + EU residency add on: estimated delta $42k/mo (Phase 1 capacity + dedicated EU storage + audit retention). Phase 2 scaling will be priced separately on acceptance testing. Exact numbers in attached proposed-amendment-v2.docx.
+- SLA/ops: initial pilot will be covered by existing SLA for hosted endpoints; upgraded SLA for automatic failover requires a production readiness gate (ops soak + security sign-off).
+
+Next steps and asks:
+1) Sophie: review the attached amendment and confirm sign-off target (were aiming to get SOW signed by Nov 30 to meet provision windows).
+2) Ben/Priyom: Ive attached the DocuSign link; please prepare the formal amendment. Priyom, confirm pricing numbers in the docx and attach redline-ready contract language.
+3) Marcus: start scheduling the infra tickets and set up a technical kickoff with MedQuest (Marcus + infra lead + Sophie) next week.
+
+Sophie — happy to take a 30-minute call tomorrow if easier. If youre good with this, I'll send the DocuSign envelope and calendar invite.
+
+Best,
+Lauren Bishop
+Account Executive, Redwood Inference
+
+Attachments: proposed-amendment-v2.docx (docx), docusign-renewal-link.txt (txt)
+
+--
+Lauren Bishop
+Redwood Inference
+Phone: +1 415-555-0198
+

@@ -1,0 +1,142 @@
+Private control plane — heartbeat loss during upgrade window / status & next steps
+
+From: Rajiv Menon <rajiv@medtechsys.com>
+To: karthik_iyer <karthik.iyer@redwood.com>, marissa_cole <marissa.cole@redwood.com>
+Cc: ops@medtechsys.com
+Date: Wed, 18 Feb 2026 09:12:00 -0800
+Subject: Re: Private control plane — sudden loss of agent heartbeats
+
+Team,
+
+We saw a sudden drop in agent heartbeats across two of our prod VPCs starting ~08:55 PST during your scheduled maintenance window. Both clusters were otherwise healthy; the workload continued but control plane reported tunnels offline and the app-level gRPC calls started failing intermittently.
+
+We opened an incident on our side (INC-7221) and have a handful of traces and tcpdumps attached. Can you confirm whether the maintenance included any network or orchestration changes? This is impacting our telemetry and failing a small set of customer-facing endpoints.
+
+Thanks,
+Rajiv
+Operations, MedTech Systems
+
+Attachments: medtech-op-traces-20260218.tar.gz (log archive, 8MB)
+
+
+From: karthik_iyer <karthik.iyer@redwood.com>
+To: Rajiv Menon <rajiv@medtechsys.com>
+Cc: marissa_cole <marissa.cole@redwood.com>, dev_patel <dev.patel@redwood.com>
+Date: Wed, 18 Feb 2026 09:27:00 -08:00
+Subject: Re: Private control plane — sudden loss of agent heartbeats
+
+Hi Rajiv — thanks for the heads up and for the traces.
+
+Short answer: you are correct, we ran a rolling control-plane patch at 08:45 PST intended to address a separate TLS renewal edge case. We have not seen this behavior in our staging clusters and are treating this as high priority.
+
+Immediate actions we have kicked off:
+- Engineering is investigating root cause (cc: Dev).
+- We scoped an immediate mitigation to re-route agent pings to the previous control plane image for affected pools.
+- I will share a timeline and a dedicated incident channel within 30 minutes.
+
+I apologize for the disruption. We know timing matters for you; we will treat the cluster and traces as priority and follow up with a structured timeline and a postmortem.
+
+Best,
+Karthik Iyer
+Director, Customer Reliability
+Redwood Inference
+
+
+From: karthik_iyer <karthik.iyer@redwood.com>
+To: dev_patel <dev.patel@redwood.com>, michael_grant <michael.grant@redwood.com>, marissa_cole <marissa.cole@redwood.com>, evelyn_hart <evelyn.hart@redwood.com>
+Date: Wed, 18 Feb 2026 09:33:00 -08:00
+Subject: URGENT: MedTech — control plane heartbeats dropped after 08:45 PST patch (INC-4872)
+
+Team — raising internal priority P0. Customer-facing production VPCs lost agent heartbeats after the control plane rolling patch. Impact: intermittent RPC failures and telemetry gaps. Rajiv attached traces.
+
+Ask list (short):
+- Dev: triage root cause, identify offending change, and produce rollback/mitigation steps (target: 45m).
+- Infra (Michael): confirm whether any network policy, routing or LB change accompanied the rollout; collect kube events & LB logs (target: 30m).
+- CS (Marissa): coordinate with customer, set expectation for timeline and escalation path; confirm compensatory credit policy.
+
+Preserve: diagnostic artifacts (do not delete) and export the control plane logs for the 08:30–09:15 window.
+
+CC’ing support channel and will open a dedicated zoom.
+
+Karthik
+
+
+From: dev_patel <dev.patel@redwood.com>
+To: karthik_iyer <karthik.iyer@redwood.com>, michael_grant <michael.grant@redwood.com>, marissa_cole <marissa.cole@redwood.com>
+Date: Wed, 18 Feb 2026 10:01:00 -08:00
+Subject: Re: URGENT: MedTech — control plane heartbeats dropped after 08:45 PST patch (INC-4872)
+
+Update: preliminary triage completed.
+
+Findings:
+- Root cause appears to be a regression in the control-plane connection manager that caused transient mismatch in tunnel keepalive negotiation after the TLS patch. A short window (approx 08:54–09:04 PST) where new connections were rejected by the updated side due to a header size mismatch.
+- This only affected connections that re-negotiated during the rolling restart; pre-existing KV sessions resumed after a second renegotiation.
+
+Mitigation applied (09:07 PST):
+- Rolled back the last deployment to previous image for the affected AZs.
+- Pushed a temporary runbook patch to force agents to reconnect to the previous control-plane endpoint while we prepare a forward fix. See runbook_fix.patch attached.
+
+Next steps:
+- Create a unit/integration test to catch header-negotiation regressions (in progress).
+- Prepare a formal postmortem and a fixed control-plane image with test coverage.
+
+Attachment: diagnostic_bundle_20260218.zip, runbook_fix.patch
+
+— Dev
+
+
+From: karthik_iyer <karthik.iyer@redwood.com>
+To: Rajiv Menon <rajiv@medtechsys.com>
+Cc: marissa_cole <marissa.cole@redwood.com>, dev_patel <dev.patel@redwood.com>, evelyn_hart <evelyn.hart@redwood.com>
+Date: Tue, 25 Feb 2026 15:08:00 -08:00
+Subject: Follow-up: timeline, root cause & remediation plan for 2026-02-18 heartbeat incident
+
+Rajiv — thank you again for your patience while we completed our analysis. Attached is a concise draft of the post-incident summary and the immediate remediation we executed. Below is a short executive timeline and commitments we’re making.
+
+Executive timeline (condensed):
+- 08:45 PST — rolling TLS-related control plane patch started (intended: rotate a rare cert edge-case).
+- 08:54 PST — first customer heartbeat failures observed in two MedTech clusters (t=+9m).
+- 09:07 PST — engineering identified header negotiation mismatch; emergency rollback to prior image initiated.
+- 09:15 PST — agent heartbeats returned to baseline for affected pools.
+
+Root cause: regression in control-plane connection manager introduced by TLS handling change; negotiation headers could be larger than compatible buffers on updated image, causing short-lived connection rejections during renegotiation.
+
+Remediations completed:
+- Rollback to stable image during the incident to restore health.
+- Runbook updated and temporary patch deployed to force selective reconnection to stable control plane.
+- Test coverage and CI gate added for connection header size negotiation.
+- We’ve scheduled a cautious staged redeploy with expanded canaries and a pre-roll check for header sizes.
+
+Commitments to MedTech Systems:
+1) Final fixed image with regression tests to be delivered by 2026-03-03.
+2) A written postmortem (draft attached) and a 30-minute review call the week of 2026-03-08.
+3) 10% service credit for the impacted hour, applied to your next invoice (we will issue a formal credit note).
+
+Attached: postmortem_draft_20260225.md (draft post-incident report)
+
+If you’d like any additional telemetry or a live walkthrough of the remediation, we can schedule it — please propose times and I’ll have engineering join.
+
+Regards,
+Karthik Iyer
+Director, Customer Reliability
+Redwood Inference
+
+
+From: Rajiv Menon <rajiv@medtechsys.com>
+To: karthik_iyer <karthik.iyer@redwood.com>
+Cc: marissa_cole <marissa.cole@redwood.com>
+Date: Tue, 25 Feb 2026 16:40:00 -08:00
+Subject: Re: Follow-up: timeline, root cause & remediation plan for 2026-02-18 heartbeat incident
+
+Karthik — thanks for the clear timeline and for the proactive remediation. The draft postmortem looks thorough. Two quick asks:
+
+1) Can we get a short packet of the tcpdumps + annotated traces highlighting the negotiation failures referenced? That will help our SREs validate the fix on our side.
+2) Please confirm the timing for the 30-minute review; we prefer a slot in the week of 2026-03-08 in the mornings PST.
+
+Accepting the proposed 10% credit for the impacted hour; please issue the credit note and link the ticket for our procurement team (PO# MTS-9876).
+
+Once we have the annotated traces we’ll close our incident INC-7221. Appreciate the responsiveness.
+
+Regards,
+Rajiv
+

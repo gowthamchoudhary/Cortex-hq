@@ -1,0 +1,152 @@
+Skyline Health — performance scaling, SLA gap assessment and recommended commit
+
+From: Emma Lopez <emma.lopez@skylinehealth.com>
+To: Aditya Rao <aditya_rao@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Cc: Laura Bennett <laura_bennett@redwood.ai>
+Date: Tue, 10 Aug 2026 09:12:00 -0700
+Subject: Request: throughput and SLA fit for upcoming pilot
+
+Hi Aditya / Ben / Laura,
+
+Thanks again for the demo last week. We are trying to finalize whether Reserved/Dedicated capacity makes sense for our pilot (POP) that launches mid-September. A few specifics from our side:
+
+- Expected avg traffic: ~180k tokens/day during pilot, with spikes up to ~1.2M tokens/day for scheduled batch jobs.
+- Typical request shape: interactive chat queries (avg 120 tokens input, 200 tokens output) but also an async document-summarization pipeline (avg 1,200 tokens output).
+- Target SLO: p95 inference latency <= 400ms for interactive; batch can be >2s.
+- Compliance: logs must be stored for 90 days and we need audit evidence for SOC2 readiness (we will request your security packet separately).
+
+Two asks:
+1) Can you share a realistic tokens/sec and p95 latency map for the model mix we discussed (redwood-13b-q4 and a 7B quantized variant) across single A100/4xA100 slabs?
+2) Based on that, what Dedicated slab/commit do you recommend to meet the interactive p95 <=400ms with ~30% headroom for peak day spikes?
+
+If you can get us a short mutual action plan with dates (including canary, prewarm, rollback), we can align procurement.
+
+Thanks,
+Emma
+Emma Lopez
+Director, Product Operations — Skyline Health
+emma.lopez@skylinehealth.com
++1 (415) 555-0199
+
+--
+Attachment: initial_requirements.xlsx (spreadsheet stub)
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: Tue, 10 Aug 2026 10:03:00 -07:00
+Subject: Re: Request: throughput and SLA fit for upcoming pilot
+
+Ben / Laura —
+
+Looping you in to produce a concise tokens/sec -> p95 mapping and a recommended commit. Key constraints from Emma: interactive p95 target 400ms, 30% headroom on peak. Please assume:
+- Model variants: redwood-13b-q4 (preferred quality) and redwood-7b-q4 (cost/fallback).
+- Target sequence lengths: interactive RTT path 320 tokens total (120 in + 200 out), long-batch 1400 tokens total.
+- Cold-start KV cache penalty: assume 35ms additional first-token penalty per request unless prewarmed.
+- Network egress and right-sizing: assume colocated VPC in us-west-2.
+
+Deliverables:
+- A short table (tokens/sec per GPU, max concurrent reqs to keep p95 <=400ms) for both models and for A100-40GB single-GPU and A100-80GB 4x slab reference (we often use 4xA100 as a slab for Dedicated).
+- Recommended commit (slab count + suggested canary prewarm pool) to hit interactive SLO with 30% headroom for Skyline's peak day.
+- Quick ops notes: prewarm strategy, recommended KV cache warmup window, and fallback plan (auto-route to 7B variant).
+
+Ben — can you draft the numbers and attach the spreadsheet? Laura — please add any SLO/observability asks and confirm audit evidence attachment list. I will produce a one-page mutual action plan for procurement once we have the numbers.
+
+Thanks,
+Aditya Rao
+Sr. Solutions Engineer, Redwood Inference
+aditya_rao@redwood.ai
+(650) 555-0142
+
+--
+(Referencing: Skyline initial_requirements.xlsx)
+From: Ben Carter <ben_carter@redwood.ai>
+To: Aditya Rao <aditya_rao@redwood.ai>
+Cc: Laura Bennett <laura_bennett@redwood.ai>
+Date: Wed, 11 Aug 2026 14:22:00 -07:00
+Subject: Re: Request: throughput and SLA fit for upcoming pilot
+
+Aditya / Laura —
+
+Attached: throughput_model_v2.xlsx (see tab 'Skyline_Summary'). High level conclusions first, then assumptions and numbers below.
+
+Summary (interactive path):
+- redwood-13b-q4 on a single A100-40GB: ~18 tokens/sec sustained per GPU at p95 ~380ms (320-token sequences).
+- redwood-13b-q4 on a 4xA100 slab (single request routed across slab via batching/concurrency): effective throughput ~68 tokens/sec aggregate at p95 ~360ms (with continuous batching to fill small windows).
+- redwood-7b-q4 on single A100: ~34 tokens/sec per GPU at p95 ~300ms (cheaper variant; lower quality).
+
+Peak day headroom calc:
+- Skyline interactive peak: estimate 1.2M tokens/day concentrated in an 8-hour window = ~42 tokens/sec sustained across the window.
+- To meet p95 <=400ms with 30% headroom we want capacity for ~55 tokens/sec sustained (interactive).
+
+Recommendation:
+- Commit: 2 x 4xA100 slabs (8 A100 GPUs total) reserved for Dedicated. Rationale: two slabs give an effective sustained aggregate throughput of ~136 tokens/sec (13B) which comfortably covers interactive 55 tps with ~2.4x headroom and allows one slab for canary/prewarm + burst absorbency.
+- Canary + prewarm pool: reserve 1 GPU (from slab 1) as a warm prewarmed router pool for KV and weight caching during canary. Prewarm window: 30 minutes for chat + nightly warmup for scheduled batch jobs. See kv_cache_warmup_notes.txt.
+- Fallback policy: automatic routing to redwood-7b-q4 when slab saturation >75% or observed p95 >420ms for >5m. 7B variant keeps interactive p95 ~300ms at lower cost.
+
+Assumptions and details (selected):
+- Numbers assume sequence-length distribution: 80% interactive (320 tokens), 20% long-batch (1400 tokens).
+- We assume batching efficiency 1.6x on the 4x slab for interactive; batch size tuned to latency SLO.
+- Cold-start penalty of ~35ms accounted for in first token; prewarm reduces incidence to <5% of requests.
+- Network egress + serialization add ~12-25ms depending on payload.
+
+Ops notes:
+- Observability: instrument token-level tracing, per-route p95, and cache hit-metrics. If p95 drift >30% baseline, trigger automated rollout to 7B and alert ops.
+- Auditables: we will attach SOC2 evidence and a compressed logs export plan to the procurement bundle. Laura: please confirm the artifact list.
+
+Requested next steps:
+1) Aditya: finalize mutual action plan (timeline + PO/Docusign milestone) and attach SLA proposal.
+2) Skyline: confirm target start date for canary (we recommended earliest 2026-09-10).
+3) Procurement: we will provide cost estimate for 2 x 4xA100 + monthly support and an optional burst pool.
+
+Numbers excerpt (interactive, redwood-13b-q4):
+- Single A100 (40GB): 18 tps, p95 380ms
+- 4xA100 slab (reference): 68 tps aggregate, p95 360ms
+- 8 GPUs (2 slabs): 136 tps aggregate, p95 target maintained with concurrency shaping
+
+Let me know if you want an alternate recommendation that leans heavier on 7B to save cost.
+
+-Ben
+Ben Carter
+Head of Solutions, Redwood Inference
+ben_carter@redwood.ai
+
+--
+Attachment: throughput_model_v2.xlsx (spreadsheet stub).
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Emma Lopez <emma.lopez@skylinehealth.com>
+Cc: Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, DevOps Team <infra@skylinehealth.com>
+Date: Thu, 12 Aug 2026 16:45:00 -07:00
+Subject: Skyline pilot recommendation & mutual action plan (MVP commit + canary)
+
+Emma —
+
+Thanks for the clarity. Based on Ben's modeling (attached) and our ops playbook, here is a concise recommendation and mutual action plan to take to procurement:
+
+Executive recommendation (short):
+- Commit: 2 x 4xA100 slabs (8 GPUs reserved) for Dedicated for the first 90-day pilot. This provides ~2.4x headroom over Skyline's estimated interactive peak and allows a one-slab canary & prewarm strategy.
+- Fallback: auto-route to redwood-7b-q4 when slab saturation exceeds 75% or p95 drift >20% for 5+ minutes.
+- Cost posture: include optional burst credits for unexpected sustained ramp (we will provide monthly cost scenarios in the procurement doc).
+
+Mutual action plan (MVP):
+- 2026-08-13: Redwood provides formal SLA_proposal_skyline_20260812.pdf and cost estimate (attached).
+- 2026-08-17: Procurement review call (Skyline + Redwood finance).
+- 2026-09-01: Canary staging window opens; Redwood provision 1 slab as canary with prewarm pool (1 GPU).
+- 2026-09-10: Production canary run (limited route %); monitor token-level p95 and KV hit rates. Success criteria: p95 interactive <=400ms, KV cache hit >=85% within 30 minutes.
+- 2026-09-20: Ramp to full dedicated routing if canary passes; otherwise rollback and tune.
+
+Ops checklist (short):
+- Prewarm: nightly warmup jobs for scheduled batch; 30-minute warm window before expected peak hours.
+- Metrics: token-level latency, per-route p95, slab utilization, cache hit/miss, GC/oom alerts.
+- Auditables: SOC2 artifacts + 90-day logs delivery; Redwood will attach standard evidence bundle in procurement package.
+
+Attachments: SLA_proposal_skyline_20260812.pdf, throughput_model_v2.xlsx, kv_cache_warmup_notes.txt
+
+If this works, I will send a final one-page mutual action plan formatted for the PO and a DocuSign envelope for the term sheet. Happy to move the canary earlier if you need.
+
+Best,
+Aditya Rao
+Sr. Solutions Engineer, Redwood Inference
+aditya_rao@redwood.ai
+(650) 555-0142
+
+--
+Skyline: feel free to loop procurement and legal; Ben / Laura / I will be on the call on the 17th.

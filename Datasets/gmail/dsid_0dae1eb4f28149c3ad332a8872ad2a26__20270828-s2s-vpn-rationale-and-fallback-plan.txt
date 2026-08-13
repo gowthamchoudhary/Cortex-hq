@@ -1,0 +1,106 @@
+S2S VPN rationale and fallback plan for Aureus Health private deployment
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Samira Khan <samira.khan@aureushealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: Sat, 28 Aug 2027 09:12:00 -0700
+Subject: Onramp choice — recommendation for low-bandwidth regulated workloads
+
+Hi Samira,
+
+Thanks for the call yesterday. Per Aureus's security and audit requirements (restricted PHI flows, no public endpoints, and a tight change-control window), we've reviewed the three common onramp patterns (VPC peering, PrivateLink/interface endpoints, and site-to-site VPN) against your constraints.
+
+Attached is a short decision matrix; summary recommendation up front: choose a site-to-site IPSec VPN (managed by Aureus networking team) for the initial private deployment pilot. Key reasons:
+- Predictable security posture: S2S keeps traffic on Aureus-managed tunnels and avoids creating cross-account interface endpoints that complicate attestations.
+- Low operational blast radius: peering introduces route table complexity across many VPCs; PrivateLink requires managing multiple interface endpoints per AZ and can complicate cross-account log collection.
+- Bandwidth profile: your conversational traffic is bursty but low sustained egress (approx 80–150 req/min) — easily handled by a modern IPSec tunnel with auto-rekeying.
+
+Fallback and next steps:
+1) Start with S2S VPN with strict route filters and MTU 1400 testing (we ran basic checks; see vpn_mtu_testing_results.pdf).
+2) If latency SLA is tightened below 70ms p95 for certain customers, plan a migration path to PrivateLink for those subnets only (we can run a directed pilot).
+3) Avoid VPC peering for this phase due to transitive routing limits and required per-VPC route management (we can revisit when Aureus consolidates VPCs).
+
+Can we lock in a Friday window for the initial VPN key exchange and small-scale connectivity test? I propose 9/3 10am PT.
+
+Thanks,
+Evelyn
+Evelyn Hart
+Senior Solutions Architect, Redwood Inference
+phone: (415) 555-0142
+Redwood Inference
+
+Attachments: aureus_connectivity_decision_matrix.xlsx, vpn_mtu_testing_results.pdf
+
+From: Samira Khan <samira.khan@aureushealth.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>
+Date: Sat, 28 Aug 2027 10:04:00 -07:00
+Subject: Re: Onramp choice — recommendation for low-bandwidth regulated workloads
+
+Evelyn —
+
+Appreciate the clear recommendation and the matrix. A few follow-ups from our security and procurement side:
+1) Our SOC2 team is uneasy about VPN key handoff; they'll want KMS-backed key rotation and a written runbook for rekeying.
+2) What are the failure modes? If the VPN drops, do you have an API fallback to a hosted Redwood endpoint (non-PHI) while we bring the tunnel back up?
+3) How long to stand up PrivateLink as a fallback if VPN shows intermittent packet loss?
+
+Procurement is also asking for a short note on cost differentials. Can you include a rough delta between maintaining an S2S VPN vs adding PrivateLink interface endpoints per AZ?
+
+Samira
+Samira Khan
+Head of Cloud Ops, Aureus Health
+samira.khan@aureushealth.com
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Samira Khan <samira.khan@aureushealth.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>
+Date: Sat, 28 Aug 2027 11:03:00 -07:00
+Subject: Re: Onramp choice — recommendation for low-bandwidth regulated workloads
+
+Samira — quick answers inline: 
+
+1) KMS-backed keys: yes. Our VPN handover process supports an HSM/KMS-wrapped pre-shared key for IPSec IKEv2. We'll provide a runbook and can sign an SLA addendum with rotation cadence (default 90d).
+
+2) Failure modes / fallback: primary failure mode is tunnel flapping (network path instability). For that, we recommend:
+   - Active health checks + BGP (if you prefer dynamic routing) or static with aggressive monitoring.
+   - A short-lived application-level fallback: route non-PHI traffic to the hosted Redwood API (we'll tag endpoints so you can filter PHI).
+   - If PHI traffic needs continued persistence, we can simultaneously provision a PrivateLink pilot on a single AZ during the VPN POC and test failover. That path adds ~15–25ms in our internal testing for proximate regions.
+
+3) Time to PrivateLink pilot: can be stood up in ~2–3 business days provided Aureus enables the endpoint service from your cloud account and we share the endpoint service ID. Cost: rough ballpark — interface endpoints per AZ (AWS) add hourly per-endpoint charges plus data processing fees; for a 3-AZ production pilot expect ~$350–900/month in endpoint charges plus data processing (dependent on egress). S2S VPN direct costs are lower (tunnel appliance and egress) but add operational overhead. We'll produce a short cost note.
+
+Kimberly — can you add the cost sketch and the KMS runbook draft to the drive link?
+
+-Karthik
+
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Samira Khan <samira.khan@aureushealth.com>, Karthik Iyer <karthik_iyer@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Sat, 28 Aug 2027 12:36:00 -07:00
+Subject: Re: Onramp choice — recommendation for low-bandwidth regulated workloads
+
+Hi all — attaching the quick cost delta and our draft runbook (pushed to the Drive folder). Highlights:
+- One-off setup for S2S (routing, BGP optional) ~ 4–8 engineering hrs; monthly ops ~ small (monitoring & rotation).
+- PrivateLink pilot (3 AZs): provisioning + certs + validation ~ 2–3 days, recurring endpoint charges + processing fees; operationally simpler for cross-account (no route table changes) but each AZ endpoint increases surface area for our network logs.
+- VPC peering still not recommended: noisy route tables and transitive restrictions make incident isolation harder for regulated workloads.
+
+I've added estimated cost ranges to the decision matrix in the Drive link. If Aureus wants, we can run a cost/runway calc for the first 6 months to feed procurement.
+
+kimberly
+Kimberly Park
+Principal Solutions Engineer, Redwood Inference
+
+Attachments: (see Drive) aureus_connectivity_decision_matrix.xlsx
+
+From: Samira Khan <samira.khan@aureushealth.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: Sat, 28 Aug 2027 14:03:00 -07:00
+Subject: Re: Onramp choice — recommendation for low-bandwidth regulated workloads
+
+Thanks all — that helps. Procurement approves S2S for the pilot provided we have:
+- The runbook and KMS-backed key rotation details in writing (please add to the DocuSign bundle for the Statement of Work).
+- A PrivateLink activation playbook in the POC run plan in case we see packet-loss >0.5% sustained.
+
+Let's proceed with the 9/3 10am PT key exchange and initial MTU test. Please include a short test plan in the Drive folder (end-to-end RTT, packet-loss, MTU sweep).
+
+I'll loop in procurement to the DocuSign step after you push the runbook.
+
+Samira
+

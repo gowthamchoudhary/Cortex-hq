@@ -1,0 +1,118 @@
+Postcall econ recap — PayNetics pilot gating & budget asks
+
+From: Alex Rivera <alex.rivera@paynetics.com>
+To: Evelyn Hart <evelyn.hart@redwoodinference.com>
+Cc: Sam Liu <sam.liu@paynetics.com>
+Date: 2028-03-27T08:05:00-07:00
+Subject: Quick follow-up on today's discovery
+
+Evelyn —
+
+Thanks again for the time this morning. Quick recap from our side so we're aligned:
+- Primary goal: reduce LLM inference unit cost for our fraud-detection scoring so we can move from an exploratory 10k daily calls to 200k/day production in Q3.
+- Pain: current hosted provider is ~ $1.20 per 1k requests with unpredictable latency spikes; our finance team wants a 40% reduction to make the project viable.
+- SLOs: 95th pct latency < 350ms, p50 < 120ms for short-context scoring (<=256 tokens).
+
+Could you send the token/TCO framing and recommended pilot gating (batching/caching assumptions) you mentioned? Also curious about a hosted vs dedicated cost delta and whether quantized variants make sense for us.
+
+—Alex
+Alex Rivera
+Head of ML Platform | PayNetics
+
+From: Evelyn Hart <evelyn.hart@redwoodinference.com>
+To: Alex Rivera <alex.rivera@paynetics.com>
+Cc: Sam Liu <sam.liu@paynetics.com>, Marissa Cole <marissa.cole@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>
+Date: 2028-03-27T11:12:00-07:00
+Subject: Re: Quick follow-up on today's discovery
+
+Alex / Sam —
+
+Appreciate the clear summary. Below is a short post-call econ recap plus the gating we'd recommend for a 6–8 week pilot to validate performance and unit economics. I'm attaching a simple token estimate spreadsheet and our pilot SOW template for procurement. (Attachment stubs below).
+
+1) What we heard (pain & goals)
+- Goal: scale fraud scoring from 10k -> 200k calls/day while hitting finance target (~40% lower unit cost) and latency SLOs (95th < 350ms).
+- Pain: bursty traffic, cost unpredictability, and current provider opaque batching/parallelism.
+
+2) Cost / token economics quick model (high level)
+- Baseline: hosted open-model variant (float32-ish) estimated ~ $2,200 per 1M tokens generated at current runs (includes per-call overhead). For your scoring workload (~120 tokens per call) that maps to ~$0.26 per 1k calls (baseline).
+- Typical savings levers (applied incrementally):
+  • Continuous batching (request coalescing) — 20–35% savings at 200k/day depending on traffic burstiness.
+  • Prefix/KV caching (scoring reuse across short-context requests) — 10–30% for repetitive prefixes (we saw 18% on similar customers).
+  • Model quantization (FP16/8-bit) — 25–40% at small accuracy tradeoffs; best for isolated scoring models.
+  • Dedicated capacity (reserved GPU pools) — lowers marginal token cost and stabilizes latency; expected 30–50% unit cost reduction vs hosted for sustained volume with a commit.
+
+Illustrative TCO scenarios (monthly, very approximate):
+- Discovery/hosted pilot (no commit): 200k/day -> ~6M calls/month -> ~720M tokens -> est $1,584 / month (post basic batching/caching assumptions).
+- Dedicated pilot (4–8 week reserve, partial commit): same traffic -> est $900–1,100 / month effective unit cost (depending on reserved capacity share + quantization).
+
+Notes: these numbers are model- and workload-sensitive; we'll validate within the pilot using your real traces.
+
+3) Pilot gating and hypotheses (recommended 6–8 weeks)
+- Week 0–1: data & infra prep: provide 3 days of representative traces, confirm token distribution, and allow us to run baseline host tests.
+- Week 2–4: run hosted pilot with aggressive batching and KV cache enabled; measure latency SLOs and savings vs baseline.
+- Week 5–6: optional dedicated cutover for a subset of routes; test quantized model variant and measure quality delta (A/B).
+- Success criteria to move to commit: verified 35%+ unit cost reduction OR latency SLOs met with <10% accuracy regression on scoring metric.
+
+4) Immediate asks from PayNetics (what we need to move)
+- Share 3 days of anonymized request traces (timestamps, token counts, route types).
+- Confirm finance guardrail: is the 40% cost reduction a strict hard gate or a preferred target?
+- Any procurement constraints (PO cadence, security questionnaire timeline)?
+
+5) Next steps / owners
+- Evelyn: finalize pilot cost estimate and SOW (attached) — deliver by Fri, 2028-03-30.
+- Marissa: prepare pricing options (hosted vs 3-month dedicated uplift + quantization delta).
+- Ben: flag any contract/legal nuances for a short dedicated reserve and data retention terms.
+- Alex / Sam: share traces and confirm budget gate (hard/soft) by next Tue, 2028-04-02.
+
+Attachments (stubs):
+- paynetics_token_model_estimate.xlsx (spreadsheet) — per-route token math and sensitivity tab
+- redwood-pilot-sow-template.pdf (pdf) — standard 6-week pilot SOW
+
+I'll include a compact view of the illustrative TCO in the spreadsheet; the plan is to run the hosted pilot first (lowest friction) and switch a fraction of traffic to Dedicated if the economics and SLOs justify it.
+
+Evelyn Hart
+Senior Solutions Engineer | Redwood Inference
+E: evelyn.hart@redwoodinference.com | M: +1 (415) 555-0138
+
+From: Sam Liu <sam.liu@paynetics.com>
+To: Evelyn Hart <evelyn.hart@redwoodinference.com>, Alex Rivera <alex.rivera@paynetics.com>
+Date: 2028-03-27T13:45:00-07:00
+Subject: Re: Quick follow-up on today's discovery
+
+Thanks, Evelyn — this is helpful. Couple clarifying points from finance and engineering:
+- Finance: 40% reduction is the threshold required for exec sign-off on Q3 roll-out; if pilot shows 30–35% we need a committed plan to reach 40% in 60–90 days.
+- Eng: curious about the 120-token avg assumption — our median is closer to 90 but tail is heavy: 95th ~ 480. We'll push a sanitized sample this afternoon.
+
+Also, can you include a short note on expected inference variance (p50/p95) for the hosted pilot vs dedicated? That will help our SREs.
+
+—Sam
+Sam Liu
+Director, Platform Engineering | PayNetics
+
+From: Evelyn Hart <evelyn.hart@redwoodinference.com>
+To: Marissa Cole <marissa.cole@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>
+Cc: Alex Rivera <alex.rivera@paynetics.com>, Sam Liu <sam.liu@paynetics.com>
+Date: 2028-03-27T15:30:00-07:00
+Subject: Fwd: Postcall econ recap — PayNetics pilot gating & budget asks
+
+Team — forwarding the thread and the two attachment stubs. Short asks below so we can turn a proposal around quickly:
+- Marissa: two pricing options — (A) hosted pilot (no commit) with batching/caching tuned (costed for 6 weeks), (B) 3-month dedicated reserve estimate with quantized model delta. Please include a bridge plan if pilot hits 30–35%.
+- Ben: confirm whether a short dedicated reserve (month-to-month with early-exit clause tied to SLOs) is acceptable; flag any contract language we should avoid.
+
+I've included Alex/Sam on the forward so they see our internal owners. Plan to send a pricing + SOW draft by EOD Fri.
+
+Begin forwarded message:
+
+> From: Evelyn Hart <evelyn.hart@redwoodinference.com>
+> To: Alex Rivera <alex.rivera@paynetics.com>
+> Cc: Sam Liu <sam.liu@paynetics.com>, Marissa Cole <marissa.cole@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>
+> Date: 2028-03-27T11:12:00-07:00
+> Subject: Re: Quick follow-up on today's discovery
+>
+> Alex / Sam —
+>
+> Appreciate the clear summary. Below is a short post-call econ recap plus the gating we'd recommend for a 6–8 week pilot... [message body trimmed in forward]
+
+Evelyn Hart
+Senior Solutions Engineer | Redwood Inference
+E: evelyn.hart@redwoodinference.com | M: +1 (415) 555-0138

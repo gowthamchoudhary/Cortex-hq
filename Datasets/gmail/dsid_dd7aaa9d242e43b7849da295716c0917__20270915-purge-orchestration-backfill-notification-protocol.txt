@@ -1,0 +1,120 @@
+Retention & purge orchestration — backfill notification protocol
+
+From: HealthCo Legal <contracts@healthco.com>
+To: diego.fernandez@redwood.com
+Cc: julio.alvarez@healthco.com
+Date: Tue, 14 Sep 2027 18:22:00 +0000
+Subject: Clarification on purge/backfill notifications for HealthCo DPA
+
+Diego,
+
+Thanks for standing up the DPA draft — a couple of questions from our side before we sign. We need clearer behavior described around these scenarios: 
+
+1) Backfill windows: if Redwood performs a backfill (e.g., replaying records into a new index) that results in user data reappearing in backups, what is the notification cadence to customers and what triggers a mandatory hold?
+2) Purge latency: our policy requires a maximum 30-day window from request to irreversible purge except when held for lawful retention — we need to understand what exceptions Redwood expects and how to escalate.
+3) Logs and ephemeral traces: can you confirm the max retention for request/response logs and whether log-exemptions are requested per-account or globally.
+
+Attached: a short redline of the DPA (HealthCo_DPA_Redline_v1.pdf) with inline comments. 
+
+Two asks: (A) a short one-page runbook describing the notification protocol for backfills and purge starts, and (B) confirmation on how Redwood will implement a circuit-breaker (manual hold) that is visible to HealthCo admins.
+
+Julio & the legal team will be reviewing the runbook. Can you get a draft to us tomorrow?
+
+Regards,
+Maria Gomez
+Senior Counsel, HealthCo
+
+---
+Attachment: HealthCo_DPA_Redline_v1.pdf (application/pdf)
+
+From: diego.fernandez@redwood.com
+To: contracts@healthco.com
+Cc: kimberly.park@redwood.com, karthik.iyer@redwood.com, laura.bennett@redwood.com
+Date: Wed, 15 Sep 2027 08:45:00 +0000
+Subject: Re: Clarification on purge/backfill notifications for HealthCo DPA
+
+Maria / Julio,
+
+Thanks — appreciate the clear asks. High-level answers below, and I attached a one-page runbook diagram (purge-backfill-notification-diagram.png). We'll follow up with a short operational playbook.
+
+1) Backfill windows: any backfill that touches customer-scoped objects will generate a \"Backfill Start\" event. Customers receive an email + Console banner if the backfill is expected to surface previously deleted objects. We also create an immutable audit marker. If the backfill would reintroduce data that had a pending purge request within the last 90 days, the system auto-triggers a manual hold flag and notifies both Redwood support and the customer's admins.
+
+2) Purge latency/escrow: our normal target for irreversible purge is 30 days after request acknowledgement. Exceptions: (a) legal hold or active investigation, (b) cross-border escrow transfer in process, (c) subprocessor migration in-flight. Exception triggers are recorded and require approval from the data retention owner + Legal. Escalation path: Redwood support -> Retention Ops -> Legal. We will provide an SLA clause and a list of valid exception categories for the DPA.
+
+3) Logs & traces: default application request/response logs are retained for 90 days; ephemeral tracing (per-token inference traces) is 30 days by default. Log-exemptions (e.g., extended retention for audit) are applied per-account and recorded in our audit log; they require a signed SoA.
+
+Next steps: Kimberley/legal, can you comment on contract language for exception categories and the manual hold visibility? Karthik / Laura: can you confirm the runbook steps for auto-hold criteria and the notification payloads?
+
+Diego Fernandez
+Head of Customer Security & Partnerships
+Redwood Inference
+
+---
+Attachment: purge-backfill-notification-diagram.png (image/png)
+
+From: kimberly.park@redwood.com
+To: diego.fernandez@redwood.com
+Cc: contracts@healthco.com, karthik.iyer@redwood.com, laura.bennett@redwood.com
+Date: Wed, 15 Sep 2027 09:05:00 +0000
+Subject: Re: Clarification on purge/backfill notifications for HealthCo DPA
+
+Diego / Maria,
+
+Thanks Diego — this is a helpful draft. A few contract-side clarifications we should add to the DPA: 
+
+- Define \"Backfill\" precisely (e.g., replay from snapshot, cross-region rehydration, or subprocessor restore).
+- For the 30-day purge target: we need to add a hard maximum for non-exception purges and require Redwood to provide weekly status updates if a purge crosses day 14.
+- For exceptions, require Redwood to provide written justification and estimated timeline within 72 hours of an exception being invoked.
+- Manual hold: HealthCo must be able to request a hold via Console and via an API call; the Console state must be reflected in the audit trail with timestamp and approver.
+
+I will add redlined language for: exception categories, notification cadence, API schema for initiating a hold, and the weekly purge status update obligation. Suggest we avoid including escrow transfer as an arbitrary exception unless mutually agreed.
+
+Kimberly Park
+Senior Counsel, Redwood Inference
+
+From: karthik.iyer@redwood.com
+To: diego.fernandez@redwood.com, kimberly.park@redwood.com
+Cc: laura.bennett@redwood.com, contracts@healthco.com
+Date: Wed, 15 Sep 2027 11:22:00 +0000
+Subject: Re: Clarification on purge/backfill notifications for HealthCo DPA
+
+Kim / Diego / Maria,
+
+Technical confirmation and an ops note below. TL;DR: we can support the requirements, but need to make a few implementation choices and document tradeoffs.
+
+Implementation details:
+- Auto-hold: we will implement a detection rule that triggers a manual-hold flag when a backfill touches objects with purge requests within last 90 days. The rule evaluates the backfill manifest during the staging phase.
+- Visibility: the hold will surface in the Console (Retention -> Holds) and via a new API endpoint /v1/holds which returns hold_id, initiator, reason, and expiry (nullable). We will include a webhook for customer endpoints to receive hold events.
+- Purge status updates: our job scheduler publishes status to the customer's mailbox and to the Console job log. We can add a weekly progress webhook and CloudEvent for purge_job.status that reports percent_complete and blockers.
+
+Ops tradeoffs / exceptions:
+- Cross-border escrow transfers: when data is copied to an escrow for legal/regulatory reasons, purge may be delayed until transfer completes. We can limit this to explicit, pre-authorized escrow actions to avoid open-ended exceptions.
+- Forensic hold during investigations: holds may be open-ended but must be reviewed monthly. We can require evidence and an owner.
+
+Action items:
+- Legal (Kim): finalize the exception categories and the 72-hour justification requirement.
+- Diego: confirm HealthCo acceptance of the 90-day backfill detection window and API-based hold visibility.
+- Laura (Ops): draft the webhook payload and example webhook delivery retry behavior (exponential backoff).
+
+Karthik Iyer
+Director, Infrastructure & Reliability
+Redwood Inference
+
+From: Julio Alvarez <julio.alvarez@healthco.com>
+To: diego.fernandez@redwood.com, kimberly.park@redwood.com, karthik.iyer@redwood.com
+Date: Thu, 16 Sep 2027 09:30:00 +0000
+Subject: Re: Clarification on purge/backfill notifications for HealthCo DPA
+
+Thanks all — clear and reasonable. We reviewed the diagram and the API/Console visibility requirement looks good. A few confirmations we need before sign: 
+
+1) Please include the 72-hour written justification clause for exceptions in the redline.
+2) Can you add a sample webhook payload for purge_job.status and a sample hold event to the runbook?
+3) For the 90-day detection window: HealthCo would prefer 180 days. Can you confirm whether increasing to 180 days materially impacts performance or storage costs?
+
+If you can update the redline with the items above and the sample webhook payloads, we can re-run legal review and aim to sign by Friday.
+
+Julio
+HealthCo Engineering/Internal Ops
+
+> On Wed, Sep 15, 2027 at 11:22 AM karthik.iyer@redwood.com wrote:
+> > Technical confirmation and an ops note below...

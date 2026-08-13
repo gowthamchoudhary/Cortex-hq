@@ -1,0 +1,146 @@
+AuroraTech Dedicated: SKU selection & memory vs throughput discussion
+
+From: Sunil Rao <sunil@auroratech.com>
+To: Olga Petrov <olga_petrov@redwood.com>
+Date: 2026-05-19T09:12:00Z
+Subject: Dedicated sizing — quick context and profile attached
+
+Hi Olga,
+
+Thanks again for the demo yesterday. We ran the preliminary perf tests this morning and wanted to move into sizing options for a Dedicated deployment. High level: production workload will be a mix of streaming chat calls (short context, high QPS) and occasional long-context document analysis jobs (up to 1M tokens/session) for batch processing.
+
+Key asks:
+- Can you outline a recommended SKU split (H100 vs A100 vs L4) that balances our 95th percentile latency targets and the memory headroom required for the long-context jobs?
+- We expect bursty spikes during business hours (x4 baseline for ~30m) rather than steady throughput.
+- Looking for a ballpark: per-month reserved capacity we should commit to for predictable pricing.
+
+Attached is a short technical profile with model families, average prompt/response token sizes, and expected concurrency. Procurement copied for contractual sizing.
+
+Appreciate a quick read and any early guidance you can share before we schedule the deep-dive.
+
+Best,
+Sunil Rao
+Director of ML Platforms, AuroraTech
+
+Attachment: Aurora_Tech_Profile.xlsx (spreadsheet, 45KB)
+From: Olga Petrov <olga_petrov@redwood.com>
+To: Sunil Rao <sunil@auroratech.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.com>, Irene Choi <irene_choi@redwood.com>
+Date: 2026-05-19T11:05:00Z
+Subject: Re: Dedicated sizing — quick context and profile attached
+
+Hi Sunil — thanks for the profile, looks helpful. Quick read below and a few clarifying questions so we can put together an ops-friendly reservation proposal: 
+
+1) Long-context jobs: are those batched (scheduled nightly) or ad-hoc interactive exports? If batched, what's the typical window and concurrency?
+2) Which model family is your latency-sensitive path using (large decoder-only vs encoder-decoder)? That changes memory and KV cache characteristics.
+3) Are you open to mixed pool routing (reserve L4 for the short-chat baseline + burst H100 for long-context/quality peaks) or do you require single-sku homogeneity for regulatory/ops reasons?
+
+Initial, non-binding thoughts:
+- L4 is cost-efficient for high-QPS short-chat when memory per request is small. Good for baseline reservation.
+- H100 favored if 1) you need large model weights or 2) long-context with large KV-caches per session — it reduces eviction and avoids heavy tiling.
+- A100 sits in between for customers needing a balance of memory and moderate cost; can be a fallback SKU for mid-size context.
+
+I’ll loop Rishi for a draft reserve/vs-burst plan and have Irene validate the ops handoff consequences for mixed pools.
+
+Next step: Rishi will send a quick SKU split proposal and an estimated reserved capacity baseline for budgeting. Can we tee up a technical deep-dive on Thursday morning PST?
+
+Thanks,
+Olga Petrov
+Senior Solutions Engineer — Redwood Inference
+
+Sent from my laptop
+
+--- quoted message ---
+On 2026-05-19T09:12:00Z Sunil Rao <sunil@auroratech.com> wrote:
+> (attached) Aurora_Tech_Profile.xlsx
+
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+To: Olga Petrov <olga_petrov@redwood.com>, Irene Choi <irene_choi@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: 2026-05-19T13:20:00Z
+Subject: Re: Dedicated sizing — draft SKU split and rough numbers
+
+Folks — I pulled together an initial working hypothesis (see inline). I attached a small CSV with the per-model per-sku throughput estimates under our current kernel set.
+
+Assumptions from Aurora profile:
+- Short-chat model: medium decoder-only, average resp 60 tokens, 120ms p50 on L4 steady state, bursts up to 4x QPS.
+- Long-context: large 70B family, sessions keep KV for the entire job; average session lasts 20 minutes but requires a per-session KV footprint equivalent to ~48GB.
+
+Proposed reserve/burst mix (non-final):
+- Reserve: L4 pool sized to cover baseline short-chat at 1.5x safety factor. L4 handles most short requests at best tokens/$ for baseline.
+- Burst reserve: small A100 pool (warm) to improve mid-tier quality and handle sustained medium-length contexts without immediate H100 spin-up.
+- H100: kept as on-demand dedicated burst (or pre-warmed in a small hot pool) for the long-context 48GB KV sessions and highest-quality model variants.
+
+Rationale / tradeoffs:
+- Memory headroom: H100 > A100 > L4 for large KV. If Aurora needs to keep full KV per session, tiling/eviction on L4 will significantly increase latency for long-context jobs and increase engineering complexity.
+- Cost vs latency: L4 reserved -> lowest $/token for chat. H100 burst -> best latency and reduced orchestration for long-context but at higher $/hr. A100 is a middle ground enabling fewer H100 spin-ups if you accept some memory-constrained tiling.
+- Operational simplicity: single-sku reserve is easiest for ops and procurement, but creates cost inefficiency. Mixed pool requires routing policies and cache-aware routing (we can provide those via Redwood Console).
+
+Numbers (very rough):
+- Baseline tokens/sec (short-chat) -> L4: 12k tokens/s per 16-GPU pool at 80% util.
+- Long-context concurrency target -> each H100 can support ~6 concurrent 48GB-KV sessions (depends on model and quant).
+- Suggested initial commit: reserve the equivalent compute of 48 L4 GPUs + 4 A100s as warm capacity. Plan H100 as a 6-node hot pool for predictable long-context SLAs.
+
+Attachment: capacity_estimates.csv
+
+Irene — can you flag any ops redlines for the mixed-pool routing and give us a rough warm-up time for H100 to meet a 95th pct latency SLO?
+
+Ben — FYI on the proposed split for commercial pricing. If needed, we can present a bundled reserve package with a H100 burst credit pool for the first 6 months to reduce up-front cost.
+
+-rishi
+
+From: Sunil Rao <sunil@auroratech.com>
+To: Olga Petrov <olga_petrov@redwood.com>
+Cc: procurement@auroratech.com
+Date: 2026-05-20T08:45:00Z
+Subject: Re: Dedicated sizing — draft SKU split and rough numbers
+
+Olga, Rishi — this is helpful, thanks. To clarify:
+- Long-context jobs will be a mix of scheduled batch (60%) and ad-hoc analyst exports (40%). Batch windows typically occur from 02:00–05:00 local with concurrency peaking for ~45 minutes. Ad-hoc can be unpredictable but usually 1–10 concurrent sessions.
+- Model family for long-context is a 70B decoder-only (weight size ~140GB FP16) — so true memory pressure.
+- Procurement note: we prefer a clear reserved commit for budgeting but are open to an initial hybrid reserve+burst arrangement if you can show a predictable cost curve.
+
+I attached our SLA draft for what Aurora expects for long-context 95th pct latency and minimum availability.
+
+Next step: we can do the technical deep-dive Thursday 10:00 PST. In the call we want: concrete per-sku perf numbers, an ops playbook for mixed routing, and an example cost projection for 12 months.
+
+Regards,
+Sunil
+
+Attachment: SLA_DRAFT_v2.pdf
+
+From: Olga Petrov <olga_petrov@redwood.com>
+To: Sunil Rao <sunil@auroratech.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.com>, Irene Choi <irene_choi@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2026-05-20T15:30:00Z
+Subject: Re: Dedicated sizing — draft SKU split and rough numbers
+
+Sunil — great, thanks for the clarifications and SLA draft. Quick summary and proposed agenda for Thursday: 
+
+Summary proposal (to validate on call):
+- Reserve: L4 pool sized to baseline + 50% buffer (covers steady chat and most ad-hoc short-context requests).
+- Warm reserve: 4x A100 nodes to absorb medium-length contexts and reduce H100 spin-ups; these would be reserved as warm capacity with a lower hourly commitment.
+- Hot pool: 6x H100 nodes dedicated for long-context jobs (pre-warmed KV support) with an automatic scaling policy up to 10 nodes for extreme batch windows. Apply a fallback routing policy to shift to A100 with graceful degradation when H100 capacity is fully used.
+
+Cost mitigations we can offer on the call:
+- Introductory H100 credits for first 3 months to reduce initial cost while Aurora validates usage patterns.
+- Quarterly review and rebalancing based on telemetry (we’ll export token-level cost/latency breakdowns).
+
+Thursday 10:00 PST agenda:
+1) Per-sku perf numbers and measured p50/p95 for your target models (Rishi)
+2) Ops playbook: routing, cache warming, pre-warm timing, fallback behavior (Irene)
+3) Commercial framing and a sample 12-month cost projection (Ben)
+4) Timeline and procurement next steps (Olga)
+
+Please confirm the time and invite link and we’ll send a calendar invite and a pre-read (we’ll include the rough cost model and the CSV I produced).
+
+Thanks — looking forward to the deep dive.
+
+—Olga
+Senior Solutions Engineer, Redwood Inference
+
+--- Forwarded message ---
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: 2026-05-19T13:20:00Z
+Subject: Re: Dedicated sizing — draft SKU split and rough numbers
+> (attached) capacity_estimates.csv

@@ -1,0 +1,100 @@
+Query fallthrough design: AtlasData integration (Pinecone pilot)
+
+From: Patrick O'Neal <patrick@atlasdata.com>
+To: Marissa Cole <marissa_cole@redwood.com>
+Cc: AtlasData Integrations <integrations@atlasdata.com>
+Date: Tue, 17 Apr 2028 15:12:00 -0700
+Subject: Query fallthrough design for AtlasData + Redwood connector
+
+Hi Marissa —
+
+Thanks again for the quick demo last week. AtlasData is excited about a lightweight Pinecone-backed pilot, but our engineering team surfaced a concern we want to validate: query fallthrough semantics when the primary vector store returns sparse or low-confidence hits.
+
+High level ask: can Redwood support deterministic fallthrough routing that first attempts Pinecone, then optionally tries a local pgvector store (for small dev deployments), and finally falls back to S3-hosted dense retrieval (embedding-only scan) when match score < threshold? We also need predictable billing signals for each leg.
+
+Attached is a short CSV of sample request patterns and expected routing outcomes. Happy to sync with your architect — can we schedule a 45-minute technical deep-dive this week?
+
+Cheers,
+Patrick
+Patrick O'Neal
+Head of Integrations, AtlasData
+patrick@atlasdata.com
++1 415-555-0198
+
+Attachments: sample-reqs.csv (text/csv, 8KB)
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Patrick O'Neal <patrick@atlasdata.com>
+Cc: Dev Patel <dev_patel@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Wed, 18 Apr 2028 09:02:00 -0700
+Subject: Re: Query fallthrough design for AtlasData + Redwood connector
+
+Patrick —
+
+Really useful framing, thanks for the CSV. Short answer: yes, we can implement deterministic fallthrough routing with clear telemetry and per-leg metering. Notes below:
+
+- Routing layers: Pinecone -> pgvector (local) -> S3-embed-scan. We treat each leg as a compatible model "variant" for routing and billing.
+- Scoring threshold config: customer-configurable per-route (e.g., score < 0.22 => fallthrough). Threshold evaluation happens in the router before request is dispatched to the next leg to avoid double-counting tokens.
+- Billing signals: we emit one event per attempted leg plus a final aggregated routing metric; this allows you to attribute cost per leg and reconcile with AtlasData billing.
+- Consistency: for dev-mode we support a sticky routing policy (pin to pgvector) to avoid noisy S3 scans during development.
+- Observability: Trace IDs per request; per-leg latency/cost breakdown surfaced in the Console.
+
+Next steps i suggest:
+1) 45-min deep-dive with our infra architect to walk the routing path and failover hooks (Dev will lead).
+2) Exchange a short schema for the routing telemetry so AtlasData can ingest our events in your analytics pipeline.
+3) Pilot scope: 2-week integration using Pinecone as primary, pgvector as dev fallback, S3 as cold fallback; success criteria: average 95th pctl latency < 220ms and <1.8x production cost uplift.
+
+Can you do Thu 4/19 at 10am PT? If that works, I'll attach a draft architecture PDF.
+
+Thanks,
+Marissa Cole
+Strategic Partnerships — Redwood Inference
+marissa_cole@redwood.com
+
+Attachments: rdw-atlasdata-query-fallthrough-arch.pdf (application/pdf, 420KB)
+
+From: Dev Patel <dev_patel@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: Wed, 18 Apr 2028 11:15:00 -0700
+Subject: Re: Query fallthrough design for AtlasData + Redwood connector
+
+Marissa —
+
+Quick tech notes for the call:
+
+- Implementation idea: router evaluates top-k matches from primary (Pinecone) and computes normalized confidence. If below threshold, router issues a synchronous request to pgvector (local) with same embedding request. If still low, we spawn an async S3 embed-scan that returns either a candidate set or triggers a background reindex.
+- Avoiding double-cost: use a short-circuit tokenization wrapper so that only the leg that generates new tokens incurs generation billing. Vector-only lookups are billed per-lookup.
+- Index consistency: recommend a periodic mirroring job to keep pgvector in sync for dev clusters (low volume), and a daily indexing job for S3 cold archives (batched embeds).
+- Testing plan: we'll provide a small harness that replays sample-reqs.csv across the three legs and outputs per-leg latencies + scores.
+
+I'll lead the deep-dive. Agenda draft: 1) routing policy and thresholds (10m), 2) billing/telemetry contract (10m), 3) failover semantics & retries (10m), 4) QA/harness and pilot timeline (15m).
+
+Ben — want to add anything on commercial constraints?
+
+--
+Dev Patel
+Staff Software Engineer, Serving Runtime — Redwood Inference
+dev_patel@redwood.com
+
+From: Patrick O'Neal <patrick@atlasdata.com>
+To: Marissa Cole <marissa_cole@redwood.com>
+Cc: AtlasData Integrations <integrations@atlasdata.com>, Dev Patel <dev_patel@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Fri, 19 Apr 2028 11:03:00 -0700
+Subject: Re: Query fallthrough design for AtlasData + Redwood connector
+
+Marissa / Dev / Ben —
+
+Thu 4/19 10am PT works for our infra lead. Appreciate the agenda — aligns perfectly. A couple quick clarifications before the call:
+
+- Does Redwood plan to expose per-leg logs as a JSON payload (trace_id, leg_name, start_ts, end_ts, top_score, candidate_count)? Our analytics pipeline expects that shape.
+- For S3 fallback, can Redwood accept pre-signed URIs for large archive scans or do you require us to ingest objects into a staging bucket you control?
+
+We'd also like to propose a brief commercial note in the pilot T&Cs: AtlasData will cover third-party Pinecone usage for the first 30 days of the pilot; after that we will agree a shared cost split. Ben — can you draft a short pilot SOW / commercial paragraph we can sign off on in the call?
+
+Looking forward to the deep-dive.
+
+Best,
+Patrick
+
+Attachments referenced earlier: sample-reqs.csv

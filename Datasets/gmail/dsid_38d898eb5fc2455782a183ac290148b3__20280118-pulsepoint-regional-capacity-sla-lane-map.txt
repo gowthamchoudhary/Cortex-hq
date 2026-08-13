@@ -1,0 +1,99 @@
+PulsePoint regional capacity request — SLA lane & burst mapping
+
+From: Elaine Park <elaine@pulsepoint.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: Arman Gupta <arman@pulsepoint.ai>
+Date: 2028-01-10T09:12:00-08:00
+Subject: Pilot ask — dedicated capacity across APAC/EU/US
+
+Hi Priya,
+
+Thanks for taking this. We are lining up a new conversational feature targeting APAC first, then EU and US. High-level requirements:
+- Target launch: 2028-02-15 (pilot)
+- Expected steady-state traffic (pilot -> month 2): ~120 QPS globally, region split roughly APAC 55%, EU 25%, US 20%
+- Model: preference for 7B quantized family (latency target p95 < 200ms) with fallback to 13B if quality regressions appear
+- Average prompt+response length: 450 tokens; peaks up to 2k tokens for longer sessions
+- SLA ask: 99.9% availability for the dedicated pool; burst capacity for marketing spikes (up to 300 QPS)
+
+Procurement needs SOW + ballpark sizing and pricing this week. Can Redwood propose a regional lane mapping (steady + standby burst lanes) and a mutual action plan so we can align internal approvals?
+
+Attaching a short internal product brief for context.
+
+Regards,
+Elaine
+Product Ops, PulsePoint
+(attachment: pulsepoint_prod_brief.pdf)
+
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Elaine Park <elaine@pulsepoint.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Dylan Brooks <dylan_brooks@redwood.ai>
+Date: 2028-01-11T10:08:00-08:00
+Subject: Re: Pilot ask — dedicated capacity across APAC/EU/US
+
+Hi Elaine — thanks, this is helpful.
+
+Quick summary of what we'll deliver this week:
+1) Regional capacity map (steady-state pool + standby/burst lanes) by region
+2) High-level node counts and cost delta for 7B-quant vs 13B fallback
+3) Suggested SLA lane mapping (Gold/Silver/Bronze) and deal triggers that unlock burst capacity
+4) Draft SOW and timeline for a Feb 15 pilot start (we'll aim to keep it flexible)
+
+A couple of clarifying Qs to make the sizing accurate:
+- Are the 120 QPS estimates measured as requests/sec (single API call) or conversational sessions (multi-call)?
+- Expected concurrency per session (how many inflight requests per user)?
+- What percentage of sessions will need >1k tokens? (we see disproportional KV/cache pressure when long sequences are common)
+- Do you need region-local data residency for logs/metrics or is cross-region observability acceptable?
+
+Ben and Dylan — looping you in for node sizing and runbook inputs. I attached a preliminary capacity workbook (capacity_estimates_pulsepoint_20280110.xlsx) with a few scenarios; please update the steady vs burst assumptions and add notes on start-of-day vs marketing spike behavior.
+
+Next steps: can we schedule a 30-min technical sync tomorrow? If procurement wants the SOW this week, we can produce a redline-ready PDF by Thursday.
+
+Thanks,
+Priya Natarajan
+Head of Strategic Accounts — Redwood Inference
+(attachment: capacity_estimates_pulsepoint_20280110.xlsx)
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>, Dylan Brooks <dylan_brooks@redwood.ai>
+Date: 2028-01-12T09:22:00-08:00
+Subject: Re: Pilot ask — dedicated capacity across APAC/EU/US
+
+Priya / Dylan — quick sizing notes after a pass on Elaine's numbers and the workbook:
+
+Baseline assumptions I used:
+- Model footprint: 7B-quant (approx 12–14GB device memory usable after kernels), 13B fallback (approx 26–30GB)
+- Average latency target p95 150–200ms on A100-class GPUs for 7B with batching and KV caching
+- Token throughput per GPU (steady, mixed seq): ~18–22K tokens/sec for 7B-quant; 9–11K tokens/sec for 13B
+
+Sizing (pilot steady-state ~120 QPS, avg 450 tokens):
+- APAC (55% = ~66 QPS): recommend a steady pool equivalent to 3 dedicated A100-equivalent nodes for 7B-quant, with 1 hot-standby node that can be traded into a burst lane (turns pool from 3->4 nodes)
+- EU (25% = ~30 QPS): 1.5 node equivalent -> round up to 2 steady nodes, 1 standby for bursts (2->3)
+- US (20% = ~24 QPS): 1 node steady, 1 standby for burst (1->2)
+
+If we assume marketing spikes to 300 QPS global, the burst lanes above (standby nodes per region) cover most cases; for larger spikes we can add cross-region overflow routing to US/EU pools.
+
+Cost tradeoffs: using 7B quant keeps node counts low; using 13B fallback increases steady-node counts by ~1.8x per region and adds reentrant latency risk during fallback.
+
+I'll add concrete vCPU/GPU SKU mapping and a simple failover flow into the workbook. Dylan — can you confirm whether we can offer an APAC warm standby on the 48-hour SLA lane vs immediate 60-minute gold lane? PulsePoint will need clarity for procurement.
+
+-ben
+
+On Thu, Jan 11, 2028 at 10:08 AM Priya Natarajan <priya_natarajan@redwood.ai> wrote:
+> (see above)
+
+From: Elaine Park <elaine@pulsepoint.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: Arman Gupta <arman@pulsepoint.ai>, procurement@pulsepoint.ai
+Date: 2028-01-18T11:45:00-08:00
+Subject: Re: Pilot ask — dedicated capacity across APAC/EU/US
+
+Thanks Priya and team — this looks sensible. Procurement asked us to confirm a few items:
+- They need an SOW and an initial quote (ballpark acceptable) to put the PO through their internal finance review.
+- Security questionnaire and SOC references are required before contract signature.
+
+We scheduled a call for Jan 19 09:00 PT to walk procurement through the SOW and the burst lane mechanics. I attached our PO template and procurement contacts. Please let me know if you need any additional collateral before the call.
+
+Best,
+Elaine
+PulsePoint — Product Ops
+(attachment: PulsePoint_PO_template.docx)

@@ -1,0 +1,146 @@
+Token validation failures causing retry storms — Acme Payments SLA impact
+
+From: Alex Torres <alex.torres@acme-payments.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Maya Srinivasan <maya.srinivasan@redwood.com>
+Date: Thu, 18 Jun 2026 09:12:00 -0700
+Subject: Re: Spike in 5xx/429s this morning — urgent
+
+Hi Rishi / Maya,
+
+We started seeing a big spike in 5xx and 429 responses at ~08:45 UTC this morning across several of our endpoints that call Redwood. Customer transactions are failing intermittently and our payment retries are amplifying traffic.
+
+Quick details:
+- Affected routes: /v1/generate, /v1/chat/stream
+- Sample request IDs: req_4f2a1, req_4f2a7, req_4f2b0 (attached CSV)
+- Symptoms: timeouts from Redwood, then a flood of 502/503 followed by 429s.
+- We’re seeing a lot of 401s converted to 5xx in our gateway logs which is making it hard to distinguish real service failures vs auth problems.
+
+This is impacting live traffic and causing a retry storm on our side. Can you confirm if there’s an ongoing incident on Redwood? Any immediate mitigation steps you can take would be appreciated.
+
+I’ve attached a screenshot of our dashboard and a small sample of request IDs.
+
+Thanks,
+Alex
+Director, Platform Engineering
+Acme Payments
+
+Attachments: acme_trace_sample.csv, acme_dashboard_screenshot.png
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Alex Torres <alex.torres@acme-payments.com>
+Cc: Maya Srinivasan <maya.srinivasan@redwood.com>
+Date: Thu, 18 Jun 2026 09:25:00 -07:00
+Subject: Re: Spike in 5xx/429s this morning — urgent
+
+Alex — thanks for the quick heads up and the artifacts. We are triaging now.
+
+Immediate asks: could you (or your on-call) pause aggressive client retries (temporarily increase backoff) and share a few full request/response pairs (headers + timestamps) for the request IDs you attached? That will help us isolate whether these are auth failures or internal timeouts.
+
+I’m escalating to our SRE and gateway teams and will circle back with an ETA for a mitigation. Apologies for the user impact — we’ll treat this as Sev2/possible Sev1 depending on blast radius.
+
+I’ll also request permission to bring this to our leadership if it looks like an SLA hit.
+
+—Rishi
+Rishi Malhotra
+Head of Site Reliability, Redwood Inference
+
+> Attachments requested: full-req-resps.txt
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Maya Srinivasan <maya.srinivasan@redwood.com>
+Date: Thu, 18 Jun 2026 09:35:00 -07:00
+Subject: Fwd: Re: Spike in 5xx/429s this morning — urgent
+
+Folks — forwarding Acme report (below). They report 5xx/429s with evidence that some auth failures are surfaced as 5xx. They’re seeing retry storms on their side.
+
+Why this matters: if gateway auth validation failures (expired/nbf JWTs or invalid API keys) are being misclassified as 5xx, client apps will retry aggressively, amplifying load and causing real downstream rate limits and timeouts.
+
+I attached a small grep of our prod gateway logs where the validator throws an UnexpectedNullException around token parsing. See acme_errors_20260618.log (snippet). Please prioritize: can the gateway mapping be changed today to return 401/403 for known auth error classes? Also need a temporary rate-limiter and circuit-breaker for auth-related failures to stop cascade.
+
+If this is a config/regression, we should prepare an exec-facing summary and proposed credits.
+
+Rishi
+
+> Forwarded message follows:
+> From: Alex Torres <alex.torres@acme-payments.com>
+> Date: Thu, 18 Jun 2026 at 09:12 AM
+> Subject: Re: Spike in 5xx/429s this morning — urgent
+> To: Rishi Malhotra <rishi.malhotra@redwood.com>, Maya Srinivasan <maya.srinivasan@redwood.com>
+> Attachment: acme_trace_sample.csv, acme_dashboard_screenshot.png
+
+> [see original message]
+
+Attachment added: acme_errors_20260618.log
+From: Hannah Schmitt <hannah.schmitt@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Maya Srinivasan <maya.srinivasan@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>
+Date: Thu, 18 Jun 2026 10:10:00 -07:00
+Subject: Re: Fwd: Re: Spike in 5xx/429s this morning — urgent
+
+Summary of first-pass triage (10:10am):
+- Root cause hypothesis: intermittent JWT validation exceptions caused by clock skew and a corner-case in our token parser when encountering `nbf` fields. The validator throws an internal exception which bubbles up and gets treated by the gateway as a 5xx rather than an auth failure.
+- Consequence: client libraries interpret 5xx/503 as transient and retry, creating a retry storm that elevates traffic and pushes other pools to 429.
+
+Immediate mitigations in order of priority:
+1) Hotfix gateway mapping (deploy within 30–90m): explicitly map known token-validation exceptions to 401/403 and include a structured body that signals non-retryable auth failure.
+2) Deploy an auth-failure rate limiter and short circuit for token validation errors to cap amplification while we roll the mapping fix.
+3) Add logging to capture token `iat/exp/nbf` and the upstream clock offset to confirm clock skew incidence.
+4) Longer-term: harden token parser for unexpected/malformed `nbf` and add a small grace window for clock skew.
+
+I’ve prepared a config patch (prod-gateway-config-diff.patch) with the mapping change and a simple limiter. If Ops approves, I can push this immediately. We should also prepare a customer-facing incident note and exec summary.
+
+Hannah Schmitt
+Engineering Manager, Gateway Services, Redwood Inference
+
+Attachment: prod-gateway-config-diff.patch
+
+> On Thu, Jun 18, 2026 at 9:35 AM Rishi Malhotra <rishi.malhotra@redwood.com> wrote:
+> > forwarding details from Acme
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Maya Srinivasan <maya.srinivasan@redwood.com>, Alex Torres <alex.torres@acme-payments.com>
+Date: Thu, 18 Jun 2026 11:02:00 -07:00
+Subject: Re: Token validation failures causing retry storms — Acme Payments SLA impact
+
+Thanks for the rapid reaction team. A couple notes from GTM / account perspective:
+- Acme is on our Standard plan with a 99.5% SLA for latency; we need to estimate user-facing downtime and potential credits.
+- Customer is asking for an executive note and a commitment on remediation timeline. Can we get a short one-paragraph summary for their CIO/CRO and a recommendation for credits?
+
+Alex — we’ll coordinate comms. Please confirm if you want a follow-up call with our CRO (available this afternoon) — I can schedule.
+
+—Karthik
+Account Executive, Redwood Inference
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Alex Torres <alex.torres@acme-payments.com>, support@acme-payments.com
+Cc: Maya Srinivasan <maya.srinivasan@redwood.com>, Hannah Schmitt <hannah.schmitt@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>
+Date: Thu, 18 Jun 2026 15:47:00 -07:00
+Subject: Incident update — auth mapping hotfix deployed, mitigation in place
+
+Alex / Acme team — status update and next steps. Short version up top: we’ve deployed a hotfix and applied rate-limiting; traffic has stabilized. We’ll follow with an RCA and proposed credit.
+
+What we did (timeline):
+- 14:05 PDT — SRE and Gateway Ops validated reproduction using Acme request IDs. Confirmed token parser thrown exceptions for `nbf` edge cases and a small clock offset.
+- 14:30 PDT — Deployed prod-gateway-config-diff.patch: mapping changed to return 401/403 for known token-validation exceptions + structured error code (error_code=AUTH_INVALID_TOKEN_NONRETRYABLE).
+- 14:35 PDT — Enabled auth-failure rate limiter (tokens per minute cap) to dampen retry amplification.
+- 14:45 PDT — Observed error-rate drop: 5xx count down 82% and 429s decreased as downstream pools recovered.
+
+Customer impact and next steps:
+- We believe the primary root cause is a combination of small clock skew at a subset of Acme clients and an unhandled token parser corner-case. The misclassification of those auth errors as 5xx caused client-side retries.
+- Immediate mitigation above is in place; we will still harden the parser and add a small `nbf` grace window in the coming days.
+- We will provide a formal RCA within 48 hours and an incident-summary PDF now attached.
+
+Credits / SLA: we are preparing a proposed credit calculation and exec note (cc: Karthik). We’ll include a concrete offer in the RCA packet.
+
+Ask from you: please confirm whether traffic looks stable on your side and whether you want the CRO call today (we have availability at 17:00 PDT).
+
+Apologies again for the disruption — we own the fix and will follow up with a full RCA.
+
+Regards,
+Rishi Malhotra
+Head of Site Reliability, Redwood Inference
+
+Attachments: incident-summary-20260618.pdf
+
+> On Thu, 18 Jun 2026 at 10:10 AM Hannah Schmitt <hannah.schmitt@redwood.com> wrote:
+> > Summary of first-pass triage (10:10am): [see above]

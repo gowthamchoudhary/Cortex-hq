@@ -1,0 +1,124 @@
+Post-call: multi-tenant rate/quota & per-customer routing — summary & next steps
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Lydia Park <lpark@atlashealth.io>
+Cc: Diego Fernandez <diego_fernandez@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Date: 2026-08-18T15:02:00Z
+Subject: Post-call: multi-tenant rate/quota & per-customer routing — summary & next steps
+
+Hi Lydia — thanks again for the time today. Quick recap of what we heard and proposed next steps so we all have the same page.
+
+Pain points you shared:
+- Tenant spikes: a handful of enterprise customers generate sudden 10-20x token bursts that cause noisy neighbor latency for others.
+- Cost uncertainty: hourly GPU spend + token egress are hard to attribute per customer; finance needs clearer unit economics.
+- Per-customer QoS: you need guaranteed throughput tiers for platinum/gold customers and soft limits for trial customers.
+- Model routing: some customers should be routed to smaller models (quantized) while others use higher-capacity variants; this must be policy-driven.
+- Compliance: audit logs and evidence for per-tenant access and KV-cache lifecycle are required for your SOC2 roadmap.
+
+Current stack you described:
+- Frontend: API gateway + custom request router
+- Model hosting: mixed strategy — OpenAI for overflow, in-house LLMs on Kubernetes for baseline (K8s autoscaling is reactive today)
+- Observability: Datadog for infra metrics; per-tenant telemetry is stitched together in a homegrown dashboard
+
+Success criteria you called out:
+- P95 latency < 200ms for tiered customers under normal load; graceful degradation under spikes
+- Per-customer cost reporting within 24 hours for invoicing accuracy
+- Policy-driven routing (RLS-like) so specific customers get pinned model variants without code changes
+- Ability to enforce per-customer RPS and token quotas with soft/ hard thresholds
+
+Proposed next steps (suggested timeline):
+1) Technical deep-dive (90m) — Redwood infra + Diego to join to validate feasibility and surface integration gaps (target: week of Aug 24)
+2) Quick POC plan — Dedicated capacity trial for 2 enterprise tenants (3–4 week trial) + baseline telemetry collection (target: scope by Aug 28)
+3) Pricing & capacity proposal — attached draft Dedicated proposal and a simple token/unit estimate for the initial trial
+4) Security artifacts & SOC2 checklist — we will share evidence matrix and a suggested audit plan (we already have many artifacts you can reuse)
+
+Open questions for you to confirm before the deep-dive:
+- Peak per-tenant RPS you expect during burst events (ballpark) — you mentioned ~250 RPS per account for two customers?
+- Any hard regulatory constraints (data residency) for the trial tenants?
+- Who should own the SSO/integration piece on your side?
+
+I'll schedule the tech-deep-dive with Diego and Vanessa once you confirm availability. Thanks again — looking forward to moving this to a short PoC.
+
+Best,
+Priyom Das
+Senior Solutions Engineer
+Redwood Inference
+---
+Attachment: redwood-dedicated-capacity-proposal.pdf (26 KB)
+Attachment: atlashealth-current-reqs.xlsx (12 KB)
+
+From: Lydia Park <lpark@atlashealth.io>
+To: Priyom Das <priyom_das@redwood.ai>
+Cc: AtlasHealth Platform <platform@atlashealth.io>
+Date: 2026-08-18T17:12:00Z
+Subject: Re: Post-call: multi-tenant rate/quota & per-customer routing — summary & next steps
+
+Thanks Priyom — great summary, this aligns with my notes. A couple clarifications:
+- Correct on the burst numbers — two accounts hit ~200–300 RPS during campaigns, spikes last ~10–25 minutes but are unpredictable.
+- Data residency: the trial tenants are US-only; longer term we may need EU-residency for a subset (not for the initial PoC).
+- SSO owner: internal infra team (cc'd platform@atlashealth.io) will own SSO ties; they will join the technical call.
+
+A couple of asks from our end before the deep-dive:
+1) Can you outline how per-customer KV cache eviction would work? We can't have one tenant's large context evicting hot keys for another.
+2) A simple example of routing rules (e.g., if customer.tier == "platinum" route->model-x; else route->model-y) and how that is enforced without code changes.
+
+We can do Aug 25 or Aug 26 for the 90m call (prefer morning PT). Thanks — Lydia
+
+On Tue, Aug 18, 2026 at 15:02 Priyom Das <priyom_das@redwood.ai> wrote:
+> [original message trimmed]
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Lydia Park <lpark@atlashealth.io>
+Cc: Diego Fernandez <diego_fernandez@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>, AtlasHealth Platform <platform@atlashealth.io>
+Date: 2026-08-19T01:09:00Z
+Subject: Re: Post-call: multi-tenant rate/quota & per-customer routing — summary & next steps
+
+Thanks Lydia — answers inline and a short plan for the deep-dive so Diego can prep.
+
+1) KV cache isolation: Redwood supports tenant-aware KV namespaces. Operationally we either:
+   - Create per-tenant KV namespaces that are isolated in memory/CUDA cache (preferred for enterprise customers), or
+   - Use a priority-based eviction policy where platinum customers' keys are pinned and trial tenants are fair-share evicted.
+We recommend per-tenant namespaces for the two enterprise tenants in the PoC to avoid any cross-tenant evictions. We'll walk through memory footprint and allocation in the tech call.
+
+2) Routing rules example: Redwood routing policies are declarative — policies are stored as JSON/YAML and evaluated at request ingress. Example rule: \"if headers.x-customer-tier == \"platinum\" then route:model-zenith-v2; else if quota_state == \"exceeded\" then route:model-quantized-mini\". No code changes required; policies are pushed via the control plane and can be versioned and rolled back. Diego will show a live demo.
+
+Deep-dive agenda (90m):
+- 0–15m: introductions & goals (AtlasHealth infra + Redwood solutions)
+- 15–45m: Redwood runtime overview — KV/cache isolation, batching, and per-tenant orchestration (Diego)
+- 45–65m: Routing & policy engine demo — show rule creation, test traffic, and live fallback behavior (Vanessa)
+- 65–85m: Integration checklist — SSO, telemetry hooks, billing attribution, provisioning of Dedicated pool
+- 85–90m: Next steps & timeline agreement
+
+Suggested times: Aug 25 09:30 PT or Aug 26 10:00 PT — which works best for the platform team?
+
+I'll attach the short proposal again for reference.
+
+Best,
+Priyom
+---
+Attachment: redwood-dedicated-capacity-proposal.pdf (26 KB)
+
+From: Diego Fernandez <diego_fernandez@redwood.ai>
+To: Lydia Park <lpark@atlashealth.io>, Priyom Das <priyom_das@redwood.ai>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, AtlasHealth Platform <platform@atlashealth.io>
+Date: 2026-08-21T10:45:00Z
+Subject: Re: Post-call: multi-tenant rate/quota & per-customer routing — summary & next steps
+
+Hi all — thanks for confirming. I'll lead the runtime portion of the deep-dive and bring the following artifacts:
+- Short deck on KV isolation strategies and memory budgeting per-tenant (10 slides)
+- A simple load script to emulate 250 RPS bursts across two tenants so we can observe tail latency and eviction behavior live
+- Example routing policy repo with test cases (I'll prep a sandbox rule that sends platinum traffic to a higher-capacity variant)
+
+For the PoC, recommended baseline configuration:
+- Dedicated GPU pool: 2 x A100 equivalents reserved for the trial tenants with burstable capacity to avoid cold starts
+- Quota config: hard token quota per-month + soft RPS thresholds with webhook alerts when soft thresholds are breached
+- Telemetry: token-level attribution tags + per-tenant cost export to a CSV daily
+
+I'll schedule the 90m deep-dive for Aug 25 at 09:30 PT and send a calendar invite to the platform distribution. If you prefer the 26th, tell me and I'll move it.
+
+Diego Fernandez
+Senior Infrastructure Engineer
+Redwood Inference
+
+> On Aug 19, 2026, 01:09 Priyom Das <priyom_das@redwood.ai> wrote:
+> > [Priyom's plan and routing examples]

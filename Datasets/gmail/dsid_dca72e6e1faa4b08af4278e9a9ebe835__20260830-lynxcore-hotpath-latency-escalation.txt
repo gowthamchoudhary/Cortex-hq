@@ -1,0 +1,115 @@
+Re: LynxCore hot-path latency & error surge after v3.2-quant rollout
+
+From: Patricia Gomez <pgomez@lynxcore.com>
+To: Soojin Lee <soojin.lee@redwood.com>
+Cc: LynxCore SRE <sre@lynxcore.com>, Alex Rivera <alex.rivera@cloudops.io>
+Date: Fri, 28 Aug 2026 16:12:00 -0700
+Subject: Sudden p95 jump and 502s after your v3.2-quant push
+
+Soojin —
+
+We pushed the v3.2-quant model variant to production this morning (per the rollout plan) and within ~45 minutes started seeing p95 jump from ~220ms to 1.8s on our high-volume /generate endpoint. Error rate (5xx) also climbed to ~2.8% and our ingest buffer started rejecting requests. Attached is a short sample of 502 responses and a screenshot of p95 from our dashboard.
+
+This is impacting customer-facing features (recommendations + chat) and we need immediate mitigation. Can you confirm whether Redwood changed any quantization parameters (per-layer quant) or kernel/runtime flags in that release? Our SREs are seeing retries and OOMs.
+
+We need a plan to bring latency back under SLA and an ETA for rollback if necessary.
+
+- Patricia
+Director, Platform Engineering
+LynxCore
+
+Attachments: lynxcore-error-sample-20260828.log, p95-spike-dashboard-screenshot.png
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Patricia Gomez <pgomez@lynxcore.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, LynxCore SRE <sre@lynxcore.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Fri, 28 Aug 2026 16:35:00 -07:00
+Subject: Re: Sudden p95 jump and 502s after your v3.2-quant push
+
+Patricia — thank you for the quick heads up and logs. Im escalating internally now. High level: we shipped a targeted quant profile change for v3.2-quant that reduces memory for cold starts but increases kernel tiling for hot-path token decode. That change passed canary on 4 small tenants but we clearly missed your traffic pattern.
+
+Immediate asks from our side:
+- Marcus, can you run the live perf profiler on the batch hot-path and check KV cache hit rates and batch sizes?
+- Patricia / Lynx SRE: can you share a short span of request IDs from the sample so we can correlate in traces?
+
+Short-term plan I'm proposing:
+1) Pause further rollout to any additional rings.
+2) Schedule an automated fallback to v3.1 (non-quantized) for LynxCore if we see p95 > 600ms for two consecutive 10-minute windows.
+3) Prepare a rollback window tonight at 22:00 UTC if we confirm OOM/retry correlation.
+
+I'll loop in Rishi and Evelyn for exec coordination and customer communication.
+
+— Soojin
+Head of Customer Escalations, Redwood Inference
+Mobile: +1 (555) 214-0902
+
+References: https://grafana.redwood.com/d/lynxcore/hotpath-p95
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Soojin Lee <soojin.lee@redwood.com>, Patricia Gomez <pgomez@lynxcore.com>
+Cc: LynxCore SRE <sre@lynxcore.com>
+Date: Fri, 28 Aug 2026 16:52:00 -07:00
+Subject: Re: Sudden p95 jump and 502s after your v3.2-quant push
+
+Quick findings from a 30-min sampling window (live profiler + trace tail):
+- Packet: v3.2-quant introduced a tighter per-layer tile that increases attention kernel invocations by ~18% for sequences > 160 tokens.
+- KV cache: LynxCore's traffic shows very high prefix reuse, but the quant change increased cache fragmentation leading to more cache misses and additional memory allocations during decode.
+- Errors: the 5xx spike aligns with increased retry loops when decode latency exceeds the request timeout; several reported 502s trace back to transient OOM on a subset of nodes (we're seeing realloc failures ~1-2s before 502).
+
+Immediate remediation options:
+A) Roll back to v3.1 for LynxCore (fastest).
+B) Patch v3.2-quant with a different tiling parameter and redeploy to canary ring (slower, but preserves quant benefits).
+C) Apply aggressive request-level backpressure and increase per-tenant memory limit (short-term mitigation but costly).
+
+I recommend option A for tonight and then run A/B tests with a patched v3.2-quant in a canary ring for 24 hours. I can prepare the rollback package; need confirmation from Soojin/exec and LynxCore for a controlled window.
+
+— Marcus
+Principal SRE, Redwood Inference
+From: LynxCore SRE <sre@lynxcore.com>
+To: Soojin Lee <soojin.lee@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Cc: Patricia Gomez <pgomez@lynxcore.com>
+Date: Fri, 28 Aug 2026 17:08:00 -07:00
+Subject: Re: Sudden p95 jump and 502s after your v3.2-quant push
+
+Thanks — sending the sampled request IDs and a small trace bundle (attached). The nodes reporting OOM are in us-west-2; we've pinned hostnames in the log. The 502s are appearing after the third retry attempt within our client library. We can accept a rollback tonight; we prefer a rollback to v3.1 to stabilize customer traffic while you iterate on the quant profile.
+
+Sample request IDs: req_11234, req_11237, req_11245
+Attachments: lynxcore-error-sample-20260828.log
+
+— LynxCore SRE
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Soojin Lee <soojin.lee@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Sat, 29 Aug 2026 09:03:00 -07:00
+Subject: EXTERNAL: LynxCore outage risk — exec sync + credits decision
+
+Team — looping you in. Customer is asking for immediate rollback and may request a goodwill credit given user impact. Soojin: please confirm the rollback window and the estimated duration of reduced throughput during rollback. Rishi/Evelyn: we should prepare a short executive note (one-pager) for the CSM and sales leader summarizing cause, impact, and compensation options.
+
+Questions for execs:
+- Can we commit to a rollback tonight at 22:00 UTC?
+- If rollback takes >30 minutes for full traffic shift, are we comfortable offering a 10% credit on the August invoice as a gesture (we should route compensation through Sales Ops)?
+
+Ill draft the one-pager after Soojin confirms the mitigation timeline.
+
+— Naomi
+VP, Customer Success
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Patricia Gomez <pgomez@lynxcore.com>, LynxCore SRE <sre@lynxcore.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Naomi Feldman <naomi.feldman@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Sun, 30 Aug 2026 10:05:00 -07:00
+Subject: Action plan: rollback schedule and next steps (LynxCore)
+
+Patricia / team — summary and confirmed plan: 
+1) Rollback: We will execute a targeted rollback to v3.1 for LynxCore tonight at 22:00 UTC (2026-08-30). Marcus will push the rollback package and monitor canary nodes for 15 minutes; if stable, we will continue a staged shift over 45 minutes to full traffic. Expected p95 improvement: back to ~230-300ms.
+2) Communication: Naomi will send the one-pager and CSM note to Lynx account team after this thread.
+3) Compensation: Pending confirmation from Sales Ops, we are prepared to offer a one-time 10% August credit if LynxCore confirms significant business impact (documented error counts).
+4) Postmortem & follow-up: Marcus will run an offline A/B with a patched v3.2-quant profile and provide results in 72 hours. We will include an evaluation of memory fragmentation causes and optional mitigations (kernel flag adjustments / per-tenant memory windows).
+
+Attachments: proposed-rollback-plan-20260830.pdf
+Links: https://pagerduty.com/incidents/PD-89324, https://grafana.redwood.com/d/lynxcore/hotpath-p95
+
+Patricia, please confirm acceptance of the window and if you want Redwood to own the rollback execution or if your ops team will trigger it (we can do either).
+
+Thanks — will keep you updated live in the incident channel.
+
+— Soojin
+Head of Customer Escalations, Redwood Inference
+Phone: +1 (555) 214-0902
+Company: Redwood Inference

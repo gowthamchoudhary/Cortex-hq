@@ -1,0 +1,106 @@
+ZephyrBank - model fidelity & phased rollout alignment
+
+From: Ben Carter <ben@redwood.com>
+To: Irene Choi <irene@redwood.com>
+Cc: Monica Patel <monica@redwood.com>, Priya Sharma <priya@zephyrbank.com>
+Date: 2028-07-10T09:14:00-07:00
+Subject: ZephyrBank - model fidelity & phased rollout alignment
+
+Priya — quick recap from our call this morning and an ask to the product/eng partners below. Thanks for walking us through the KYC pipeline constraints. High-level summary: ZephyrBank needs a higher-fidelity inference path for core identity/parsing during the first 6 months of the pilot (higher token context + reduced quantization error) and wants a predictable fallback if the high-fidelity path is unavailable.
+
+Key asks from ZephyrBank (paper bullet):
+- Maintain model snapshot fidelity for 90 days (audit/debug requirement).
+- Latency p95 target <= 450ms for production KYC requests.
+- Pilot traffic initially ~200 rps peak, daytime burst to 450 rps.
+- Willing to contract dedicated capacity or reserved GPU pool if we can commit to availability + retention.
+
+Our immediate need: can product + eng give a feasibility estimate for (A) non-quantized variant with 90-day snapshot retention and (B) a staged rollout plan that allows canary + automated fallback to a lower-cost variant when capacity constrained? Also need a rough cost uplift delta so we can present to the customer. I attached the Zephyr requirements doc from their infra team (Attachment: Zephyr_requirements_v1.docx).
+
+Proposed next steps from sales: technical deep dive next week and an internal prioritization decision before Thursday EOD so we can include a commitment in the deal sheet.
+
+Thanks — Ben
+Ben Carter
+Senior Account Executive, Redwood Inference
+
+From: Irene Choi <irene@redwood.com>
+To: Ben Carter <ben@redwood.com>, Monica Patel <monica@redwood.com>
+Cc: Markus Klein <markus@redwood.com>, Priya Sharma <priya@zephyrbank.com>
+Date: 2028-07-10T11:02:00-07:00
+Subject: Re: ZephyrBank - model fidelity & phased rollout alignment
+
+Ben / Priya — thanks for the clear summary. A couple of clarifying questions so eng can scope correctly:
+
+1) Throughput distribution: is the 200 rps peak steady-state or heavily spiky (10s spikes to 450 rps)? If spiky, what is the typical spike duration?
+2) Latency target: is p95 <= 450ms a hard SLA required at contract signing, or an initial goal for the pilot?
+3) Retention: 90-day snapshot — do they require on-demand rollback to any previous snapshot or just storage for audit?
+4) Data residency: is this strictly US regions or do we need EU/other region parity for the same config (affects routing & capacity planning)?
+5) Success metrics for staged rollout: what percent of failed/high-latency requests can we tolerate during canary?
+
+From product perspective we have two main levers: dedicated capacity with pinned non-quantized variant, or a hybrid strategy where we serve the high-fidelity model for a fraction of traffic and fall back to a quantized variant otherwise. If engineering confirms effort is >2 sprints we need to decide whether to slot this work for the next committed sprint or offer a temporary contractual workaround (higher price for guaranteed dedicated capacity).
+
+Markus — can you please run a feasibility sketch (ram/GPUs, expected token cost delta, any infra gating items) and call out the minimum observable/instrumentation changes we need to ship the canary safely? Monica — I’ll coordinate the go/no-go criteria with CS.
+
+— Irene
+Irene Choi
+Product Lead, Redwood Console
+
+From: Markus Klein <markus@redwood.com>
+To: Irene Choi <irene@redwood.com>, Ben Carter <ben@redwood.com>, Monica Patel <monica@redwood.com>
+Cc: Priya Sharma <priya@zephyrbank.com>
+Date: 2028-07-11T09:28:00-07:00
+Subject: Re: ZephyrBank - model fidelity & phased rollout alignment
+
+Copying my initial technical readout — high-level feasibility and risks below. Quoting Ben’s note for context.
+
+Short answer: feasible, but non-trivial. Two practical options:
+
+Option A — Dedicated, non-quantized path (recommended for fidelity):
+- Requires pinned GPU pool (A100/ equivalent), model loaded in FP16/FP32 (no int8 quant).
+- Estimated infra delta: ~1.5x GPU memory and ~1.4x per-token cost vs our current default quantized path.
+- Canary strategy: we can start with 5% traffic on dedicated nodes, ramp to 20% after 48h, then 50% after automated health checks.
+- Work: infra orchestration (2 sprints), model-variant packaging + routing policy (1 sprint), telemetry/trace updates (0.5 sprint).
+- Risks: KV cache warmup kills cold-start latency; sustained burst handling needs buffer pool.
+
+Option B — Quantized-but-tuned path (lower cost, some fidelity loss):
+- Use 4-bit quant with targeted per-layer calibration. Reduces cost but introduces small inference drift against audit traces.
+- Work: calibration and eval run (1 sprint), rollout policy coding (0.5 sprint).
+
+Instrumentation and gating items to ship for safe canary:
+- Token-level delta metrics vs baseline (per-prompt BLEU-like match for KYC extraction).
+- OpenTelemetry trace tags to correlate user session -> model variant.
+- Automated rollback policy when fidelity delta exceeds threshold for 12h.
+
+Attachments: implementation-sketch.pdf (high level infra diagram), cost-estimates.csv (rough numbers).
+
+ETA: If we prioritize, initial canary infrastructure (Option A minimal) is ~3 engineering sprints (6 weeks) to reach 5% traffic with observability. Option B (calibration-first) can be done in ~2 sprints and used as a temporary mitigation while A is built.
+
+I’ll post a short RFC with diagrams and sequencing after the sketch attachments.
+
+— Markus
+Markus Klein
+Staff Engineer, Serving Runtime
+
+From: Monica Patel <monica@redwood.com>
+To: Priya Sharma <priya@zephyrbank.com>, Rajiv Nair <rajiv.nair@zephyrbank.com>
+Cc: Ben Carter <ben@redwood.com>, Irene Choi <irene@redwood.com>, Markus Klein <markus@redwood.com>
+Date: 2028-07-12T16:42:00-07:00
+Subject: Fwd: ZephyrBank - model fidelity & phased rollout alignment
+
+Priya / Rajiv — looping you back in with the internal plan and concrete asks so we can lock timelines. Below is a short mutual action plan based on internal feasibility:
+
+Mutual action items (short):
+- ZephyrBank: provide 7 days of production QPS histograms and 90-day sample logs (anonymized) so we can size buffer pools (due: 2028-07-14).
+- Redwood: deliver a canary plan and cost uplift estimate (Option B quick) by 2028-07-18.
+- ZephyrBank legal: sign MSA addendum for dedicated capacity if Option A chosen (DocuSign link: https://www.docusign.com/en/link/ZB-MSA-ADDENDUM-12345).
+- Joint technical deep-dive: 2028-07-13T10:00 PT (Google Meet: https://meet.google.com/xyz-ptd-2028).
+- Go/no-go checkpoint: 2028-08-15 — decision to either proceed with dedicated capacity (Option A) or continue with tuned quantized path (Option B).
+
+HubSpot deal record: https://app.hubspot.com/deal/54921/ZB-2028-007
+
+Ben — thanks for initiating. Markus / Irene — when you post the RFC please tag the specific infra changes and the minimum instrumentation we need on day-one for the canary (token-delta metric thresholds, rollback triggers). Priya / Rajiv — please confirm availability for the 7/13 deep dive and whether Zephyr’s security team wants to join (security@zephyrbank.com).
+
+Thanks — Monica
+Monica Patel
+Customer Success Manager, Redwood Inference
+Attachment: none (internal attachments referenced above)
+

@@ -1,0 +1,153 @@
+MAP: Throughput benchmarking & unit economics for Fintech POC
+
+From: Marissa Cole <marissa@redwood.inference>
+To: Olivia Chen <olivia@fintechinc.com>
+Date: Sun, 1 Jun 2025 09:02:00 -0700
+Subject: MAP: Throughput benchmarking & unit economics for POC
+
+Hi Olivia,
+
+Thanks again for the call this morning. Attached is a first draft of a Mutual Action Plan (MAP) for the Fintech POC plus an outline of the performance evaluation we discussed. High-level asks from your side I captured: sustained throughput target, TTFT target, latency SLOs, and an expected input distribution (avg seq length ~120 tokens, 20% long tails).
+
+What I'm proposing in the MAP:
+- Week 0–1: finalize test corpus & acceptance criteria
+- Week 2: Redwood runs throughput benchmarking against representative traffic patterns (latency/TTFT, sustained QPS, concurrency sweep)
+- Week 3: joint review, adjust model/config, and hand off a short eval report + cost model
+- Week 4: pilot deployment (sandbox) and procurement kickoff
+
+Please review the attached MAP and let me know if any milestones or owners should change.
+
+Attachments: fintech_poc_map_v2.pdf (MAP draft)
+
+Best,
+Marissa Cole
+Enterprise AE | Redwood Inference
+marissa@redwood.inference
++1 (415) 555-0162
+[Attachment: fintech_poc_map_v2.pdf (PDF, 72KB)]
+From: Olivia Chen <olivia@fintechinc.com>
+To: Marissa Cole <marissa@redwood.inference>
+Date: Mon, 2 Jun 2025 11:24:15 -0700
+Subject: Re: MAP: Throughput benchmarking & unit economics for POC
+
+Marissa,
+
+Thanks — MAP looks good. A few clarifications on acceptance criteria so our procurement and engineering teams can estimate:
+- TTFT (time to first token): target < 200 ms median across 95% of requests
+- Sustained throughput: target 200 QPS for our production-like load (peak bursts to 500 QPS)
+- Concurrency: multiple simultaneous sessions — we'll validate up to 100 concurrent sessions during the POC
+- Token characteristics: avg 120 tokens per request, 2.4M tokens/day in the sandbox estimate
+
+Also need an initial unit-economics view (cost per 1M tokens and monthly estimate for sandbox vs dedicated). Can you include that in the evaluation report?
+
+Olivia Chen
+Head of Applied ML, Fintech Inc.
+olivia@fintechinc.com
+[signature]
+
+From: Marissa Cole <marissa@redwood.inference>
+To: rishi_malhotra <rishi_malhotra@redwood.inference>, priyom_das <priyom_das@redwood.inference>, laura_bennett <laura_bennett@redwood.inference>
+Cc: 
+Date: Tue, 3 Jun 2025 08:37:00 -0700
+Subject: Fwd: MAP: Throughput benchmarking & unit economics for POC
+
+Team — forwarding Olivia's accept, she added explicit targets (TTFT <200ms med, sustained 200 QPS, concurrency up to 100). Can we finalize a bench plan and schedule a run next week? Key deliverables: raw bench CSV, summary metrics (tokens/sec, sustained QPS, TTFT p50/p95/p99, latency distribution), and a unit-cost model comparing hosted vs Dedicated pricing.
+
+Proposed owners: Rishi to own harness and run; Priyom to validate dataset + cost model; Laura help with SLAs and procurement checklist.
+
+Thanks — want to get this back to Olivia by end of next week.
+
+Marissa
+[Quoted message]
+> From: Olivia Chen <olivia@fintechinc.com>
+> Date: Mon, 2 Jun 2025 11:24:15 -0700
+> Subject: Re: MAP: Throughput benchmarking & unit economics for POC
+> 
+> Marissa,
+> ...
+
+From: Rishi Malhotra <rishi_malhotra@redwood.inference>
+To: Marissa Cole <marissa@redwood.inference>, priyom_das <priyom_das@redwood.inference>
+Cc: laura_bennett <laura_bennett@redwood.inference>
+Date: Fri, 6 Jun 2025 14:12:20 -0700
+Subject: Re: MAP: Throughput benchmarking & unit economics for POC — bench plan
+
+Marissa / team,
+
+Planned benchmark approach:
+- Test harness: Redwood internal qbench harness (continuous batching + KV cache off) with playback of 50k representative requests from Finch corp corpus (sampled to match 120-token avg).
+- Model: open-llama-13b-qlora (closest perf profile to customer's model); will also run a quantized variant to show unit cost delta.
+- Hardware: 2x A100-equivalent nodes for ramp; scalars reported per-GPU.
+- Metrics captured: tokens/sec, sustained QPS over 30m windows, TTFT (time to first token) p50/p95/p99, p50/p95 generation latency, GPU utilization, and cost estimate based on Redwood hosted pricing + Dedicated reserved pricing model.
+- Concurrency sweep: 1, 5, 25, 50, 100 sessions; each step runs for 10 minutes steady-state.
+- Acceptance: sustainable 200 QPS for 15 continuous minutes at target latency.
+
+Schedule: run week of Jun 9; I will produce benchmark_results_2025-06-09.csv and a one-page summary.
+
+Attaching the run config (script stub) and estimated run time.
+
+Rishi
+Senior SE | Redwood Inference
+[Attachment: bench_config_run_2025-06-06.sh (shell script)]
+From: Priyom Das <priyom_das@redwood.inference>
+To: Marissa Cole <marissa@redwood.inference>, Olivia Chen <olivia@fintechinc.com>, rishi_malhotra <rishi_malhotra@redwood.inference>
+Cc: laura_bennett <laura_bennett@redwood.inference>, procurement <procurement@fintechinc.com>
+Date: Mon, 9 Jun 2025 16:03:00 -0700
+Subject: Benchmark results & unit-economics — Fintech POC (raw + summary)
+
+Hi all,
+
+Attached are the raw results and a short summary from the Jun 9 runs. TL;DR: the configuration that best matches Olivia's acceptance criteria is a 4x A100-eq cluster using the quantized model variant. Key numbers below (all medians unless otherwise noted):
+
+Summary metrics:
+- Average tokens / sec (per GPU): 4150 tokens/sec
+- Sustained QPS (end-to-end, aggregate): 220 QPS sustained over 20 minutes (meets 200 QPS target)
+- TTFT (time to first token): p50 = 115 ms, p95 = 238 ms, p99 = 420 ms
+- Generation latency p50 = 75 ms / request, p95 = 190 ms
+- Concurrency: passes 100 concurrent sessions with degraded p95 latency but sustained throughput (see CSV)
+- GPU utilization: p95 ~ 88% during peak windows
+
+Unit economics (sandbox traffic profile, daily 2.4M tokens):
+- Hosted (pay-as-you-go) estimate: $1.24 per 1M tokens ⇒ ~$2,976 / month for the sandbox
+- Redwood Dedicated estimate (reserved 4x cluster): effective unit cost ≈ $0.31 per 1M tokens after amortized reservation and utilization assumptions ⇒ ~$744 / month (not including enterprise support add-ons)
+- Break-even point estimated at ~3.8M tokens/month between hosted and Dedicated assumptions given our pricing model and the planned utilization.
+
+Attachments: benchmark_results_2025-06-09.csv (raw timeseries), rdw-cost-model-2025-06.xlsx (cost model workbook).
+
+Notes / caveats:
+- We used a quantized model variant for the cost numbers; unquantized runs show ~18–25% slower tokens/sec and ~30% higher cost per token.
+- TTFT p95 is slightly above the 200ms target in some runs (238ms). Mitigations: enable prefix KV caching for warm sessions and a low-latency fallback model for strict p95-sensitive paths. We can run a focused TTFT run if you want us to prioritize that.
+
+Next steps I recommend:
+1) Joint review call (30m) to walk the CSV and cost model — propose Tue Jun 17 or Wed Jun 18.
+2) If acceptable, finalize MAP milestone for pilot sandbox and procurement kickoff.
+
+Priyom Das
+Solutions Engineer | Redwood Inference
+priyom@redwood.inference
+[Attachment: benchmark_results_2025-06-09.csv (CSV, 42KB)]
+[Attachment: rdw-cost-model-2025-06.xlsx (XLSX, 128KB)]
+From: Marissa Cole <marissa@redwood.inference>
+To: Olivia Chen <olivia@fintechinc.com>, procurement <procurement@fintechinc.com>
+Cc: rishi_malhotra <rishi_malhotra@redwood.inference>, priyom_das <priyom_das@redwood.inference>, laura_bennett <laura_bennett@redwood.inference>
+Date: Tue, 10 Jun 2025 15:28:00 -0700
+Subject: Updated MAP & next steps — target close 2025-06-24
+
+Olivia / Procurement team,
+
+Thanks for the quick turnaround. Based on Priyom's results, I've updated the MAP to include the bench results and unit-economics appendix. High-level recommendations and next steps:
+- Recommended trial configuration: Dedicated 4x A100-eq cluster, quantized model variant, enable KV caching for warm sessions
+- Action owners: Procurement (Fintech) to supply PO template by Jun 17; Redwood to provide sandbox access and a 30-day trial (owner: Marissa)
+- Milestone to close commercial terms: Jun 24 — we will exchange a term sheet + DocuSign intent by Jun 20
+- Joint review call: proposed Wed Jun 18 10:00 AM PT — confirm if that works for your team
+
+Links: HubSpot deal (https://app.hubspot.com/deals/1234567) | MAP & assets in Drive (https://drive.google.com/drive/folders/0B-example-drive-link)
+
+If procurement needs an institutional quote or a security questionnaire (SOC 2 evidence), I can loop in our Security & Compliance team.
+
+Thanks, looking forward to next steps.
+
+Marissa Cole
+Enterprise AE | Redwood Inference
+marissa@redwood.inference
+[Attachment: fintech_poc_map_v2.pdf (updated with bench summary)]

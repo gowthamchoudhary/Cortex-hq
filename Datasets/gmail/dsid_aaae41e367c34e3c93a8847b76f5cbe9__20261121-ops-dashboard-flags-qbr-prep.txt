@@ -1,0 +1,121 @@
+Ops dashboard flags + QBR prep: latency, cost, uptime, usage
+
+From: jasmine.liu@redwoodai.com
+To: markus.klein@redwoodai.com, laura.bennett@redwoodai.com, logan.wright@redwoodai.com
+Date: Mon, 16 Nov 2026 16:22:00 +0000
+Subject: November ops snapshot — initial flags for QBR prep
+
+Team,
+
+Attaching the November ops snapshot (pdf) and a short slice of latency breakdowns (xlsx). I ran the dashboard this morning and flagged four items I think we need on the QBR deck:
+
+- Tail latency: p99 increased from ~95ms (Oct avg) to ~130ms last week during the 17:00-20:00 PST window. The median is stable.
+- Cost: token cost per 1k dropped slightly on gen models, but total spend is up 14% due to a usage shift (longer sequences, more retries).
+- Uptime: we had a 45-minute blip (scheduled infra migration) that pushed daily availability to 99.90% on Nov 12 — within SLA but will look ugly in exec slides.
+- Usage pattern: a new customer integration (Acme Analytics) generated a sustained 3x increase in embeddings calls from Nov 5–10.
+
+Asks: can infra run a quick root-cause on the p99 spike (is it batching, KV cache miss rates, or GPU contention?), and can finance ops give a short note on the usage-driven cost delta? I want to close these items by EOD Fri so we have a clean QBR narrative.
+
+Attachments: nov-2026-dashboard.pdf, latency-weekly-slices.xlsx
+
+Thanks,
+Jasmine Liu
+Sr. Sales Operations Manager, Redwood Inference
+Mobile: (415) 555-0196
+
+---
+
+From: logan.wright@redwoodai.com
+To: jasmine.liu@redwoodai.com
+Cc: markus.klein@redwoodai.com, laura.bennett@redwoodai.com
+Date: Tue, 17 Nov 2026 09:08:00 +0000
+Subject: Re: November ops snapshot — initial flags for QBR prep
+
+Quick read — thanks for pulling this together, Jas. A few quick notes from infra: we saw elevated cache-miss rates on Nov 9 and 10 correlated with a config roll for the quantized 16-bit path. I'm filing INF-789 to track.
+
+Action: I'll pull A/B traces for the 17:00-20:00 PST window and check whether batching latency increased or queueing was the issue. Expect a short note by EOD Wednesday.
+
+— Logan
+Infra Lead, Serving Runtime
+
+On Mon, 16 Nov 2026 at 16:22, jasmine.liu@redwoodai.com wrote:
+> Team,
+> 
+> Attaching the November ops snapshot (pdf) and a short slice of latency breakdowns (xlsx). I ran the dashboard this morning and flagged four items I think we need on the QBR deck:
+> 
+> - Tail latency: p99 increased from ~95ms (Oct avg) to ~130ms last week during the 17:00-20:00 PST window. The median is stable.
+> - Cost: token cost per 1k dropped slightly on gen models, but total spend is up 14% due to a usage shift (longer sequences, more retries).
+> - Uptime: we had a 45-minute blip (scheduled infra migration) that pushed daily availability to 99.90% on Nov 12 — within SLA but will look ugly in exec slides.
+> - Usage pattern: a new customer integration (Acme Analytics) generated a sustained 3x increase in embeddings calls from Nov 5–10.
+> 
+> Asks: can infra run a quick root-cause on the p99 spike (is it batching, KV cache miss rates, or GPU contention?), and can finance ops give a short note on the usage-driven cost delta? I want to close these items by EOD Fri so we have a clean QBR narrative.
+> 
+> Attachments: nov-2026-dashboard.pdf, latency-weekly-slices.xlsx
+> 
+> Thanks,
+> Jasmine Liu
+> Sr. Sales Operations Manager, Redwood Inference
+
+From: ellis@acme-analytics.com
+To: jasmine.liu@redwoodai.com
+Cc: logan.wright@redwoodai.com
+Date: Wed, 18 Nov 2026 13:45:00 +0000
+Subject: Re: November ops snapshot — initial flags for QBR prep
+
+Hi Jasmine — thanks for the heads up and for including our traffic pattern in the report. A couple items from our side that may explain the usage/cost delta:
+
+- We pushed a config change on Nov 4 that enabled longer context windows for certain pipeline stages (we thought it was a non-prod flag). That led to longer sequences and more tokens.
+- We also enabled a higher retry count for failed streaming responses during Nov 5–8 while testing reliability.
+
+We rolled both changes back on Nov 11 after noticing cost anomalies. Happy to share our change diff; attaching a short excerpt.
+
+Ellis Park
+Senior Integration Engineer, Acme Analytics
+ellis@acme-analytics.com
+
+On Wed, Nov 18, 2026 at 09:00 Jasmine Liu <jasmine.liu@redwoodai.com> wrote:
+> Team,
+> 
+> Attaching the November ops snapshot...
+
+From: markus.klein@redwoodai.com
+To: jasmine.liu@redwoodai.com, laura.bennett@redwoodai.com, logan.wright@redwoodai.com
+Date: Thu, 19 Nov 2026 18:52:00 +0000
+Subject: Re: November ops snapshot — initial flags for QBR prep
+
+Good set of pulls — appreciate the concise calls-out. A few follow-up items for leadership deck and runbook:
+
+1) Narrative: we should present the tail latency as a mitigated incident (config + cache misses) with the remediation timeline and INF-789 as the tracking ticket.
+2) Cost: ask finance ops to produce a 1-page delta showing "normalized cost" (what spend would have been with Oct usage profile) vs actual — that gives the execs a clear signal.
+3) Uptime: include one slide with the maintenance note and how automations prevented broader impact; call out the SLO delta but also show 30-day rolling availability.
+
+Requests: Laura, can you confirm the QBR slide owner for "Costs & Economics"? Logan, prioritize the KV cache follow-up (INF-789), and Jasmine — can you consolidate the final deck items and circulate before EOD Monday?
+
+-Markus
+VP, Product Operations
+
+On Wed, 18 Nov 2026 at 13:45, ellis@acme-analytics.com wrote:
+> Hi Jasmine — thanks for the heads up...
+
+From: jasmine.liu@redwoodai.com
+To: markus.klein@redwoodai.com, laura.bennett@redwoodai.com, logan.wright@redwoodai.com, ellis@acme-analytics.com
+Date: Sat, 21 Nov 2026 09:17:00 +0000
+Subject: Re: November ops snapshot — initial flags for QBR prep
+
+Thanks all — consolidating status and owners below so the QBR narrative is tight. Final deck target: Tue, Nov 23 noon.
+
+Current state & owners:
+- Tail latency (p99 spike): root cause = cache misses from quantization roll. Owner: Logan. Tracking: INF-789. ETA: Wed EOD.
+- Cost delta: driven by Acme longer contexts + retry behavior. Owner: Laura + Finance Ops (please add normalized-cost slide). ETA: Mon EOD.
+- Uptime blip: scheduled infra migration; include single-slide note and automation timeline. Owner: Markus. ETA: Mon EOD.
+- Usage surge (Acme): Ellis to provide final change diff for slides and approve wording.
+
+Attachments included in this thread: nov-2026-dashboard.pdf, latency-weekly-slices.xlsx.
+
+Related links: Drive deck (https://drive.google.com/file/d/1a2b3c-dashboard), HubSpot HS-Deal-3421 for Acme.
+
+If anyone needs more data slices I can pull the 5–95% latency windows or sequence-length heatmaps. Otherwise I'll assemble the final QBR appendix and circulate a draft by Mon morning.
+
+Thanks,
+Jasmine Liu
+Sr. Sales Operations Manager, Redwood Inference

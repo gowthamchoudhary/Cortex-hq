@@ -1,0 +1,130 @@
+SLA addendum request: filter-induced structured-output degradation and credit proposal
+
+From: Tom Blake <tom.blake@blueanchor.com>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Cc: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+Date: Sat, 2 Oct 2027 13:15:00 -0400
+Subject: Unexpected structured-output failures affecting claims parsing — SLA impact?
+
+Hi Kimberly,
+
+Quick note from our engineering team: over the last 24 hours we've seen a small but growing number of failed claims parses that trace back to malformed structured output coming from Redwood's tool-calling responses. In several cases the model returned a human-readable explanation instead of the expected JSON payload; downstream ingestion failed and we had to fall back to manual processing.
+
+We've attached a sample of the request/response pairs and the aggregator logs (error-logs-1002.zip). Our questions:
+- Does this class of failure fall under your uptime/latency SLA or is it considered a behavior-level transformation (i.e., filter/tooling-induced) that would be carved out?
+- If it's a carve-out, what's the exception process and how will credits be calculated?
+
+This is causing a small operational burden for our claims ops team. We're not asking for a service termination — we want to understand how to cover this in the contract so both sides have clear expectations. Happy to hop on a quick call.
+
+Thanks,
+Tom Blake
+Director of Integrations
+BlueAnchor Health
+
+Attachment: error-logs-1002.zip (20 KB)
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Tom Blake <tom.blake@blueanchor.com>
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+Date: Sat, 2 Oct 2027 15:12:00 -0400
+Subject: Re: Unexpected structured-output failures affecting claims parsing — SLA impact?
+
+Hi Tom — thanks for the detailed capture and the logs.
+
+We're looking into this. Looping in Marcus from runtime engineering and Stephanie who owns the account so we can:
+1) Triage the root cause and confirm whether the transformation is due to a content filter/tool-call suppression or a model generation regression.
+2) Put a temporary mitigation in place (short-term config change / retry behavior) while we validate.
+3) Draft an SLA addendum if this is a behavior-level carve-out (so the language is explicit during the contract period).
+
+Marcus — can you take the logs and the sample request/response? If it's a filter-induced change we should document the exact conditions that trigger the structured-output fallback so legal and BlueAnchor can agree on narrow carve-out language.
+
+Tom — can you share a preferred 45-minute window tomorrow for a troubleshooting call (we're on ET).
+
+Thanks,
+Kimberly Park
+Enterprise Sales, Redwood Inference
+Phone: +1 415-555-0103
+
+Attachment: (referenced)
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Tom Blake <tom.blake@blueanchor.com>
+Cc: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+Date: Sun, 3 Oct 2027 09:03:00 -04:00
+Subject: Re: Unexpected structured-output failures affecting claims parsing — SLA impact?
+
+Tom/Kim — I dug into the logs you attached (thanks). Summary of findings:
+
+- Root cause: In ~82% of the failed samples the runtime's content-safety filter triggered during the model's tool-calling step. When that happens our current behavior is to replace the tool-call structured payload with a short human-readable explanation ("Tool call suppressed due to content policy") instead of the expected JSON blob.
+- Why: This behavior is by design to avoid returning policy-violating artifacts. It prevents unsafe content from being included in downstream tool invocations, but it also means the structured output shape changes and many client parsers cannot handle it.
+- Impact: Based on BlueAnchor's traffic patterns in the sample, the effective functional failure rate is ~0.07% of requests but concentrated on longer sequences and certain claim categories.
+
+Options: 
+A) Short-term: enable a guarded retry path for BlueAnchor where suppressed tool-calls trigger an automated second attempt with a more conservative safety profile (risk: potential exposure to borderline content — requires customer opt-in and monitoring).
+B) Medium-term: add an explicit structured-output fallback envelope that preserves JSON schema while flagging the filtered fields (this would be backward-compatible but needs ~2-3 weeks dev work).
+C) Contractual: we can define a narrow SLA addendum that treats filter-induced structured-output transformation as a carve-out from standard uptime/JSON-delivery guarantees, with a capped credit formula tied to occurrence rate.
+
+I'll prepare wording for the addendum and a technical mitigation plan. If BlueAnchor wants to run A temporarily I can enable it and add monitoring.
+
+- Marcus
+Senior Software Engineer, Runtime
+Redwood Inference
+
+JIRA: INF-9217
+From: Tom Blake <tom.blake@blueanchor.com>
+To: Kimberly Park <kimberly_park@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Cc: legal@blueanchor.com
+Date: Sun, 3 Oct 2027 10:22:00 -04:00
+Subject: Re: Unexpected structured-output failures affecting claims parsing — SLA impact?
+
+Thanks Marcus — that explanation helps. We are open to option A for immediate relief, provided we keep strict monitoring and a rollback path. Please enable the guarded retry for our tenant and let us know what telemetry you'll surface.
+
+On the contractual side we'd like the addendum language to be narrow: carve out "content-filter induced structured-output transformation" from guaranteed JSON-delivery SLA when the transformation is explicitly caused by Redwood's automated safety filters. The carve-out should: 
+- Be limited to cases where the runtime returns text in place of expected JSON (i.e., not general model hallucinations);
+- Include a credit formula: if the rate > 0.05% of valid requests in a monthly window, Redwood provides a pro-rated service credit equal to 10% of that month's usage for the percent exceeding 0.05%, capped at 30% of monthly invoice.
+
+We are willing to accept the mitigation and run tests; after 2 weeks of monitoring we'll review whether the medium-term fix is required.
+
+If you can send a draft addendum today we can get it to legal.
+
+—Tom
+Director of Integrations, BlueAnchor Health
+
+Attachment: none
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Tom Blake <tom.blake@blueanchor.com>
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Stephanie Nguyen <stephanie_nguyen@redwood.ai>, Naomi Feldman <naomi_feldman@redwood.ai>
+Date: Sun, 3 Oct 2027 11:08:00 -04:00
+Subject: Re: Unexpected structured-output failures affecting claims parsing — SLA impact?
+
+Tom — appreciate the concrete proposal. Marcus will enable the guarded retry for your tenant this morning and we'll surface a dashboard with the following metrics: suppressed-toolcall-rate, retry-success-rate, and parser-failure-count. We'll also set an alert if the suppressed-toolcall-rate exceeds 0.05% in any 24-hour window.
+
+I've attached a first-pass SLA addendum that mirrors the wording you proposed and contains the credit formula. Naomi from legal is looped for a quick review. If legal signs off we'll prepare a DocuSign for signature.
+
+Attachments: SLA-addendum-draft-BlueAnchor.pdf
+
+Next steps:
+- Marcus: enable guarded retry and attach monitoring (done by EOD).
+- Stephanie: schedule weekly check-ins during the 2-week evaluation period.
+- Naomi: quick legal review of the carve-out language.
+
+Kimberly Park
+Enterprise Sales, Redwood Inference
+
+
+From: Tom Blake <tom.blake@blueanchor.com>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Cc: Naomi Feldman <naomi_feldman@redwood.ai>, legal@blueanchor.com
+Date: Sun, 3 Oct 2027 14:42:00 -04:00
+Subject: Re: Unexpected structured-output failures affecting claims parsing — SLA impact?
+
+Kimberly/Naomi — legal here did a quick pass and the addendum language is acceptable pending one small change to the credit cap calculation (BlueAnchor requested the cap be applied post-pro rata; Naomi, Marcus — happy to sync on the formula).
+
+We're ready to sign once the DocuSign reflects that tweak. Marcus — confirm when the guarded retry is live and share the monitoring link so our ops can verify.
+
+I'll watch for the DocuSign.
+
+Thanks,
+Tom Blake
+Director of Integrations
+BlueAnchor Health
+
+DocuSign: https://docusign.example/abc123

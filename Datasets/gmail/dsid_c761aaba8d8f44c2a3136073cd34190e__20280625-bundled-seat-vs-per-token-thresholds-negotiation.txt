@@ -1,0 +1,110 @@
+Bundled seats vs per-token thresholds: carveouts, rounding, and example scenarios
+
+From: Kevin Liu <kevin.liu@acme.com>
+To: Rafael Mendes <rafael_mendes@redwood.com>; Marissa Cole <marissa_cole@redwood.com>
+Date: Mon, 24 Jun 2028 16:12:00 -0700
+Subject: Clarification: bundled seats + per-token thresholds
+
+Hi Rafael / Marissa,
+
+Thanks for the demo last week. Procurement is drafting the SOW and we have one open question on billing: Acme plans to buy 20 bundled seats with a blended per-token threshold for overage. We need clarity on how Redwood handles the following: 1) if a seat bundle includes a per-seat token allowance (e.g., 500k tokens/month/seat) how do you apply per-token thresholds when a customer also uses host-level per-token billing? 2) rounding: do you round up per-call, per-session, or per-bundle? 3) are there carveouts for KV-cache hits and streaming partial responses?
+
+We want a concise example to put into the contract (one or two scenarios with numbers). Can you confirm the exact rounding rules and whether we can negotiate a floor for the first 100k tokens consumed each month?
+
+Appreciate a short example we can attach to the SOW.
+
+Thanks,
+Kevin
+Procurement — Acme Robotics
+
+
+From: Rafael Mendes <rafael_mendes@redwood.com>
+To: Kevin Liu <kevin.liu@acme.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Tue, 25 Jun 2028 11:03:00 -0700
+Subject: Re: Clarification: bundled seats + per-token thresholds
+
+Hi Kevin — quick answers and two example scenarios below. Attached: redwood-pricing-matrix.xlsx and a PDF with the arithmetic examples.
+
+Short answers:
+- Allocation model: seat bundles carry an aggregate monthly token allowance scoped to the customer/organization (not pinned to individuals). If you also run host-level per-token routes (e.g., API endpoints billed per token), we reconcile consumption at the org level each billing period and consume from the bundle first, then apply per-token overage rates.
+- Rounding rules: we round at the smallest billing unit, which for tokens is per-API-call token consumption aggregated per minute window for streaming and per-request for non-streaming. After aggregation we apply the billing quantum (1,000-token increments) for invoicing. Practically: per-call numbers are summed into a rolling minute bucket and then rounded to the nearest 1,000 tokens.
+- KV-cache and prefix cache: cache hits are deducted before metering; a 100% cache hit results in no token charge. Partial streaming chunks are measured by the tokens delivered server-side (what the runtime emits) and are included in the same minute aggregation.
+
+Examples (for contract text):
+Scenario A — Bundled-preferred consumption
+- Bundle: 20 seats, 500k tokens/seat = 10,000,000 bundled tokens/month.
+- Usage: month-to-date consumed = 10,250,400 tokens across all routes.
+- Metering: we apply minute aggregation and 1,000-token quantum rounding. The 10,250,400 -> rounded to 10,250,000 after nearest 1,000 rule. The bundle covers that; no overage charge.
+
+Scenario B — Mixed routes, small excess
+- Bundle same as above. External per-token route (ad-hoc API) consumes an extra 45,900 tokens during a burst. Aggregation rounding: 45,900 -> 46,000 (1,000-quantum up). The bundle covers first 10,000,000; excess 250,400 consumes 250,400 of the bundle; the 46,000 ad-hoc rounded amount creates an apparent excess only if total rounded consumption exceeds the bundle. Overages billed at agreed overage rate.
+
+Negotiation note: We can offer a concession for SOWs — a 100k monthly floor that prevents micro-overage charges under that floor; above that floor normal rounding/quantum applies. If you want that in the SOW, we will mark it as a one-line concession and reflect it in the pricing matrix.
+
+File attachments: redwood-pricing-matrix.xlsx (pricing tiers and suggested concession), example-billing-scenarios.pdf (detailed arithmetic).
+
+Let me know if you want the SOW language drafted; happy to propose a short clause.
+
+— Rafael
+Rafael Mendes
+Enterprise Sales, Redwood Inference
+rafael_mendes@redwood.com | +1 (415) 555-0199
+
+
+From: Kevin Liu <kevin.liu@acme.com>
+To: Rafael Mendes <rafael_mendes@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>; Acme Procurement <procurement@acme.com>
+Date: Tue, 25 Jun 2028 13:20:00 -0700
+Subject: Re: Clarification: bundled seats + per-token thresholds
+
+Thanks Rafael — this is helpful. Two quick follow-ups: 1) when you say 'nearest 1,000 token quantum' does Redwood ever floor instead of round? We need to understand worst-case invoice exposure. 2) For the 100k monthly floor concession, does that apply per-account or per-deal (we have multiple subsidiaries that will share a single contract)?
+
+If you can provide exact contract language for the 100k floor and an explicit example showing an invoice calculation that demonstrates the worst-case rounding impact that would help procurement sign off.
+
+Best,
+Kevin
+
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Kevin Liu <kevin.liu@acme.com>
+Cc: Rafael Mendes <rafael_mendes@redwood.com>
+Date: Tue, 25 Jun 2028 15:05:00 -0700
+Subject: Re: Clarification: bundled seats + per-token thresholds
+
+Kevin — quick clarifications inline, and suggested SOW clause at the bottom.
+
+1) Rounding direction: Redwood's billing defaults to nearest-quantum rounding (>=500 rounds up). We avoid systematic upward bias; the minute aggregation plus nearest-quantum prevents per-call micro-billing. That said, for enterprise SOWs we can switch to 'floor-to-quantum' for the first 100k tokens each month (i.e., all rounded-down during the floor) so invoice exposure is conservative on your side for small overages.
+
+2) Floor scope: applies per-billing-account. If you require it to apply across subsidiaries under a single master account, we can implement it as an org-level floor in our billing topology — we'll need to map your subsidiaries into a single billing account at purchase.
+
+Proposed SOW language (suggestion you can paste):
+"Redwood will apply a monthly aggregation floor of 100,000 tokens at the organization billing-account level. Consumption will be aggregated according to Redwood's standard metering (minute aggregation; 1,000-token quantum). For the first 100,000 tokens each month, Redwood will floor consumption to the nearest 1,000 tokens downwards (no overage will be billed within this floor). After the floor is exhausted, consumption will be billed using standard nearest-quantum rounding as defined in Redwood's pricing matrix."
+
+If this looks acceptable I can drop it into the SOW and reflect the concession in the pricing appendix. Rafael — please confirm the operational changes we need to capture (account mapping + billing flags).
+
+— Marissa
+Marissa Cole
+Senior Solutions, Redwood Inference
+marissa_cole@redwood.com
+
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>; Rafael Mendes <rafael_mendes@redwood.com>
+Cc: Kevin Liu <kevin.liu@acme.com>
+Date: Wed, 26 Jun 2028 09:10:00 -0700
+Subject: Fwd: Clarification: bundled seats + per-token thresholds — propose final SOW text
+
+Forwarding with a small tweak. Rafael / Marissa please sign off — I'm happy to include the language below in the SOW and have Legal attach the pricing appendix with the 100k floor as a non-recurring concession for year one.
+
+Suggested final SOW clause (for insertion):
+1) Aggregation and allocation: Redwood will aggregate token consumption at the billing-account level for the term of the Agreement. Bundle allowances are applied to aggregated consumption prior to overage calculation.
+2) Metering and rounding: Consumption is measured at the runtime emission point, aggregated per minute, and invoiced in 1,000-token quanta. By default Redwood applies nearest-quantum rounding (>=500 up). For the initial 12-month term Redwood will apply a monthly floor of 100,000 tokens at the billing-account level. During the floor period, tokens within the floor will be rounded down to the nearest 1,000 and not billed.
+3) KV-cache and prefix cache: Cache hits are excluded from metered consumption.
+
+If Kevin confirms, we'll drop this into the DocuSign envelope and include the pricing appendix.
+
+— Karthik
+Karthik Iyer
+Director, Enterprise Sales Operations
+karthik_iyer@redwood.com

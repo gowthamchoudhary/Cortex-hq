@@ -1,0 +1,157 @@
+Mutual Action Plan: technical leads & milestones for Claro Health evaluation
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Priya Reddy <priya.reddy@clarohealth.com>
+Cc: jonas.weber@redwood.ai, mina.haddad@redwood.ai, lauren.bishop@redwood.ai
+Date: Tue, 15 Jun 2027 15:12:00 -0700
+Subject: Mutual Action Plan: technical leads & milestones for Claro Health evaluation
+
+Hi Priya —
+
+Thanks again for the time last week. Per our conversation, I want to loop in our technical leads so we can kick off a concise Mutual Action Plan (MAP) that gets Claro Health from PoC to internal sign-off within 6–8 weeks. Key asks in this thread: confirm technical contact, identify test dataset scope, and align on a target close date.
+
+Attaching a first-pass MAP and an evaluation-plan template for your team to review. Proposed attendees on our side: Jonas (Solutions Engineer) and Mina (ML engineer).
+
+Proposed MAP highlights (high level):
+- Week 0: Technical kickoff & access (network, test buckets)
+- Week 1–2: Inference validation + latency/cost tuning
+- Week 3–4: Feature parity tests + quality evals (sample prompts)
+- Week 5–6: Pilot, feedback, procurement prep
+
+Questions for Priya / Claro Health:
+1) Who will be the primary engineering contact for network & S3 access?
+2) Do you have a preferred sample set (size/format) for the evaluation?
+3) Any org-level requirements (encrypted logs, retention, SOC2 addenda) we should bake into the MAP?
+
+Next step: quick 30-minute technical handshake tomorrow or Thursday. Please share times that work.
+
+Attachments: CLH-MAP-v1.pdf; redwood-eval-plan-template.xlsx; SOC2-summary.pdf
+
+Best,
+Marissa Cole
+Account Executive, Redwood Inference
+marissa.cole@redwood.ai | +1 415-555-0187
+https://redwood.ai
+
+From: Priya Reddy <priya.reddy@clarohealth.com>
+To: Marissa Cole <marissa.cole@redwood.ai>
+Cc: jonas.weber@redwood.ai, mina.haddad@redwood.ai, lauren.bishop@redwood.ai, procurement@clarohealth.com
+Date: Tue, 15 Jun 2027 16:03:00 -07:00
+Subject: Re: Mutual Action Plan: technical leads & milestones for Claro Health evaluation
+
+Thanks Marissa — and thanks for the clear outline. Quick answers up front:
+- Primary eng contact for integration: me (Priya Reddy). I will pair with our infra lead Alex Gomez for network/S3 details (cc'd).
+- Sample set: we have ~10k de-identified outpatient notes (JSONL) and a smaller annotated set (~800 records) for evaluation. Format is newline JSON with text/body fields.
+- Compliance: we need audit logs retained for 90 days and a copy of SOC2 evidence (sending procurement loop).
+
+I'm available for a 30-min tech handshake Thursday 06/17 午前10:00–11:00 PT or Friday 06/18 午後2:00–3:00 PT. Thurs works best.
+
+Two technical questions for your team before the call:
+1) Will Redwood run the evaluation in our VPC (private deploy) or via a hosted instance? We prefer private or dedicated for data governance.
+2) Are there sample rate limits or token cost estimates we should expect for the initial 10k record pass?
+
+Look forward to connecting —
+Priya Reddy
+Engineering Lead, Claro Health
+priya.reddy@clarohealth.com | +1 312-555-0123
+
+From: Jonas Weber <jonas.weber@redwood.ai>
+To: Priya Reddy <priya.reddy@clarohealth.com>
+Cc: marissa.cole@redwood.ai, mina.haddad@redwood.ai, lauren.bishop@redwood.ai
+Date: Wed, 16 Jun 2027 08:21:00 -07:00
+Subject: Re: Mutual Action Plan: technical leads & milestones for Claro Health evaluation
+
+Hi Priya —
+
+Thanks for the clarity. Short answers to your technical questions, and a proposed checklist for the Thursday handshake.
+
+Deployment options (what we recommend for evaluation):
+- Option A (Recommended): Redwood Dedicated in your cloud account (cross-account, customer-managed VPC) — gives isolation, easy networking, and no raw data leaves your environment.
+- Option B: Redwood Private (on-prem or VPC private control plane) — for extra compliance controls if you want to run behind a customer-managed HSM/KMS.
+
+Network & access checklist for Week 0 handshake:
+- Provide IAM role/assume-role or short-lived credentials for a read-only S3 bucket containing sample JSONL.
+- Open egress to our dedicated endpoint (TLS 443) OR configure VPC peering; we'll share a small list of IPs if you want outbound restrictions.
+- If you want to use your KMS for model artifacts, indicate KMS key arn and we'll validate.
+
+Sizing & token/cost estimate (initial pass):
+- 10k notes, avg 750 tokens per note => ~7.5M tokens. For a single-model evaluation run (no heavy sampling), expect ~1–2k GPU-minutes on a mid-range spec; we will give a precise estimate after we confirm prompt lengths and max generation.
+- We recommend doing a 1k-sample smoke run first to validate prompts and latency targets before running the full 10k.
+
+Checklist items for Thursday 06/17 (proposed 10:00 PT):
+1) Confirm S3 path and access method (IAM role or temporary creds)
+2) Decide Dedicated vs Private for the evaluation
+3) Agree on the 1k smoke-test dataset and acceptance criteria (latency < 300ms p50, quality pass rate >= 85% on dev set)
+4) Identify internal reviewers for the MAP (procurement + security contacts)
+
+I can run through network steps and demo a smoke run in the call.
+
+--
+Jonas Weber
+Solutions Engineer, Redwood Inference
+jonas.weber@redwood.ai | +1 650-555-0222
+
+From: Mina Haddad <mina.haddad@redwood.ai>
+To: Priya Reddy <priya.reddy@clarohealth.com>
+Cc: marissa.cole@redwood.ai, jonas.weber@redwood.ai, lauren.bishop@redwood.ai
+Date: Wed, 16 Jun 2027 09:10:00 -07:00
+Subject: Re: Mutual Action Plan: technical leads & milestones for Claro Health evaluation
+
+Hi Priya —
+
+Nice to e-meet you. I wanted to add a short note on evaluation metrics and the runbook we'll use so everyone has the same frame before Thursday.
+
+Evaluation plan (suggested):
+- Primary quality metric: exact-match / F1 on your annotated 800-record set (we'll compute both).
+- Secondary: semantic-similarity (embedding cosine) and a small human eval on 200 records for edge cases.
+- Latency targets: p50 < 300ms, p95 < 1s for 1k smoke run with batching enabled.
+
+Data prep & runbook steps:
+1) Sanitize and place dev/test JSONL in S3 (we'll supply a validator script).
+2) Run 1k smoke pass (confirm prompts/stop tokens).
+3) Analyze errors, tune prompts or select quantized variant if needed.
+4) Run full 10k pass and produce evaluation report (per-prompt breakdown, cost, latencies).
+
+Recommended checkpoints & acceptance for MAP (so procurement/security have clear gates):
+- Gate 1 (Tech Kickoff): network + access verified
+- Gate 2 (Smoke validation): smoke run passes baseline accuracy and latency
+- Gate 3 (Pilot review): pilot demonstrates business KPIs with sign-off from product & security
+
+I'll bring a short notebook and the validator scripts to the Thursday call. If you can share a small sample (50 records) beforehand, I can pre-run the validator so we save time.
+
+Thanks —
+Mina Haddad
+ML Engineer, Redwood Inference
+mina.haddad@redwood.ai
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Priya Reddy <priya.reddy@clarohealth.com>, Alex Gomez <alex.gomez@clarohealth.com>
+Cc: jonas.weber@redwood.ai, mina.haddad@redwood.ai, lauren.bishop@redwood.ai, procurement@clarohealth.com
+Date: Thu, 16 Jun 2027 09:05:00 -07:00
+Subject: Re: Mutual Action Plan: technical leads & milestones for Claro Health evaluation
+
+Perfect — thanks everyone for the quick alignment. Meeting confirmed: Thursday 2027-06-17 10:00 PT (30 min). I've attached the MAP v1 and the evaluation-plan template; Mina and Jonas will demo the smoke-run flow.
+
+Immediate action items (before the call):
+- Priya/Alex: share 50-sample JSONL and S3 path or a preferred credential method (IAM role recommended)
+- Procurement: we need a copy of your SOC2 addenda; we've attached SOC2-summary.pdf for reference
+- Redwood: we'll prepare a 1k smoke-run plan and an estimated cost/compute table to share on the call
+
+Target milestones (proposed final MAP dates):
+- 6/17: Technical handshake (tomorrow)
+- 6/18–6/24: 1k smoke run + tuning
+- 6/25–7/09: Full 10k evaluation + pilot review
+- 7/16: Exec review & contracting window (target close)
+
+If those dates look good from your side we'll publish the MAP v1 to the shared drive and send a DocuSign to accelerate the procurement steps.
+
+Meeting link: https://meet.redwood.ai/teams/rdw-clh-map
+Drive: https://redwood.app/drive/CLH/MAP-v1
+
+Thanks — excited to get started.
+
+Marissa Cole
+Account Executive, Redwood Inference
+marissa.cole@redwood.ai | +1 415-555-0187
+
+Attachments: CLH-MAP-v1.pdf; redwood-eval-plan-template.xlsx; SOC2-summary.pdf

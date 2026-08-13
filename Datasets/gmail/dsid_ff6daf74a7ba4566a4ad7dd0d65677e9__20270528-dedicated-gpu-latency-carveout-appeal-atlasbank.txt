@@ -1,0 +1,144 @@
+Dedicated capacity: latency carveout request & short-term trial (Atlas Bank)
+
+From: Darren Mills <darren.mills@atlasbank.com>
+To: Soojin Lee <soojin.lee@redwoodinference.com>
+Cc: procurement@atlasbank.com
+Date: Tue, 25 May 2027 09:12:00 -0700
+Subject: Dedicated capacity carveout: monthly batch tail latency concerns
+
+Hi Soojin,
+
+Thanks for the earlier demo last week — Atlas Bank is close to selecting Redwood Dedicated for our document-insight pipeline. One last operational requirement came up during an internal review: month-end batch windows push a much higher concurrent QPS (we see ~6x baseline for 4-6 hours) and our SLAs are strict. We need written confirmation on two items before procurement signs the commitment:
+
+- A throughput/latency carveout for a recurring monthly batch window (typical window: last business day, 22:00–02:00 local). During that window we need a 95th percentile latency under 300ms for a "small" response (<=512 tokens).
+- Confirmation of reserved GPU behavior: will reserved pools preempt or get queued behind transient bursts from other customers? We need guaranteed reserved capacity and clarity on queueing priority for pinned Dedicated pools.
+
+I attached a small sample of our monthly batch profile to help size the request.
+
+Attachment: atlas_monthly_batch_metrics.csv (CSV, 47KB)
+
+If Redwood can provide an operational compromise (temporary burst capacity or credits for SLA misses during the batch window) we can close the deal this week. Can you loop in engineering and legal?
+
+—Darren
+Darren Mills
+Head of Platform Ops, Atlas Bank
+darren.mills@atlasbank.com
+
+From: Soojin Lee <soojin.lee@redwoodinference.com>
+To: Darren Mills <darren.mills@atlasbank.com>
+Cc: Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: Tue, 25 May 2027 14:08:00 -0700
+Subject: Re: Dedicated capacity carveout: monthly batch tail latency concerns
+
+Darren —
+
+Appreciate the details and the sample profile. Looping in Karthik (inference infra) to confirm behavior and propose options. Quick answers up-front:
+
+- Reserved pools are isolated to the customer and will not be preempted by hosted traffic; however, latency guarantees for highly bursty windows depend on configured headroom and queueing policy.
+- We can offer a temporary burst pool + a written carveout amendment for month-end windows, but we need to agree sizing and a remediation/credit policy if we miss the metric.
+
+Karthik — can you review their metrics and propose a concrete reservation and fallback plan (recommended GPU reserve, priority queue settings, and a proposed SLA clause for the 95p latency target)? Also flag any risks for the on-call runbook.
+
+I’ll loop in Legal/Contracts once we have technical language.
+
+Thanks,
+
+Soojin Lee
+Account Executive — Strategic Accounts
+Redwood Inference
+soojin.lee@redwoodinference.com
+
+From: Karthik Iyer <karthik.iyer@redwoodinference.com>
+To: Soojin Lee <soojin.lee@redwoodinference.com>, Darren Mills <darren.mills@atlasbank.com>
+Cc: marissa.cole@redwoodinference.com
+Date: Wed, 26 May 2027 10:30:00 -0700
+Subject: Re: Dedicated capacity carveout: monthly batch tail latency concerns
+
+Hi Darren (and Soojin),
+
+Thanks for the profile — that file makes the request concrete. I reviewed the peak counts and token distribution. High level recommendations and constraints below; I tried to keep legal-friendly language where appropriate so Contracts can reuse it.
+
+1) Queueing and reserved pool behavior
+- Dedicated/reserved pools are tenant-isolated: workloads pinned to a Dedicated pool will not be preempted by other customers. That said, tail latency during sustained spikes is a function of concurrency per-GPU and headroom.
+- Our queueing has two priority bands for Dedicated: "reserved" (customer pinned) and "burst" (shared burst capacity). Reserved requests are dequeued before shared burst requests. That provides deterministic dispatching when adequate headroom is provisioned.
+
+2) Sizing guidance (based on your CSV sample)
+- Baseline steady QPS: ~800 requests/min (avg). Peak month-end QPS: ~4,800 req/min for ~5 hours.
+- Recommendation: reserve 4x baseline (to cover steady plus buffer) and add a dedicated burst pool sized to cover an additional 2x for the 4–6 hour window. Practically: reserve N GPUs (I estimate N=12 on A100-equivalent for your model family) and configure burst pool of 6 GPUs with automated warm-up 30 minutes before window.
+
+3) SLA carveout language (draft for Contracts)
+- For the scheduled monthly batch window (defined as the last business day of each month, 22:00–02:00 local), Redwood will make commercially reasonable efforts to maintain 95th percentile latency <= 300ms for responses <=512 tokens for workloads routed to the customer’s Reserved pool. The performance commitment is dependent on the customer provisioning the recommended Reserved and Burst capacity and enabling pre-warming.
+- In the event the 95p target is not met for two or more scheduled windows in a rolling 3-month period, Redwood will provide a remediation credit equal to 5% of the monthly Dedicated fee for each breached window beyond the first.
+
+4) Operational controls and fallbacks
+- Pre-warm hooks: API to trigger KV cache warm-up and prefix caching 45 minutes prior to the window.
+- Canary: we recommend a 2-week canary where Redwood will instrument and report a per-minute latency dashboard and runbooks for the on-call escalation.
+- If Atlas elects to increase headroom during the window (manual or policy-driven), we will auto-provision burst nodes and route requests to the dedicated burst pool.
+
+5) Risks and notes
+- If customer runs very large single requests (>4096 tokens) during the window, observed tail latency can spike; recommend enforcing a per-request token cap for the batch job or sharding large inputs.
+- Memory-constrained models may require more GPUs than compute-bound models; final count will be validated during canary.
+
+I attached a short draft of contract wording and a redlined example for Contracts to start from. Let me know if you want a technical call to walk through pre-warm APIs and queueing behavior.
+
+Attachment: proposed_sla_carveout_redwood_draft.docx
+
+—Karthik
+Karthik Iyer
+Principal Engineer, Inference Infrastructure
+karthik.iyer@redwoodinference.com
+
+From: Darren Mills <darren.mills@atlasbank.com>
+To: Karthik Iyer <karthik.iyer@redwoodinference.com>, Soojin Lee <soojin.lee@redwoodinference.com>
+Date: Fri, 28 May 2027 08:46:00 -0700
+Subject: Re: Dedicated capacity carveout: monthly batch tail latency concerns
+
+Karthik / Soojin —
+
+Thanks, this is exactly the level of detail we needed. Atlas is comfortable with the sizing recommendation pending a short trial. Two asks before we finalize:
+
+1) One-month pilot: Redwood runs the recommended Reserved + Burst config for one production month (we'll label it a pilot month). If Atlas experiences more than one breached scheduled window during the pilot, Redwood provides a credit equal to 10% of the monthly Dedicated fee (pilot-only escalated credit).
+2) Measurement and transparency: we need a shared dashboard (read-only) reporting per-minute P95 and per-request token distribution for the pilot.
+
+If you can confirm these two items and Marissa (CC) signs off on the escalation credit, we’ll circulate a PO by EOD Monday.
+
+—Darren
+Darren Mills
+Head of Platform Ops, Atlas Bank
+
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: Darren Mills <darren.mills@atlasbank.com>, Soojin Lee <soojin.lee@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: Fri, 28 May 2027 11:02:00 -0700
+Subject: Re: Dedicated capacity carveout: monthly batch tail latency concerns
+
+Darren —
+
+We can do the one-month pilot and provision the Reserved + Burst configuration as specified. Conditions:
+
+- Pilot credit: single-month escalated credit up to 10% of the pilot month Dedicated fee if Atlas has more than one breached scheduled window.
+- Shared dashboard: we will provision a read-only Grafana link and invite your ops team; data will include minute-level P95 and token-size histogram.
+- Legal will produce a short amendment (pilot terms + post-pilot SLA language) and circulate via DocuSign by COB Monday.
+
+Soojin will coordinate kick-off and Karthik will schedule a technical run-through for pre-warm APIs and canary instrumentation. Thanks for pushing this across the line.
+
+Link: https://www.docusign.com/atlascorp/EnvelopeId=abc123 (DocuSign placeholder)
+
+Best,
+Marissa Cole
+VP, Strategic Sales
+Redwood Inference
+marissa.cole@redwoodinference.com
+Attachment: atlas_trial_terms_v1.pdf (PDF, 12KB)
+
+> On Fri, May 28, 2027 at 08:46 AM Darren Mills <darren.mills@atlasbank.com> wrote:
+> > Karthik / Soojin —
+> >
+> > Thanks, this is exactly the level of detail we needed. Atlas is comfortable with the sizing recommendation pending a short trial. Two asks before we finalize:
+> >
+> > 1) One-month pilot: Redwood runs the recommended Reserved + Burst config for one production month (we'll label it a pilot month). If Atlas experiences more than one breached scheduled window during the pilot, Redwood provides a credit equal to 10% of the monthly Dedicated fee (pilot-only escalated credit).
+> > 2) Measurement and transparency: we need a shared dashboard (read-only) reporting per-minute P95 and per-request token distribution for the pilot.
+> >
+> > If you can confirm these two items and Marissa (CC) signs off on the escalation credit, we’ll circulate a PO by EOD Monday.
+> >
+> > —Darren
+> > Head of Platform Ops, Atlas Bank

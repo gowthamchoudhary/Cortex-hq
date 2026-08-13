@@ -1,0 +1,103 @@
+[Urgent] Meridian Pay EU gateway 503 surge — exec sync requested
+
+Customer reports sudden increase in 503s and client timeouts across EU edge points. Evidence suggests LB-level upstream 502/503 from a subset of POPs causing retry amplification. Customer requested executive visibility and SLA credits if rolling outages persist.
+From: Elena Morales <elena@meridianpay.com>
+To: jasmine_liu <jasmine@redwood.ai>
+Cc: meridian-pay-sre@meridianpay.com
+Date: 2028-09-03T06:12:00Z
+Subject: Spike in 503s — checkout traffic failing in EU
+
+Hi Jasmine,
+
+We started seeing a dramatic uptick in 503s for checkout calls hitting your EU gateway around 06:00 UTC. Affected merchants are seeing timeouts and multiple retries from our clients. Attached is a short sample of server-side logs and a Grafana snapshot.
+
+Can you confirm if this is a known degradation on Redwood's side and what the ETA is for mitigation? Our payments team is holding captures for high-risk orders. We may need a fast track to an SLA credit if this continues.
+
+Thanks,
+Elena Morales
+Head of Platform Reliability
+Meridian Pay
+
+Attachments: meridian_5xx_sample.log, grafana_snapshot_2028-09-03T06-40.png
+
+From: jasmine_liu <jasmine@redwood.ai>
+To: Elena Morales <elena@meridianpay.com>
+Cc: rishi_malhotra <rishi@redwood.ai>, laura_bennett <laura@redwood.ai>
+Date: 2028-09-03T06:25:00Z
+Subject: Re: Spike in 503s — checkout traffic failing in EU
+
+Hi Elena — thanks for the quick heads up and the attachments. I’ve opened an incident (INC-20280903-617) and routed to EU SRE. Preliminary telemetry shows elevated 502/503 rates originating from a subset of us-west-eu edge POPs (ams, fra). We’re seeing increased upstream connection resets to our pool.
+
+Immediate steps:
+- SRE (cc'd) investigating upstream health and LB saturation.
+- Routing policy: we are triggering a partial failover to alternate POPs; this may cause short-lived 200->503/504 transitions.
+- I’ll share a mutual action plan in 30 minutes and loop in execs if impact remains broad.
+
+Apologies for the disruption — we’ll keep you updated every 15 minutes until stabilized.
+
+— Jasmine
+Customer Engineering
+Redwood Inference
+
+From: rishi_malhotra <rishi@redwood.ai>
+To: jasmine_liu <jasmine@redwood.ai>, laura_bennett <laura@redwood.ai>, aditya_rao <aditya@redwood.ai>
+Date: 2028-09-03T06:40:12Z
+Subject: [Routing update] EU POP failover in progress
+
+Team — quick notes from triage:
+- Root observation: sudden upstream connection churn to the backend pool handling legacy TLS termination; connection tracking table is reaching soft limits in a few POPs.
+- Traffic pattern: sharp spike in short-lived connections from a batch of Meridian clients followed by aggressive retry behavior. This created backlog at LB and led to 502/503 responses.
+- Mitigations in flight: increase conntrack timeout, scale dedicated workers in AMS/FRA, and temporarily disable prefix-based sticky routing for Meridian to spread load.
+
+Requesting:
+- Marcus: can you validate quota/conntrack bump and confirm kernel params are applied — I’ve staged a runbook.
+- Laura: prep a brief for execs summarizing customer impact and compensation options.
+
+I’ve attached the sample log that shows many reset frames referencing 504 upstream.
+
+Regards,
+Rishi
+Sr. Infra Eng
+
+> On 2028-09-03 06:25, jasmine_liu wrote:
+> > I’ve opened an incident (INC-20280903-617) and routed to EU SRE.
+
+From: laura_bennett <laura@redwood.ai>
+To: jasmine_liu <jasmine@redwood.ai>, rishi_malhotra <rishi@redwood.ai>, aditya_rao <aditya@redwood.ai>, marcus_lin <marcus@redwood.ai>
+Cc: Elena Morales <elena@meridianpay.com>, Tom Baxter <tom.baxter@meridianpay.com>
+Date: 2028-09-03T07:05:00Z
+Subject: Re: [Action needed] Meridian Pay — exec brief + MAP
+
+Folks,
+
+Customer asks for exec visibility and an SLA credit conversation if downtime persists. Drafting a short mutual action plan (attached) that includes:
+- Timeline of events and observed impact (orders failed, retries amplified).
+- Mitigation steps and ETA for stability (conntrack bump + worker scale = 45–60 min).
+- Proposed goodwill: one week of overage credit + post-mortem share and a follow-up architecture session.
+
+Elena/Tom — does that address immediate needs? If you need an on-call exec on a quick bridge, we can arrange a 1:1 with our CRO.
+
+Laura Bennett
+Head of Customer Success
+Redwood Inference
+
+Attachments: mutual_action_plan_v1.docx
+
+From: aditya_rao <aditya@redwood.ai>
+To: Elena Morales <elena@meridianpay.com>, jasmine_liu <jasmine@redwood.ai>, laura_bennett <laura@redwood.ai>
+Date: 2028-09-04T14:45:00Z
+Subject: Post-stabilization update and next steps
+
+Hi Elena and team — following the mitigations we applied on 2028-09-03 the EU POP error rates have returned to baseline by 12:30 UTC. Key items:
+- Cause: connection churn from a customer-side load pattern combined with conntrack soft limits in two POPs.
+- Immediate fix: conntrack tuning + worker pool scale prevented further LB stall; we also applied a routing exception to smooth Meridian traffic.
+- Follow-ups:
+  - We recommend Meridian reduce burst parallelism for checkout calls and adopt an exponential backoff (we can share SDK guidance).
+  - We will run a joint post-mortem and a deeper review of per-customer traffic shaping in our next architecture sync.
+
+We’re open to the proposed goodwill credit; Customer Success will follow up on exact amounts. Thanks for patience and the quick coordination.
+
+Best,
+Aditya Rao
+Director, Platform Reliability
+Redwood Inference

@@ -1,0 +1,127 @@
+Privacy SSQ — edge dataflow diagram: annotation & scoping questions
+
+From: Emily Stone <emily.stone@medica-health.com>
+To: Jasmine Liu <jasmine.liu@redwood.com>
+Cc: Medica Health Security <security@medica-health.com>
+Date: Thu, 29 Oct 2026 09:12:00 -0700
+Subject: Privacy SSQ: edge dataflow annotated diagram + questions
+
+Hi Jasmine,
+
+Thanks for sending the initial security questionnaire yesterday. I attached a lightly annotated copy of the edge dataflow diagram (annotated-dataflow-v1.png) with callouts where our team needs clarification. High-level asks below — can you confirm or point us to the appropriate artifact/owner?
+
+1) Edge proxies / CDN: are raw request payloads or headers ever persisted outside the CDN logs? If so, which components and for how long?
+2) Tokenization: the diagram shows tokenization at the gateway layer — is that performed in the edge region (i.e., before leaving our network) or in a central region?
+3) Subprocessors: please provide the list of subprocessors involved in edge routing and caching (CDN, edge compute) and confirm their access boundaries.
+4) Access & retention: we need a simple matrix mapping who (Redwood roles) can see unmasked PII at each hop and the retention period for any persisted artifacts (logs, KV cache, analytics).
+
+If possible, can you return a short SSQ answer set and updated diagram annotations by next Thursday (Nov 4)? We can schedule a 30-min follow-up if that's easier.
+
+Attachments:
+- annotated-dataflow-v1.png (image)
+
+Thanks,
+Emily
+Emily Stone | Head of Security
+Medica Health
+
+From: Jasmine Liu <jasmine.liu@redwood.com>
+To: Emily Stone <emily.stone@medica-health.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Mina Haddad <mina.haddad@redwood.com>
+Date: Thu, 29 Oct 2026 10:03:00 -0700
+Subject: Re: Privacy SSQ: edge dataflow annotated diagram + questions
+
+Emily — thanks for the annotated diagram, very helpful.
+
+Short answers up front:
+- CDN logs: we do not persist raw request bodies in the CDN. Standard CDN access logs may capture request metadata (path, headers) for 7 days; payloads are not retained by CDN.
+- Tokenization: tokenization runs in the regional gateway (pre-centralization) for recognized customer contexts; we will confirm exact region mapping for your tenant.
+- Subprocessors: list attached in a short SSQ draft (will iterate).
+- Access matrix: Karthik will take lead on the access matrix; Marissa will coordinate DPA/subprocessor annex items; Mina will validate retention numbers against telemetry.
+
+Next steps:
+- Karthik: fill in access matrix and detail tokenization flow in one-pager.
+- Marissa: prepare subprocessor list + DPA annex notes.
+- I will update the annotated diagram to mark access boundaries and note cross-border hops.
+
+Would Monday Nov 1 or Tuesday Nov 2 for a 30-min sync work for you?
+
+On Thu, 29 Oct 2026 at 09:12 AM Emily Stone <emily.stone@medica-health.com> wrote:
+> Hi Jasmine,
+> 
+> Thanks for sending the initial security questionnaire yesterday. I attached a lightly annotated copy of the edge dataflow diagram (annotated-dataflow-v1.png) with callouts where our team needs clarification. High-level asks below — can you confirm or point us to the appropriate artifact/owner?
+> 
+> 1) Edge proxies / CDN: are raw request payloads or headers ever persisted outside the CDN logs? If so, which components and for how long?
+> 2) Tokenization: the diagram shows tokenization at the gateway layer — is that performed in the edge region (i.e., before leaving our network) or in a central region?
+> 3) Subprocessors: please provide the list of subprocessors involved in edge routing and caching (CDN, edge compute) and confirm their access boundaries.
+> 4) Access & retention: we need a simple matrix mapping who (Redwood roles) can see unmasked PII at each hop and the retention period for any persisted artifacts (logs, KV cache, analytics).
+> 
+> If possible, can you return a short SSQ answer set and updated diagram annotations by next Thursday (Nov 4)? We can schedule a 30-min follow-up if that's easier.
+> 
+> Attachments:
+> - annotated-dataflow-v1.png (image)
+> 
+> Thanks,
+> Emily
+> Emily Stone | Head of Security
+> Medica Health
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Emily Stone <emily.stone@medica-health.com>, Jasmine Liu <jasmine.liu@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Mina Haddad <mina.haddad@redwood.com>
+Date: Sun, 01 Nov 2026 14:18:00 -0700
+Subject: Re: Privacy SSQ: edge dataflow annotated diagram + questions
+
+Emily / team — following up with the technical clarifications and a draft SSQ response attached (ssq-response-draft.docx). Key points below; the doc includes a one-page access matrix and a short subprocessor list.
+
+CDN / Edge persistence:
+- CDN (CloudFront) access logs: metadata only (request path, status, edge location, headers subset) retained for 7 days by default. No raw request bodies are stored by the CDN.
+- Edge compute (our edge workers) may temporarily buffer request bodies for processing (<5 sec) but do not persist them to durable storage. Any tokenization output (non-PII token references) is routed into central KV caches.
+
+Tokenization & placement:
+- Tokenization happens in the regional gateway instance closest to the customer’s region (edge pre-processing). For Medica Health tenants in the US region, tokenization is performed in the us-east region before streaming to central inference clusters. This ensures PII is replaced with ephemeral tokens prior to longer-term processing.
+
+Subprocessors (edge routing & caching):
+- CDN provider: Amazon CloudFront (logging metadata only)
+- Edge compute: FastEdge Inc. (ephemeral execution, no persistent storage)
+- Metrics/analytics: StatsStream (aggregated telemetry only; no PII)
+- Central logging: Redwood central logging (PII redaction applied at ingest)
+
+Access matrix summary (see attached):
+- Platform Ops: can view anonymized telemetry and aggregated metrics; no raw PII.
+- Site Reliability / On-call: can access transient logs for debugging; raw PII views are gated and require approved incident case + audit log entry.
+- Support: can view customer identifiers (token references) but not unmasked PII.
+
+Retention:
+- CDN metadata: 7 days
+- Edge ephemeral buffers: <5 seconds (no durable storage)
+- Central KV cache (non-PII tokens): 30 days by default, configurable per-customer
+- Audit logs (access events): 365 days
+
+Attachments:
+- ssq-response-draft.docx (draft responses + access matrix)
+
+Next steps: I will share an updated annotated diagram with access zones marked (Jasmine is doing the diagram update). If you want more granularity on incident access workflows we can add a short appendix.
+
+-Karthik
+Karthik Iyer | Senior Security Engineer
+Redwood Inference
+
+From: Emily Stone <emily.stone@medica-health.com>
+To: Jasmine Liu <jasmine.liu@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Medica Health Security <security@medica-health.com>, Marissa Cole <marissa.cole@redwood.com>, Mina Haddad <mina.haddad@redwood.com>
+Date: Mon, 02 Nov 2026 16:45:00 -0700
+Subject: Re: Privacy SSQ: edge dataflow annotated diagram + questions
+
+Thanks — that level of detail is really helpful and addresses most of our items. We reviewed the draft SSQ and the access matrix; a couple of follow-ups:
+
+- Can you add a short note in the diagram about the token TTL for the KV cache (we saw 30 days in your note, please confirm if that's configurable per customer).
+- For the incident access gating, can you point to the exact process or ticket template so our auditors can reference it?
+
+We're available for a 30-min call on Wednesday Nov 4 at 10:00 AM PT — please confirm and share a calendar invite+drive link to the updated diagram when ready.
+
+Appreciate the quick turnaround.
+
+Emily
+Emily Stone | Head of Security
+Medica Health

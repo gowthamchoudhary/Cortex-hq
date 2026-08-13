@@ -1,0 +1,146 @@
+Reserved-pool throughput & renewal: proposed addendum and escalation path
+
+From: Alex Duarte <alex.duarte@cloudone.com>
+To: Michael Grant <michael@redwood.com>, Marissa Cole <marissa@redwood.com>
+Cc: Sophie Lemaire <sophie.lemaire@cloudone.com>
+Date: 2026-09-29T09:12:00-07:00
+Subject: Capacity needs for renewal — throughput guarantees and burst handling
+
+Hi Michael / Marissa,
+
+We’re starting our renewal discussions and we need to lock in reserved capacity for the next 12 months. Two asks from engineering and procurement:
+
+- Sustained throughput requirement: ~200k tokens/sec (production mix).
+- Short bursts: up to ~400k tokens/sec for spikes (up to 30s).
+
+Before we proceed with contracting, can you confirm whether Redwood can include: dedicated GPU pool (8 x A100-equivalent), a tokens/sec SLO in the addendum, and a fallback policy if capacity constraints occur? Also want to see a simple credit formula in the SLO (not overly legalistic).
+
+We’re targeting a firm renewal by mid-October — happy to hop on a quick call next week.
+
+Thanks,
+Alex
+Head of Platform Engineering
+CloudOne
+
+Attachments: none
+
+From: Michael Grant <michael@redwood.com>
+To: Alex Duarte <alex.duarte@cloudone.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: 2026-10-01T11:06:00-07:00
+Subject: Re: Capacity needs for renewal — throughput guarantees and burst handling
+
+Alex — thanks for the clarity. We can absolutely support a reserved pool and include throughput commitments in a renewal addendum; the details below outline our proposed approach. I’ve attached a draft addendum for your review (reserved_pool_throughput_addendum_draft.pdf).
+
+Proposed framework (high level):
+- Reserved capacity: 8x A100-equivalent GPUs dedicated to CloudOne for the 12‑month renewal period.
+- Baseline TPS: 220k tokens/sec sustained (measured as a 5‑minute sliding window).
+- Burst allowance: up to 450k tokens/sec for bursts up to 60 seconds, subject to available capacity and fair-use controls.
+- Availability SLO: 99.95% for the reserved pool on a monthly basis (measured against the sustained TPS target).
+- Fallback & graceful degradation: automatic routing to compatible model variants (smaller quantized variants) when reserved pool is saturated; requests continue to be served but may have increased latency or quality delta — documented fallback policy in section 4 of the draft.
+- Credits: prorated service credit tied to minutes below SLO in the month; simple formula in appendix (capped at 40% of monthly reserved fee).
+
+Next steps: if this framework is acceptable, we’ll circulate an internal redline from legal and ops and produce an updated draft with measurement definitions (what we measure, how we calculate tokens/sec, and where metrics are surfaced).
+
+Propose a 30-minute call Thursday to walk the draft with your SREs — what time works?
+
+Best,
+Michael Grant
+Head of Sales, Redwood Inference
+
+Attachment: reserved_pool_throughput_addendum_draft.pdf (PDF, 120KB)
+
+From: Marissa Cole <marissa@redwood.com>
+To: Michael Grant <michael@redwood.com>, Alex Duarte <alex.duarte@cloudone.com>
+Cc: Neha Kapoor <neha@redwood.com>
+Date: 2026-10-03T09:38:00-07:00
+Subject: Re: Capacity needs for renewal — throughput guarantees and burst handling
+
+Alex / Michael — quick operational notes from the infra side to ensure the draft is actionable:  
+
+- Measurement: we must define tokens/sec precisely (tokens generated + tokens accepted) and use a 5-minute sliding window for sustained TPS. Monthly SLO calc will be based on minutes in month where sustained TPS < committed baseline.
+- Bursts: allow a burst pool with two constraints — burst duration cap (60s) and an aggregate 5‑minute burst budget (to prevent continuous bursting). We propose a burst-bucket that refills at sustained rate; engineering can provide more input.
+- Fallbacks: document must enumerate compatible model variants (e.g., gptx-base-q8, gptx-medium-q4) and expected quality delta. Customers should be able to opt-out of any model substitution for compliance reasons; opt-outs can be noted in the account config and remove automatic fallback (but then the reserved pool SLA is subject to stricter penalties if capacity exhausts).
+- Observability: include a dashboard link (redwood console) and an alerting hook (webhook) for when usage reaches 80/90/100% of reserved capacity.
+
+I’ll add these as explicit clauses in an internal redline.
+
+— Marissa
+Director, Product Operations
+Redwood Inference
+
+From: Alex Duarte <alex.duarte@cloudone.com>
+To: Michael Grant <michael@redwood.com>, Marissa Cole <marissa@redwood.com>
+Cc: Sophie Lemaire <sophie.lemaire@cloudone.com>
+Date: 2026-10-08T14:22:00-07:00
+Subject: Re: Capacity needs for renewal — throughput guarantees and burst handling
+
+Thanks — this looks good. A few clarifications from our SREs and procurement:
+
+- Baseline: we can accept 220k sustained if credit formula is robust and measurement is transparent.
+- Bursts: 60s is fine; ask that burst budget be at least 4x/minute over a rolling 5-minute window so short traffic patterns aren’t throttled.
+- Credits: prefer a deterministic schedule — for example, per-minute shortfall credit = (shortfall_tokens / committed_tokens) * (reserved_month_fee / 30 / 24 / 60). If monthly shortfall exceeds X minutes, then escalate to a 2x credit for excess minutes.
+- Fallback opt-out: we will likely opt-out for some PCI-related flows — we need a flag on our account config to opt-out of model substitution without manually contacting support.
+
+We’ll review your internal redline. If possible, please include a proposed DocuSign-ready addendum PDF by Oct 20 so procurement can route signatures.
+
+Alex
+
+On Wed, Sep 29, 2026 at 09:12 AM Alex Duarte <alex.duarte@cloudone.com> wrote:
+> We’re starting our renewal discussions and we need to lock in reserved capacity...
+
+From: Neha Kapoor <neha@redwood.com>
+To: Alex Duarte <alex.duarte@cloudone.com>, Michael Grant <michael@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>, Ben Carter <ben@redwood.com>
+Date: 2026-10-15T10:05:00-07:00
+Subject: Re: Capacity needs for renewal — throughput guarantees and burst handling
+
+Alex — internal redline attached and short summary below. Thanks for the clear credit example; legal liked that it’s deterministic.
+
+Redline highlights (see attachment throughput_sla_redline.docx):
+- Measurement definition tightened: tokens/sec = output tokens measured at the Redwood edge; aggregated per-account across replicas. 5-minute sliding window for sustained KPI.
+- SLO & credits: monthly SLO 99.95% (measured on sustained TPS). Credit schedule included:
+  * 99.95% – no credit
+  * 99.50%–99.95% – 10% of monthly reserved fee
+  * 99.00%–99.49% – 25% of monthly reserved fee
+  * <99.00% – 40% of monthly reserved fee (cap)
+- Burst policy: 60s max burst per incident; aggregate bursts cannot exceed 10% of total monthly reserved capacity minutes. We added a burst-bucket algorithm description so SREs can simulate it.
+- Fallback opt-out: added account-level flag + a 48-hour advance notice requirement if opting out before renewal; otherwise fallback enabled by default for availability reasons.
+
+I’ve left two open items for procurement to confirm: cap on credits and whether the 48-hour opt-out notice is acceptable to CloudOne.
+
+Attachment: throughput_sla_redline.docx (DOCX, 85KB)
+
+Regards,
+Neha Kapoor
+Senior Account Executive, Redwood Inference
+
+From: Michael Grant <michael@redwood.com>
+To: Alex Duarte <alex.duarte@cloudone.com>
+Cc: Marissa Cole <marissa@redwood.com>, Neha Kapoor <neha@redwood.com>, Ben Carter <ben@redwood.com>
+Date: 2026-10-20T16:42:00-07:00
+Subject: Final addendum and renewal execution steps — CloudOne RDW-2026-CLD1-789
+
+Alex / Team — thanks for the quick turnaround. Per your SRE feedback and our redlines, we’re ready to finalize. Key terms in the attached final addendum (reserved_pool_throughput_addendum_final.pdf):
+
+- Reserved capacity: 8x A100-equivalent GPUs assigned to CloudOne for the 12‑month renewal term.
+- Committed sustained throughput: 220,000 tokens/sec (5-minute sliding window).
+- Burst allowance: up to 450,000 tokens/sec for bursts up to 60 seconds; burst-bucket algorithm / aggregate budget described in appendix.
+- Availability SLO: 99.95% monthly against sustained throughput metric.
+- Credits: tiered schedule (no credit at >=99.95%; 10% / 25% / 40% tiers below that), capped at 40% of monthly reserved fee.
+- Fallbacks: automatic model substitution by default; account-level opt-out flag available (48-hour notice).
+- Observability: Redwood Console dashboard link included; webhook for 80/90/100% thresholds.
+
+Next steps for execution:
+1) I’ve uploaded the DocuSign envelope (see related link). Please confirm signers and we’ll route.
+2) Procurement to confirm the credit cap (40%) is acceptable — if so we’ll execute by Oct 27 to hit your mid-Nov deployment window.
+3) Technical kickoff: Marissa will schedule a 60-minute handoff with your SREs (dashboard + webhook + fallback test cases).
+
+Happy to hop on a final sync — propose Friday 10/23 10:00am PT; I’ll send a calendar invite pending your confirmation.
+
+Thanks,
+Michael Grant
+Head of Sales, Redwood Inference
+michael@redwood.com | +1 415-555-0192
+
+Attachment: reserved_pool_throughput_addendum_final.pdf (PDF, 95KB)

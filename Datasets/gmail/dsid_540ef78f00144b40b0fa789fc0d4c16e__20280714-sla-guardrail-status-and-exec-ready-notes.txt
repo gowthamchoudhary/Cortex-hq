@@ -1,0 +1,138 @@
+SLA guardrail status and exec-ready notes for QBR
+
+From: Claire Moss <claire.moss@telosanalytics.com>
+To: Rachel Kim <rachel_kim@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: Thu, 13 Jul 2028 16:12:00 -0700
+Subject: Re: Incident impact to Telos (request for exec summary)
+
+Hi Rachel —
+
+Thanks for the quick sync earlier. Telos sees a measurable uptick in error rates for our batch ingestion jobs between 2028-06-28 and 2028-07-02. That translated to delayed processing for several high-priority customers; we escalated.
+
+We have a short QBR on Monday and the execs asked for a succinct summary of root cause, mitigations, and a crisp list of commitments (owners + dates). Can you confirm if Redwood can provide a one-slide executive summary and the incident timeline?
+
+Attachment: incident_timeline.csv (CSV)
+
+Claire
+Claire Moss
+VP SRE, Telos Analytics
+
+---
+
+From: Rachel Kim <rachel_kim@redwood.com>
+To: Claire Moss <claire.moss@telosanalytics.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: Thu, 13 Jul 2028 19:01:00 -0700
+Subject: Re: Incident impact to Telos (request for exec summary)
+
+Claire —
+
+Appreciate the heads-up and context. High level for the QBR slide (draft below) — I'll consolidate into a one-slide PDF by EOD tomorrow unless you need it sooner.
+
+Executive summary (draft):
+- Incident window: 2028-06-28 02:14 UTC -> 2028-07-02 11:43 UTC.
+- Impact: elevated tokenization/cache invalidation latency causing backpressure on batch ingestion; ~12% of Telos ingestions delayed beyond SLA for affected window.
+- Root cause: an interaction between a new KV-cache eviction policy (deployed 2028-06-27) and the cross-model routing optimization; resulted in repeated cold-cache priming under certain sequence-length distributions.
+- Immediate mitigations: rollback KV-cache eviction change (2028-06-28 03:05 UTC), emergency increase to dedicated capacity for Telos (temporary, 2028-06-29 -> 2028-07-05).
+- Permanent actions / commitments: see action table below (owner / ETA).
+
+Action table (short):
+1) Finalize postmortem & public summary — Marissa Cole — 2028-07-18
+2) KV-cache policy test harness + gate in CI — Jonas Weber — 2028-07-28
+3) Routing policy safety net (fallback variant) — Vivek Kulkarni — 2028-08-02
+4) Customer-facing SLA credit proposal (legal + billing) — Rachel Kim (lead) + Billing — 2028-07-20
+
+I'll attach the incident timeline and a refreshed slide for the Monday QBR. If this outline looks correct, I'll mark owners in the tracker and chase the dates.
+
+Rachel
+Rachel Kim
+Head of Customer Reliability, Redwood Inference
+
+---
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Rachel Kim <rachel_kim@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: Thu, 13 Jul 2028 20:10:00 -0700
+Subject: Re: Incident impact to Telos (request for exec summary)
+
+Thanks — I ran the replay and verified the eviction-change interaction. A couple of clarifications for the tracker:
+
+- Root cause refinement: the eviction heuristic mis-estimated live KV-hotness when sequence lengths exceeded 6k tokens; that produced mutex contention on the priming path. Not just cross-model routing; it's the combination.
+- Technical owner for the test harness is me + infra-eng (I'll add specific engineers in the tracker).
+
+I've uploaded a short action-tracker.csv (attached) with columns: action, owner, ETA, status, blocker. I've flagged the items that need funding approval (capacity bump extension) under blocker.
+
+Attachment: action-tracker.csv (CSV)
+
+Jonas
+Director, Serving Runtime
+
+On Thu, Jul 13, 2028 at 7:01 PM Rachel Kim <rachel_kim@redwood.com> wrote:
+> Claire —
+> 
+> Appreciate the heads-up and context. High level for the QBR slide (draft below) — I'll consolidate into a one-slide PDF by EOD tomorrow unless you need it sooner.
+> 
+> [snip — executive summary & action table]
+
+---
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: Rachel Kim <rachel_kim@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Fri, 14 Jul 2028 07:15:00 -0700
+Subject: Re: Incident impact to Telos (request for exec summary)
+
+Team —
+
+Nice concise draft. Two asks before I send a short note to execs and include this on the QBR slide deck:
+
+1) Make the first slide bullet count no more than four; prioritize: impact metric, root cause (one-liner), key commitments (owner + date), near-term mitigations already executed.
+2) Put owners in the tracker as single named owners (no teams) so follow-ups are clear.
+
+Operational note: for the capacity extension we should present a clear cost/benefit: incremental run-rate vs. penalty credits. Rachel, please coordinate with Billing (cc'd in final thread) and Legal if needed.
+
+I'll plan to include the single-slide exec note in Monday's QBR package if I have the final PDF by EOD tomorrow (2028-07-14 23:59 UTC).
+
+Vivek
+VP, Operations
+
+On Thu, Jul 13, 2028 at 8:10 PM Jonas Weber <jonas_weber@redwood.com> wrote:
+> Thanks — I ran the replay and verified the eviction-change interaction. A couple of clarifications for the tracker:
+> 
+> - Root cause refinement: the eviction heuristic mis-estimated live KV-hotness when sequence lengths exceeded 6k tokens; that produced mutex contention on the priming path. Not just cross-model routing; it's the combination.
+> - Technical owner for the test harness is me + infra-eng (I'll add specific engineers in the tracker).
+
+---
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Rachel Kim <rachel_kim@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Fri, 14 Jul 2028 09:43:00 -0700
+Subject: Re: Incident impact to Telos (request for exec summary)
+
+All —
+
+I've updated the tracker with single named owners and added ETA reminders. The postmortem v0.3 is attached; it includes the annotated timeline and the customer impact calc.
+
+Quick status:
+- Postmortem draft -> Marissa (finalize) — ETA 2028-07-18 (on track)
+- KV-cache CI gates -> Jonas (engineering owners assigned) — ETA 2028-07-28
+- Routing fallback variant -> Vivek (product + infra) — ETA 2028-08-02
+- Billing & credits -> Rachel (coord w/ billing) — ETA 2028-07-20
+
+Claire — attaching the postmortem and the tracker for your reference. If you want any phrasing changed in the public summary we can edit before distribution.
+
+Attachments: postmortem-v0.3.md (Markdown)
+
+Marissa Cole
+Director, Reliability
+
+On Fri, Jul 14, 2028 at 7:15 AM Vivek Kulkarni <vivek_kulkarni@redwood.com> wrote:
+> Team —
+> 
+> Nice concise draft. Two asks before I send a short note to execs and include this on the QBR slide deck:
+> 
+> 1) Make the first slide bullet count no more than four; prioritize: impact metric, root cause (one-liner), key commitments (owner + date), near-term mitigations already executed.
+> 2) Put owners in the tracker as single named owners (no teams) so follow-ups are clear.
+
+---

@@ -1,0 +1,129 @@
+Capacity gate review — Ceres Labs (late-stage sizing & soft-hold request)
+
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Marcus Lin <marcus.lin@redwood.com>, Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2029-08-19T09:12:00-07:00
+Subject: Capacity gate review — Ceres Labs (late-stage sizing & soft-hold request)
+
+Team,
+
+Heads-up: Ceres Labs (contact: Lauren Park) just signaled they want to finalize Dedicated capacity in the next 3–4 weeks as part of their procurement windows. This is a late-stage close — marketing automation + real-time chat with medium-length sequences (~1k tokens) and embedding index lookups. They want a baseline fleet for steady-state and a 30% burst buffer for training/finetune windows.
+
+Initial ask from Sales/Customer:
+- Baseline: 12 x A100-80GB (single region, us-west) for inference (expected 12k reqs/day, p50 latency target ~120ms)
+- Burst/finetune window: additional 6 x A100-80GB for up to 72 hours across month spikes (they may prefer single-tenancy for bursts)
+- Duration: contract start target 2029-11-01, rolling 12-month commitment
+
+Can Ops confirm current usable pool and whether we can create a soft-hold (no billing commit) to protect this capacity for 30 days while legal/procurement runs? If we can’t fully commit A100s, provide fallback options (A10x4 / mixed-quant profiles) and an ETA for hard reservation.
+
+I attached an early capacity snapshot and the draft MAP. Please call out any blockers (networking/VPC constraints, regional placement, SLO collision with other reserved customers). Karthik — would like you on the loop for approval if we need to escalate to guaranteed pool.
+
+Thanks,
+Naomi
+Naomi Feldman
+Senior Account Executive | Redwood Inference
+naomi.feldman@redwood.com
++1 (415) 555-0183
+
+Attachments: capacity_snapshot_0819.pdf, mutual_action_plan_CERES_v2.docx
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: 2029-08-19T11:05:00-07:00
+Subject: Re: Capacity gate review — Ceres Labs (late-stage sizing & soft-hold request)
+
+Naomi — thanks for the clear ask. Quick summary from infra side after a fast pass:
+
+- Usable A100-80GB pool (us-west): 18 units currently available for allocation but 6 are nearing scheduled maintenance in September (we can mitigate with hot-replacement policies).
+- Contention: Two existing Dedicated customers (on standing reservations) will consume predictable 8 units during nightly batch windows; that reduces continuous headroom.
+- Soft-hold policy: We can create a 30-day soft-hold ticket that flags capacity but does not remove units from the shared pool. Soft-hold protects from new hard reservations but not from transient failures/maintenance — we can attach a hard-reserve escalation path.
+
+Fallback options (feasible):
+1) Mixed profile — 8 x A100 + 8 x A10 (quantized runtime for throughput) with transparent fallbacks; expected slightly higher p95 latency during IO-heavy bursts.
+2) Cross-region split (us-west primary + us-east standby) — requires customer sign-off on egress/latency tradeoffs and updated networking in MAP.
+
+I attached a short snapshot showing reservation windows and the ticket template. Action items:
+- Naomi/Marissa: confirm if Ceres will accept mixed-profile fallback or insists on homogeneous A100s.
+- Ben: can you validate the inference profile (token distribution + concurrency) so we can produce more precise footprint?
+- Karthik: please confirm if we should auto-escalate to a guaranteed pool commit when legal hits the procurement milestone.
+
+I'll queue a soft-hold ticket once Naomi confirms go-ahead.
+
+— Marcus
+Marcus Lin
+Capacity Planner, ServeOps | Redwood Inference
+marcus.lin@redwood.com
+
+Attachment: capacity_snapshot_0819.pdf
+
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Lauren Park <lauren@cereslabs.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: 2029-08-19T13:24:00-07:00
+Subject: Re: Capacity gate review — Ceres Labs (late-stage sizing & soft-hold request)
+
+Lauren — looping Ops (Marcus) and Marissa for next steps.
+
+Short ask for you to confirm two quick items so we can create the soft-hold ticket:
+1) Do you require homogeneous A100 fleet, or is a mixed profile (A100 + A10 fallbacks) acceptable for short-term start?
+2) Are you ok with a cross-region standby (us-east) for burst windows if we need to shift some capacity during maintenance?
+
+If you can respond today or tomorrow we can put a 30-day soft-hold in place and proceed with procurement paperwork in parallel. I attached the MAP to this thread (see section 4.2 for networking requirements).
+
+Best,
+Naomi
+
+> On Mon, Aug 19, 2029 at 11:05 AM Marcus Lin <marcus.lin@redwood.com> wrote:
+> Naomi — thanks for the clear ask. Quick summary from infra side after a fast pass:
+> - Usable A100-80GB pool (us-west): 18 units currently available for allocation but 6 are nearing scheduled maintenance in September (we can mitigate with hot-replacement policies).
+> - Contention: Two existing Dedicated customers (on standing reservations) will consume predictable 8 units during nightly batch windows; that reduces continuous headroom.
+> - Soft-hold policy: We can create a 30-day soft-hold ticket that flags capacity but does not remove units from the shared pool. Soft-hold protects from new hard reservations but not from transient failures/maintenance — we can attach a hard-reserve escalation path.
+> 
+> — Marcus
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: 2029-08-20T09:47:00-07:00
+Subject: Re: Capacity gate review — Ceres Labs (late-stage sizing & soft-hold request)
+
+Thanks Naomi — quick sizing calc attached (sizing_calc_CERES.csv). I ran microbenchmarks on the reference model they plan to serve (open-llama-30B quant-8) and estimate:
+- 12 A100 baseline yields p50 ~= 95ms, p95 ~= 210ms at expected concurrency (20 concurrent generation sessions).
+- If we mix 8 A100 + 8 A10, expect p95 degrade ~25% under burst load but cost drops ~38% net.
+
+Notes:
+- Network pinning: if they want single-tenant bursts, we need a short runbook for transfer windows; otherwise we can defend the pool with anti-noise scheduling.
+- Customer slack: they mentioned a short finetune window monthly — 72h burst is consistent with the sizing above.
+
+Recommendation: create the 30-day soft-hold now, include the mixed-profile fallback in the MAP as a conditional path, and flag a hard-reserve approval step tied to DocuSign execution. I can prepare an updated MAP with the perf numbers.
+
+— Ben
+Ben Carter
+Senior Sales Engineer | Redwood Inference
+ben.carter@redwood.com
+
+Attachment: sizing_calc_CERES.csv
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2029-08-21T14:22:00-07:00
+Subject: Re: Capacity gate review — Ceres Labs (late-stage sizing & soft-hold request)
+
+Update: I created SOFTHOLD-13742 in the capacity system (30 days). Summary: 12 A100 baseline flagged in us-west with conditional fallback to mixed profile (8 A100 + 6 A10) if maintenance or contention triggers. Linked ticket: https://infra.redwood.com/tickets/SOFTHOLD-13742
+
+What this does:
+- Prevents new hard-reservations that would consume those A100s for 30 days.
+- Adds a high-priority escalation path to request guaranteed pool allocation if procurement completes and legal finalizes the SOW.
+
+Remaining items to close:
+- External confirmation from Ceres on homogeneous vs mixed (Naomi to confirm).
+- Ben to drop perf numbers into the MAP and we’ll copy that ZIP into the ticket.
+- Karthik: please confirm whether we should auto-escalate to guaranteed pool at 85% contract-sign probability (or wait for explicit ask).
+
+If all good, I’ll set a calendar reminder 7 days out for a recheck and attach the maintenance windows schedule.
+
+— Marcus
+Marcus Lin
+Capacity Planner, ServeOps | Redwood Inference
+marcus.lin@redwood.com
+
+Links: https://infra.redwood.com/tickets/SOFTHOLD-13742, capacity_snapshot_0819.pdf

@@ -1,0 +1,111 @@
+Request: enforce EU-only routing + model pin for HealthSync pilot
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Laura Bennett <laura.bennett@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Sara Khan <sara.khan@healthsync.com>
+Date: 2026-08-14T09:17:00Z
+Subject: Request: enforce EU-only routing + model pin for HealthSync pilot
+
+Hi team,
+
+Following the contracts conversation with HealthSync (see cc), they have a strict requirement for the upcoming pilot: all inference must stay in the EU region and the customer wants us to pin a specific model variant for consistency across runs. They have asked that there be no automatic fallback to other model variants or regions for the pilot duration.
+
+Key asks from the customer (short):
+- EU-only routing (no cross-region routing or fallback)
+- Pin model variant: redwood-instruct-7b-eu-quant (they called this out by name)
+- No fallback to other model families during pilot window (initial 30 days)
+
+Can product/infra evaluate feasibility and provide:
+- Is a temporary routing rule + pinning doable on hosted accounts, or do we need a Dedicated capacity commit?
+- Risk/cost delta (approx) for enforcing no-fallback + region lock
+- Estimated timeline to enable this (including canary and rollback plan)
+
+HealthSync is sensitive about data locality and auditability; they also indicated they will sign a narrowly-scoped addendum (attached) that authorizes the exception. They want a go/no-go by next Tuesday (2026-08-18) so they can start integration.
+
+Attachments: HealthSync_Security_Addendum.pdf (pdf stub)
+
+Thanks — Ben
+-- 
+Ben Carter
+Account Executive, Strategic Sales
+Redwood Inference
+ben.carter@redwood.ai | +1 (415) 555-0123
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Sara Khan <sara.khan@healthsync.com>
+Date: 2026-08-14T15:02:00Z
+Subject: Re: Request: enforce EU-only routing + model pin for HealthSync pilot
+
+Ben — thanks for the heads up and attaching the addendum. High level: this is doable but there are a few product and risk items we should confirm before we commit to a hard no-fallback policy.
+
+Questions from product POV:
+- Workload profile: expected concurrency (avg qps and p95), burst windows, and token distribution (avg tokens per call). If we pin a larger model and traffic spikes, we could hit our SLOs.
+- Are they ok with a controlled canary (5-10% traffic) for 48–72 hours before flipping 100%? That lets us validate latency and error rates without full exposure.
+- Do they require API-level enforcement (server-side routing rule) or are they willing to run a client-side pin (safer but less enforceable)?
+
+If this needs to be strictly enforced server-side with no fallback, we should treat it as a policy exception with an operational runbook and a standby rollback (auto-switch) in case infra health degrades. Karthik, can infra outline the required config changes and the time to implement? Marissa, FYI on potential implications for the pilot billing and offer (we may need to recommend Dedicated if capacity predictability is required).
+
+I'll block time to sync if needed — otherwise pls reply with the workload numbers and Karthik's feasibility notes.
+
+— Laura
+Laura Bennett
+Group PM, Inference Platform
+laura.bennett@redwood.ai
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Laura Bennett <laura.bennett@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Sara Khan <sara.khan@healthsync.com>
+Date: 2026-08-15T11:23:00Z
+Subject: Re: Request: enforce EU-only routing + model pin for HealthSync pilot
+
+TL;DR: technically possible but operationally risky if we do a hard no-fallback on hosted infra. Details below.
+
+Notes and assumptions:
+- Pinning: We can add a routing policy that maps HealthSync's api-key to a model-pinned tag (redwood-instruct-7b-eu-quant) and region restriction to eu-west-1/2 endpoints.
+- Capacity: If this model is quantized and smaller (7B), it's reasonable, but we need expected qps to size autoscaling. Without a Dedicated commit, the control plane cannot guarantee capacity during cloud pressure; that means a real outage risk if there is a cluster pressure event.
+- No-fallback risk: If we disable fallback, any node-level issue causing that model variant to be unavailable will result in 100% request failures rather than falling back to a compatible model. We need an agreed SLA downgrade or emergency fallback policy (manual or automatic with approval).
+
+Operational requirements to proceed:
+1) Signed addendum explicitly authorizing region-only enforcement and acceptance of outage risk if fallback is disabled.
+2) Runbook with approved rollback steps (we can implement an automated rollback toggle that product/ops can hit).
+3) Canary plan: 48-hour canary at 5% traffic, followed by 100% only after stability checks (error rate, p95 latency).
+4) Deployment window: 45 minute change window during low traffic (we recommend 02:00–03:00 UTC).
+
+Estimated timeline (with infra resources):
+- Prep + config change (policy + pin mapping): 3 business days
+- Canary monitoring + verification: 2 days
+- Full flip: 1 business day (after signoff)
+
+Attachments: route_config_diff.patch (config diff stub)
+
+If HealthSync is unwilling to accept the risk of no-fallback on hosted, recommend Dedicated lanes (we can reserve capacity and provide SLA guarantees). I'm happy to run the change with infra on-call and ensure the toggle for emergency rollback is in place.
+
+— Karthik
+Karthik Iyer
+Staff SRE, Serving Infrastructure
+karthik_iyer@redwood.ai
+
+From: Sara Khan <sara.khan@healthsync.com>
+To: Ben Carter <ben.carter@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2026-08-17T15:33:00Z
+Subject: Re: Request: enforce EU-only routing + model pin for HealthSync pilot
+
+Thanks — Ben/Laura/Karthik.
+
+We appreciate the quick read. HealthSync is comfortable signing the addendum and accepts the outlined risk that disabling fallback introduces. We are aligned with the canary approach (5% for 48 hours) and happy to do the integration work during the recommended deployment window.
+
+A couple of clarifications from our side:
+- Expected qps: initially ~12 requests/sec (avg) with 99th percentile bursts to ~55 rps during batch imports. Avg tokens per request ~220.
+- We want weekly syncs while the pilot is active (engineering + security + product).
+- Proposed go-live (canary start): 2026-08-25. Does that timeline work?
+
+Please advise if you need a formal signature now; I can send the signed addendum to expedite.
+
+Best,
+Sara Khan
+Head of Integrations
+HealthSync Inc.
+sara.khan@healthsync.com
+
+

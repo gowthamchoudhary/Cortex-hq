@@ -1,0 +1,131 @@
+Traffic denial after tier cutover — request for immediate rollback & audit
+
+From: Maria Alvarez <maria@clearwavehealth.com>
+To: support@redwood.ai, grace_oconnor@redwood.ai
+Cc: 
+Date: Thu, 18 Feb 2027 09:15:00 -0800
+Subject: Immediate: Prod traffic denials — spikes of 429 + downstream 5xx
+
+Hi team,
+
+We started seeing a huge increase in 429 responses and user-visible 5xx errors across our US-WEST-2 prod environment beginning ~08:50 PST. Many requests are timing out at the client layer and our retry behavior has amplified the backpressure — we are seeing a retry storm and sustained latency.
+
+Attached is a short screenshot of the dashboard plus a request trace; our engineering leads are on the call and this is impacting our paid users. Our SLOs are failing and executives are asking for an immediate mitigation. Can you confirm whether anything changed on Redwood's side around quota/tiering or cutover?
+
+We can provide access to a debug session if helpful. Please escalate.
+
+— Maria
+Maria Alvarez
+Director of Engineering, ClearWave Health
+maria@clearwavehealth.com
++1 (415) 555-0189
+
+Attachments: svc-metrics-2027-02-18.png, request-trace-1676621700.txt
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: jonas_weber@redwood.ai, marissa_cole@redwood.ai, evelyn_hart@redwood.ai
+Cc: Maria Alvarez <maria@clearwavehealth.com>, support@clearwavehealth.com
+Date: Thu, 18 Feb 2027 09:22:00 -08:00
+Subject: Re: Immediate: Prod traffic denials — spikes of 429 + downstream 5xx
+
+Thanks Maria — acknowledging. Adding internal on-call and infra owners.
+
+Quick summary of what we need immediately:
+- Confirm if a tier/org cutover or quota mapping change occurred around 08:30–09:00 PST.
+- If so, can we perform an emergency rollback of the cutover to restore previous org/project quota mappings?
+- Short-term mitigation for client side: request that you increase retry jitter and backoff (we'll coordinate but understand this impacts UX).
+
+Jonas — can you check the deployment history and the quota-mapping audit log for ClearWave's org (org_id: cw-9812)? I can ask infra to push an emergency rollback if we confirm a misassignment.
+
+Maria — we are treating this as a Severity 1. We'll aim to have a rollback plan and ETA within the next 30 minutes.
+
+— Grace
+Grace O'Connor
+Enterprise Support Lead, Redwood Inference
+grace_oconnor@redwood.ai
+
+Attachment: quota-config-export-20270218.json (sanitized)
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Grace O'Connor <grace_oconnor@redwood.ai>, marissa_cole@redwood.ai, evelyn_hart@redwood.ai
+Cc: Maria Alvarez <maria@clearwavehealth.com>
+Date: Thu, 18 Feb 2027 09:34:00 -08:00
+Subject: Re: Immediate: Prod traffic denials — spikes of 429 + downstream 5xx
+
+Investigating — preliminary triage below.
+
+What I see:
+- At 08:37 PST there was an automated tier reassignment job that ran as part of the scheduled "org-tier cutover" for a set of customers. The job touchlist included org cw-9812 (ClearWave) inadvertently due to a filter mismatch.
+- The job applied a lower throughput tier to one of ClearWave's projects (project cw-prod-main) rather than their prior reserved tier. The mapping table shows project -> tier_id = tier-standard (should have stayed tier-premium).
+- When the client retries kicked in, the rate limiter started returning 429s and our autoscaling did not catch up because quota was incorrectly scoped at org-level rather than project-level.
+
+Suggested immediate fix (emergency path):
+1) Rollback the cutover patch for ClearWave's org mapping (re-assign cw-prod-main -> tier-premium).
+2) Temporarily raise the project cap by 2x while we validate.
+3) Monitor for 15 minutes for 429/5xx reduction, then proceed with controlled canary if needed.
+
+I can apply (1) now if we have sign-off. I will also tag the change so it's reversible.
+
+— Jonas
+Jonas Weber
+Senior SRE, Runtime Platform
+jonas_weber@redwood.ai
+
+Technical notes: see /ops/audit/quota-mapping/2027-02-18 for matching logs.
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: Maria Alvarez <maria@clearwavehealth.com>
+Cc: jonas_weber@redwood.ai, marissa_cole@redwood.ai, evelyn_hart@redwood.ai
+Date: Thu, 18 Feb 2027 09:40:00 -08:00
+Subject: Re: Immediate: Prod traffic denials — spikes of 429 + downstream 5xx
+
+Maria — thanks for the quick report and patience.
+
+We have identified the likely root cause: the org-tier cutover job incorrectly included your org in a lower tier mapping. Jonas proposes an emergency rollback to restore your prior mapping and a temporary project cap increase while we validate. If you approve, we'll proceed with the rollback immediately and keep your team updated in this thread and a parallel Slack channel.
+
+Risk/impact: change is a config mapping rollback (no code deploy). Risk is low; we will tag and be ready to revert. Expected customer-side effect: 429 rate should fall to baseline within 5–10 minutes after rollback as rate-limiter state recovers and autoscaling absorbs traffic.
+
+Do we have permission to proceed now? Also confirming you want a post-incident credit and a written postmortem — we'll include both.
+
+— Grace
+Enterprise Support Lead, Redwood Inference
+
+Planned attachment: post-rollback metrics and timeline
+From: Maria Alvarez <maria@clearwavehealth.com>
+To: Grace O'Connor <grace_oconnor@redwood.ai>
+Cc: support@clearwavehealth.com
+Date: Thu, 18 Feb 2027 09:43:00 -08:00
+Subject: Re: Immediate: Prod traffic denials — spikes of 429 + downstream 5xx
+
+Please proceed with the rollback immediately. Our CTO and VP Product are on the call and have authorized any low-risk config changes. We appreciate the quick action. Please include a timeline for crediting and the postmortem.
+
+— Maria
+
+Note: exec escalation — ClearWave leadership on call for updates.
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: Maria Alvarez <maria@clearwavehealth.com>, jonas_weber@redwood.ai, marissa_cole@redwood.ai, evelyn_hart@redwood.ai
+Date: Thu, 18 Feb 2027 11:02:00 -08:00
+Subject: Re: Immediate: Prod traffic denials — spikes of 429 + downstream 5xx
+
+Update: rollback applied at 10:47 PST.
+
+What we did:
+- Reassigned project cw-prod-main -> tier-premium (reverted mapping created by cutover job).
+- Temporarily increased project cap by 2x for 45 minutes to allow backlog drain.
+
+Observed impact:
+- 429 rate: 08:50 PST spike -> baseline within ~9 minutes post-rollback.
+- 5xx calls and client timeouts declined steadily; downstream error chain stabilized.
+
+Attachments: svc-metrics-2027-02-18.png (post-rollback graph)
+
+Next steps:
+- Jonas will open an internal incident ticket (INC-2027-022) with RCA timeline and a permanent fix to prevent cutover filter regressions.
+- We will produce a customer-facing postmortem and propose a credit for the incident.
+- Programmatic change: add a pre-cutover validation that cross-checks explicit org allowlists for scheduled jobs.
+
+Maria — I'm sorry for the disruption. We will follow up within 48 hours with the postmortem and remediation plan. If you'd like an earlier briefing for your execs, I can join a call.
+
+— Grace
+Grace O'Connor
+Enterprise Support Lead, Redwood Inference
+grace_oconnor@redwood.ai
+
+Attachments: svc-metrics-2027-02-18.png, quota-config-export-20270218.json

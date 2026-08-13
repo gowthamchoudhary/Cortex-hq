@@ -1,0 +1,123 @@
+Onramp topology proposal for HeliosWorks — endpoint vs peering vs s2s
+
+From: Lauren Bishop <lauren.bishop@redwoodinference.com>
+To: Karthik Iyer <karthik.iyer@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>, Monica Patel <monica.patel@redwoodinference.com>, ops@heliosworks.com
+Cc: 
+Date: Mon, 07 Jun 2027 09:12:00 -0700
+Subject: Onramp topology proposal for HeliosWorks — endpoint vs peering vs s2s
+
+Team / Ravi,
+
+Quick proposal based on last week's call and the infra questionnaire Ravi shared. HeliosWorks' constraints we need to design around:
+- Multi-account setup (prod + analytics), limited CIDR flexibility in analytics account.
+- Low single-digit 10s ms latency requirement for token-level inference in US-West primary region.
+- Security: customer wants private, non-internet-exposed control/data plane.
+- Operational bandwidth: Helios' networking team prefers managed endpoints over long-lived peering maintenance.
+- Cost sensitivity for egress / per-GB data transfer.
+
+Tradeoffs summary (high-level):
+1) VPC Peering
+   - Pros: lowest hop count, straightforward routing inside cloud fabric, good raw latency.
+   - Cons: cross-account peering needs acceptance, no transitive routing (complex if Helios uses transit gateway), could require peering to multiple accounts/regions -> management burden. Egress billing depends on cloud (can be higher cross-AZ/region).
+
+2) PrivateLink / Endpoint Service (AWS PrivateLink style)
+   - Pros: service-controlled endpoints from customer account -> strong isolation, no peering acceptance required, granular security (SGs + IAM), easier onboarding for customers who don't want to manage peering. Often preferred by customers who want minimal network ops.
+   - Cons: slightly higher end-to-end latency (extra hop to ENI/NLB), per-hour endpoint charges and data processing fees; requires NAT or routing for certain outbound flows if we host NLB in private subnets.
+
+3) Site-to-Site VPN (IPSec over Internet)
+   - Pros: fast to bootstrap, works with on-prem + cloud, provides encryption over public internet, lower initial project friction.
+   - Cons: jitter and variable latency (not great for strict p99 latency), throughput limits on managed VPN appliances, additional monitoring and reliability considerations; can be used as failover.
+
+Recommendation (what I want to propose to HeliosWorks):
+- Primary: PrivateLink endpoint service in their prod US-West account for inference traffic. This keeps customer in control of connectivity, minimizes our peering maintenance, and hits security expectations. We expect +3–8 ms added latency in region which meets their target.
+- Secondary / resilience: S2S VPN tunnel between HeliosWorks on-prem (or transit) and our dedicated VPC as automated fallback for cross-region or burst traffic overflow.
+- Avoid cross-account peering unless Helios insists on sub-ms latencies and is willing to accept the operational overhead of multi-peering or a transit gateway design. If they already have a Transit Gateway and want to centralize, we can revisit peering/transit integration.
+
+Attached: connectivity-cost-estimates.xlsx (est. monthly egress and endpoint fees) and diagram-onramp-v2.png (proposed topology).
+
+Ask: internal sign-off on recommendation and permission to send a short proposal to Ravi that includes a SOW sketch and estimated onboarding timeline (2–3 weeks to prod, assuming Helios provisions endpoint subnets and reserved NACLs). Ben — want you to pick up SOW/pricing if we agree. Monica — please confirm any security or compliance caveats (KMS, logging) we should include.
+
+Thanks,
+Lauren
+
+--
+Lauren Bishop
+Head of Solutions — Redwood Inference
+lauren.bishop@redwoodinference.com | +1 (415) 555-0199
+
+From: Ravi Shah <ravi.shah@heliosworks.com>
+To: Lauren Bishop <lauren.bishop@redwoodinference.com>
+Cc: ops@heliosworks.com
+Date: Mon, 07 Jun 2027 11:03:12 -0700
+Subject: Re: Onramp topology proposal for HeliosWorks — endpoint vs peering vs s2s
+
+Thanks Lauren — this is useful. A couple of quick clarifications from our side:
+- Our analytics account is in a different AWS account and they can't share the same /16 range as prod; we want a single connectivity approach if possible.
+- Concern about PrivateLink: does that support bursty traffic (we expect spikes when batch jobs hit) and what is the MTU/fragmentation behavior? We run high-PSI traffic sometimes and don't want to introduce extra packet fragmentation.
+- If we go PrivateLink + VPN fallback, latency on VPN → what's the expected p95/p99 in same-region?
+
+Happy to hop on a 30-min call today if helpful.
+
+Ravi
+VP Cloud Operations | HeliosWorks
+ravi.shah@heliosworks.com | +1 (206) 555-0244
+
+From: Karthik Iyer <karthik.iyer@redwoodinference.com>
+To: Lauren Bishop <lauren.bishop@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>, Monica Patel <monica.patel@redwoodinference.com>, Ravi Shah <ravi.shah@heliosworks.com>
+Date: Mon, 07 Jun 2027 13:24:40 -0700
+Subject: Re: Onramp topology proposal for HeliosWorks — endpoint vs peering vs s2s
+
++1 to Lauren's recommendation. A few technical notes to set expectations and answer Ravi's questions: 
+
+- PrivateLink throughput & bursting: PrivateLink backs to NLB (or our NVA). In practice, it supports high throughput but you need to size the NLB and worker pool for bursts. We'll recommend an autoscaling policy with accelerated warm-up on the inference pool. For very large one-off batch pushes we should route via a managed S3 presigned transfer and run embeddings offline (lower cost).
+
+- MTU: AWS ENIs and PrivateLink generally preserve 1500 MTU; if the customer has jumbo frames on-prem (9001) those will be fragmented over PrivateLink/NLB. If fragmentation is a hard blocker, peering keeps path MTU more consistent (but peering still may require fragmentation if crossing internet gateways for cross-account flows). We'll note this explicitly in the SOW.
+
+- Latency expectations: PrivateLink adds an internal hop (ENI/NLB) and we should expect ~3–10ms overhead inside same AZ. S2S VPN p95/p99 (managed AWS VPN) inside same region is typically 15–40ms and higher jitter — not great for low p99 SLAs. Use VPN for non-latency-critical failover or multi-region routing.
+
+- CIDR & routing: since analytics is in a separate account, PrivateLink is attractive because Helios won't need to create peering entries or manage route tables across accounts. For a centralized transit model, if Helios already runs a TGW we can integrate via TGW attachments (we should check whether Helios wants that).
+
+Operational ask: we'll need an ingress security checklist from Helios (reserved subnets for endpoints, required SGs, allowed egress CIDRs). Monica — can you draft the security checklist and the logging/KMS requirements we want to lock into the SOW?
+
+I'll add a short appendix in the SOW that calls out MTU and burst guidance.
+
+Karthik
+Senior Solutions Architect — Redwood Inference
+
+From: Lauren Bishop <lauren.bishop@redwoodinference.com>
+To: Karthik Iyer <karthik.iyer@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>, Monica Patel <monica.patel@redwoodinference.com>, Ravi Shah <ravi.shah@heliosworks.com>
+Date: Tue, 08 Jun 2027 09:05:00 -0700
+Subject: Re: Onramp topology proposal for HeliosWorks — endpoint vs peering vs s2s
+
+Thanks — that aligns with my reading. Plan of record to present to Helios: 
+1) Primary topology: PrivateLink endpoint service in Helios prod account (US-West).
+2) Failover/overflow: Managed S2S VPN tunnel into our dedicated VPC (automated health checks + traffic shaping).
+3) PEERING only if Helios elects to use Transit Gateway / wants sub-ms latency and is willing to manage peering attachments — we'll treat that as an advanced option.
+
+Ben: please prepare a draft SOW & high-level pricing that includes: one-time onboarding (network validation, endpoint verification), monthly endpoint fees estimate (from the spreadsheet), and optional peering/integration advisory.
+Monica: include the security checklist items (KMS, audit logs, TLS termination boundaries, netflow logging) — flag anything that would push this into an elevated compliance review.
+
+Ravi — if that matches your expectations we'll send a concise proposal this afternoon and propose a 30-min follow-up to align on subnets/MTU.
+
+Lauren
+
+> On Mon, Jun 7, 2027 at 1:24 PM Karthik Iyer <karthik.iyer@redwoodinference.com> wrote:
+> > +1 to Lauren's recommendation. A few technical notes...
+
+From: Ben Carter <ben.carter@redwoodinference.com>
+To: Lauren Bishop <lauren.bishop@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>, Monica Patel <monica.patel@redwoodinference.com>, Ravi Shah <ravi.shah@heliosworks.com>
+Date: Tue, 08 Jun 2027 17:43:21 -0700
+Subject: Re: Onramp topology proposal for HeliosWorks — endpoint vs peering vs s2s
+
+Acknowledged — I'll draft the SOW and include the pricing slices (onboarding / monthly / optional peering advisory). I'll attach the first draft by EOD tomorrow.
+
+Monica — can you share the security checklist items you'd like in the SOW (KMS key policy snippets, required audit log retention, any HSM recommendations)? I can fold those into the compliance appendix.
+
+Ravi — we'll note the MTU caveat and include a simple performance test plan (small synthetic tps ramp + p99 latency capture) as part of onboarding. If you'd like, schedule a 30-min runbook review and we'll invite Karthik.
+
+Attaching: heliosworks-sow-draft.docx (stub) — this is a very early template.
+
+Thanks,
+Ben
+Solutions Engineering — Redwood Inference
+

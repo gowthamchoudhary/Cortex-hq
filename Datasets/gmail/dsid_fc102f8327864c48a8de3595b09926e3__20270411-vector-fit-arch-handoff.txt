@@ -1,0 +1,147 @@
+Vector migration architecture handoff and integration next steps
+
+From: laura_bennett@redwoodinference.com
+To: Tom Haverford <tom.h@searchly.ai>
+Date: Sun, 11 Apr 2027 15:02:00 -0700
+Subject: Quick recap + next steps — vector migration & architecture handoff
+
+Hi Tom — thanks again for the call earlier. Quick recap and a simple set of next actions so we can get engineering moving: 
+
+- Current state you shared: Pinecone for vector store, embeddings produced by openai/text-embedding-3-small, ~50 qps normal, 200 qps bursts.
+- Goals you mentioned: Improve p95 search latency, reduce per-query cost, stage a migration off Pinecone without search regressions, keep reranker in the loop for top-k precision.
+
+Questions we need to confirm so our engineering team can size the POC and migration plan:
+1) Vector dimensionality (exact number) and whether vectors are normalized on ingest today (L2 unit length, or raw).
+2) Current batch size used by your ingestion pipeline and average vector export file size (you mentioned a monthly incremental of ~10M vectors — confirm).
+3) Any hard latency SLOs (p50/p95) for embedding & search paths — you gave p95 ~120ms as a target, correct?
+4) Auth model: long-lived API keys rotating every X days vs short-lived tokens + KMS.
+5) Reranker details: model used, whether it's called synchronously in the search path or as an async post-process.
+
+Proposed next steps:
+- Please attach the Pinecone export (namespace + sample vectors).
+- I’ll loop in our solutions lead (marissa_cole) and platform architect (rishi_malhotra) for a technical handoff.
+- Tentative technical sync Thursday 4/13 — 1hr to walk through ingestion, auth, routing, and a staged dual-write migration plan.
+
+Attaching: pricing-draft-Searchly.docx (cliques), include the SOC2 we referenced.
+
+Thanks — Laura
+Laura Bennett
+Senior AE, Redwood Inference
+laura_bennett@redwoodinference.com
+
+Attachments: pricing-draft-Searchly.docx, SOC2-redacted.pdf
+
+From: Tom Haverford <tom.h@searchly.ai>
+To: laura_bennett@redwoodinference.com
+Date: Sun, 11 Apr 2027 16:18:12 -0700
+Subject: Re: Quick recap + next steps — vector migration & architecture handoff
+
+Hey Laura — thanks for the tidy summary. A few quick answers and I'm attaching the export (searchly_vectors_export.tar.gz) with a 1% sample set plus namespace metadata.
+
+Answers:
+- Vector dims: 1536 (generated from text-embedding-3-small).
+- Normalization: vectors are currently NOT normalized at ingest; we do cosine similarity at query time in Pinecone (so effectively normalized at query).
+- Batch size: our ingestion job sends batches of ~512 vectors; we can change that during a migration.
+- Traffic: steady-state ~50 qps, typical peak bursts to ~200 qps during traffic spikes (batching on writers helps smooth ingestion).
+- Latency: target p95 search <=120ms; p50 typically ~30–40ms with Pinecone (but we've seen variability).
+- Reranker: synchronous transformer reranker (internal model) that runs on top 50 results and re-scores — so it is part of the request path today.
+- Auth: long-lived API keys rotated every 90 days by our devops; we do not currently use customer KMS or short-lived tokens.
+
+I attached the export. Happy to join the technical sync.
+
+—Tom
+Tom Haverford
+Head of Search Engineering, Searchly
+integrations@searchly.ai
+
+Attachments: searchly_vectors_export.tar.gz
+
+From: laura_bennett@redwoodinference.com
+To: marissa_cole@redwoodinference.com, rishi_malhotra@redwoodinference.com, dev_patel@redwoodinference.com
+Cc: Tom Haverford <tom.h@searchly.ai>
+Date: Sun, 11 Apr 2027 17:05:00 -0700
+Subject: Fwd: Quick recap + next steps — vector migration & architecture handoff
+
+Marissa / Rishi / Dev — looping you in on Searchly. Tom sent a sample export and the quick answers below. High-level ask: prepare an architecture handoff that covers SDK setup, auth options, routing across regions (US primary, EU planned), and a staged migration plan for vectors + reranker validation.
+
+Top priorities for the handoff doc / sync:
+- Ingest strategy: dual-write vs bulk import, validation checks, sample-size experiments.
+- Batching & latency: recommendations on per-request batching (for real-time), and recommended ingest batch sizes for speed/cost.
+- Normalization: should we normalise at ingest or in-query? Any differences wrt Redwood runtime optimizations (KV cache, quantized indexes).
+- Reranker integration: patterns for synchronous reranker calls vs async, cost and latency trade-offs, ability to fall back to a lighter reranker.
+- Auth & compliance: short-lived tokens + KMS, SOC2 auditability — Dev, can you note requirements for Private deployment or Dedicated?
+
+Can you draft a 1-pager and a short runbook before the technical sync Thu 4/13? I proposed 10:00am PT (Tom indicated availability).
+
+Thanks — Laura
+
+From: marissa_cole@redwoodinference.com
+To: laura_bennett@redwoodinference.com, rishi_malhotra@redwoodinference.com, dev_patel@redwoodinference.com
+Cc: Tom Haverford <tom.h@searchly.ai>
+Date: Mon, 12 Apr 2027 09:30:00 -0700
+Subject: Re: Fwd: Quick recap + next steps — vector migration & architecture handoff
+
+Thanks Laura & Tom — reviewed the export sample. Drafting a concise handoff and including an initial technical checklist below. I’ll bring a short proof-of-concept plan to the sync.
+
+Initial notes / recommendations (high level):
+
+1) Vector dimensionality & normalization
+- 1536 dims is fully supported by Redwood. For best end-to-end similarity stability we recommend normalizing to unit L2 vector at ingest time so downstream indexing/search (including quantized index paths) use consistent metrics.
+- If Searchly wants to keep in-query normalization (current approach), we can support that, but expect minor differences in quantized recall. We should run A/B with a 100k sample.
+
+2) Batching & latency tradeoffs
+- Ingest: continue using 512-sized batches for bulk jobs; for initial POC we recommend smaller batches (128) to speed validation and reduce memory spikes.
+- Query path: batching at request level should be conservative. For synchronous reranker flows (rerank top 50) recommend per-request batching of 8–32 to preserve p95. Redwood Optimize can suggest exact settings after we profile.
+
+3) Migration approach (staged, low-risk)
+- Phase 0: Dual-write for a shadow index — write to Pinecone + Redwood in parallel for 2–4 weeks.
+- Phase 1: Run shadow queries with re-ranking disabled on Redwood to compare recall/latency (holdout tests).
+- Phase 2: Enable reranker on Redwood for a subset of traffic (canary).
+- Phase 3: Cutover when metrics align (recall delta < 1.5% and latency SLO met).
+
+4) Reranker integration patterns
+- Synchronous (current): Provide a low-latency path using Redwood’s function-calling / structured output to pass top-k candidates to the reranker service; implement timeout/fallback to best-effort knn-only results.
+- Async hybrid: run fast knn for 95% of traffic and run reranker for high-value queries or sessions (cost saving).
+
+5) SDK & auth setup
+- Recommend using Redwood SDK with short-lived tokens minted by Searchly’s identity system. We can support customer-managed KMS for signing tokens if Searchly wants HSM-backed keys.
+- For Dedicated/Private, plan for VPC peering and audit log forwarding (Dev, see compliance notes).
+
+Attachments & quick links:
+- I’ll drop a migration_playbook.pdf with the phased checklist and sample queries to validate.
+- HubSpot deal: https://app.hubspot.com/deals/1234567890
+- Design doc (drive): https://drive.google.com/file/d/1x2y3z4-design-vec-migration
+
+Quick code sketch (ingest normalization idea):
+- Normalize vectors on ingest: compute L2 norm then divide; also store original magnitude in metadata if you want to preserve it.
+
+Next: I’ll produce the 1-pager and runbook before Thu 4/13 10:00am PT.
+
+—Marissa
+Marissa Cole
+Solutions Lead, Redwood Inference
+marissa_cole@redwoodinference.com
+
+Attachments: migration_playbook.pdf
+
+From: dev_patel@redwoodinference.com
+To: laura_bennett@redwoodinference.com, marissa_cole@redwoodinference.com, rishi_malhotra@redwoodinference.com
+Cc: Tom Haverford <tom.h@searchly.ai>
+Date: Mon, 12 Apr 2027 11:45:00 -0700
+Subject: Re: Fwd: Quick recap + next steps — vector migration & architecture handoff
+
+Quick security/compliance notes for the sync: 
+
+- Auth: we should push for short-lived tokens (15m–1h) backed by Searchly’s identity provider (OIDC) and optionally signed with customer-managed KMS for Dedicated/Private. Short-lived tokens + request-level RBAC reduce blast radius compared to 90-day API keys.
+- Network: if Searchly opts for Private deployment, plan VPC peering + enforced egress rules. For hosted Dedicated we can set dedicated tenant pools and restrict ingress IP ranges.
+- Audit: enable request tracing + token-level logs; we can export to Searchly’s SIEM. SOC2 doc is attached for their compliance team.
+- Data residency: Searchly mentioned EU expansion — we should include routing policy to keep EU traffic in EU region and replicate indices asynchronously if needed.
+
+I attached a redacted SOC2 to help their security team. I’ll create a short checklist we can run during the POC.
+
+—Dev
+Dev Patel
+Principal Security Engineer, Redwood Inference
+dev_patel@redwoodinference.com
+
+Attachments: SOC2-redacted.pdf

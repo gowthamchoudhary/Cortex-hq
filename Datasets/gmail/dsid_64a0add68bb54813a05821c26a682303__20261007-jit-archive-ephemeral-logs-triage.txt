@@ -1,0 +1,141 @@
+Just-in-time archive request: ephemeral audit logs & exceptions
+
+From: Lena Park <lena.park@sunrise-thera.com>
+To: diego_fernandez@redwood.ai
+Date: 2026-10-05T09:12:00-07:00
+Subject: Short retention + JIT archival for audit logs
+
+Diego —
+
+Thanks for taking this. We’re evaluating Redwood for a sensitive workflow and have a hard requirement: transaction-level audit logs must not be retained in hot storage beyond 48 hours by default, but we need a mechanism to 'just-in-time' (JIT) archive selected sessions to a long-term store when there is a legal hold or incident. The archive must include an immutable evidence manifest, proof of key wrapping (customer KMS preferred), and chain-of-custody metadata.
+
+Questions for your team:
+- Is there a supported flow today to move TTL-expired logs into a locked archive on-demand?
+- Can we require customer-managed wrapping keys (BYOK) for archives and have rotation-proof audit evidence?
+- What audit fields are available in the archive (actor_id, resource_id, request_payload_hash, response_hash, session_kv_snapshot)?
+
+We’ve copied our Legal team and an external auditor (audits@auditorco.io) who will review evidence formats. Would like a short triage call this week.
+
+— Lena
+Senior Security Program Manager
+Sunrise Therapeutics
+
+Attachments: none
+
+From: diego_fernandez@redwood.ai
+To: Lena Park <lena.park@sunrise-thera.com>, marissa_cole@redwood.ai, grace_oconnor@redwood.ai, naomi_feldman@redwood.ai, priyom_das@redwood.ai
+Date: 2026-10-05T11:03:00-07:00
+Subject: Re: Short retention + JIT archival for audit logs
+
+Lena — thanks, this is a clear ask and doable with constraints. Quick triage summary and what I need from you before we scope:
+
+Summary of ask (my words):
+- Default hot retention: 48 hours
+- On-demand JIT archive: full audit package moved to long-term immutable store when triggered (legal hold / CS incident)
+- Archive must include an evidence manifest and proof of customer KMS wrapping
+
+Info we need from Sunrise:
+- Typical volume: average events/minute for the affected tenant and peak day spikes
+- Legal hold workflows: who triggers holds, and whether holds can be applied retroactively to a given time range
+- Desired archive retention (e.g., 7 years, subject to legal) and access controls
+
+Initial constraints I want to call out to be realistic:
+- Current hosted product supports export and long-term storage, but we don’t have a built-in automated JIT-archive-on-ttl-expiry flow yet; we can implement a policy-based routing that copies events to an archive when a hold flag is set, but retroactive capture (catching events already expired from hot tier) is a hard engineering ask unless we add a short 'grace window' buffer.
+- Customer-managed KMS for archive envelopes is supported on Redwood Private/Dedicated; for hosted tenants we need to validate a KMS handoff path (wrap/unwrap proofs) and audit artifacts.
+
+Proposed next steps:
+1) Quick call with product/security/compliance + Sunrise legal to confirm volume and legal hold process (30 min).
+2) Marissa: map compliance evidence checklist and identify gaps.
+3) Prio: confirm whether Sunrise will accept a small rolling grace window (e.g., 72 hours) if retroactive capture is required.
+
+I’m free 10/6 between 09:00–12:00 or 10/7 after 14:00 PT. Marissa, Grace, Naomi, Prio — please weigh in on feasibility and what artifacts we can promise.
+
+— Diego
+Solutions Engineer, Redwood Inference
+
+Attachment: redwood-jit-archive-proposal.md (placeholder)
+
+From: marissa_cole@redwood.ai
+To: diego_fernandez@redwood.ai, Lena Park <lena.park@sunrise-thera.com>, grace_oconnor@redwood.ai, naomi_feldman@redwood.ai, priyom_das@redwood.ai, legal@sunrise-thera.com
+Date: 2026-10-06T08:17:00-07:00
+Subject: Re: Short retention + JIT archival for audit logs
+
+Thanks — I can own the evidence checklist. High-level compliance asks we need to satisfy for the auditor (and items to confirm with Sunrise):
+
+Mandatory evidence items for archived package:
+- Evidence manifest (schema v1): archive_id, originating_tenant, event_range, checksum_sha256 of bundle, signing_key_id, kms_wrap_key_id
+- Signed timestamp (RFC 3161) for archive creation
+- KMS wrap metadata: key version, key thumbprint, wrapping algorithm
+- Chain-of-custody log (who triggered archive, IP, timestamp, approvals)
+- Full event list with event-level hashes and provenance headers
+
+Questions for Sunrise/legal:
+- Is acceptance of an archive signed by Redwood + KMS wrap proof enough, or do you require a third-party notarization?
+- Will you accept a defined retention policy in contract (e.g., Redwood will keep archive for X years and provide export only)?
+
+I’m attaching a short spreadsheet with the evidence manifest fields we expect. I also recommend we decide whether the archive format will be standard ndjson + detached signature, or a tarball with an embedded index. Auditor preference will matter.
+
+Attachment: evidence_requirements.xlsx
+
+Marissa Cole
+Head of Compliance, Redwood Inference
+
+From: grace_oconnor@redwood.ai
+To: diego_fernandez@redwood.ai, marissa_cole@redwood.ai, Lena Park <lena.park@sunrise-thera.com>, naomi_feldman@redwood.ai, priyom_das@redwood.ai
+Date: 2026-10-06T10:43:00-07:00
+Subject: Re: Short retention + JIT archival for audit logs
+
+Technical notes from Security (things we need to align on):
+
+1) Retroactive capture feasibility
+- If events are removed from hot storage after 48 hours with no extra buffer, there is no way for us to reconstruct them unless we keep a short grace buffer (e.g., 24–72h) or store a compact index (hash-only) that lets us verify later. Retroactive ingestion would require either: (a) an ingestion-side hold that prevents deletion for a grace window, or (b) a continuous stream-copy to cold storage gated by a legal-hold flag (but that has cost implications).
+
+2) KMS and proof-of-wrap
+- For hosted tenants we can capture wrap metadata and include attestations, but true customer KMS control (HSM-backed keys) is only available on Dedicated/Private deployments today. We can prototype an envelope-wrapping handshake for hosted, but it will need product sign-off and a short pilot.
+
+3) Archive immutability
+- We should provide append-only archives with signed manifests and store a digest in our immutable ledger (SHA256) and expose the ledger entry in the archive as extra proof.
+
+4) Operational hooks
+- Need a runbook for: trigger archive -> evaluation -> create bundle -> sign & wrap -> store -> notify legal & auditor. Who approves trigger? Sunrise wants legal to do it, but product/ops need a fail-safe.
+
+I recommend we offer two options to Sunrise:
+A) Recommended: Dedicated deployment with customer-managed KMS and a 24h grace buffer (fast to guarantee capture).
+B) Alternative: Hosted pilot with an agreed policy: 72h grace buffer + signed-manifest prototype and explicit contractual terms on evidence scope.
+
+Happy to walk through this on the call.
+
+— Grace O'Connor
+Security Engineering
+Redwood Inference
+
+From: diego_fernandez@redwood.ai
+To: Lena Park <lena.park@sunrise-thera.com>, marissa_cole@redwood.ai, grace_oconnor@redwood.ai, naomi_feldman@redwood.ai, priyom_das@redwood.ai, legal@sunrise-thera.com, audits@auditorco.io
+Date: 2026-10-07T17:42:00-07:00
+Subject: Re: Short retention + JIT archival for audit logs — meeting + actions
+
+Thanks everyone — summary and confirmed next steps:
+
+Decisions so far:
+- We will not promise retroactive capture if Sunrise insists on a strict 48h hot-only retention. To enable JIT archive reliably, Sunrise should accept a small grace buffer.
+- Two paths offered: Dedicated (customer KMS + no-capture risk) vs Hosted pilot (72h buffer + signed-manifest).
+
+Action items:
+- Sunrise (Lena/legal): confirm whether a 72-hour rolling grace window is contractually acceptable OR request Dedicated deployment quotation (by 2026-10-11).
+- Marissa: finalize evidence manifest schema and preferred archive packaging (ndjson vs tar+index) and share by 2026-10-09. (Attachment: evidence_requirements.xlsx)
+- Grace & Prio: draft a runbook for the archive workflow and a short security control checklist for the pilot by 2026-10-12.
+- Naomi: assess product impact and timeline for a hosted-envelope KMS handshake prototype; provide rough ETA and risk notes by 2026-10-14.
+- Diego: schedule 30-min triage call (I propose 2026-10-08 11:00 PT) and prepare a short slide with architecture options.
+
+Lena — if the auditor wants to join the triage call, happy to have them on. Please confirm availability for 10/08 11:00 PT or suggest alternatives.
+
+Best,
+Diego
+Solutions Engineer, Redwood Inference
+
+--
+On Wed, Oct 6, 2026 at 10:43 AM Grace O'Connor <grace_oconnor@redwood.ai> wrote:
+> Technical notes from Security (things we need to align on):
+> ...
+
+Attachments: redwood-jit-archive-proposal.md, evidence_requirements.xlsx

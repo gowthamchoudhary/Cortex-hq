@@ -1,0 +1,110 @@
+Reservation guarantees and concurrency tests — post-demo action items
+
+From: Mateo Alvarez <mateo_alvarez@redwood.ai>
+To: Elaine Park <elaine.park@healthlytics.com>, John Carter <jc@cloudvendor.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>
+Date: Wed, 21 Jul 2027 10:15:00 -0700
+Subject: Reservation guarantees and concurrency tests — post-demo action items
+
+Thanks again for your time this morning, Elaine — great to see the team walk through the HealthLytics inference flow. Quick recap and proposed next steps so we keep momentum while you validate internal procurement.
+
+Summary of what we heard
+- Peak inference pattern: 300 tps sustained for short bursts (10–15m) during morning syncs; baseline ~40–60 tps the rest of the day.
+- Latency SLO: p95 < 220ms for single-request, < 350ms for batched requests.
+- Data concerns: PHI-filtering before model input and audit logs retention for 12 months.
+
+Redwood ask / proposal
+1) Dedicated reservation variant: 4x A100-equivalent GPUs reserved (no preemption) with network isolation + KMS. We propose a 6-week trial with a credit-backed reservation.
+2) Concurrency tests: we suggest three synthetic tests (light, mixed, heavy) + a real traffic replay using the sample payloads you shared. I attached the ops checklist and the sample CSV for expected load.
+3) Fallback plan vs hyperscaler: when reserved capacity saturates, we can route non-critical/low-priority requests to a lower-cost hosted model profile (higher latency but preserves correctness) — this is configurable per-route.
+
+Can you confirm:
+- Procurement timeline and whether legal needs revised T&Cs for reserved capacity?
+- A contact on the infra/dev side who can approve the replay payload and run the smoke test?
+
+Next steps (proposed)
+- Redwood: provision trial reservation, hand over runbook + test harness (ETA 3 business days).
+- HealthLytics: confirm procurement point-person and provide a signed NDA (if required) to enable network-connectivity testing.
+- Joint: schedule the replay test window — we recommend Wed 2027-07-28 09:00-11:00 PT.
+
+Attachments: redwood-dedicated-ops-reqs.pdf (ops checklist), hl-expected-load.csv (sample payload volumes)
+
+Thanks — Mateo
+Mateo Alvarez
+Enterprise Solutions, Redwood Inference
+---
+
+
+From: Elaine Park <elaine.park@healthlytics.com>
+To: Mateo Alvarez <mateo_alvarez@redwood.ai>
+Cc: John Carter <jc@cloudvendor.com>
+Date: Wed, 21 Jul 2027 13:04:00 -0700
+Subject: Re: Reservation guarantees and concurrency tests — post-demo action items
+
+Thanks Mateo — useful recap. A few clarifications from our side: 
+
+1) Procurement timeline: target decision by 2027-08-10 but we need a formal cost estimate + a short statement of the reservation SLA and failure modes for procurement. If you can provide an itemized one-pager (cost / what’s covered / termination rights) that helps.
+
+2) Legal: not necessary for the trial, but procurement will ask for a short appendix on data handling (audit logs & retention).
+
+3) Infra owner: looping in Ravi (ravi.srinivasan@healthlytics.com) — he’ll own the replay and smoke tests. Ravi, can you confirm availability for Wed 07/28 09:00-11:00 PT?
+
+One more question: John from the cloud reseller mentioned potential credit for bringing our committed spend onto their platform. From your perspective, are there differences in the reserved SKU guarantees (preemption, 99.9% uptime) versus what you offer as Dedicated? We want to document the decision criteria between a hyperscaler reservation and Redwood Dedicated.
+
+—Elaine
+Elaine Park
+Head of Data Products, HealthLytics
+
+
+From: Mateo Alvarez <mateo_alvarez@redwood.ai>
+To: Elaine Park <elaine.park@healthlytics.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>, John Carter <jc@cloudvendor.com>
+Date: Thu, 22 Jul 2027 08:12:00 -0700
+Subject: Re: Reservation guarantees and concurrency tests — post-demo action items
+
+On Wed, Jul 21, 2027 at 1:04 PM Elaine Park <elaine.park@healthlytics.com> wrote:
+> Thanks Mateo — useful recap. A few clarifications from our side: 
+> 
+> 1) Procurement timeline: target decision by 2027-08-10 but we need a formal cost estimate + a short statement of the reservation SLA and failure modes for procurement.
+
+Thanks — quick answers below and we’ll follow up with the one-pager you asked for.
+
+Key differences (high level) between hyperscaler reserved VMs and Redwood Dedicated
+- Reservation semantics: hyperscalers reserve instance types (VM+GPU) in a region; preemption risk depends on SKU and purchase model. Redwood Dedicated reserves physical GPU capacity inside our Dedicated pool — we guarantee that capacity for the duration of the contract and support live migrations within our pool for hardware maintenance without dropping customer traffic.
+- SLA and uptime: our Dedicated SLA covers model-serving availability (we commit to 99.9% per-month for provisioned endpoints) and include automatic fallback routing to a compatible hosted model profile with documented latency degradation steps. Hyperscaler reserved VM SLA is typically for the cloud infrastructure and may not cover application-level inference availability or managed fallback behavior.
+- Operational runbook: Redwood provides an ops playbook for on-call routing, KV-cache warm-up, and failover policies. We can run replay tests with KV-cache priming to get realistic p95 numbers. Hyperscalers generally require the customer to manage orchestration for inference reliability; some marketplace partners add orchestration but it varies.
+- Cost and predictability: hyperscaler committed discounts can look cheaper for raw GPU hours but may not include the orchestration, caching, and routing features that reduce effective token cost. We’ll include a modeled TCO slide for the 6-week trial.
+
+Proposed deliverables by Friday 2027-07-23
+- Itemized cost + reservation SLA one-pager (legal-friendly).
+- Test plan: 3 synthetic tests + real-traffic replay (with KV-cache warm-up).
+- Success criteria doc (latency p95, error rate, % of requests that can be offloaded when saturated).
+
+Action items
+- Marissa: can you draft the one-pager and TCO model?
+- Karthik: prep the replay harness and flag any infra prerequisites for Ravi.
+- Grace: I'll need the fallback routing runbook consolidated into 1 page.
+
+Elaine / Ravi / John — we'll drop the one-pager into the shared Drive link and confirm the replay window after Ravi confirms availability.
+
+Thanks — Mateo
+
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Mateo Alvarez <mateo_alvarez@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>
+Date: Thu, 22 Jul 2027 16:02:00 -0700
+Subject: Re: Reservation guarantees and concurrency tests — post-demo action items
+
+Adding a little detail before I share slides: 
+
+- One-pager outline: 1) What the reservation covers (physical capacity, network isolation, KMS integration), 2) SLA table (99.9% availability, maintenance windows, failover behavior), 3) Termination & credits (how we handle hardware failure/extended outages), 4) Pricing example + TCO assumptions.
+
+- Test templates: I’ll attach a short checklist in Drive (link above) and a simple script to run the replay that will automatically collect p50/p95/p99, errors, and cold-start counts. Karthik — please verify the KV-cache priming step is included and add the command we need Ravi to run from their side.
+
+- Risk register (short list): 1) Network egress throttles during replay, 2) KV cache not primed causing inflated cold starts, 3) Mis-matched model spec between Redwood-hosted fallback and reserved model causing correctness drift. I’ll add mitigation steps for each.
+
+I’ll aim to share the one-pager + TCO by EOD PDT tomorrow.
+
+Marissa
+Solutions Ops, Redwood Inference
+

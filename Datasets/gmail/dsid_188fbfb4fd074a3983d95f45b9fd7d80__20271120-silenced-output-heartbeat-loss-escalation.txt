@@ -1,0 +1,137 @@
+Urgent: Silenced streaming output & heartbeat loss impacting OmniData demo
+
+From: Harper Lane <harper@omnidata.io>
+To: Vivek Kulkarni <vivek@redwood.ai>; Account Exec - Alex Wu <alexw@omnidata.io>; support@redwood.ai
+Cc: 
+Date: Thu, 18 Nov 2027 09:12:00 -0800
+Subject: Live demo blackout — multiple streaming requests silent
+
+Vivek / Redwood team,
+
+We observed repeated silent responses during our live demo this morning. The UI shows the session as connected, token counters increment on the client for ~2–4s, then nothing (no chunks) for ~10–30s; eventually the connection times out and the user sees a blank response. This happened during three separate demos across two regions (us-west and us-east).
+
+Impact: demo failed with 6 paying customers in the room. We need an immediate explanation and ETA. Please advise whether we should pause using Redwood for the rest of the week.
+
+Attached: session traces and a short video of the client console.
+
+Harper
+Head of Integrations, OmniData
+
+---
+Attachment stubs:
+- omnidata_session_20271118_traces.zip (zip, 3.2MB)
+- demo_console_capture.mov (video, 12s)
+
+From: Vivek Kulkarni <vivek@redwood.ai>
+To: Harper Lane <harper@omnidata.io>; Account Exec - Alex Wu <alexw@omnidata.io>
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai, support@redwood.ai
+Date: Thu, 18 Nov 2027 09:35:00 -08:00
+Subject: Re: Live demo blackout — multiple streaming requests silent
+
+Harper — thanks for the quick heads-up and the traces. Really sorry about this. We’re treating this as P0.
+
+Immediate steps we have kicked off:
+- SRE (Ben) is correlating the traces to our ingress and gateway logs to identify whether this is a connection-level stall (chunked transfer/WebSocket) or an upstream runtime stall.
+- Marissa is pulling model-host telemetry for the sessions you attached to verify token emission at the runtime layer.
+- I’m standing up a short war room with our CTO and CS leadership. I’ll send a calendar invite in the next 10 min.
+
+I know customers were on a demo — our apologies. We’ll aim to provide an initial RCA hypothesis and mitigation within 2 hours.
+
+-Vivek
+CRO, Redwood Inference
+
+---
+Attachment stubs: none
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Vivek Kulkarni <vivek@redwood.ai>; marissa_cole@redwood.ai
+Cc: support@redwood.ai, laura_bennett@redwood.ai
+Date: Thu, 18 Nov 2027 10:01:00 -08:00
+Subject: RE: Live demo blackout — multiple streaming requests silent
+
+Team — initial findings from quick triage:
+- The client traces show the HTTP/1.1 chunked body stops being sent from our edge at specific intervals (10:21:12.6, 10:27:03.9, 10:41:50.2 PST).
+- At those times, we see an increased syscall timeout in the nginx worker logs followed by a short spike in connection queue depth on the gateway.
+- The runtime logs for the associated model containers DO show token emission continuing for ~2–3s before the chunked frames stop propagating to the client. The KV cache and decoder logs show no OOM or model stall.
+
+Hypothesis: backpressure/congestion between gateway and edge proxy resulting in dropped chunk flushes. That explains the client-side token counter but no chunks reaching the browser.
+
+Mitigation attempted (10:35): temporarily increased gateway chunk flush interval and disabled a new batching heuristic rolled last week. Early tests show the client receives steady chunks on a repro harness.
+
+Next: collect full tcpdump for the affected nodes and escalate to infra to check kernel-level socket drops.
+
+-ben
+Senior SRE, Redwood Inference
+
+---
+Attachment stubs:
+- chunked-transfer-logs-20271118.txt (text, 1.1MB)
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Vivek Kulkarni <vivek@redwood.ai>; Ben Carter <ben_carter@redwood.ai>; support@redwood.ai
+Cc: olga_petrov@redwood.ai, laura_bennett@redwood.ai
+Date: Thu, 18 Nov 2027 11:20:00 -08:00
+Subject: RE: Live demo blackout — multiple streaming requests silent
+
+On Thu, Nov 18, 2027 at 10:01 AM Ben Carter <ben_carter@redwood.ai> wrote:
+> Team — initial findings from quick triage:
+> - The client traces show the HTTP/1.1 chunked body stops being sent from our edge at specific intervals ...
+> Hypothesis: backpressure/congestion between gateway and edge proxy resulting in dropped chunk flushes.
+
+Adding voice from runtime: we verified that for affected sessions the runtime emitted tokens but the gateway’s chunk flush path returned EAGAIN on write for a sustained 10–30s window. We saw no model-level exceptions. I recommend the following short/medium-term plan: 
+
+Short (next 2 hrs):
+- Keep the temporary disable of the batching heuristic.
+- Roll a conservative gateway config with higher socket send buffer and more aggressive flush attempts.
+- Offer OmniData a temporary routing to a dedicated pool in us-west for the next 48h (we’ll need Ops approval for capacity).
+
+Medium (48–72h):
+- Full kernel-level audit and patch any socket driver anomalies.
+- Rework the chunk flush backoff logic to prefer immediate flush on low-latency sessions (demo path).
+
+I’ll draft a short exec note for Harper and Alex. Vivek, want me to include potential credit/compensation language?
+
+—Marissa
+Principal Product Manager, Runtime
+
+---
+Attachment stubs: none
+
+From: Vivek Kulkarni <vivek@redwood.ai>
+To: Harper Lane <harper@omnidata.io>; Account Exec - Alex Wu <alexw@omnidata.io>
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai, olga_petrov@redwood.ai, laura_bennett@redwood.ai
+Date: Thu, 18 Nov 2027 12:05:00 -08:00
+Subject: Re: Live demo blackout — multiple streaming requests silent
+
+Harper — quick update and proposed mitigation: thanks for the traces.
+
+What we found so far (short version):
+- Runtime emitted tokens but certain gateway nodes stopped flushing chunked frames to the client during intermittent backpressure events.
+- We temporarily disabled the recent batching heuristic and increased gateway send buffers which has restored steady chunk delivery in our repro harness.
+
+What we propose now:
+1) Immediate: route your demo traffic to a dedicated capacity pool in us-west for 48 hours (we can do this now).
+2) Credits: we’ll offer a one-off service credit for the session impact; Marissa and Laura will propose the exact amount and process.
+3) Root cause work: Ben + infra will run kernel-level captures tonight and we’ll produce a detailed RCA by EOD tomorrow.
+
+Would you like us to switch the routing for the next scheduled demo (Wednesday) preemptively? We can coordinate the cutover and test with you beforehand.
+
+-Vivek
+
+---
+Attachment stubs:
+- postmortem-proposal-draft.docx (docx, 23KB)
+
+From: Harper Lane <harper@omnidata.io>
+To: Vivek Kulkarni <vivek@redwood.ai>; Account Exec - Alex Wu <alexw@omnidata.io>
+Cc: support@omnidata.io
+Date: Sat, 20 Nov 2027 16:48:00 -08:00
+Subject: Re: Live demo blackout — multiple streaming requests silent
+
+Thanks for the rapid response and the proposed route. We appreciate the offer of a dedicated pool and the credit. Please proceed with the routing change for our next demo on Wednesday; Alex and I will be on the test window Friday morning to validate. We also need the formal RCA and the kernel-capture results before Monday so we can brief our leadership.
+
+Harper
+Head of Integrations, OmniData
+
+---
+Quoted earlier thread preserved above

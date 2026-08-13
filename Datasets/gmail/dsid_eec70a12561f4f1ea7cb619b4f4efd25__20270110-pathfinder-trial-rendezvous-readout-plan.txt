@@ -1,0 +1,148 @@
+Pathfinder: discovery recap + tactical timeline for kickoff to final readout
+
+From: Samir Patel <samir@pathfinder.ai>
+To: jonas_weber@redwood.com
+Cc: Alyssa Chen <alyssa@pathfinder.ai>
+Date: Mon, 4 Jan 2027 08:15:00 -0800
+Subject: Re: Intro / demo — next steps
+
+Thanks for the demo this morning, Jonas — good to meet the team. Alyssa and I discussed internally and we think a short, outcome-focused trial makes the most sense to validate latency and inference cost on our core search suggestion use case.
+
+Quick recap of Pathfinder's goals from the call:
+- 95th percentile latency under 120ms for single-turn suggestion queries (avg input length ~40 tokens)
+- End-to-end inference cost target <= $0.004/token for the workload mix we shared
+- Deterministic model behavior for the top-5 suggestions (stable ranking)
+- No production data leaves our VPC during the trial (must be deployable in your Private offering)
+
+What we need from Redwood to scope the trial:
+1) A proposed 6-week timeline with milestones (kickoff, mid-trial checkpoint, readout)
+2) Success criteria and the evaluation plan (how you'll measure latency, cost, and ranking stability)
+3) Ownership: who from Redwood will run the pilot day-to-day and who is our escalation contact
+4) A rough SOW / high-level workplan we can share with procurement
+
+If you can send a proposed plan by EOD Wednesday (Jan 6) that would help us align internally. We can be flexible on kickoff dates the week of Jan 18.
+
+Attachments: pathfinder_trial_scope_matrix.xlsx (workload slices we referenced)
+
+Best,
+Samir
+Director of Search Products
+Pathfinder AI
+
+From: jonas_weber@redwood.com <jonas_weber@redwood.com>
+To: Samir Patel <samir@pathfinder.ai>
+Cc: marissa_cole@redwood.com, neha_kapoor@redwood.com, Alyssa Chen <alyssa@pathfinder.ai>
+Date: Tue, 5 Jan 2027 09:42:00 -0800
+Subject: Re: Pathfinder: discovery recap + tactical timeline for kickoff to final readout
+
+Thanks, Samir — appreciate the clear priorities. Quick acknowledgement and proposed high-level plan below; Marissa (trial lead) will follow with the success criteria and eval plan in detail.
+
+High-level 6-week plan (proposed):
+- Week 0 (alignment): SOW sign + kickoff prep, access exchange, deployment plan (goal: Jan 18 kickoff)
+- Week 1 (kickoff + baseline): Deploy model variant in Pathfinder VPC (private), run baseline traffic, capture 24h latency/cost baseline
+- Weeks 2–4 (validation): Load slices 1–3 from your matrix; enable KV caching/batching experiments; weekly check-ins every Thursday
+- Week 5 (stability run): Run sustained load for 48–72h, collect 95th pct latency, token cost, and ranking drift metrics
+- Week 6 (readout): Final readout + decision rubric review; deliver artifacts and recommended production paths
+
+Ownership:
+- Redwood day-to-day: Marissa Cole (marissa_cole) — trial lead, config and metrics owner
+- Escalation / exec sponsor: Jonas Weber (jonas_weber) — commercial & timeline guardrail
+- Engineering contact (runtime tweaks): Neha Kapoor (neha_kapoor) — will own kernel/quantization experiments
+
+I'll attach a short SOW draft and evaluation template for your procurement. If this looks good, we can lock kickoff for Jan 19 (Tue) at 10:00 PT.
+
+Next steps:
+- Samir/Alyssa: confirm kickoff date and any security paperwork required for Private deployment
+- Jonah (sic, meant Jonas): provide final SOW and eval metrics by EOD Jan 6
+
+Thanks — I'll wait for Marissa to add the specific pass/fail thresholds.
+
+Best,
+Jonas
+Head of Solutions
+Redwood Inference
+
+From: marissa_cole@redwood.com <marissa_cole@redwood.com>
+To: Samir Patel <samir@pathfinder.ai>, Alyssa Chen <alyssa@pathfinder.ai>
+Cc: jonas_weber@redwood.com, neha_kapoor@redwood.com
+Date: Wed, 6 Jan 2027 11:05:00 -0800
+Subject: Re: Pathfinder: discovery recap + tactical timeline for kickoff to final readout
+
+Hi Samir / Alyssa — following up with the evaluation plan and concrete success criteria. Attaching the metrics template and a short checklist.
+
+Evaluation plan (how we'll measure):
+- Latency: collect p50/p95/p99 for end-to-end request (network + runtime) using your representative traffic replay. Measurement window: 24h baseline, then weekly 24h windows during validation, and 72h stability window. Use same request replay seed for ranking stability tests.
+- Cost: calculate per-token inference cost using tokenized payloads and total tokens served (include KV cache hit/miss accounting). Provide cost per 1M tokens normalized to your mix.
+- Ranking stability: run 1k canonical queries and compute top-5 Jaccard similarity between runs; threshold for pass = >= 0.92 average similarity across runs
+- Error and fallback: monitor model timeouts, rate-limited responses, and any degrades; pass = fewer than 0.1% client-facing errors during stability run
+
+Concrete pass/fail thresholds (proposal):
+- Latency p95 <= 120ms (pass), 120–160ms (yellow), >160ms (fail)
+- Cost <= $0.004/token (pass), $0.004–$0.006 (yellow), >$0.006 (fail)
+- Ranking stability average >= 0.92 (pass)
+- No data egress outside Pathfinder VPC (hard requirement)
+
+Operational checkpoints: weekly Thursday 30-min syncs (15-min demo, 15-min blockers) — Jan 21, Jan 28, Feb 4, Feb 11
+
+Deliverables from Redwood:
+- Pre-kickoff checklist + infra runbook
+- Instrumented metrics dashboard link (read-only)
+- Final readout deck with cost/latency/ranking analysis and suggested production configuration
+
+Attachments: evaluation-metrics-template.csv, redwood-sow-draft-v1.docx
+
+Questions for you:
+1) For traffic replay, can you provide an anonymized 48h sample by Jan 14? (we only need tokenized payloads)
+2) Any internal compliance forms we should expect from procurement? we can pre-fill some fields in the SOW to speed review.
+
+Happy to iterate on thresholds once you review.
+
+—Marissa
+Senior Solutions Engineer
+Redwood Inference
+
+From: Samir Patel <samir@pathfinder.ai>
+To: marissa_cole@redwood.com, jonas_weber@redwood.com
+Cc: Alyssa Chen <alyssa@pathfinder.ai>, procurement@pathfinder.ai
+Date: Fri, 8 Jan 2027 09:13:00 -0800
+Subject: Re: Pathfinder: discovery recap + tactical timeline for kickoff to final readout
+
+Thanks Marissa — this is exactly what we need. A few clarifications from procurement/security side: 
+- We can provide an anonymized 48h sample by Jan 13.
+- Data residency: we need confirmation that the Private package will run inside our AWS account in us-west-2; any telemetry collected by Redwood must be opt-in and routed to our logging endpoint.
+- SOW: procurement asked for an itemized payment schedule and a statement of acceptance criteria tied to readout deliverables.
+
+On thresholds: the 0.92 top-5 Jaccard is fine; procurement asked if you can provide historical examples of ranking stability numbers for similar customers (high level, no PII) — that will help speed sign-off.
+
+We can lock Jan 19 kickoff at 10:00 PT — Alyssa confirms, but that's our preference.
+
+Samir
+
+On Fri, Jan 8, 2027 at 08:15 AM Redwood Inference <jonas_weber@redwood.com> wrote:
+> Thanks — confirming we can run Private in your us-west-2 account. We'll provide opt-in telemetry wiring in the infra runbook.
+
+
+From: jonas_weber@redwood.com <jonas_weber@redwood.com>
+To: Samir Patel <samir@pathfinder.ai>, Alyssa Chen <alyssa@pathfinder.ai>, procurement@pathfinder.ai
+Cc: marissa_cole@redwood.com, neha_kapoor@redwood.com
+Date: Sun, 10 Jan 2027 16:22:00 -0800
+Subject: Re: Pathfinder: discovery recap + tactical timeline for kickoff to final readout
+
+Great — thanks for the fast turnaround, team. Final operational notes and next steps before kickoff (Jan 19, 10:00 PT):
+
+1) SOW and payment schedule: attached redwood-sow-draft-v1.docx with an itemized payment schedule tied to kickoff (20%), mid-trial readout (30%), and final acceptance (50%). Please review and flag changes — we can move to DocuSign once procurement confirms.
+2) Pre-kickoff checklist: we need the anonymized 48h traffic sample by Jan 14 and an AWS cross-account role for our deploy (instructions in the infra runbook).
+3) Weekly cadence: Thursdays 10:00–10:30 PT (Jan 21, 28; Feb 4, 11). I'll send calendar invites after this thread.
+4) Readout date: Feb 26, 2027 (final deck + acceptance rubric) — conservative buffer after the 6-week window to allow analysis.
+
+Attachments: redwood-sow-draft-v1.docx, pathfinder-trial-runbook.pdf (infra and telemetry wiring)
+Links: https://app.hubspot.com/contacts/123456/company/7412, https://docusign.com/embedded/s/ABC-Pathfinder-SOW-7412
+
+If procurement needs a tailored acceptance clause we can add a short amendment — happy to coordinate directly with procurement@pathfinder.ai.
+
+See you on Jan 19.
+
+Best,
+Jonas
+Head of Solutions
+Redwood Inference

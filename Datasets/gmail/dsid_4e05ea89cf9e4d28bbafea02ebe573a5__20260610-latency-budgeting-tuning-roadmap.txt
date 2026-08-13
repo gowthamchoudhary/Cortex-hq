@@ -1,0 +1,127 @@
+Latency budget & tuning roadmap for AtlasAI onboarding
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Danielle Rivera <danielle@atlasai.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Rachel Kim <rachel_kim@redwood.com>
+Date: Wed, 10 Jun 2026 09:12:00 -0700
+Subject: Latency budget & tuning roadmap for AtlasAI onboarding
+
+Hi Danielle —
+
+Thanks again for the demo yesterday. To make the onboarding run smoothly on our side, I want to lock in your latency budget and the initial tuning approach so engineering can scope the implementation sprint. High level asks:
+
+- Confirm your P95 latency target for interactive queries (you mentioned ~150ms).
+- Share an anonymized sample of typical request sizes and a tail distribution if available.
+- Confirm expected steady-state QPS and peak burst QPS.
+
+Proposed approach for first 2-week sprint (what we’ll deliver):
+1) Baseline run with your sample workload and our default quant profile (q4_0) to get token-level cost baseline.
+2) Apply KV prefix cache with a 5m TTL candidate and per-route cache keys for repeat queries.
+3) Tune batching window to balance p95 vs cost (we’ll test 8ms / 16ms / 32ms windows).
+4) Evaluate two quant profiles (int8-q4_0 and int8-q3_1 fallback) and pick final production profile.
+5) Configure smart routing: primary: high-performance variant in us-west, fallback: cost-optimized variant in us-west2.
+
+I attached a short runbook template and an example of the query profile you can drop into our test harness (atlas_query_profiles.json). Can you confirm the SLO and share the sample payloads? Also propose two 60-minute windows for a joint implementation kickoff next week.
+
+Thanks —
+Karthik
+
+--
+Karthik Iyer
+Solutions Engineer, Redwood Inference
+karthik_iyer@redwood.com
+Redwood Inference
+
+From: Danielle Rivera <danielle@atlasai.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: procurement@atlasai.com
+Date: Wed, 10 Jun 2026 13:05:22 -0700
+Subject: Re: Latency budget & tuning roadmap for AtlasAI onboarding
+
+Hi Karthik —
+
+Thanks, this looks good. Confirming the SLO: P95 = 150ms for interactive retrievals; P99 is not strict for the first month but we'd like to track it.
+
+I've attached a representative sample of queries (atlas_query_profiles.json) — those are redacted to remove PII. Typical payload sizes range from 150–600 tokens; median ~220. Steady-state QPS: 12 qps, peak bursts up to 75 qps for short windows (sub-5m). Monthly embedding/hosting estimate: ~1.2M tokens.
+
+We can do kickoff windows: Tue 2026-06-16 10:00–11:00 PT or Wed 2026-06-17 14:00–15:00 PT. Either works for our engineers. Procurement is looped on budget/PO.
+
+Thanks —
+Danielle
+
+Attachments: atlas_query_profiles.json
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Danielle Rivera <danielle@atlasai.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>, Rachel Kim <rachel_kim@redwood.com>
+Date: Thu, 11 Jun 2026 08:30:00 -0700
+Subject: Re: Latency budget & tuning roadmap for AtlasAI onboarding
+
+Danielle — great, thanks for the profile and SLO. Based on the numbers you shared, here’s a more concrete plan and the acceptance criteria we’ll use during the sprint: 
+
+Sprint plan (2 weeks):
+- Week 1: Baseline + switches
+  - Baseline run against your sample set using q4_0. Measure p95, p99, and cost/tokens.
+  - Enable KV prefix caching for exact-repeat and high-similarity queries. Initial TTL 5m; we’ll test 1m/10m in experiments.
+  - Start continuous-batching experiments with target windows: 8ms, 16ms, 32ms. We’ll measure latency tail and token cost.
+- Week 2: Quant + routing + productionization
+  - Test int8-q4_0 and int8-q3_1; measure answer drift on a small eval set (we’ll use your redacted evals) and pick a production profile.
+  - Implement routing policy: route interactive reads to the high-perf variant; if average queue depth exceeds threshold or p95 breaks, failover to cost-optimized variant.
+  - Run a 2-hour soak at synthetic 80 qps to validate autoscaling and cache behavior.
+
+Acceptance criteria (sign-off):
+- P95 <= 160ms on baseline eval (we will target 150ms but allow a 10% buffer during tuning).
+- Cost per 1k tokens within 15% of baseline after quantization and batching adjustments.
+- No functional regressions on the eval set (we’ll surface any >3% semantic change for review).
+
+Action items for AtlasAI before kickoff:
+1) Provide a shared synthetic workload script (or confirm we can replay from the sample file).
+2) Confirm whether you prefer a 5m or 10m caching TTL for high-hit routes (we recommend 5m to start).
+3) Approve the two kickoff windows (we’ll send a calendar invite on confirmation).
+
+I’ve also created a short shared runbook in Drive here: https://drive.google.com/open?id=1Xq_example_runbook — it includes the test checklist and our measurement spreadsheet.
+
+If that looks good Monica/vivek, we’ll scope any Dedicated capacity needs based on the soak results — I’ve put a placeholder in the runbook for dedicated pool sizing.
+
+-Karthik
+
+> On Wed, Jun 10, 2026 at 13:05, Danielle Rivera <danielle@atlasai.com> wrote:
+> > Thanks, this looks good. Confirming the SLO: P95 = 150ms ...
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Danielle Rivera <danielle@atlasai.com>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: Thu, 11 Jun 2026 12:45:12 -0700
+Subject: Re: Latency budget & tuning roadmap for AtlasAI onboarding
+
+Thanks Karthik — solid plan. A couple practical notes from the Dedicated/contracts side:
+
+- If the soak test shows sustained 80 qps for >30m, we’ll need to discuss a short-term burst reservation (Dedicated burst) to meet strict latency SLOs; that will be a one-time add-on for the onboarding period.
+- I attached our dedicated pricing term sheet that lists burst increments and billing cadence.
+- Can AtlasAI procurement confirm target total monthly commit so we can model Dedicated vs hosted economics (procurement@atlasai.com is cc’d).
+
+Also, Vivek — can you check whether the proposed routing failover threshold can be implemented without extra infra work? We want to avoid a two-week blocker.
+
+Monica
+
+Attachments: dedicated-pricing-term-sheet.pdf
+
+From: Danielle Rivera <danielle@atlasai.com>
+To: Monica Patel <monica_patel@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: procurement@atlasai.com
+Date: Fri, 12 Jun 2026 16:40:00 -0700
+Subject: Re: Latency budget & tuning roadmap for AtlasAI onboarding
+
+Monica/Karthik —
+
+Thanks — we’re aligned. Procurement confirms target monthly commit of $18k for the first quarter; procurement@atlasai.com will follow up with PO steps. For caching TTL we’re fine starting at 5m.
+
+We’ll take the Tue 2026-06-16 10:00 PT kickoff. I’ve added our infra lead (cc’d on a separate message) and uploaded a small eval set to the Drive link you shared.
+
+Please send over the mutual action plan and a short checklist for post-sprint handoff (documentation, runbook entry points, and rollback steps).
+
+Looking forward —
+Danielle
+
+> On Thu, Jun 11, 2026 at 08:30, Karthik Iyer <karthik_iyer@redwood.com> wrote:
+> > Danielle — great, thanks for the profile and SLO. Based on the numbers ...

@@ -1,0 +1,122 @@
+Private deployment: pinset expiry & micropatch contingency protocol
+
+From: kimberly_park <kimberly_park@redwood.com>
+To: Asha Reddy <asha.reddy@greenline.health>, Greenline Ops <ops@greenline.health>
+Cc: rafael_mendes <rafael_mendes@redwood.com>, karthik_iyer <karthik_iyer@redwood.com>, soojin_lee <soojin_lee@redwood.com>
+Date: 2026-07-20T09:12:00-07:00
+Subject: Private deployment: pinset expiry & micropatch contingency protocol
+
+Hi Asha —
+
+Quick heads-up: the version pin on your private deployment (pinset ID GL-2025-08) is scheduled to expire on 2026-07-27 23:59 UTC unless we extend or re-pin. We want to avoid surprise drift and are proposing a short maintenance window to apply a micropatch that addresses the CVE in the runtime library and refreshes a small kernel build. This is a micropatch (no schema changes) and should be low-risk if we follow the runbook.
+
+Proposed windows (pick one):
+- Option A: 2026-07-25 00:00–04:00 UTC (overnight Fri/Sat)
+- Option B: 2026-07-26 22:00–02:00 UTC (preferred for your operations team per previous cadence)
+
+Planned approach:
+- Canary 10% of fleet (target non-production slice + 10% of production)
+- Run smoke generation tests & latency/throughput checks for 30m
+- If green, roll to remaining nodes in 15–30 minute batches with traffic-split 90/10 during ramp
+- KV-cache warm-up and warm restart to avoid cold-cache spikes
+- Circuit-breaker: automatic rollback on latency >2x baseline for 3 consecutive intervals or error-rate >1%
+
+Rollback plan (short):
+- Immediately revert pin in control plane, fall back to pinned-compatible variant (v2.3-compat)
+- If model-level state is corrupted, perform snapshot restore from preflight snapshot (we will take snapshot at T-30m)
+- Engineering standby for hotfix rollback (SSH access and runbook script attached)
+
+Attachments: greenline_patch_runbook_v1.md (runbook), micropatch_script_v1.sh (execution helper), soc2_evidence_redacted.pdf (requested evidence that micropatch does not materially change data flows)
+
+Ask: Please confirm acceptance of Option B or propose an alternate window before EOD 2026-07-21. Also confirm whether you want a 10% canary or a smaller 3% canary. We need a formal sign-off to schedule automated pin expiration handling.
+
+Thanks,
+Kimberly Park
+Senior Technical Program Manager, Redwood Inference
+kimberly_park@redwood.com
+
+
+From: Asha Reddy <asha.reddy@greenline.health>
+To: kimberly_park <kimberly_park@redwood.com>
+Cc: Greenline Ops <ops@greenline.health>, rafael_mendes <rafael_mendes@redwood.com>
+Date: 2026-07-20T10:03:00-07:00
+Subject: Re: Private deployment: pinset expiry & micropatch contingency protocol
+
+Thanks, Kimberly.
+
+We appreciate the heads-up. Constraints from our side: no maintenance during 08:00–20:00 local (PDT) Mon–Fri; we require a minimum 72-hour notice for any changes that touch production. Option B (2026-07-26 22:00–02:00 UTC) looks doable for us, assuming the canary is limited to 10% and the runbook includes verification steps for model fidelity (we'll run our QA prompts).
+
+Please also include the SOC2 excerpt that states change-control procedures are not impacted; I see soc2_evidence_redacted.pdf in attachments — good. We will need the final runbook link and a DocuSign approval for our change board before 2026-07-23 12:00 UTC.
+
+Two asks from ops: please ensure a pre-patch snapshot (T-30m) is captured and retained for 7 days, and that you provide a short checklist we can run during the canary (latency, 99th percentile, sample prompt fidelity).
+
+If you send the DocuSign, I'll route to my change board for approval.
+
+—Asha
+Asha Reddy
+Director, Infrastructure & Ops — Greenline Health
+asha.reddy@greenline.health
+
+
+From: karthik_iyer <karthik_iyer@redwood.com>
+To: kimberly_park <kimberly_park@redwood.com>, rafael_mendes <rafael_mendes@redwood.com>, soojin_lee <soojin_lee@redwood.com>
+Cc: Asha Reddy <asha.reddy@greenline.health>, Greenline Ops <ops@greenline.health>
+Date: 2026-07-20T12:14:00-07:00
+Subject: Re: Private deployment: pinset expiry & micropatch contingency protocol
+
+Adding operational detail so the runbook is explicit. Replying inline to Asha's asks.
+
+- Canary size: default 10% is reasonable for this micropatch; we can reduce to 3% if Greenline prefers fewer users impacted. 10% gives better signal for throughput/latency regressions.
+
+- Preflight snapshot: we'll create a full model/container snapshot at T-30m and push to your S3 bucket (redwood-exports/greenline/backups/YYYYMMDD_HHMM). Retention: 7 days by default per request.
+
+- Canary checklist (to include in runbook):
+  1) Monitor token generation latency: baseline 50ms p50 / 320ms p99; fail if p99 > 640ms for 10m
+  2) Error-rate monitor: fail if 5xx spike > 1% across requests in 5m window
+  3) Fidelity smoke: run sample prompt set (attached to runbook) and verify 5 golden prompts return expected structure and no hallucination regressions
+  4) KV-cache hit rate: must not fall below 70% after warm-up window
+
+- Rollback commands (short):
+  - control-plane: redwoodctl pin revert --deployment GL-2025-08 --target v2.3-compat
+  - ops: run restore_snapshot.sh <snapshot_id> (script included: micropatch_script_v1.sh)
+
+- Circuit-breaker automation: configured in canary policy. If triggered, we automatically halt rollout, send pager, and revert traffic split to 100% v2.3-compat.
+
+I've added a short preflight test plan to the runbook (see Drive link). If Asha signs off on Option B and the DocuSign request goes through, we'll assign owners and schedule a dry-run for 2026-07-24 (staging only).
+
+On Tue, Jul 20, 2026 at 10:03 AM Asha Reddy <asha.reddy@greenline.health> wrote:
+> Thanks, Kimberly.
+> 
+> We appreciate the heads-up....
+
+
+From: rafael_mendes <rafael_mendes@redwood.com>
+To: Asha Reddy <asha.reddy@greenline.health>, kimberly_park <kimberly_park@redwood.com>, karthik_iyer <karthik_iyer@redwood.com>, soojin_lee <soojin_lee@redwood.com>
+Date: 2026-07-20T15:48:00-07:00
+Subject: Re: Private deployment: pinset expiry & micropatch contingency protocol
+
+Thanks all — I'll consolidate and own the ops coordination for the window. Summary & next steps: 
+
+1) Window: Option B confirmed — 2026-07-26 22:00–02:00 UTC (Greenline ops accepted conditionally). DocuSign link will be sent to Asha for change-board approval (target: 2026-07-22 12:00 UTC).
+2) Canary: 10% production slice + staging canary.
+3) Preflight snapshot: T-30m, retained 7 days (we will place a copy in greenline bucket).
+4) Runbook & checks: final runbook link & micropatch script attached in Drive (see related_links).
+5) Rollback: automated pin revert + snapshot restore. Karthik will lead rollback play.
+6) Pager rotation: Rafael (owner), Karthik (backup), Soojin (eng lead), Kimberly (PM/contact) — please confirm availability during window.
+
+Action items: 
+- Kimberly: send DocuSign for Change Board approval (due 2026-07-22 12:00 UTC)
+- Karthik: finalize the staging dry-run checklist and test harness by 2026-07-23 18:00 UTC
+- Soojin: validate the automated circuit-breaker thresholds in staging by 2026-07-24 12:00 UTC
+- Asha: route DocuSign to Change Board and confirm result
+
+I'll update the Drive runbook with the final signature block and will post an after-action-summary link in this thread once the window closes.
+
+Docs & attachments referenced: greenline_patch_runbook_v1.md, micropatch_script_v1.sh, soc2_evidence_redacted.pdf
+DocuSign: https://app.docusign.com/1234-approval
+Runbook: https://drive.redwood.com/teams/ops/greenline/patch_runbook_v1
+
+-rm
+Rafael Mendes
+Senior Manager, Customer Reliability — Redwood Inference
+rafael_mendes@redwood.com

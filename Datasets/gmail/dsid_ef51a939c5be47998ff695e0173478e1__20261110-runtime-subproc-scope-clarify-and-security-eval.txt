@@ -1,0 +1,94 @@
+Clarify runtime subprocessor scope & security sign-off needed
+
+From: Marc Sullivan <marc.sullivan@bluecrest.ai>
+To: olga_petrov <olga.petrov@redwood.ai>
+Cc: contracts@bluecrest.ai
+Date: Tue, 10 Nov 2026 09:42:00 -0800
+Subject: DPA redline + runtime subprocessor scope question
+
+Hi Olga,
+
+Thanks again for the demo last week. The legal team at BlueCrest reviewed Redwood's DPA and flagged one runtime-related clause that needs clarification before we can sign. Specifically, we ask for an explicit carve-in to allow our analytics subprocessor (DataSight) to receive transient KV-cache snapshots and minimal runtime traces for troubleshooting and model performance analysis.
+
+I've attached a redline (bluecrest_dpa_redline_v3.pdf) and a simple runtime-dataflow-diagram.png to show where DataSight would interact with the runtime. Our ask: a narrow subprocessor exception limited to (a) non-persistent KV snapshots, (b) no training use, and (c) a 30-day deletion guarantee.
+
+Can you route this to Product and Security for a quick scope & risk review? We're trying to close the procurement window this month.
+
+Best,
+Marc Sullivan
+Head of Platform Partnerships | BlueCrest Analytics
+marc.sullivan@bluecrest.ai
+
+--
+Attachment: bluecrest_dpa_redline_v3.pdf (application/pdf)
+Attachment: runtime-dataflow-diagram.png (image/png)
+From: olga_petrov <olga.petrov@redwood.ai>
+To: laura_bennett <laura.bennett@redwood.ai>, karthik_iyer <karthik.iyer@redwood.ai>, irene_choi <irene.choi@redwood.ai>
+Cc: Marc Sullivan <marc.sullivan@bluecrest.ai>, contracts@bluecrest.ai
+Date: Tue, 10 Nov 2026 10:15:00 -0800
+Subject: Re: DPA redline + runtime subprocessor scope question
+
+Team — looping you in. BlueCrest wants an exception that would permit their analytics partner to access transient KV-cache snapshots and limited runtime traces for debugging/perf analysis. They emphasize non-persistent storage and no training. Redline attached by Marc.
+
+Questions for Product/Security:
+- Is there a supported/implemented path to export the specific KV fragments they're asking for without exposing full model ROI or PII?
+- What controls would we need to enforce (e.g., allowlist, encryption-in-flight, strict retention/auto-delete, purpose-limited contract language)?
+- Would this require a runtime change (new endpoint or temporary job) or can we satisfy with existing telemetry exports?
+
+Marc asked for an expedited review — procurement timeline is tight. Can we get an initial assessment + required guardrails by EOD tomorrow? If Product or Security needs a short async call with BlueCrest, say the time and I'll coordinate.
+
+Thanks,
+Olga Petrov
+Sr. Counsel, Privacy & Security
+Redwood Inference
+
+> On Tue, Nov 10, 2026 at 09:42 AM Marc Sullivan <marc.sullivan@bluecrest.ai> wrote:
+> [original message and attachments referenced above]
+From: laura_bennett <laura.bennett@redwood.ai>
+To: olga_petrov <olga.petrov@redwood.ai>, karthik_iyer <karthik.iyer@redwood.ai>, irene_choi <irene.choi@redwood.ai>
+Date: Tue, 10 Nov 2026 12:03:00 -0800
+Subject: Re: DPA redline + runtime subprocessor scope question
+
+Thanks for the ping, Olga. Quick Product take: we want to avoid any path that creates an operational dependency on external partners for live KV cache access. That said, supporting a narrow, auditable export for debugging is reasonable if we can meet these constraints:
+
+- Export must be sampled and scope-limited (token ranges + hashed keys only).
+- No persistent storage in BlueCrest/DataSight infrastructure — we can push a one-time ephemeral package into a pre-signed S3 with 30-day auto-delete enforced by a lifecycle rule.
+- Access must be gated: RBAC + signed, time-limited URL + allowlist of recipient OWNs.
+- We should avoid creation of a new always-on endpoint; prefer on-demand job triggered by Redwood ops.
+
+Operational impacts: engineering will need a small change to produce the sampled artifact and the autos-delete lifecycle. Estimate: 3 dev days + 1 ops day to QA and add audit hooks. If Security is comfortable with the controls and Legal accepts the narrow language, Product can schedule this for a minor sprint (target canary next month).
+
+Karthik: can you confirm whether the sample shape (we discussed hashed keys + token index + timing metadata) is sufficient for BlueCrest's analytics team?
+
+Laura Bennett
+Director, Product Management — Serving Runtime
+Redwood Inference
+
+> On Tue, Nov 10, 2026 at 10:15 AM Olga Petrov <olga.petrov@redwood.ai> wrote:
+> [internal routing note to Product/Security]
+From: irene_choi <irene.choi@redwood.ai>
+To: olga_petrov <olga.petrov@redwood.ai>, laura_bennett <laura.bennett@redwood.ai>, karthik_iyer <karthik.iyer@redwood.ai>
+Cc: Marc Sullivan <marc.sullivan@bluecrest.ai>, contracts@bluecrest.ai
+Date: Wed, 11 Nov 2026 14:05:00 -0800
+Subject: Re: DPA redline + runtime subprocessor scope question
+
+Appreciate the detail. Security checklist & conditional sign-off below. In short: we can approve a limited subprocessor exception if the following controls and commitments are in place and documented in the DPA addendum: 
+
+Required controls (must be written into the DPA addendum or supported by auditable tech controls):
+1) Data minimization: exported artifact contains only hashed keys, sampled token positions, and non-identifying timing metadata. No request/response payloads that contain user-provided content.
+2) Encryption in transit + at rest for any temporary storage (presigned S3 must enforce SSE).
+3) Short-lived access: presigned URL TTL <= 24 hours; lifecycle rule to purge after 30 days; vendor must provide signed ack of deletion within 5 business days of request.
+4) Contractual prohibition on training and model reconstruction: explicit clause; annual attestation from DataSight, and right-to-audit clause limited to verification of the deletion/handling processes.
+5) Subprocessor SOC2 Type II evidence and proof of key management controls prior to first export.
+6) Audit logging: every export must generate an immutable audit event (who triggered, which artifacts, timestamp) retained for 365 days and viewable by Redwood compliance under NDA.
+
+Operational guardrails: exports must be run by Redwood Ops (no direct API access to KV by external vendor). Product's plan to use a one-off job + presigned S3 aligns with this.
+
+If Legal drafts an addendum with the above and Product provides the implementation plan + dev estimate, Security will provide formal sign-off. Also ask Legal to include an emergency rollback and termination clause if misuse is detected.
+
+Irene Choi
+Head of Security Engineering
+Redwood Inference
+
+> On Tue, Nov 10, 2026 at 12:03 PM Laura Bennett <laura.bennett@redwood.ai> wrote:
+> [product assessment and implementation estimate]

@@ -1,0 +1,120 @@
+Post-call: data trajectory for prompt outputs — PII TTL & residency confirmation
+
+From: Chloe Martin <chloe.martin@redwood.com>
+To: Emma Salazar <emma@baysidehealth.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Sat, 03 Oct 2026 16:15:00 -0700
+Subject: Post-call: data trajectory for prompt outputs — PII TTL & residency confirmation
+
+Hi Emma — thanks again for a productive call today. Quick recap and the concrete asks we discussed so your legal/security teams can review: 
+
+Summary of what we heard from Bayside Health
+- Use case: clinician-facing summarization assistant that ingests transcripts and patient identifiers to pre-populate charts.
+- Requirement: customer wants no persistent storage of raw PII-containing prompt inputs in hosted environments; allowed to persist sanitized outputs for up to 90 days for QA/monitoring.
+- Residency: primary storage must be in us-east-1 (US-only).
+- Audit: need token-level logs showing request timestamps and model variant, with ability to export audit logs for SOC reporting.
+
+What Redwood can provide (initial position)
+- Prompt inputs: ephemeral pathing — by default hosted API does not persist full prompt payloads for customers who opt into ephemeral mode. We can ensure inputs are not written to long-term object storage.
+- Outputs: we can persist generated outputs to a customer-scoped bucket with configurable TTL; suggestion is configurable options of 0, 7, 30, 90 days.
+- Logs & tracing: request metadata (timestamp, model id, response size) retained for 13 months in audit logging; we can enable export of logs in CSV/JSON for your compliance team.
+- Residency: we can pin storage and audit exports to us-east-1 for Hosted accounts; Dedicated/Private available if you need air-gapped control.
+
+Open items (asks for your team)
+1) Confirm which TTL option you want for generated outputs (0 / 7 / 30 / 90 days).
+2) Confirm whether QA snapshots will include patient identifiers post-redaction or strictly de-identified outputs.
+3) LegalOps: any specific format required for audit exports (CSV with columns X,Y,Z).
+
+Next steps
+- I attached a lightweight prompt-data matrix mapping what Redwood can store and for how long. If OK, Ben will follow with a short MSA appendix language for storage & retention.
+
+Thanks — I also looped in Karthik (security) to weigh in on the technical controls.
+
+Best,
+Chloe Martin
+Account Executive | Redwood Inference
+chloe.martin@redwood.com
+(415) 555-0183
+
+Attachments: redwood_prompt-data-matrix_20261003.xlsx (spreadsheet, 12KB); bayside_requirements_2026-10-03.pdf (attachment)
+
+From: Emma Salazar <emma@baysidehealth.com>
+To: Chloe Martin <chloe.martin@redwood.com>
+Cc: Raj Patel <raj.patel@baysidehealth.com>, LegalOps <legalops@baysidehealth.com>
+Date: Sun, 04 Oct 2026 09:48:00 -0700
+Subject: Re: Post-call: data trajectory for prompt outputs — PII TTL & residency confirmation
+
+Thanks, Chloe — appreciate the clear recap. A few clarifications from our side after running this by product and legal: 
+
+Answers to your asks
+1) TTL for outputs: for initial pilots we need 30-day retention for generated outputs (QA + clinician rollback). Will revisit after pilot.
+2) QA snapshots: must be de-identified where possible. If outputs require PHI to validate model behavior, we need explicit fields redacted prior to storing; we can provide a redaction list (PHI fields) to Redwood.
+3) Audit export format: LegalOps prefers a JSONL export with fields: timestamp, request_id, model, region, response_token_count. CSV OK as fallback.
+
+Additional constraints
+- We cannot allow any raw prompt payloads that contain full patient identifiers to be stored long term in multi-tenant hosted storage. Temporary ephemeral caching for inference path is fine as long as it is not persisted beyond processing.
+- Residency: confirm that audit exports and retained outputs will both be located in us-east-1.
+
+If you can send a one-page appendix that lists these commitments (TTL, redaction approach, residency, export format), LegalOps will sign off for the pilot.
+
+Thanks — Emma
+Emma Salazar
+Head of Product, Bayside Health
+emma@baysidehealth.com
+
+On Sat, Oct 3, 2026 at 4:15 PM Chloe Martin <chloe.martin@redwood.com> wrote:
+> (original message)
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Chloe Martin <chloe.martin@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 05 Oct 2026 10:02:00 -0700
+Subject: RE: Post-call: data trajectory for prompt outputs — PII TTL & residency confirmation
+
+Chloe / Ben — quick technical read from security. Below are commitments we can make for Hosted pilot and notes where Dedicated/Private would be required: 
+
+Hosted (options)
+- Ephemeral inputs: we will enable request-level ephemeral mode for Bayside; inputs will live only in RAM and transient caches and will not be written to object storage when ephemeral mode is enabled.
+- Output TTLs: we can support 0 / 7 / 30 / 90 day TTL on the output store; TTL enforcement is a retention policy on the customer-scoped object store. We can set to 30 days for the pilot as requested.
+- Redaction pipeline: Redwood can apply a pre-store redaction hook. We recommend the redaction occurs client-side when possible; server-side redaction can be enabled but requires a sample of the redaction list to test.
+- Audit logs: request metadata retained for 13 months in our audit pipeline; we can provide JSONL exports scoped to your account and pinned to us-east-1. Note: full request body will not be included in exported logs when ephemeral mode is on.
+
+When Dedicated/Private is required
+- If Bayside needs cryptographic separation (customer-managed KMS/HSM) for stored outputs, or if LegalOps requires absolute proof that no multi-tenant copies exist, Dedicated or Private deployment is recommended.
+
+Actionable items for sales/legal
+- Chloe: produce appendix language describing ephemeral-mode behavior, TTL=30d for pilot, audit JSONL fields, and residency commitment to us-east-1.
+- Ben: please draft proposed appendix and proposed pricing delta for TTL=30d and audit export frequency.
+
+I'll stand by to validate appendix text with technical wording.
+
+Thanks,
+Karthik Iyer
+Principal Security Engineer | Redwood Inference
+karthik.iyer@redwood.com
+
+
+From: Chloe Martin <chloe.martin@redwood.com>
+To: Emma Salazar <emma@baysidehealth.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, LegalOps <legalops@baysidehealth.com>
+Date: Tue, 06 Oct 2026 11:02:00 -0700
+Subject: Re: Post-call: data trajectory for prompt outputs — PII TTL & residency confirmation
+
+Emma / Raj / LegalOps — thanks for the quick turnaround. Per Karthik's notes, here's the short appendix language we propose for the pilot (please confirm):
+
+Proposed one-page appendix (pilot commitments)
+- Ephemeral prompt inputs: Redwood will enable ephemeral request handling for Bayside Health pilot accounts. Prompt inputs containing PII will not be written to Redwood long-term object storage; they will only be processed in memory and transient caches.
+- Output retention: Generated outputs (post-redaction where applicable) will be stored in a customer-scoped object store in us-east-1 with a retention TTL of 30 days. Objects will be automatically purged at TTL expiration.
+- Redaction: Bayside will provide a redaction list of PHI fields. Redwood will validate server-side redaction in a test harness prior to pilot start; customer-side redaction is recommended for sensitive fields.
+- Audit exports: Redwood will provide JSONL audit exports (timestamp, request_id, model, region, response_token_count) scoped to the Bayside account and pinned to us-east-1; exports will be available on request and retained for 13 months for compliance.
+
+If this matches your expectations I will have Ben attach the appendix as a PDF and a short pricing note for the 30-day retention pilot. If LegalOps needs tighter language (e.g., dedicated KMS or proof-of-non-replication), please flag and we can scope Dedicated/Private options.
+
+Action: Emma / LegalOps — reply with Approve or Suggest Edits.
+
+Best,
+Chloe Martin
+Account Executive | Redwood Inference
+chloe.martin@redwood.com
+
+Attachments: redwood_prompt-data-matrix_20261003.xlsx (spreadsheet)

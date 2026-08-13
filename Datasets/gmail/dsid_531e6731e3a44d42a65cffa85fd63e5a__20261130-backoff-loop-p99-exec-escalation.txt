@@ -1,0 +1,102 @@
+Hosted API sudden p95/p99 regression — 429 backoff loop & customer impact
+
+From: Sylvia Kapoor <sylvia.kapoor@acme-retail.com>
+To: Connor O'Brien <connor_obrien@redwood.ai>
+Cc: ACME Platform <ops@acme-retail.com>; Raj Patel <raj.patel@acme-retail.com>
+Date: Mon, 30 Nov 2026 09:12:00 -0800
+Subject: Spike in p95/p99 today — severe timeouts (we're blocking on checkout)
+
+Connor —
+
+We started seeing a big regression in token-level latency this morning at ~08:40 PST. Our checkout service that calls the Redwood hosted API hit elevated p95/p99 (p99 ~1.9s -> 6.8s) and a rise in 429s. Customers are seeing timeouts in the checkout flow and we have multiple carts stuck.
+
+Attached is a screenshot from our APM (p95-dash) and a short log snippet showing retries/failures. We suspect a cascade of retries after 429s — our infra backed off, but the symptom is we're getting long tail latency spikes and occasional timeouts from Redwood calls.
+
+This is impacting the holiday rush for us. Can you escalate to your SRE/eng team? Need ETA on mitigation and whether a temporary throughput increase or quotas change can help.
+
+Sylvia
+Sylvia Kapoor
+Head of Platform, Acme Retail
+--- attachment: p95-dash-20261130.png (image/png)
+--- attachment: service-logs-snippet.txt (text/plain)
+
+From: Connor O'Brien <connor_obrien@redwood.ai>
+To: Sylvia Kapoor <sylvia.kapoor@acme-retail.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Mon, 30 Nov 2026 09:27:00 -08:00
+Subject: Re: Spike in p95/p99 today — severe timeouts (we're blocking on checkout)
+
+Sylvia — thanks for the quick report and attachments. I’m escalating to our infra on-call (cc’d).
+
+Quick ask while we triage: can you confirm the client retry strategy (initial backoff, multiplier, max attempts) and whether you recently changed any rate-limiting or caching settings on checkout? Any sample request IDs (x-request-id) is helpful — the log snippet you sent had two but I couldn't resolve them.
+
+Rishi / Hannah — can you validate if there's a service-side spike or a degradation in the shared token-generation pool? I'm particularly worried about 429-driven retry amplification in our shared hosted pool during the peak. If needed we should consider temporarily raising the per-tenant burst limit for Acme or routing them to a warmed dedicated pool.
+
+Connor
+Account Exec — Redwood Inference
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Connor O'Brien <connor_obrien@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>, Sylvia Kapoor <sylvia.kapoor@acme-retail.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Mon, 30 Nov 2026 10:03:00 -08:00
+Subject: Re: Spike in p95/p99 today — severe timeouts (we're blocking on checkout)
+
+Thanks for the heads up — we've pulled relevant traces and logs. Preliminary findings: starting 08:38 PST we see a 3x increase in concurrent token requests from Acme's API key and a correlated rise in 429 responses from our per-tenant rate limiter. Around the same time several clients retry aggressively (exponential backoff with low jitter and max attempts 8), producing a feedback loop where 429s trigger retries that amplify load and push shared dispatch queues past latency SLOs.
+
+What we've done so far (in-flight):
+- Scoped: isolated Acme traffic to a separate burst bucket to prevent cross-tenant amplification.
+- Throttled: applied a temporary elevated burst window to allow their inflight operations to drain (30 min window).
+- Enabled: server-side additional jitter on retry guidance headers (Retry-After semantics) and increased visibility metrics for their key.
+
+Immediate ask for Acme: reduce client-side retry attempts to 3 with randomized jitter; if you can roll that change we expect p95/p99 to improve within 10-20 minutes of drain. If they cannot change client behavior quickly we can route them to a warmed dedicated worker (manual) — that will buy ~5x throughput and isolate tail effects.
+
+We will keep the temporary burst open until traffic normalizes and then revert with a postmortem. I’ll attach the log snippet and traces to the Jira ticket.
+
+Rishi Malhotra
+Senior SRE, Redwood Inference
+--- attachment: service-logs-snippet.txt (excerpt)
+
+From: Sylvia Kapoor <sylvia.kapoor@acme-retail.com>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>, Connor O'Brien <connor_obrien@redwood.ai>
+Cc: Raj Patel <raj.patel@acme-retail.com>
+Date: Mon, 30 Nov 2026 11:01:00 -08:00
+Subject: Re: Spike in p95/p99 today — severe timeouts (we're blocking on checkout)
+
+Thanks Rishi — appreciate the quick isolation steps. Our platform team confirms client retry policy is exponential backoff with multiplier 2, jitter 0.1, max attempts 8; we can push a config change to cut max attempts to 3 within ~40 minutes (requires a rolling deploy).
+
+We are worried about the immediate business impact (cart timeouts). Can Redwood confirm whether the temporary burst window will prevent further p99 spikes during our deploy? Also we will need an executive contact for credits/compensation if we confirm lost sales today. Please escalate to your account leader.
+
+Sylvia
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Sylvia Kapoor <sylvia.kapoor@acme-retail.com>, Connor O'Brien <connor_obrien@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Mon, 30 Nov 2026 12:25:00 -08:00
+Subject: Re: Spike in p95/p99 today — severe timeouts (we're blocking on checkout)
+
+Sylvia — I’m Marissa (your AE leader). I’ve looped Hannah for billing/credits and product for follow-up. Connor is coordinating engineering. Short answers:
+- Temporary burst: Yes — Rishi’s team has applied a burst window designed to let in-flight requests drain; it should materially reduce p99 exposure while your deploy completes. We’ll monitor p95/p99 for the next hour.
+- Exec contact & credits: I’ll own the customer-facing follow-up and finance conversation. Please share estimated lost revenue and customer-impact counts and I’ll fast-track an internal review.
+
+Next steps (mutual action plan):
+1) Acme deploys reduced retries (target: within 1 hour).
+2) Redwood holds elevated burst and monitors telemetry for 60 minutes then begins a staged revert.
+3) SRE to deliver post-incident write-up and recommended permanent mitigations (adaptive per-tenant circuit breaker, default jitter changes).
+4) Finance review for credits; Marissa will respond with proposed make-good by EOD.
+
+Marissa Cole
+Director, Sales Operations — Redwood Inference
+--- attachment: acme-mat-action-plan.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+
+From: Connor O'Brien <connor_obrien@redwood.ai>
+To: Sylvia Kapoor <sylvia.kapoor@acme-retail.com>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Mon, 30 Nov 2026 17:48:00 -08:00
+Subject: Re: Spike in p95/p99 today — severe timeouts (we're blocking on checkout)
+
+Sylvia — thank you. Quick operational note: Acme rolled the retry config at 11:20 and we observed p95 drop from ~2.1s to ~0.9s and p99 back to ~1.2s within 25 minutes. No new widespread 429 cascade after that window.
+
+Rishi — can you confirm when you’ll publish the postmortem (rough ETA)? Hannah/Marissa — please confirm credit path and whether we should proactively issue a customer notice to impacted merchants.
+
+Connor O'Brien
+Account Executive, Redwood Inference

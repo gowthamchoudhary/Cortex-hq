@@ -1,0 +1,120 @@
+Evaluation pass/fail signals and cutover schedule (MAP milestone alignment)
+
+From: Olivia Shaw <olivia@healthsync.io>
+To: laura.bennett@redwood.com
+Cc: jake.miller@healthsync.io
+Date: Fri, 20 Nov 2026 10:12:00 -0800
+Subject: Re: MAP kickoff + evaluation window
+
+Hi Laura —
+
+Thanks again for the demo yesterday. Jake and I pulled together a first-pass MAP and have a few asks about how you prefer to gate the evaluation. At a high level we want:
+- Clear pass/fail signals so our product team can sign off quickly
+- A short cutover schedule if the pilot meets the criteria
+- Minimal integration work during the evaluation (we can run proxy traffic)
+
+Quick context: we plan to run two integration modes — 1) Proxy for 2 weeks (no PII) and 2) Short direct API smoke tests for production readiness.
+
+Can you share the acceptance tests you expect, any quantitative thresholds, and the preferred order of exit gates? I attached our MAP draft (HealthSync_MAP_v1.xlsx).
+
+Would appreciate a suggested timeline for the test run and an outline for the go/no-go meeting.
+
+Thanks,
+Olivia
+\
+Olivia Shaw
+Head of Product
+HealthSync
+
+----
+
+From: laura.bennett@redwood.com
+To: Olivia Shaw <olivia@healthsync.io>
+Cc: aditya.rao@redwood.com, marissa.cole@redwood.com
+Date: Mon, 23 Nov 2026 09:08:00 -0800
+Subject: Re: Evaluation pass/fail signals and cutover schedule (MAP milestone alignment)
+
+Olivia —
+
+Appreciate the MAP — good baseline. I pulled together a concise acceptance-test matrix and a suggested cutover cadence below. I attached a slightly edited MAP and our standard SLA/Smoke template (SLA_SR_template.pdf).
+
+Core acceptance tests (what we run, and pass thresholds):
+- Functional correctness (intent/slot match): evaluation dataset of 3,000 representative queries; pass if top-intent accuracy >= 95% and slot extraction F1 >= 92%
+- Response quality regression: side-by-side A/B comparison vs your incumbent on 500 sentinel prompts; no more than 5% relative drop in task completion rate
+- Latency: p95 end-to-end < 300ms for 1–512 token responses during 10qps sustained; degrade gracefully at 50qps
+- Cost / throughput stress: sustain 100 qps for 10 minutes with error rate < 1% (for Dedicated mode we’ll simulate expected production traffic)
+- Cache effectiveness: KV/prefix cache hit >= 30% on proxy run (to justify unit-cost estimates)
+- Security/compliance: SOC2 evidence provided, audit logs enabled, data retention policy confirmed (default 30 days; options available)
+- Failover policy verified: automatic fallback to fallback-model X for OOM/latency incidents; fallback must not exceed 10% of requests during test window
+
+Exit gates (order of gates we recommend):
+1) Legal/Procurement: signed SOW or PO for pilot resources (minimal commit)
+2) Security: gap-less confirmation of SOC2 + evidence folder + retention settings configured
+3) Functional: pass functional correctness and response-quality checks on canonical datasets
+4) Reliability: latency & stress thresholds met in Dedicated/Hosted equivalent environment
+5) Production-readiness: smoke tests in direct-API mode with two production-like partners
+
+Cutover schedule (suggested, compressed 3-week eval):
+- Week 0 (prep): SOW signed, accounts provisioned, test data sanitized
+- Week 1 (proxy): proxy traffic run (3k sample queries), collect metrics, iterate prompts
+- Week 2 (stress + smoke): 100 qps stress test, p95 latency measurement, A/B quality checks (500 prompts)
+- Week 3 (decision & cutover): go/no-go meeting, staged ramp to 10% production, validate SLA metrics for 48 hours, full cutover 1 week after greenlight
+
+Acceptance test harness & ownership:
+- Redwood provides an eval harness (scripts + datasets) and a runbook; HealthSync provides production-like test data and two product SMEs for quality reviews.
+- Owner: Laura (Redwood) for test-run orchestration; Olivia (HealthSync) for dataset signoff; Aditya (Redwood) for infra tuning.
+
+Next steps / asks from HealthSync:
+- Confirm dataset availability by Mon Nov 30
+- Sign the attached SOW (we can strip long legal terms for pilot)
+- Name the two SMEs who will join the smoke tests
+
+I'll set up a 30-minute go/no-go cadence for the week of Dec 7 — keen to keep this tight.
+
+Best,
+Laura Bennett
+Sr. Solutions Manager | Redwood Inference
+laura.bennett@redwood.com
+\
+Attachments: HealthSync_MAP_v1.xlsx (xlsx), SLA_SR_template.pdf (pdf)
+
+----
+
+From: aditya.rao@redwood.com
+To: laura.bennett@redwood.com, Olivia Shaw <olivia@healthsync.io>
+Cc: marissa.cole@redwood.com
+Date: Tue, 24 Nov 2026 11:32:00 -0800
+Subject: Re: Evaluation pass/fail signals and cutover schedule (MAP milestone alignment)
+
+Couple of technical clarifications that will affect pass/fail thresholds:
+- Latency measurement: p95 should be measured from request arrival at Redwood edge to last token emitted (end-to-end), include network baseline provided by HealthSync (we will provide synthetic baseline scripts).
+- Model variants & quantization: we recommend running the proxy on the float16 variant for quality baselines, and the stress tests on the int8/quantized variant to validate cost metrics.
+- Cache warmup: expect initial hit rates to be low for first 1,000 unique users — we should exclude a 24-hour warmup window from the pass/fail calculation.
+- Monitoring hooks: we’ll enable token-level traces for the test window — request throttling thresholds will be at 95th percentile so we can observe tail behavior.
+
+I'll add a short appendix to the MAP describing how we calculate pass ratios and which runs are counted/ignored. Laura, I can own infra during the proxy and stress runs if that works.
+
+- Aditya
+
+----
+
+From: marissa.cole@redwood.com
+To: laura.bennett@redwood.com, Olivia Shaw <olivia@healthsync.io>, aditya.rao@redwood.com
+Date: Mon, 30 Nov 2026 17:05:00 -0800
+Subject: Re: Evaluation pass/fail signals and cutover schedule (MAP milestone alignment)
+
+Quick confirmation from our side:
+- SOW for the pilot is prepared and I uploaded a redlined copy to the HubSpot deal (link above).
+- Procurement (Jake) — can you confirm billing/legal point of contact so we can route the SOW?
+- HealthSync: please confirm dataset delivery by EOD Nov 30 or we push the proxy window by one week.
+
+I'll schedule the go/no-go meeting for Dec 8 at 10:00am PT and include a short agenda (functional results, latency/stress summary, outstanding risks). If anything shifts, Laura will own communications.
+
+Thanks all — small set of gating items and we can kick this off.
+
+Marissa Cole
+Enterprise Sales Operations | Redwood Inference
+marissa.cole@redwood.com
+
+----
+

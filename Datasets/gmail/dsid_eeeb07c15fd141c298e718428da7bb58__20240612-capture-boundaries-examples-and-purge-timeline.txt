@@ -1,0 +1,107 @@
+Customer Q: examples of artifacts we capture by default and deletion timelines
+
+From: Sam Ellis <sam.ellis@brightbank.com>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Cc: BrightBank Security <security@brightbank.com>
+Date: 2024-06-12T15:11:00+01:00
+Subject: Questions from compliance: what exactly is kept by default and for how long
+
+Hi Kimberly,
+
+Our compliance team is running a quick data-minimization review and asked for concrete examples of what Redwood captures by default for hosted accounts in the EU region. They want to see: 
+- Which artifacts are stored by default (raw request text, mid-stream partials for streaming, final model outputs, embeddings, KV cache snapshots, attachments).
+- Default retention windows for each artifact type.
+- What deletion actions are available to customers and how quickly data is purged after a delete request.
+- Any control-plane metadata residency caveats (e.g., billing/control plane outside EU).
+
+Could you send a short, example-based response we can share with the legal/compliance reviewers? If you have a matrix or diagram that maps artifact -> default retention -> deletion trigger, that would be ideal.
+
+Thanks — Sam
+Sam Ellis
+Head of Procurement
+BrightBank
+
+-----Original message ended-----
+
+---
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Sam Ellis <sam.ellis@brightbank.com>
+Cc: BrightBank Security <security@brightbank.com>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2024-06-12T16:02:00+01:00
+Subject: Re: Questions from compliance: what exactly is kept by default and for how long
+
+Sam — thanks for the clear ask. Below is a concise, example-driven breakdown you can forward to the compliance team. Attaching a one-page retention matrix and a simple data-flow diagram (see attachments).
+
+Summary (hosted EU region — default behavior):
+- Request payloads (user prompts / request bodies): stored by default for 30 days. Example: a chat message and the full prompt text will be retained for 30 days from creation unless the customer enables no-store.
+- Model outputs (final responses): stored by default for 30 days. Streaming partials are NOT written to persistent stores by default; we only persist the final response unless the session recording feature is enabled.
+- Prompt derivatives / logs (parsed tokens, token counts, generation metadata): retained for 90 days for debugging and quality monitoring; these are aggregated in telemetry dashboards and can be configured to a shorter window.
+- KV caches / in-memory session state: ephemeral per session and NOT persisted to disk by default. They are cleared when the session expires (typically within minutes/hours).
+- Embeddings / artifacts produced by explicit embedding APIs: stored only if the customer opts-in to embedding storage (default is not to store embeddings unless the API call specifies storage).
+- Attachments referenced in requests: we store attachment metadata and the file itself only if the customer uploads assets to our storage; retention follows the same 30-day default unless otherwise configured.
+
+Deletion and purge behavior:
+- Customer-initiated deletion (Console/API): immediate soft-delete from active indexes; full irrecoverable purge is scheduled and completed within 30 days of the delete request across the primary stores. Some long-term backups are retained for disaster recovery and are rotated per our backup retention schedule (up to 180 days), but those backups are encrypted and access-controlled and are not used for serving.
+- Legal / regulatory holds: if a legal hold is requested, the normal deletion/purge schedule is suspended until the hold is lifted.
+- Account-level opt-out/no-store: we support a per-request header (x-redwood-store: false) that prevents a request and its outputs from being written to persistent logs or derivatives; opt-out takes effect immediately for new requests.
+
+Residency specifics (EU region):
+- Data stored by the inference path (request/response artifacts) remains in the EU region storage by default for customers who select the EU region.
+- Control-plane metadata (billing records, some usage aggregates) are processed in our global control plane and may be stored in the US for operational reasons; we minimize identifiers in control-plane aggregates and provide enterprise customers with options for dedicated control-plane agreements under Private/Dedicated deployments.
+
+Next steps: I attached the retention-matrix PDF and a simple data-flow diagram. If your compliance team wants a formal attestation (SOC2 scope specifics) or a custom retention contract, we can route that through legal/enterprise.
+
+Best,
+Kimberly Park
+Director, Solutions — Redwood Inference
+kimberly_park@redwood.ai
+
+Attachments: retention-matrix-2024.pdf (pdf), redwood-data-flow-eu.png (png)
+
+-----Reply above-----
+
+---
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Sam Ellis <sam.ellis@brightbank.com>, Kimberly Park <kimberly_park@redwood.ai>
+Cc: BrightBank Security <security@brightbank.com>
+Date: 2024-06-12T17:10:00+01:00
+Subject: Re: Questions from compliance: what exactly is kept by default and for how long
+
+Adding a couple of clarifying points on residency and operational controls: 
+
+1) Control plane vs data plane: Kimberly covered this well — for hosted EU customers the data-plane artifacts remain in EU storage. Control-plane signals (billing, high-level usage metrics) are aggregated and might transit through our central control plane. For customers with strict residency requirements we recommend Redwood Private or a Dedicated contract where both control plane and data plane can be constrained to the customer's VPC/region.
+
+2) Backups / snapshots: our snapshots for disaster recovery are region-scoped (EU) by default for EU accounts. There are operational backups that we may retain for up to 180 days; these are encrypted and access-limited.
+
+3) API / technical opt-outs: the x-redwood-store header is the simplest for per-request no-store. We also support account-level retention policies (Console > Data Controls) that change the default windows (e.g., set request retention to 7 days).
+
+4) Example enforcement timeline: if a user triggers an account-level purge today, the data is removed from active stores within minutes and a background job completes the irreversible purge across all replicated stores within 30 days. For EU-residency customers requesting deletion we follow the same timeline but ensure purge jobs run inside EU region data stores.
+
+Happy to explain to your security team in a call and walk through the retention matrix.
+
+—Karthik
+Karthik Iyer
+Sr. Product Manager, Security & Compliance — Redwood Inference
+
+-----Quoted message follows-----
+
+---
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Sam Ellis <sam.ellis@brightbank.com>, Kimberly Park <kimberly_park@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2024-06-13T08:30:00+01:00
+Subject: Re: Questions from compliance: what exactly is kept by default and for how long
+
+Thanks everyone — Sam, appreciate the quick turnaround. For clarity, action items below: 
+
+- Kimberly: please send the one-page retention matrix and the data-flow diagram (attached by Kimberly) as a separate PDF to Sam and the BrightBank security mailbox, and include the x-redwood-store header docs link.
+- Karthik: please prepare a single-paragraph summary describing how backups are handled and the IR timeline for purges (we'll include this in the compliance packet).
+- Sam: if BrightBank's compliance team wants a scoped attestation or contract language for a Dedicated/Private deployment, we'll put you in touch with our security & legal leads (we can queue a short SOW).
+
+We’ll follow up with a 30-min call if the compliance team wants a walkthrough.
+
+Regards,
+Marissa Cole
+Director, Customer Success — Redwood Inference
+marissa_cole@redwood.ai
+
+-----End of thread-----

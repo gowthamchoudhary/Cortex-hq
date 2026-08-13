@@ -1,0 +1,108 @@
+Quantitative entitlement & safety-ladder for Lumenix reserved GPUs — TPS gap analysis
+
+From: Rachel Kim <rachel.kim@redwood.com>
+To: Alex Moreno <alex.moreno@lumenix.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Kimberly Park <kimberly.park@redwood.com>
+Date: 2026-10-31T09:12:00-07:00
+Subject: Quantitative entitlement & safety-ladder for Lumenix reserved GPUs — TPS gap analysis
+
+Alex —
+
+Thanks for the call this morning. Attached is the token profile you shared (I exported the top 10k requests) and a first-pass simulation that maps committed TPS to required GPU slabs under our standard model mix (Llama2-13B quantized and Llama2-70B as a fallback). High-level conclusions up front:
+
+- If Lumenix signs the 200k tps/month entitlement you mentioned, your observed peak burst (30-minute window) maps to ~42 tokens/sec sustained per second across the fleet which we estimate will require 6 dedicated A100-equivalent slabs for p95 latency <= 450ms on the 13B baseline.
+- There is a ~18% shortfall vs your highest observed 5-min peak if you require p99 <= 600ms — we recommend a 2-tier safety-ladder: 
+  - Tier 1 (operational buffer): +15% dynamic burst capacity (warm spare slabs for KV cache priming)
+  - Tier 2 (strategic buffer): +1 full slab reserved as guaranteed burst capacity for release days
+
+I put the detailed numbers in the attached spreadsheet (safety_ladder_runway_simulation.xlsx) — quick notes on assumptions:
+- Model mix: 80% 13B quantized (fast path), 20% 70B full precision for high-quality gen.
+- KV cache hit rate: 42% (based on your sample) — raising to 60% via prefix caching reduces slab needs by ~1 slab in the sim.
+- We assumed batching with 25ms batching window for best cost/latency tradeoff.
+
+Next steps I suggest: Ben can run a narrower sim using your 99th-percentile prompt lengths to validate p99 sensitivity; Kimberly can scope an on-call canary plan that automatically routes overflow to hosted capacity during sustained peaks.
+
+Are you available Tuesday for a walk-through of the workbook?
+
+Thanks,
+
+Rachel Kim
+Account Executive, Redwood Inference
+rachel.kim@redwood.com
++1 415-555-0123
+
+Attachment stubs: lumenix_token_profile.csv (sampled requests), safety_ladder_runway_simulation.xlsx (detailed sim), proposed_slab_map.pdf (visual slab allocation)
+From: Alex Moreno <alex.moreno@lumenix.com>
+To: Rachel Kim <rachel.kim@redwood.com>
+Cc: Lumenix Solutions Team <solutions@lumenix.com>
+Date: 2026-10-31T11:04:00-07:00
+Subject: Re: Quantitative entitlement & safety-ladder for Lumenix reserved GPUs — TPS gap analysis
+
+Rachel —
+
+Thanks for the fast turnaround and the workbook. A few clarifications from our side:
+
+1) Our 5-min peak last month hit ~52 tokens/sec sustained for a 12-minute window (that was during a product launch). That was dominated by the 13B CLI feature (so your 80%/20% split is sensible).
+2) The KV hit rate is opportunistic — we can probably push it to ~55% with a small frontend tweak but not to 60%.
+3) What worries us is the p99 guidance: our customers will complain if the fallbacks to hosted capacity add visible latency. For launches we need predictable p99 <= 700ms.
+
+Can Ben/your infra team run the p99 sim specifically for the 12-minute microburst profile and show what the latency delta is when we inject the Tier 1 buffer vs. only Tier 2?
+
+Also: Can you include an option that shifts more workload to a smaller 8B quantized variant during bursts to reduce slab delta (accepting a modest quality drop)? That might be easier politically than paying for always-on extra slabs.
+
+Alex
+Senior SRE, Lumenix Inc
+alex.moreno@lumenix.com
+
+From: Rachel Kim <rachel.kim@redwood.com>
+To: Alex Moreno <alex.moreno@lumenix.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Kimberly Park <kimberly.park@redwood.com>
+Date: 2026-11-01T08:43:00-07:00
+Subject: Re: Quantitative entitlement & safety-ladder for Lumenix reserved GPUs — TPS gap analysis
+
+Alex —
+
+Great points. Quick answers:
+
+- Ben will run a targeted p99 microburst sim (12-minute, 5-min rolling windows inside) and produce a delta table for: baseline, +Tier1 (warm spares), +Tier2 (dedicated spare slab), and an alternate mix that replaces 20% of 13B calls with 8B quantized during the burst. Expect that by EOD Monday.
+- The 8B substitution path typically buys ~1.2x effective tokens/sec per GPU (lower latency & memory pressure) at the cost of ~6-12% quality delta for the cases you flagged. We'll include the sample prompt-set eval so you can review the quality tradeoff.
+- On the visibility side: we can automate a transparent UX for customers so that fallback routing shows a short 'degraded quality' banner during launch windows if you want to be explicit.
+
+Attached also is a proposed slab map (proposed_slab_map.pdf) that visualizes how Tier 1 warm spares rotate and how Tier 2 reserve is held in a cold-but-prepared state.
+
+Best,
+
+Rachel
+
+On Sat, Oct 31, 2026 at 09:12 AM Rachel Kim <rachel.kim@redwood.com> wrote:
+> Alex —
+>
+> Thanks for the call this morning. Attached is the token profile you shared (...)
+>
+From: Ben Carter <ben.carter@redwood.com>
+To: Rachel Kim <rachel.kim@redwood.com>, Alex Moreno <alex.moreno@lumenix.com>
+Cc: Kimberly Park <kimberly.park@redwood.com>, Jordan Blake <jordan.blake@redwood.com>
+Date: 2026-11-02T15:44:00-07:00
+Subject: Re: Quantitative entitlement & safety-ladder for Lumenix reserved GPUs — TPS gap analysis
+
+Alex / Rachel —
+
+I've attached the focused p99 microburst simulation (sheet: p99_microburst_tab). Highlights:
+
+- Baseline (committed 200k/month, current model mix): p99 = 812ms under the 12-minute microburst profile (exceeds your 700ms target).
+- Baseline + Tier1 (warm rotation, +15% dynamic capacity, KV cache primed): p99 = 690ms (meets 700ms target).
+- Baseline + Tier2 (one guaranteed spare slab) + Tier1: p99 = 640ms (comfortable margin).
+- Baseline with 20% shift to 8B during burst (no extra slabs): p99 = 705ms (near-target) — quality eval attached as a short sample column showing examples where 8B deviates.
+
+Interpretation / recommendation:
+- Operationally, Tier1 (warm spare rotation) is the most cost-effective path to meet p99 <= 700ms for launch-like microbursts.
+- If Lumenix prefers no dynamic routing to smaller models, you should provision Tier2 (one dedicated spare slab) for consistent headroom.
+
+I'll sync with Kimberly to draft an SLO playbook that defines the automatic thresholds and the routing rules (when to trigger 8B fallback vs. warm-slab spin-up). If you give the green light, we can run a 48-hour canary in your dedicated pool next week.
+
+Cheers,
+
+Ben Carter
+Solutions Architect, Redwood Inference
+ben.carter@redwood.com
+Attachment stubs: p99_microburst_report.pdf, sample_quality_8b.csv

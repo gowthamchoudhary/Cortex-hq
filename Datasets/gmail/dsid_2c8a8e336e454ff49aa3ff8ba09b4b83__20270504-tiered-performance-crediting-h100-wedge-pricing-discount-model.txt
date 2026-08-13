@@ -1,0 +1,74 @@
+Tiered performance credits & wedge pricing — Aurora Dedicated pool proposal
+
+From: Ryan Liu <ryan.liu@aurora-analytics.com>
+To: marissa.cole@redwood.ai
+Cc: procurement@aurora-analytics.com
+Date: Tue, 04 May 2027 09:14:00 -0700
+Subject: Re: Dedicated pool options — memory / perf / pricing follow-up
+
+Marissa — thanks for the call this morning. A couple of follow-ups from Aurora’s side as we prep internal procurement: 1) Pricing: Ryan asked whether you can structure a staged discount that increases as committed throughput moves up (we run seasonal spikes), and whether we can get an early lower price on H100 80GB for a short pilot. 2) Memory breakpoints: our model family uses batches that push into the 96GB working set for a subset of tasks — is L40S 48GB + KV cache realistic as a cheaper fallback for those jobs, or do we need 80/96GB H100 to keep latency within the 120ms SLO? 3) Credits: procurement wants to balance an upfront commit with credits for burst months. Can you send a short proposal with a tiered discount table, a pilot offer for H100s and a “wedge” performance-credit concept (credits that convert to throughput units when used)?
+
+—Ryan
+Aurora Analytics
+
+From: marissa.cole@redwood.ai
+To: Ryan Liu <ryan.liu@aurora-analytics.com>
+Cc: ben.carter@redwood.ai, karthik.iyer@redwood.ai
+Date: Tue, 04 May 2027 10:03:00 -07:00
+Subject: Re: Dedicated pool options — memory / perf / pricing follow-up
+
+Ryan — appreciate the clear ask. Looping Ben (pricing) and Karthik (infra sizing) so we can put numbers against your scenarios. Quick notes up front: 1) Tiered discounting: we can do a 3‑tier commit structure (base, growth, enterprise) with increasing % discounts tied to committed throughput-months. The discount steps are negotiable — we usually protect baseline unit economics by making the H100 tranche smaller and giving larger discounts at the mid and upper tranches. 2) Pilot: we can offer a 6‑week H100 80GB pilot at a reduced unit price with a usage cap; if you convert to a 12m commit within 30 days of pilot end we apply a credit. 3) L40S as fallback: technically viable for many workloads but will increase token latency for large working sets — Karthik, can you confirm perf delta and whether KV caching mitigates impact for Aurora’s batch patterns?
+
+I’ll draft a concise pricing table and a wedge credit concept and send an annotated attachment by EOD.
+
+Thanks,
+Marissa Cole
+Senior Account Executive, Redwood Inference
+
+From: ben.carter@redwood.ai
+To: marissa.cole@redwood.ai, karthik.iyer@redwood.ai
+Date: Wed, 05 May 2027 09:28:00 -07:00
+Subject: RE: Dedicated pool options — memory / perf / pricing follow-up
+
+Marissa / Karthik — sketching numbers for the doc Marissa will send. Assumptions up front: baseline list price units are perf-units/hour normalized to A100-40GB equivalent. H100 80GB: +35% unit price vs A100, L40S 48GB: -18% unit price. Proposed tiering (example):
+- Base (12m minimum): commit 200 perf-units/month -> 5% discount
+- Growth (12m, mid): commit 600 perf-units/month -> 12% discount + 1 month of wedge credits spread over first 3 months
+- Enterprise (24m): commit 1500 perf-units/month -> 20% discount + 3 months wedge credits
+
+Wedge credit idea: give X credits per month for the first 3 billing cycles convertible to burst capacity (H100 units at pilot price). Credits expire after 6 months. Pilot: 6 weeks H100 at 50% list for up to 80 perf-units, conversion credit = 25% of pilot spend if converted to 12m within 30 days.
+
+Numbers are placeholders — Karthik, what’s realistic for throughput SLO support if they mix L40S as fallback? We need to prescribe KV cache sizing and expected 95th p50 latency deltas.
+
+—Ben
+
+From: karthik.iyer@redwood.ai
+To: marissa.cole@redwood.ai, ben.carter@redwood.ai
+Date: Thu, 06 May 2027 11:05:00 -07:00
+Subject: RE: Dedicated pool options — memory / perf / pricing follow-up
+
+Ben / Marissa — did a quick microbenchmark with Aurora-like models (long-context retrieval + multi-turn). Short summary:
+- H100 80GB: median token latency ~28ms, 95th ~110ms for their 8k-ish context runs when using 1:1 KV caching and continuous batching (target SLO 120ms looks safe).
+- A100 40GB: median ~44ms, 95th ~160ms for same workload — fails 120ms SLO on heavier requests.
+- L40S 48GB: median ~52ms, 95th ~210ms without aggressive KV caching; with prefix/KV cache warmed for repeat prompts you can recover to ~140ms 95th for certain traffic patterns.
+
+Implication: For Aurora’s critical low-latency slices we should recommend H100 80GB for the committed tranche that maps to their 95th-percentile SLO. L40S can be offered as a cost-effective overflow with explicit latency caveats; it should be configured with a warmed KV cache and smaller batch sizing. Recommend we include a clear routing policy in the proposal: H100 for tagged low-latency routes, L40S for background/async jobs and best-effort bursts.
+
+I’ll attach the microbench CSV (summary attached). If they want to push L40S for more workloads we’ll need larger cache sizes (roughly +30% memory footprint) which we should price.
+
+—Karthik
+Senior Solutions Architect
+
+From: Ryan Liu <ryan.liu@aurora-analytics.com>
+To: marissa.cole@redwood.ai
+Cc: procurement@aurora-analytics.com
+Date: Mon, 10 May 2027 16:22:00 -07:00
+Subject: Re: Tiered performance credits & wedge pricing — Aurora Dedicated pool proposal
+
+Marissa — thanks for the proposal packet (received via Drive). Procurement is encouraged by the wedge credits and pilot conversion credit. A couple of asks before we escalate to legal: 1) Can you lock the pilot price in writing and make the conversion credit automatic on signature (procurement wants less manual reconciliation)? 2) For the L40S fallback, can you add an explicit clause in the SLA that identifies which routes qualify for fallback and the expected latency delta ranges (so we can notify internal product teams)? 3) Lastly, can we get an example 12‑month contract stub with the Growth tranche numbers populated so our CFO can model cashflow? If you can include those changes I’ll push to Legal/Procurement next week.
+
+Ryan
+Aurora Analytics
+
+On Thu, May 6, 2027 at 11:05 AM karthik.iyer@redwood.ai wrote:
+> Ben / Marissa — did a quick microbenchmark with Aurora-like models...
+

@@ -1,0 +1,122 @@
+Saffron MedTech — post-call architecture checklist & SLOs
+
+From: Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>
+To: Dr. Emily Choe <emily.choe@saffronmed.com>, Ravi Kapoor <ravi.kapoor@saffronmed.com>
+Cc: Karthik Iyer <karthik.iyer@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Tue, 13 Mar 2028 15:20:00 -0700
+Subject: Saffron MedTech — post-call architecture checklist & SLOs
+
+Thanks for the time today — quick recap from our discovery and a proposed checklist so we can align before a technical deep dive next week. Appreciate Dr. Choe and Ravi walking us through the ingestion patterns and clinical constraints.
+
+Pain points we heard:
+- Bursty inference from chart summarization and triage alerts (peaks ~700 req/min for 2-3 minute windows).
+- Strict latency needs on triage path: p95 <= 150ms for 256-token inference, p95 <= 350ms for 1k-token longform summaries (can be async).
+- Data residency: patient PII must remain in their VPC for model input; only token-level logs allowed out.
+- Need for predictable unit cost to forecast monthly budgets.
+
+Goals we agreed on:
+- Proof-of-concept (PoC) for triage pipeline with p95 <= 150ms, handle 800 rpm sustained for headroom.
+- Deployment inside customer VPC (Redwood Private) with optional burst to Dedicated during peaks.
+- Validate quality for distilled LLM v2.1 (non-proprietary checkpoints) and measure regression against current on-prem model.
+
+Proposed technical notes (draft):
+- Target SLOs: triage (p95 <= 150ms, p50 <= 40ms) for 256 tokens; summary path p95 <= 350ms with async workers.
+- Throughput plan: baseline 800 rpm sustained, burst to 2k rpm via autoscale policy.
+- Model: quantized 8-bit variant of distilled LLM v2.1, KV-cache enabled.
+- Topology: customer VPC with private control plane, model served on Dedicated pool (NVidia A100 equivalent), routing policy: primary Private, fallback to Dedicated in our region.
+- Optimizations to consider: prefix KV caching for repeated patient templates, request coalescing for batched triage events.
+
+Next steps (requested from Saffron):
+1) Share 3 representative prompt examples + expected length distributions (attachment: sample_prompts).
+2) Confirm compliance checklist owners and any additional data-retention constraints.
+3) Schedule a technical deep-dive with infra+security + our solutions engineer (Marissa) — proposed times next Tue/Wed 10-2 PT.
+
+I attached a short draft topology diagram and a one-page SLO checklist. If any of the SLO numbers above are off, call them out and I’ll update before we get into the deep-dive.
+
+Best,
+Vivek Kulkarni
+Enterprise Account Executive
+Redwood Inference
+(415) 555-0182
+
+Attachments: saffron_slo_topology_draft.pdf, saffron_sample_prompts.json, kv-cache-and-batching-notes.txt
+
+From: Dr. Emily Choe <emily.choe@saffronmed.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>
+Cc: Ravi Kapoor <ravi.kapoor@saffronmed.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>, Marissa Cole <marissa.cole@saffronmed.com>
+Date: Wed, 14 Mar 2028 09:05:00 -0700
+Subject: Re: Saffron MedTech — post-call architecture checklist & SLOs
+
+Vivek — thanks for the clear summary. A few clarifications from our side: we can provide the sample prompts by EOD Friday.
+
+Confirmations / clarifications:
+- The triage path is synchronous and high-priority: we need p95 <= 150ms, ideally measured end-to-end at the API layer (not just model inference).
+- The longform summaries can be asynchronous; SLA there is looser but we want completion within 2 minutes for clinical review.
+- Traffic pattern: baseline ~300 rpm during business hours with spikes to ~900-1,000 rpm for up to 5 minutes (we call these "surges").
+- Security: we require processing inside our AWS account (VPC) and that any logs be sanitized; we will share a short compliance spreadsheet in the next email.
+
+Would like Marissa and Karthik to propose a topology variant that minimizes cross-AZ egress. Also, can you confirm whether Redwood supports KV-cache warmup during cold starts for our nightly batch runs?
+
+Happy to meet Tue 21 Mar 10:00 PT if that works for your team.
+
+Thanks,
+—Emily
+Dr. Emily Choe
+Head of Clinical AI
+Saffron MedTech
+
+From: Karthik Iyer <karthik.iyer@redwoodinference.com>
+To: Dr. Emily Choe <emily.choe@saffronmed.com>, Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Ravi Kapoor <ravi.kapoor@saffronmed.com>
+Date: Wed, 14 Mar 2028 12:30:00 -0700
+Subject: Re: Saffron MedTech — post-call architecture checklist & SLOs
+
+Emily — appreciate the clarifications. Quick technical notes on the items you called out.
+
+End-to-end p95: we will measure at the API gateway level in-customer VPC (agent container that proxies to the Redwood model endpoint). Our latency budget will include network hop inside the VPC; for planning I will assume ~20-40ms network overhead for intra-region traffic.
+
+KV-cache warmup: yes — we can support proactive KV-cache population for the triage model. Options:
+- Warmup job inside the VPC that runs 15 minutes before business hours to prime common prefixes.
+- Persistent warm caches pinned to the Dedicated pool for hot replicas (recommended for sub-150ms p95).
+
+Topology variants (brief):
+1) Fully private: control plane in Redwood but with private connectors; model runtime entirely in Saffron VPC on customer-managed nodes. Pros: lowest egress risk; Cons: higher ops surface.
+2) Hybrid (recommended PoC): model runtime in Redwood Dedicated pool inside same region, routing via a private peering link; private control plane components still live in customer VPC. Pros: faster autoscale and simpler rollback.
+
+Sizing back-of-envelope for PoC: to meet p95 <= 150ms for 256 tokens at 800 rpm sustained with bursts to 2k rpm, we recommend a Dedicated pool of 6x A100-equivalent machines with continuous batching tuned to 30-50ms batch latency and KV-cache enabled. We will instrument token-level cost so you can see the per-transaction unit economics.
+
+Requested items from Saffron to finalize PoC scope:
+- 3 sample prompt families + 95th percentile token length (attachment: saffron_sample_prompts.json)
+- Compliance spreadsheet / any required SOC2 artifacts (we can provide our SOC2 attestation and KMS integration notes)
+- Preferred week for the PoC run and access window for engineers to the VPC (IAM role details).
+
+I attached brief notes on batching and KV strategies. If you'd like, Marissa can walk through the sizing in a short screen share.
+
+—Karthik
+Karthik Iyer
+Principal Solutions Architect
+Redwood Inference
+
+From: Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>
+To: Dr. Emily Choe <emily.choe@saffronmed.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Ravi Kapoor <ravi.kapoor@saffronmed.com>
+Date: Fri, 15 Mar 2028 09:10:00 -0700
+Subject: Re: Saffron MedTech — post-call architecture checklist & SLOs
+
+Thanks all — locking in next steps and the Tue 21 Mar 10:00 PT deep dive (calendar invite to follow).
+
+Action items owned:
+- Saffron (Emily/Ravi): send sample prompts + compliance spreadsheet by Fri 17 Mar.
+- Redwood (Karthik/Marissa): prepare two topology slides (Fully private vs Hybrid), draft PoC runbook, and an estimated cost delta for Dedicated bursting.
+- Vivek: create HubSpot deal and share access to the PoC folder: https://drive.google.com/drive/folders/1Saffron-Postcall-Docs
+
+I attached the current topology draft and a short notes file on KV-cache and batching. If Saffron confirms prompt families, Karthik will produce a concrete sizing and we can aim to start the PoC in the week of Mar 27.
+
+If anything changes on your end with availability or compliance artifacts, flag me and I’ll coordinate.
+
+Best regards,
+Vivek
+Enterprise Account Executive
+Redwood Inference
+
+Attachments: saffron_slo_topology_draft.pdf, kv-cache-and-batching-notes.txt

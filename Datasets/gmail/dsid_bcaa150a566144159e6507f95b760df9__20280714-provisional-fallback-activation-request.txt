@@ -1,0 +1,104 @@
+Provisional fallback activation for model v21.4 - SLA carve-out request
+
+Date: Sat, 14 Jul 2028 09:12:00 -0700
+From: Sarah Lim <sarah.lim@altbank.com>
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: procurement@altbank.com
+Subject: urgent: p95 spike observed on model v21.4 (prod)
+
+Neha —
+
+We've been seeing sustained p95 latency spikes across our production traffic starting ~08:52 PDT this morning. Current numbers: p95 ~2.4s (baseline normally ~0.9s), error rate up ~0.6% (small but rising). Traffic is mostly transaction enrichment calls routed to your v21.4 rollout. Attached a short CSV with minute-by-minute p95.
+
+We need Redwood to propose an immediate mitigation: can you either (a) switch our traffic to the previous stable variant (v21.3-quant) as a provisional fallback, or (b) apply a configuration change that reduces tokenization batch sizes to bring down tail latency. We are on a tight schedule and need confirmation within 30 minutes or we'll have to throttle at our side.
+
+Sarah Lim
+Platform Ops — AltBank
+ops@altbank.com
+Attachment: p95_snapshot_20280714.csv
+
+Date: Sat, 14 Jul 2028 09:28:00 -07:00
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Evelyn Hart <evelyn.hart@redwood.ai>, Grace O'Connor <grace.oconnor@redwood.ai>
+Cc: Sarah Lim <sarah.lim@altbank.com>
+Subject: Re: urgent: p95 spike observed on model v21.4 (prod)
+
+Thanks for the alert, Sarah — and good catch. I'm escalating this to eng + ops. Preliminary notes:
+- Model: v21.4 (canary -> ramped for AltBank this week)
+- Symptom: p95 spike that correlates with longer sequence tokens arriving from enrichment pipeline (we're seeing a small fraction of heavy requests that blow up kv cache misses)
+- Immediate mitigation options: fallback to v21.3-quant (compatible API) OR reduce batching + increase request-timeout to surface errors faster.
+
+Ben / Evelyn / Grace — can we get a provisional fallback ready? Ben, can you confirm the compatibility matrix for v21.3-quant (embeddings + rerank paths) and whether we can route AltBank's route to the older variant with zero schema changes? If yes, I'm asking for authorization to activate the fallback now and request a temporary SLA carve-out (p95 grace) until traffic normalizes. I'll loop in the customer for signoff immediately. I've attached our snapshot + traffic dump for context.
+
+Neha
+Director, Customer Reliability
+Redwood Inference
+Attachment: p95_snapshot_20280714.csv; traffic_snapshots_v21_4.zip
+
+Date: Sat, 14 Jul 2028 09:41:00 -07:00
+From: Ben Carter <ben.carter@redwood.ai>
+To: Neha Kapoor <neha.kapoor@redwood.ai>, Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: Grace O'Connor <grace.oconnor@redwood.ai>, Sarah Lim <sarah.lim@altbank.com>
+Subject: Re: urgent: p95 spike observed on model v21.4 (prod)
+
+Neha — quick answers: v21.3-quant is fully compatible for AltBank's inference calls (same input schema). We have a tested traffic-shift runbook. Steps (short):
+1) pause new v21.4 rollout for AltBank route
+2) open canary switch to v21.3-quant for 10% traffic -> 100% in 5 minutes if no lambda errors >0.5%
+3) monitor p95 & error rate; if p95 drops below 1.1s for 30 minutes, keep route; otherwise rollback to v21.4 and hit postmortem.
+
+Operational note: fallback requires a temporary SLA carve-out since AltBank will be served a different model variant w/ slightly different token accounting (we should log the change for billing). We have a ready runbook PDF (fallback-runbook-v1.pdf).
+
+If you authorize I will trigger the runbook and coordinate with traffic router.
+
+— Ben
+Engineering Reliability
+Attachment: fallback-runbook-v1.pdf
+
+Date: Sat, 14 Jul 2028 09:55:00 -07:00
+From: Sarah Lim <sarah.lim@altbank.com>
+To: Neha Kapoor <neha.kapoor@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: procurement@altbank.com
+Subject: Re: urgent: p95 spike observed on model v21.4 (prod)
+
+Neha / Ben — thanks for the quick response. AltBank approves the provisional fallback to v21.3-quant with the following conditions:
+- We accept a temporary SLA grace window until 2028-07-20 23:59 PT for p95 and crediting to be handled per our contract clause 7.2a.
+- Please send a post-activation notice with metrics and the exact rollback triggers.
+- Procurement needs a short note for billing reconciliation.
+
+Proceed when ready.
+
+— Sarah
+Platform Ops — AltBank
+Attachment: (none)
+
+Date: Mon, 16 Jul 2028 14:05:00 -07:00
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Evelyn Hart <evelyn.hart@redwood.ai>, Grace O'Connor <grace.oconnor@redwood.ai>
+Cc: Sarah Lim <sarah.lim@altbank.com>, procurement@altbank.com
+Subject: Fwd: provisional fallback activation for model v21.4 - activation authorized
+
+Folks — per AltBank signoff (see below), I'm authorizing activation of the provisional fallback for the AltBank route. Activation window executed at 14:00 PDT today. Summary & operational constraints:
+
+Activation details:
+- Action: shift AltBank production route from v21.4 -> v21.3-quant (gradual: 10% -> 100% over 5 minutes)
+- Time: 2028-07-16T14:00:00-07:00 (actual shift)
+- Rollback triggers (auto):
+  * sustained p95 > 1.1s for 30 consecutive minutes OR
+  * request error rate > 1.5% for 10 minutes OR
+  * rate-limiting anomaly detected on gateway (X-Rate-Limit-5m > 1500)
+- Manual rollback: allowed if customer flags functional regressions (semantic mismatches), in which case ops to pause and notify product & customer success immediately.
+- Billing: mark traffic as "provisional-fallback" for 2028-07-16 -> 2028-07-20 for reconciliation (ALT-847).
+
+Attachments uploaded to shared drive: p95 snapshot + traffic dump + fallback runbook. Post-activation ask: Ben / Evelyn — please collect 30/60/120-minute p95 reports and drop into HB-52348. We'll schedule a postmortem with AltBank on Tuesday.
+
+Neha Kapoor
+Director, Customer Reliability
+Redwood Inference
+
+-----Original message-----
+On Sat, Jul 14, 2028 at 09:12 AM Sarah Lim <sarah.lim@altbank.com> wrote:
+> Neha —
+>
+> We've been seeing sustained p95 latency spikes ... (see above)
+>
+> Attachment: p95_snapshot_20280714.csv

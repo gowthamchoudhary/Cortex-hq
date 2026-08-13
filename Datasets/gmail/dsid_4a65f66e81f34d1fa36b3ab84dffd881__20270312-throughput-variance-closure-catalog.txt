@@ -1,0 +1,120 @@
+Throughput variance: remediation catalog, action owners, and executive asks
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Dawn Park <dawn@trellisretail.com>; Trellis Ops <ops@trellisretail.com>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: Fri, 12 Mar 2027 09:12:00 -0000
+Subject: Throughput variance observed this morning — initial data and next steps
+
+Hi Dawn / Trellis Ops team,
+
+Thanks for flagging the spike this morning. We ran an immediate sampling pass across the affected routes and attached a short throughput-diff CSV showing token-rate and error-rate deltas vs the 30d baseline. Short summary below:
+
+- Incident window: 2027-03-12 06:42–08:55 UTC
+- Symptoms: transient token processing slowdown on /v1/generate (increased 95th latency from 190ms -> 720ms), small uptick in 5xx (0.12% -> 1.9%) and visible queueing on mid-tier GPU nodes
+- Immediate mitigation applied: auto-burst pool expanded for Trellis (reserve +20% capacity) and short-lived routing to the secondary region to relieve pressure
+
+Next steps I propose this morning:
+1) Deliver a concise RCA with proposed fixes (kernel/quantization adjustments, batching caps) by 11:30 local
+2) Provide an exec-facing summary (one pager) for Dawn and Trellis leadership by 13:00
+3) Ship a soft canary for the runtime patch to 5% of traffic tonight, then pause for stability checks
+
+I’ve attached the throughput-diff-report.csv. I’ll follow up with the RCA and assigned owners in a separate thread update.
+
+Apologies for the impact — we’re treating this as a high-priority remediation sprint.
+
+Thanks,
+Marcus
+Marcus Lin
+Senior SRE, Redwood Inference
+
+From: Dawn Park <dawn@trellisretail.com>
+To: Marcus Lin <marcus_lin@redwood.ai>
+Cc: Trellis Ops <ops@trellisretail.com>, Kimberly Park <kimberly_park@redwood.ai>
+Date: Fri, 12 Mar 2027 10:05:12 -0000
+Subject: Re: Throughput variance observed this morning — initial data and next steps
+
+Marcus,
+
+Appreciate the fast signal and the CSV. Two asks from our side: one — we need a single-slide exec summary for our CTO by 11:30 PST (14:30 UTC) with clear customer impact and mitigation timeline; two — can you confirm whether there will be any request-level changes we need to make (payload/prompt size) before you rollout the runtime patch?
+
+Last time we took a patch, we had to throttle long-prompt flows during the canary window; want to avoid surprises.
+
+Dawn
+Dawn Park | Chief Revenue Officer, Trellis Retail
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Dawn Park <dawn@trellisretail.com>, Trellis Ops <ops@trellisretail.com>
+Cc: Neha Kapoor <neha_kapoor@redwood.ai>
+Date: Fri, 12 Mar 2027 11:20:45 -0000
+Subject: Re: Throughput variance observed this morning — initial data and next steps
+
+Hi all,
+
+On Fri, 12 Mar 2027 at 09:12, Marcus Lin <marcus_lin@redwood.ai> wrote:
+> Hi Dawn / Trellis Ops team,
+> 
+> Thanks for flagging the spike this morning. We ran an immediate sampling pass across the affected routes and attached a short throughput-diff CSV showing token-rate and error-rate deltas vs the 30d baseline.
+
+Quick RCA (summary):
+- Root cause: selector kernel mismatch on a subset of model variants after a recent kernel-selector change merged on 2027-03-10. The selector triggered a slower attention kernel for long-context batches when the runtime observed bursty sequence-length variance. This caused sustained CPU->GPU handoff contention and increased queuing.
+- Contributing factors: high variance in incoming sequence-lengths from Trellis’s long-prompt feature, default batching window set to 12ms (too aggressive for variance), and the recent selector flip did not have a long-tail synthetic test case for sequence variance.
+
+Proposed corrective actions and owners (first pass):
+1) Runtime kernel rollback & opt patch (PR: runtime-kernel-patch.diff) — owner: Marcus Lin — target: 2027-03-12 20:00 UTC (canary 5% at 21:00 UTC)
+2) Batching window adjustment (12ms -> 22ms) and workload-aware adaptive cap — owner: Neha Kapoor — target: 2027-03-13 04:00 UTC
+3) Prefix/KV cache tuning for Trellis long-prompt flows (config toggle) — owner: Kimberly Park — target: 2027-03-13 08:00 UTC
+4) Add synthetic long-tail sequence-length tests to selector CI and a post-merge smoke job — owner: Karthik Iyer — target: 2027-03-16
+5) Customer communication + exec one-pager (impact + timeline) — owner: Marcus Lin / Kimberly Park — target: 2027-03-12 14:30 UTC
+
+Attachments: runtime-kernel-patch.diff (patch + test notes), small postmortem draft (postmortem-summary.pdf sent after closure).
+
+Risk notes: the patch is low-risk but we’ll watch token-level latency for 30 minutes post-canary and have immediate rollback steps documented. For Trellis, we recommend pausing long-prompt batchers for the 5% canary window if Trellis expects heavy long-context queries — otherwise we can route long prompts off-canary.
+
+Kimberly
+Kimberly Park
+Director, Production Reliability — Redwood Inference
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Dawn Park <dawn@trellisretail.com>, Trellis Ops <ops@trellisretail.com>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Fri, 12 Mar 2027 13:02:10 -0000
+Subject: Re: Throughput variance observed this morning — remediation plan and exec ask
+
+Dawn —
+
+Thanks Kimberly for the clear list. A couple of clarifications and asks from the Redwood side before we move the canary tonight:
+- We will not change any request payload format. Routing/pauses are internal to the Redwood runtime. If Trellis wants to proactively mark certain customers/flows as "off-canary" we can honor that (ops tag to add to routes).
+- For the exec one-pager: I’ve uploaded a short slide to the shared drive (link below) that calls out impact window, customer-visible symptoms, mitigations applied, and the timeline/owners above. Please confirm and we’ll send to your CTO.
+
+Immediate operational playbook (for tonight):
+A) Deploy runtime-kernel-patch.diff to canary group (5% traffic) at 21:00 UTC
+B) Pause Trellis long-prompt flows on canary group for 21:00–21:40 UTC (ops toggle) OR route them to regional fallback — pick one in the next 60 minutes
+C) Observe token-latency rollup, 95th/99th latency slices, and 5xx rate for 40 minutes; rollback if 95th increases >10% vs baseline or 5xx > 0.5%
+
+Exec ask: Dawn, can you confirm an exec contact who will accept the one-pager and sign off on the canary (required before 20:30 UTC)? Also please indicate whether we should route long-prompt flows off-canary or pause them (ops toggle).
+
+Link: https://redwood.app/drive/Trellis-TR-9847/postmortem
+
+Thanks,
+Marcus
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>, Dawn Park <dawn@trellisretail.com>
+Date: Fri, 12 Mar 2027 15:48:00 -0000
+Subject: Fwd: Throughput variance: remediation catalog, action owners, and executive asks
+
+Karthik — forwarding the thread and RCA summary. TL;DR: kernel-selector change caused queuing under high sequence-length variance for Trellis long-prompt traffic. We have an owner, a low-risk patch to canary 21:00 UTC, and a recovery playbook.
+
+Please review the owners/timeline below. I’m requesting exec acceptance for the canary tonight (Dawn is confirming internal signoff). If you approve, please reply with an explicit :
+
+- Acknowledgement of the customer impact and approval to proceed with the 21:00 UTC canary
+- Any additional executive-level communication you want Redwood to include in the Trellis-facing one-pager
+
+Forwarded message starts here: (see above)
+
+--
+Marcus Lin
+Senior SRE, Redwood Inference
+

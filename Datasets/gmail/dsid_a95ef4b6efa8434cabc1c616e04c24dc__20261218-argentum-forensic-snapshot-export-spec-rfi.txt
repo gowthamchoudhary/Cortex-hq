@@ -1,0 +1,137 @@
+RFI: Audit exports, retention windows & forensic snapshot requirements
+
+From: Elena Shephard <e.shephard@argentum.com>
+To: Ben Carter <ben_carter@redwood.ai>
+Cc: legal@argentum.com
+Date: Tue, 01 Dec 2026 09:12:00 -0800
+Subject: RFI: export & retention specifics for regulatory review
+
+Hi Ben,
+
+Thanks for taking this. Our compliance team has a few follow-ups on the audit/export aspects we saw in the deck. Specifically we need:
+
+1) A description of available export formats for audit logs (token-level events, API request metadata, model identifiers, timestamps, user/tenant IDs).
+2) Retention windows you support by default and options for longer retention for regulated customers (immutable snapshots, retention tiers).
+3) Forensic snapshotability: ability to produce a point-in-time export with tamper-evidence, manifest, and cryptographic hashes (we need chain-of-custody language).
+4) Typical SLA/timeline to produce a bulk extract for legal preservation (volume estimates: ~25GB compressed/day).
+
+Can you send a short RFI response we can attach to our internal packet? We may follow up with a SOC/attestation request.
+
+Best,
+Elena
+Legal & Compliance | Argentum Financial
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Elena Shephard <e.shephard@argentum.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 01 Dec 2026 11:03:00 -0800
+Subject: Re: RFI: export & retention specifics for regulatory review
+
+Elena —
+
+Thanks for the clear ask. I copied Marissa (our solutions lead) to confirm throughput/timeline estimates and Laura (security) for details on tamper-evidence and chain-of-custody. Below is a concise response we can formalize for your packet; happy to expand on any item.
+
+Export formats and content:
+- Available formats: NDJSON (newline-delimited JSON), Parquet (columnar), and gzipped CSV for smaller slices.
+- Exportable records: per-request metadata (request_id, timestamp, model_name+version, prompt+response hashes), token counts, response latency, route/pool used, client API key (hashed), tenant_id. We do not export unredacted user PII by default unless requested under a preservation order; redaction tooling/LLM-based redaction is available as an add-on.
+
+Retention windows:
+- Default hosted retention: 90 days for request/response event payloads; 365 days for billing/usage aggregates.
+- Dedicated/Private customers can request custom retention tiers (30d/90d/1y/7y) via contract.
+- For regulated preservation we support immutable snapshots (see section below) and long-term archival exports to customer S3 or our secure transfer with SSE-KMS.
+
+Forensic snapshot and tamper-evidence:
+- Point-in-time snapshots: we can produce an immutable export representing a defined time range, terminated with a manifest file containing per-file SHA256 sums and an overall signed manifest.
+- Signing: manifests are signed with Redwood's HSM-backed key; customers can request concurrent customer-side signing when handed off.
+- Chain-of-custody package: export includes (1) manifest, (2) per-file hashes, (3) service logs of the export job (who initiated, job id, start/end times), and (4) a short statement of export integrity signed by our security team.
+
+Timing and SLAs:
+- Typical ad-hoc extraction (<= 100GB): 3–5 business days.
+- Large-scale forensic exports (multi-TB): we provide project plan and estimate; 7–21 business days depending on scope and redaction needs.
+- Rush/expedited: we can commit to 48–72 hours for certified customers under an escalation clause.
+
+Attachments: I attached our export schema CSV and a sample manifest for your review.
+
+If you want, we can draft an attestation paragraph for your compliance packet.
+
+— Ben
+Director, Solutions | Redwood Inference
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Tue, 01 Dec 2026 11:17:00 -0800
+Subject: Fwd: RFI: export & retention specifics for regulatory review
+
+Forwarding Elena's RFI and Ben's draft. Quick notes for the response packet:
+
+- Laura: can you add a one-paragraph on HSM signing and key rotation timelines (we currently rotate signing keys annually, can provide key fingerprints).
+- Karthik: please confirm throughput/tarballing approach for 25GB/day sustained and whether the typical compression ratio we see (3x) holds for audit events. Also confirm redaction support window/timeline.
+- Ben: I'll add a brief on delivery options (S3 push with presigned URLs, scp to customer appliance, or encrypted physical transfer for very large handoffs).
+
+Thanks — I want to get this back to Elena by EOD Thursday.
+
+-- Marissa
+Solutions Lead | Redwood Inference
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Wed, 02 Dec 2026 08:44:00 -0800
+Subject: Re: Fwd: RFI: export & retention specifics for regulatory review
+
+Marissa / Ben,
+
+Below is the language to include for tamper-evidence and signing:
+
+"Redwood generates per-file SHA256 hashes for all exported artifacts. Upon completion, an aggregated manifest containing file names, file sizes, SHA256 checksums, and an export_job_id is produced. The aggregated manifest is signed using our HSM-backed signing key (AWS CloudHSM / BYOK option available for Private deployments). We rotate signing keys annually and retain prior key fingerprints for validation of past exports. Customers may request customer-side signing during delivery; in that case we provide a pre-signed hash manifest and guidance for performing the signature. Export job logs are retained for 12 months and include the initiating principal, IP address, job start/end timestamps and process exit codes."
+
+Also note: when we push to customer S3 with SSE-KMS, the transfer uses TLS 1.2+, multi-part upload for large files, and we generate byte-range checksums.
+
+Happy to sign the attestation once we finalize wording.
+
+Laura
+Lead Security Engineer | Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Thu, 03 Dec 2026 09:22:00 -0800
+Subject: Re: Fwd: RFI: export & retention specifics for regulatory review
+
+Marissa/Ben,
+
+Throughput/operational notes:
+- 25GB/day compressed: our export job pipeline comfortably handles this as a background job. We typically observe ~2.5–3x compression on JSON audit events; network egress and multipart upload are the gating steps.
+- Packaging: we chunk exports by day (YYYYMMDD) into gzipped NDJSON shards (~500MB compressed target) and produce a signed manifest per-day. This helps with resume and rehydration.
+- Redaction: automated PII redaction (configurable) is an extra pipeline step; for preservation under legal hold we typically do a copy-without-redaction and then provide a separate redacted bundle on request. Redaction costs are size+CPU dependent — estimate 1–2 business days additional per 100GB.
+- Delivery options: S3 push (preferred), rsync over TLS to customer appliance, or encrypted hard-drive courier for TB+ volumes. Estimated export job run times: 25GB/day -> 24–36 hours end-to-end including packaging and signing.
+
+Karthik
+Principal Infrastructure Engineer | Redwood Inference
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Elena Shephard <e.shephard@argentum.com>, legal@argentum.com
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Fri, 18 Dec 2026 16:42:00 -0800
+Subject: Re: RFI: export & retention specifics for regulatory review
+
+Elena —
+
+Thanks for your patience. Attached are: audit_export_schema_v1.csv (field-level schema we export), sha256_manifest.txt (sample signed manifest), and the Redwood Forensic Snapshot Playbook (PDF) which summarizes chain-of-custody and delivery options. Key points:
+
+- Export formats: NDJSON (primary), Parquet for analytics, gzipped CSV for small slices.
+- Retention tiers: default 90d, custom tiers by contract up to 7 years, and immutable snapshots for legal preservation.
+- Tamper-evidence: per-file SHA256 + HSM-signed manifest; prior key fingerprints available on request.
+- SLA: 3–5 business days for <100GB; 7–21 business days for multi-TB; expedited 48–72 hours under escalation.
+
+If you want an attestation paragraph for your compliance packet, Laura can sign it and we can include HSM key fingerprints. Do you want us to open a support ticket to scope the first sample export (we can provision an S3 bucket or share a presigned transfer link)?
+
+Best,
+Ben
+Director, Solutions | Redwood Inference
+
+On Fri, Dec 18, 2026 at 09:45 AM Elena Shephard <e.shephard@argentum.com> wrote:
+> Ben —
+>
+> This is exactly what we need. Please include the attestation and the HSM key fingerprints. We will open a change request internally and confirm a target date for a 30-day preservation snapshot (Q1 2027). Also request that the manifest include a per-file line for the encryption metadata (KMS key id used).
+>
+> Elena
+> Legal & Compliance | Argentum Financial

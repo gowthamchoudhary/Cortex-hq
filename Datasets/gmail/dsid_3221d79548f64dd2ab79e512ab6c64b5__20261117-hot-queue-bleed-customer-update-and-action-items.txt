@@ -1,0 +1,125 @@
+Hot queue bleed — regional GPU capacity surge (Aurora Retail)
+
+From: Sam Ellis <sam.ellis@aurora-retail.com>
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Mon, 16 Nov 2026 15:04:12 -0800
+Subject: Hot queue bleed in us-west-2 — elevated 504s and throughput drop
+
+Hi Neha,
+
+We're seeing a sustained spike in 504s and token-level latency from ~14:45 PST across our us-west-2 dedicated pool. Throughput for our inference fleet has dropped ~30% and several requests are timing out at the client. Our SRE team has surface IDs and sample request IDs if you need them.
+
+What we can confirm from our side:
+- Affected model: open-llama-30b-v2 (pinned in our Dedicated config)
+- Region: us-west-2 (reserved pool id: rsv-usw2-14)
+- Start window: ~14:40–14:50 PST, ongoing when I write this
+
+This is impacting our checkout fraud model (real-time scoring) and causing client retries. We need an update on mitigation and ETA for restored throughput. Please escalate.
+
+Thanks,
+Sam Ellis
+Head of Platform Reliability
+Aurora Retail
+[Attachment: sample-request-ids.txt (text)]
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Sam Ellis <sam.ellis@aurora-retail.com>
+Cc: Camila Reyes <camila.reyes@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Connor O'Brien <connor.obrien@redwood.ai>
+Date: Mon, 16 Nov 2026 15:12:03 -0800
+Subject: Re: Hot queue bleed in us-west-2 — elevated 504s and throughput drop
+
+Sam — thanks for the heads up and very sorry for the disruption. I’m escalating to our Dedicated operations on-call and CC’ing the team.
+
+Immediate plan:
+- Ops will triage the warmup/eviction and autoscaler signals and report back within 30 minutes.
+- If routing fallback is available we will shift a portion of your traffic to a compatible spare pool to reduce client impact.
+- We’ll consolidate logs and share a live update + runbook excerpt.
+
+Can you confirm whether Aurora is observing any client-side retry amplification (e.g., simultaneous retries creating more load)? Any sample request IDs are helpful.
+
+I’ll be your primary contact for communications and will follow up with a status update.
+
+Best,
+Neha Kapoor
+Senior Account Lead — Dedicated
+Redwood Inference
+[Attachment: incident-intake-form.pdf (stub)]
+From: Camila Reyes <camila.reyes@redwood.ai>
+To: Neha Kapoor <neha.kapoor@redwood.ai>, Sam Ellis <sam.ellis@aurora-retail.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Connor O'Brien <connor.obrien@redwood.ai>
+Date: Mon, 16 Nov 2026 15:39:27 -0800
+Subject: Re: Hot queue bleed in us-west-2 — regional findings and mitigations
+
+Sam / Neha — technical update from ops: we confirmed that a head-of-queue saturation event occurred in rsv-usw2-14 starting ~14:42. Key findings:
+
+- Root immediate cause: the regional autoscaler missed several scale-up signals due to a recent scheduling-edge change in the allocator (a circuit condition when node warmup rate exceeded the backfill window). The autoscaler did not allocate new warm nodes fast enough.
+- Secondary effect: continuous request retries caused KV-cache thrash on active nodes, increasing p99 token latency and triggering request timeouts.
+- Impacted surface: all Dedicated tenants pinned to rsv-usw2-14 with high concurrency; Aurora observed ~30% throughput drop and elevated 504s.
+
+Mitigations applied (15:00–15:25 PST):
+1) Manually forced a partial pool rebalance and increased warm standby count for rsv-usw2-14.
+2) Enabled temporary routing to compatible spillover pool rsv-usw2-spill-2 for 20% of traffic to lower head pressure.
+3) Applied a short-lived throttle to extremely high-concurrency keys (via per-tenant rate cap) while we stabilize.
+
+Artifacts attached: ops_snapshot_20261116.log (truncated), alloc-graph-uswest2.png (allocation timeline).
+
+Next steps:
+- We'll conduct a controlled rolling restart of the allocator subservice across the pool to clear warmup backlog (scheduled 17:00 PST tonight).
+- Provide a post-incident write-up with root cause and a remediation plan (patch to allocator scheduling and autoscaler heuristics).
+
+We’ll follow up with a timeline for permanent fixes and a proposed credit amount for customer impact.
+
+—Camila
+Principal SRE, Dedicated Runtime
+Redwood Inference
+[Attachments: ops_snapshot_20261116.log, alloc-graph-uswest2.png]
+From: Sam Ellis <sam.ellis@aurora-retail.com>
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: Camila Reyes <camila.reyes@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Mon, 16 Nov 2026 16:02:51 -0800
+Subject: Re: Hot queue bleed — thanks for the update; follow-ups
+
+Thanks Camila — that helps. A couple of follow-ups from Aurora SRE:
+
+- Can you confirm the expected ETA for the rolling restart and how long the spillover routing will be in effect? We want to coordinate client-side retry windows to avoid amplifying load while you restart.
+- We need a commitment on a postmortem and expected delivery date for the write-up and the proposed credit. We will share our incident timeline from our side as well.
+
+Appreciate the quick triage. Please let us know if Redwood needs any specific logs or request IDs.
+
+Sam
+Head of Platform Reliability, Aurora Retail
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Sam Ellis <sam.ellis@aurora-retail.com>
+Cc: Camila Reyes <camila.reyes@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Connor O'Brien <connor.obrien@redwood.ai>
+Date: Tue, 17 Nov 2026 11:22:09 -0800
+Subject: Re: Hot queue bleed — remediation summary and next steps
+
+Sam — following up with the consolidated post-incident summary and next steps. Apologies again for the impact; we own the operational lapse and are committed to corrective action. Summary below and a draft postmortem is attached.
+
+Summary of timeline (PST):
+- 14:40–14:50: Head-of-queue saturation observed (customer reports).
+- 14:50–15:00: Autoscaler under-provisioned due to allocator scheduling edge; retries amplify pressure.
+- 15:00–15:25: Manual mitigations applied (partial rebalance, routing spillover, per-tenant throttle).
+- 17:00: Controlled rolling restart of allocator subservice completed; warmup backlog cleared and p99 latency normalized by 17:12.
+
+Root cause: a recently introduced allocator scheduling change exposed a race where warm node warmup events exceeded backfill windows causing the autoscaler heuristic to drop scale-up signals. Fix: patch to allocator to handle high warmup-rate windows + improved autoscaler signal deduping.
+
+Immediate remediation actions we will deliver by 2026-12-03:
+- Deploy allocator scheduling patch to all Dedicated regions + canary monitoring.
+- Add autoscaler guardrails to preserve headroom under bursty warmup scenarios.
+- Improve per-tenant early-throttle heuristics to prevent retry-amplification loops.
+- Update runbook and add a faster manual-override path for spill routing.
+
+Customer remediation and next steps:
+- Draft postmortem with full logs attached: https://drive.redwood.example/drive/postmortems/aurora-hot-queue-20261117 (internal doc link).
+- Proposed good-faith credit: 25% of Dedicated service fees for the affected 6-hour window (billing team to formalize).
+- We’ll schedule a 30-minute technical review with Aurora SRE next week to walk through the patch and monitoring changes — suggest Tue 2026-11-23 10:00 PST (let me know availability).
+
+Attachments: postmortem-draft-aurora-20261117.pdf (draft) and the ops artifacts previously shared.
+
+If that plan looks good we’ll move forward to implement the remediation schedule and finalize the credit paperwork. Thank you for your partnership; we’ll be transparent on every step.
+
+Best,
+Neha Kapoor
+Senior Account Lead — Dedicated
+Redwood Inference
+[Attachments: postmortem-draft-aurora-20261117.pdf]

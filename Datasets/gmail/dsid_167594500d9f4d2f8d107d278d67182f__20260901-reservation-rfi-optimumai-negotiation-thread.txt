@@ -1,0 +1,133 @@
+RFI: Dedicated reservation & GPU sizing - Optimum AI
+
+From: Samir Patel <samir.patel@optimum-ai.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: procurement@optimum-ai.com
+Date: Tue, 1 Sep 2026 09:12:00 -07:00
+Subject: RFI: Dedicated Reservation & GPU Sizing — Optimum AI
+
+Hi Ben,
+
+Thanks for taking a look — Optimum AI is preparing a procurement package for a dedicated inference reservation and we need detailed responses to a short RFI so our procurement and infra teams can size budget and timeline. High-level asks below, full doc attached (Optimum_RFP_Dedicated_v1.docx):
+
+- Target throughput: steady-state 1.2M tokens/minute (mixed batch sizes from our web and API workloads), peak bursts up to 4.8M tokens/minute for 20-30m windows.
+- Tail latency SLO: p99 generation latency <= 200ms for single-turn chat (up to 512 tokens).
+- Model families: Llama-2 70B/Chat/Quantized and internally fine-tuned Mistral-7B variants.
+- Data residency: US only; audit logs required for 12 months.
+- Contract ask: committed reserved capacity for 12 months with burst pool and an option to increase within 90 days.
+
+Please send: GPU family recommendations, sizing worksheet (preferred: xlsx), expected headroom numbers, fallback model variants for capacity constraints, and an outline of how a reserved pool + burst lane would be implemented. Also include any compliance evidence we can show procurement (SOC 2/IAM controls).
+
+Can you get us an initial workbook and answers by EOD Friday PST?
+
+Thanks — happy to hop on a short call if helpful.
+
+Samir
+Samir Patel
+Head of Infra Procurement, Optimum AI
+procurement@optimum-ai.com
++1 415 555 0134
+
+Attachment: Optimum_RFP_Dedicated_v1.docx (document)
+From: Ben Carter <ben.carter@redwood.ai>
+To: Samir Patel <samir.patel@optimum-ai.com>
+Cc: karthik.iyer@redwood.ai, laura.bennett@redwood.ai
+Date: Tue, 1 Sep 2026 11:03:00 -07:00
+Subject: Re: RFI: Dedicated Reservation & GPU Sizing — Optimum AI
+
+Samir — thanks for the RFP and clear specs. I'll own the response.
+
+Quick commit: we can deliver a completed sizing workbook + RFI answers by EOD Friday PST. I’m looping in Karthik (inference capacity) and Laura (solutions) to supply modeling numbers and procurement-friendly artifacts (SOC2 summary, audit log retention notes).
+
+Immediate plan:
+- Karthik: build baseline GPU mix scenarios (A100/H100/L4 combos) and headroom numbers for steady/peak.
+- Laura: prepare reservation_workbook_optimum.xlsx and SOC 2 / compliance attachment pointers.
+- I’ll draft the narrative RFI answers and a short one-page reservation playbook describing reserved pool + burst lane behavior and fallbacks.
+
+If you have a preferred workbook template or HubSpot doc link, share it — otherwise we’ll use our standard reserve-sizing workbook and call out where to tune.
+
+Ben
+Ben Carter
+Director, Solutions — Redwood Inference
+ben.carter@redwood.ai
+
+On Tue, Sep 1, 2026 at 09:12 AM Samir Patel <samir.patel@optimum-ai.com> wrote:
+> (original RFP attached)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: karthik.iyer@redwood.ai, laura.bennett@redwood.ai
+Cc: soojin.lee@redwood.ai
+Date: Wed, 2 Sep 2026 08:22:00 -07:00
+Subject: FW: RFI: Dedicated Reservation & GPU Sizing — Optimum AI
+
+Internal thread — copying the original RFP below. Karthik/Laura, please prioritize: we need three sizing scenarios (Conservative, Target, Aggressive) and an explicit recommended SKU mix and reservation profile by Thursday so I can assemble the RFI packet. Key asks from Optimum: 
+
+- Steady-state: 1.2M tokens/min. Peak bursts: 4.8M tokens/min for 20–30 minutes. p99 <=200ms for single-turn chat at up to 512 tokens. US-only. 12mo retention for logs.
+
+Karthik — initial notes from a capacity perspective:
+- Model footprint: Llama-2/70B quantized (q4f16/q5) will fit best on H100 80GB or A100 80GB depending on kernel support; Mistral-7B variants run efficiently on L4/RTX-class with high throughput per dollar.
+- Recommendation: blended pool: 60% H100/A100 mix for high-capacity multi-token generation, 40% L4 class for cheaper short-turn loads and Mistral variants. Provide throughput estimates per GPU (tokens/min) for the specified token lengths.
+- Burst lane: implement a separate autoscale lane with pre-warmed instances using ephemeral instances billed as burst; enforce cost/fallthrough policy to a smaller chat-optimized model if bursts exceed reserved + burst cap.
+
+Laura — please prepare workbook tabs: inputs (QPS by client), model mapping, GPU SKU throughput matrix, cost run-rate for reserved vs burst, and an annex with compliance pointers (SOC2 link, logging retention).
+
+I’ll coordinate and draft the external reply.
+
+Ben
+
+On Tue, Sep 1, 2026 at 11:03 AM Ben Carter <ben.carter@redwood.ai> wrote:
+> (Ben’s confirmation to Samir)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Samir Patel <samir.patel@optimum-ai.com>
+Cc: karthik.iyer@redwood.ai, laura.bennett@redwood.ai, soojin.lee@redwood.ai
+Date: Fri, 4 Sep 2026 15:30:00 -07:00
+Subject: Re: RFI: Dedicated Reservation & GPU Sizing — Optimum AI
+
+Samir — attaching our completed RFI answers and the sizing workbook. Highlights below and next steps:
+
+Attachments: Optimum_RFI_Answers_20260904.pdf, reservation_workbook_optimum.xlsx (tabs: assumptions, scenario_conservative, scenario_target, scenario_aggressive, GPU_throughput_matrix, cost_run_rates)
+
+Executive summary (short):
+- Recommended reserve: 48 H100-80GB equivalents for baseline steady-state (scenario: target) to meet 1.2M tokens/min with 25% headroom. Map to physical SKUs as 30 x H100 + 18 x A100 for redundancy and queueing characteristics.
+- Burst pool: 12 L4-class nodes (ephemeral) to absorb short 20–30 minute surges; fallback policy routes overflow to quantized Llama-2 70B q4f16 running on H100/A100 with slightly higher latency but lower cost after burst capacity is exhausted.
+- Latency: based on our modeling, p99 single-turn <=150ms under target scenario for up to 512 tokens (measured on H100 mix with continuous batching disabled for interactive requests). Tail latency under heavy burst depends on request mix; we provide p90/p99 curves in the workbook.
+- Autoscaling behavior: reserved pool maintains throughput for committed tokens; burst lane autoscale to predefined cap, with automatic fallthrough to lower-cost model variants and a capacity-based throttling policy.
+- Compliance: SOC 2 Type II summary included; we provide 12mo audit log retention and an exportable activity log for customer audits.
+- Pricing: preliminary committed monthly run-rate estimate included in workbook (tab: cost_run_rates). We provide a 12-month commitment with a 90-day increase window and optional monthly true-ups.
+
+Ask/Next steps:
+1) Review the attached workbook. We suggest a 45-minute walkthrough next week to go through the scenario_target assumptions and tune model mix.
+2) If workbook numbers look acceptable, we’ll prepare a preliminary SOW and DocuSign packet that includes reserved units, burst lanes, and SLA language.
+3) We can include a single 30-day trial of burst credits to validate headroom at no charge for proof-of-capacity.
+
+Link: reservation workbook (Drive): https://drive.company/shared/Optimum/ReservationWorkbook-OPTA-20260904
+HubSpot deal: https://hubspot.company/contacts/deal/OPTA-2026-042
+DocuSign: https://www.docusign.com/s/abcdef1234567890
+
+If helpful, Karthik and I can join the walkthrough; Laura will cover procurement/compliance items. Proposed times: Mon 2026-09-07 09:00-09:45 PT, Tue 2026-09-08 11:00-11:45 PT.
+
+Ben
+
+Attachment stub: Optimum_RFI_Answers_20260904.pdf (PDF, 6 pages)
+Attachment stub: reservation_workbook_optimum.xlsx (Excel workbook, 8 tabs)
+
+From: Samir Patel <samir.patel@optimum-ai.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: procurement@optimum-ai.com, legal@optimum-ai.com
+Date: Tue, 8 Sep 2026 16:45:00 -07:00
+Subject: Re: RFI: Dedicated Reservation & GPU Sizing — Optimum AI
+
+Ben — thanks for the thorough packet and workbook. A few quick clarifications before the walkthrough:
+
+1) The H100/A100 split: can you provide expected degraded p99 if we run 20% of the workload on A100-only nodes? We need a clear number for procurement.
+2) Burst credits: appreciate the 30-day trial — how are credits consumed and are they separate from committed billing for reporting? We need separate metering for committed vs burst tokens.
+3) Can you add a line in the workbook that shows cost under a 6-month ramp (10/30/50 ramp %) — procurement requires a run-rate table for budget phasing.
+
+Also propose a walkthrough time: Tue 2026-09-15 10:00 PT. That gives our legal and procurement teams time to review the draft terms. One attached doc: procurement_terms_optimum_draft.pdf — high level comments inline.
+
+If you can add the A100-only degraded p99 and the ramp table prior to the walkthrough that would be great.
+
+Thanks — Samir
+
+Attachment: procurement_terms_optimum_draft.pdf (PDF, markups)

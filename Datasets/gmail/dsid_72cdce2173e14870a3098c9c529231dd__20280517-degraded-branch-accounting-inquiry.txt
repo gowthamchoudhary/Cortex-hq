@@ -1,0 +1,144 @@
+Partial degradations during third‑party edge rollout — accounting inquiry
+
+From: Sally Huang <sally.huang@medilink.com>
+To: Rachel Kim <rachel.kim@redwood.ai>
+Cc: ops@cloudgrove.com
+Date: Fri, 17 May 2028 09:12:00 -0400
+Subject: Partial degradations May 15 — request for SLA accounting
+
+Hi Rachel,
+
+We saw a noticeable increase in 5xx and latency spikes for our write-heavy endpoints on May 15 between 02:30 and 03:40 UTC (US‑East region). Traffic graphs show a sustained error rate and elevated p95 latency that impacted our customers — several time-sensitive jobs retried and one stream timed out.
+
+Our platform team traced the pattern to a misrouted subset of requests going through CloudGrove edge POPs which were undergoing a firmware rollout at the time. CloudGrove ticket reference is CG-98721.
+
+Per our contract we expect Redwood to account for partial degradations and third‑party maintenance that meaningfully affects the path. Please advise how you plan to calculate uptime impact and whether MediLink will receive a credit for this window. We can share our access logs and a condensed timeline but wanted to start here.
+
+Attached: MediLink_sample_errors_20280515.csv (20 rows)
+
+Thanks,
+Sally Huang
+Head of Platform Reliability
+MediLink
+
+From: Rachel Kim <rachel.kim@redwood.ai>
+To: Sally Huang <sally.huang@medilink.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Sergio Alvarez <sergio.alvarez@redwood.ai>
+Date: Fri, 17 May 2028 11:05:00 -04:00
+Subject: Re: Partial degradations May 15 — request for SLA accounting
+
+Sally — thanks for the note and the sample rows. Sorry to hear this impacted your jobs.
+
+Quick next steps from our side:
+- I've looped in Marissa (CS) and Sergio (support) to pull telemetry and the probe traces for the US‑East POPs during the window.
+- Could you share the condensed timeline you mentioned (UTC timestamps) and a representative request id or two so we can correlate?
+- We'll also reach out to CloudGrove to confirm their maintenance manifest and whether it overlaps our serving path.
+
+I'll follow up with an initial assessment by EOD Monday (May 20) once we have probe data and CloudGrove's confirmation.
+
+— Rachel
+Rachel Kim
+Account Lead, Enterprise
+Redwood Inference
+
+From: Dinesh Rao <dinesh@cloudgrove.com>
+To: Rachel Kim <rachel.kim@redwood.ai>, Sergio Alvarez <sergio.alvarez@redwood.ai>
+Cc: ops@cloudgrove.com
+Date: Sat, 18 May 2028 07:20:00 -07:00
+Subject: Re: Partial degradations May 15 — CloudGrove maintenance manifest
+
+Hi Rachel / Sergio,
+
+CloudGrove performed a staged firmware rollout for a subset of US‑East POPs on 2028‑05‑15 between 02:15–03:30 UTC. We published the maintenance notification on May 10 (manifest attached: cloudgrove_maintenance_manifest.csv). The rollout targeted interface firmware on three edge racks; we observed elevated drop rates on a small percentage of sessions while rerouting traffic.
+
+By our telemetry the event was within our announced maintenance window; the majority of traffic was served by alternate POPs. We'll share our internal traces if Redwood needs deeper correlation (we're attaching a short manifest).
+
+— Dinesh
+Dinesh Rao
+SRE Lead, CloudGrove
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Karthik Iyer <karthik_iyer@redwood.ai>, Sergio Alvarez <sergio.alvarez@redwood.ai>, Rachel Kim <rachel.kim@redwood.ai>
+Date: Sat, 18 May 2028 13:45:00 -04:00
+Subject: Fwd: Partial degradations May 15 — need apportionment analysis
+
+Folks — forwarding Sally's report and CloudGrove's manifest. MediLink is asking for the credit calculation and reasoning. Can infra ops (Karthik) run the apportionment analysis (redwood probe v/s external edge maintenance overlap) and recommend a credit amount under our SLA?
+
+Key asks:
+- Confirm whether the path-level partial degradation meets our SLA partial-degrade threshold (per‑customer p95/p99 thresholds and 5xx triggers).
+- If it does, provide a breakdown of attributable cause (Redwood runtime vs CloudGrove edge) and a suggested percent credit.
+- Attach the probe traces and the calculation spreadsheet.
+
+Marissa
+Director, Customer Success
+Redwood Inference
+
+On Fri, May 17, 2028 at 11:05 AM Rachel Kim <rachel.kim@redwood.ai> wrote:
+> Sally — thanks for the note and the sample rows. Sorry to hear this impacted your jobs.
+> 
+> Quick next steps from our side:
+> - I've looped in Marissa (CS) and Sergio (support) to pull telemetry and the probe traces for the US‑East POPs during the window.
+> - Could you share the condensed timeline you mentioned (UTC timestamps) and a representative request id or two so we can correlate?
+> - We'll also reach out to CloudGrove to confirm their maintenance manifest and whether it overlaps our serving path.
+> 
+> I'll follow up with an initial assessment by EOD Monday (May 20) once we have probe data and CloudGrove's confirmation.
+> 
+> — Rachel
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Rachel Kim <rachel.kim@redwood.ai>, Sergio Alvarez <sergio.alvarez@redwood.ai>
+Date: Sun, 19 May 2028 09:10:00 -04:00
+Subject: Re: Fwd: Partial degradations May 15 — need apportionment analysis
+
+Team — analysis complete (summary below). Attachments: redwood_probe_traces_us-east.log, apportionment_calc_20280515.xlsx.
+
+What we observed:
+- Redwood edge probes show a step increase in 5xx ratio starting 2028‑05‑15 02:28 UTC and resolving to baseline at 03:09 UTC; sustained period where p95 latency breached our partial degradations threshold (rule set v2.1) was ~41 minutes.
+- Median path availability remained > 99.7% because alternate POPs served most requests; however the customer‑impact window crosses our partial‑degrade SLA threshold (per contract clause 4.2).
+- CloudGrove manifest and their traces indicate a staged firmware roll that affected three racks in us‑east from ~02:15–03:30 UTC and caused increased drop rates on flows pinned to those racks.
+
+Apportionment methodology applied:
+- We correlated request-level sampling for MediLink (their sample ids) against our probes and CloudGrove's manifest.
+- Using flow split and probe visibility we estimate ~60% of the impacted requests were routed via CloudGrove‑affected racks; ~40% appear due to transient capacity pressure in our admission layer when failover occurred (queueing + brief overload on fallback POPs).
+
+Recommendation:
+- Attribute 60% of the degraded window to CloudGrove's maintenance and 40% to Redwood service factors.
+- Per SLA, downtime minutes for credit calculation = duration over threshold (41 minutes). We propose issuing a credit equal to 40% of the eligible downtime credit per SLA formula (i.e., Redwood portion).
+- Proposed customer credit: a one‑time account credit equal to Redwood's calculated share (line item shown in apportionment_calc_20280515.xlsx).
+
+Notes / caveats:
+- CloudGrove may dispute the split; we should offer the calculation and ask for their approval before issuing the credit.
+- We recommend opening an internal SUP ticket to track the credit and an external RFC with MediLink and CloudGrove so all parties agree to the numbers.
+
+— Karthik
+Karthik Iyer
+Staff Site Reliability Engineer
+Redwood Inference
+
+From: Rachel Kim <rachel.kim@redwood.ai>
+To: Sally Huang <sally.huang@medilink.com>, Dinesh Rao <dinesh@cloudgrove.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Sergio Alvarez <sergio.alvarez@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Mon, 20 May 2028 16:05:00 -04:00
+Subject: Re: Partial degradations May 15 — proposed credit and next steps
+
+Sally / Dinesh — thanks for the patience while we investigated. Below is the short version of our assessment and proposed resolution. Full calculation and traces are attached.
+
+Summary of assessment:
+- The path experienced a partial degradation that exceeded Redwood's partial‑degrade SLA threshold for ~41 minutes (2028‑05‑15 02:28–03:09 UTC).
+- Our correlation indicates ~60% of affected flows were routed through CloudGrove POP racks that were in their firmware rollout; ~40% is attributable to our fallback admission pressure during the failover.
+
+Proposed resolution:
+- We suggest issuing a customer credit corresponding to Redwood's attributable share (40% of the eligible downtime credit for the 41‑minute window). The exact dollar credit and account posting are in the attached redwood_credit_proposal.pdf and apportionment_calc_20280515.xlsx.
+- We will open SUP-2347 to track the credit posting and any subsequent reconciliation with CloudGrove.
+
+Next steps for agreement:
+1) Dinesh — please confirm CloudGrove's assessment of the overlap and whether you accept the 60/40 split or propose an alternative split. If you disagree, please provide the playback traces referenced in your manifest so we can re-run the correlation.
+2) Sally — if MediLink accepts the proposed credit, we'll schedule the posting date and notify billing.
+3) Marissa / Sergio — please create SUP-2347 and attach the two calculation artifacts for audit.
+
+Thanks all — we want to keep this transparent and get it closed quickly.
+
+Best,
+Rachel Kim
+Account Lead, Enterprise
+Redwood Inference

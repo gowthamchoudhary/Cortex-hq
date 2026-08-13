@@ -1,0 +1,148 @@
+Private GPU pool — queueing model & headroom strategy
+
+From: Anya Patel <anya@coretech.com>
+To: Priya Natarajan <priya@redwood.com>
+Date: 2027-09-08T09:12:00-07:00
+Subject: Sizing check: private GPU pool for inference
+
+Hi Priya,
+
+Thanks for taking a look. We're planning a private deployment (VPC) to run a mix of chat-style generation and some heavy embeddings/reranking for a pilot (CoreTech internal). High-level traffic profile:
+- Steady baseline ~120–220 QPS (user-facing chat), 95th spike up to 600 QPS for short windows (3–7 minutes)
+- Avg response size ~800 tokens, occasional long responses to 2k tokens
+- Mix: ~85% generation/chat, ~10% embeddings, ~5% reranking
+- Latency SLO: p95 user-response <= 140 ms for short prompts; bulk batch embeddings allowed higher latency
+
+Primary asks: recommended GPU pool sizing (initial and buffer/headroom), sensible queueing/autoscale model to meet latency SLOs, networking requirements (per-host NICs, recommended throughput), and any warmup/caching strategies to avoid cold-start latency cliffs. Also call out operational constraints we should plan for (maintenance, power/thermal, failover).
+
+Can attach a short sample trace if that helps. Looking for an initial sizing and a practical rollout plan.
+
+Thanks,
+Anya
+Anya Patel
+CoreTech Systems — AI Platform
+anya@coretech.com
+
+-----
+
+From: Priya Natarajan <priya@redwood.com>
+To: Anya Patel <anya@coretech.com>
+Cc: Dev Patel <dev@redwood.com>, Marissa Cole <marissa@redwood.com>, Soojin Lee <soojin@redwood.com>
+Date: 2027-09-08T12:03:00-07:00
+Subject: Re: Sizing check: private GPU pool for inference
+
+Hi Anya — thanks for the concise profile, this is perfect to start with. Quick summary and recommended starting point below; follow-ups have the math and operational notes.
+
+TL;DR recommendation (initial):
+- Start with an 8-GPU pool using H100-80GB class nodes (4 GPUs per host x 2 hosts), staged as: 6 GPUs "active" for steady-state, +2 GPUs reserved as immediate headroom/spare (rolling upgrades, instant bursts).
+- Configure prewarmed KV cache for typical user prefixes; use an aggressive prefix cache TTL for chat to avoid token regen on cold slots.
+- Network: 2x25Gbps NICs per host (bonded) minimum; prefer 100 Gbps if within budget for inter-node NVLink-like traffic and fast model shards.
+- Autoscaling policy: fast vertical scaling for queued short spikes (scale up within 90s), and a conservative horizontal policy for sustained >5-minute load.
+
+Rationale and sizing notes:
+1) Throughput baseline math (approx):
+- Measured p95 latency target forces low batching size for user-facing chat. With our runtime, an H100 at modest batching (batch size 4–8) sustains ~25–40 generated requests/sec for median prompt sizes (800 tokens) with p95 under 120–140ms.
+- For 200 QPS steady: 200 / 30 rps ≈ 6.7 GPUs => round to 7 and add 20–25% headroom => 8 GPUs recommended.
+
+2) Queueing/fallback model:
+- Short spikes: accept a small, bounded queue with SLA-aware prioritization (user chat > embeddings). Implement request queuing with token-budgeted timeouts and an early-fallback policy to a smaller-generation model if queue depth crosses threshold.
+- Use a two-tier autoscale: immediate (fast start) to bring spare GPUs online via warm standby, and slower scale for sustained traffic. Keep 1–2 GPUs as warm standbys to avoid cold-starts.
+
+3) Cache & warmup:
+- Pre-warm KV caches for top-1000 user prefixes and warm commonly used model weights on node boot. For your mix, cache hits can shave 20–40% of p95 latency on bursty chat.
+
+4) Networking:
+- For single-host 4-GPU nodes: at least dual 25 Gbps NICs; prefer 100 Gbps for multi-host models or sharded variants. Turn on jumbo frames and ensure MTU consistency. Avoid oversubscribed TOR links.
+
+5) Operational constraints:
+- Place GPUs across two racks (see Marissa's note below) to survive a rack-level failure and allow rolling firmware updates without dropping capacity below target.
+- Plan maintenance windows with explicit prewarming after updates.
+
+Please see Dev and Marissa's notes below for profiling data and rack/power guidance. I can sketch a canary rollout plan once we get your current datacenter NIC specs and power per-rack limits.
+
+Best,
+Priya Natarajan
+Head of Solutions, Redwood Inference
+priya@redwood.com
+
+-----
+
+From: Dev Patel <dev@redwood.com>
+To: Priya Natarajan <priya@redwood.com>, Anya Patel <anya@coretech.com>
+Cc: Marissa Cole <marissa@redwood.com>, Soojin Lee <soojin@redwood.com>
+Date: 2027-09-09T08:15:00-07:00
+Subject: Re: Sizing check: private GPU pool for inference
+
+Adding runtime profiling details and a conservative throughput matrix so you can run the numbers against your traces. Attaching a quick CSV and a short flame graph — see attachments (profiling).
+
+Key observations from our lab runs (H100-like topology, FP16, 32k KV cache disabled vs enabled):
+- Median per-request token throughput (generation): ~55k tokens/s/GPU when batching is allowed (batch 8); p95 latency depends heavily on max-gen length and KV cache state.
+- For typical 800-token responses: effective requests/sec per GPU ~28–35 rps at p50; p95 falls to ~20–25 rps without cache warm.
+- Embeddings are cheap and can be processed with batching; pack embeddings into larger batches to shift cost away from user p95.
+
+Network & interconnect:
+- If you plan model-parallel sharding or cross-host KV traffic, ensure 200 Gbps equivalent interconnect in rack or use GPUs with NVLink bridged hosts. Local NVLink inside host matters more than external bandwidth for single-host models.
+
+Autoscale settings I'd use as starting point (can tune):
+- Warm standby GPUs: 2 (always warm, drained if healthy capacity available)
+- Scale-up threshold1: queue depth > 12 requests for > 30s => add 1 GPU (fast path)
+- Scale-up threshold2: sustained CPU/GPU utilization > 75% for 3m => add 2 GPUs (slow path)
+- Scale-down: idle < 10% for 6m and queue depth 0 => remove 1 GPU
+
+Attachments: profiling CSV, throughput-matrix.png.
+
+-Dev
+Dev Patel
+Senior Infra Engineer, Redwood Inference
+dev@redwood.com
+
+-----
+
+From: Marissa Cole <marissa@redwood.com>
+To: Priya Natarajan <priya@redwood.com>, Dev Patel <dev@redwood.com>, Anya Patel <anya@coretech.com>
+Cc: Soojin Lee <soojin@redwood.com>
+Date: 2027-09-09T09:42:00-07:00
+Subject: Re: Sizing check: private GPU pool for inference
+
+Operational notes from ops/hosting side:
+- Power & thermal: H100 racks at 4 GPUs/host typically draw ~12–14 kW per rack at full tilt with standard fans. Confirm datacenter rack PDU limits; recommend at least 20% spare power headroom per rack.
+- Rack layout: do not colocate all 8 GPUs in a single rack. Spread across 2 racks (4+4) to handle rack-level network faults and PDU failures.
+- Spares & procurement: Have 1 spare GPU node that can be swapped in within 4 hours. Consider an on-call escalation runbook for failed NVLink/NIC issues.
+- Maintenance: schedule rolling firmware/driver updates with warm-standby strategy and prewarm periods post-update (30–45 minutes for large models).
+
+I've uploaded a blanket sizing sheet that maps traffic curves to GPU counts and recommended power/PDU profiles. Please review column F (deployment constraints) and column I (recommended rack split).
+
+Marissa Cole
+Director, Platform Operations, Redwood Inference
+marissa@redwood.com
+
+Attachment referenced: private_pool-sizing-sheet.xlsx
+
+-----
+
+From: Soojin Lee <soojin@redwood.com>
+To: Anya Patel <anya@coretech.com>, Priya Natarajan <priya@redwood.com>, Dev Patel <dev@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: 2027-09-09T16:42:00-07:00
+Subject: Re: Sizing check: private GPU pool for inference
+
+Thanks everyone — short action items and next steps: 
+
+Action items:
+- Anya/CoreTech: upload a 48-hour representative trace (requests with timestamps + payload size). We need it to validate the queue model. (Anya)
+- Priya: draft a canary rollout plan with explicit warmup windows and failure rollback steps — due EOD Tue (2027-09-14).
+- Dev: share profiling CSV & throughput matrix (attached in this thread). Also include a short script to simulate warm-cache vs cold-cache behavior.
+- Marissa: confirm rack PDU limits and whether you can support dual-100Gb NICs in target colo; if not, we’ll adjust to bonded 2x25G recommendation.
+
+Meeting: Proposed 30-min sync on 2027-09-15 10:00AM PT to review the sizing spreadsheet and run the trace through the simulation. Calendar invite to follow.
+
+Drive & tickets: 
+- Drive folder: https://drive.google.com/drive/folders/1aBcdExampleDriveLink
+- Jira ticket created: INF-4321 (private-pool-sizing)
+
+Thanks — I’ll consolidate responses and produce a 1-page runbook for your SRE team after the trace validation.
+
+Soojin Lee
+Principal Reliability Engineer, Redwood Inference
+soojin@redwood.com
+
+[Attachments in thread: coretech-private-pool-workload-sample.json, private_pool-sizing-sheet.xlsx, network-trace-sample.pcap]

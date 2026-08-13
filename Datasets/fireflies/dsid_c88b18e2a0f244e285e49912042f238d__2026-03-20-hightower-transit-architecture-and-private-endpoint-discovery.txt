@@ -1,0 +1,78 @@
+Hightower - transit architecture & private endpoint discovery
+
+Meeting header:
+Date: 2026-03-20
+Start: 16:00 PT
+Duration: ~52 minutes
+Attendees: Alex (Redwood AE), Samir (Redwood SE), Maya (Redwood SE), Jordan (Hightower SRE), Priya (Head of Cloud), Diego (SecOps), Emily (Product)
+
+Auto-summary (auto-generated, may be rough): Hightower is evaluating private/VPC deployment. Primary constraints: regulatory data residency, strict egress controls, transit-gateway topology, and limited peering ranges. Discussed private endpoints, VPC peering vs TGW, NAT/egress, route tables, KMS integration and SOC2 docs. Next steps: Redwood to share terraform examples and security pack; customer to share network diagrams and CIDRs.
+
+00:00 Alex Rivera: hey everyone, thanks for carving out time. quick intro — i'm alex, AE on the infra team at Redwood. today our goal is to understand how you'd like to run inference — private deployment in your VPC, looks like — and any network constraints.
+00:22 Jordan Lee: hi, jordan here. yeah we're looking at private first. need to keep inference traffic inside our AWS footprint, "no public egress for payloads", and most compute should be in us-east-1 with DR in eu-west-1.
+00:35 Priya Kapoor: and we have a transit-gateway based architecture, we've got three core accounts: prod, infra, and peering. so peering to an external provider needs to play nice with transit gw route tables.
+00:50 Samir Patel: awesome, thanks. quick clarifying q — when you say "no public egress for payloads", do you mean both model input and logs, or logs can go to a logging endpoint we control?
+01:03 Diego Morales: logs can go to our splunk forwarder inside the VPC, but payloads must never leave the org. encryption-at-rest and KMS integration also must be in place.
+01:15 Maya Chen: good to know. for Redwood Private we can run a customer-managed control plane + private data plane or an on-prem bundle; most customers use our VPC endpoint model where we put an ENI/service endpoint in the customer's VPC and traffic never traverses the public internet.
+01:35 Alex Rivera: a couple of network patterns we see: direct VPC peering, Transit Gateway attachments, or PrivateLink style endpoints. each has tradeoffs around route management, cross-account permissions, and bandwidth.
+01:50 Jordan Lee: biggest operational ask: we need automatic failover to eu-west-1 for regional outage and predictable latency SLAs. also we have strict egress inspection — everything leaving an account must pass through NGFWs.
+02:05 Samir Patel: gotcha. transit-gateway fits that with centralized inspection. we have customers who attach our infra as an additional TGW attachment in the same account or via a cross-account attachment; however you will need to add route propagation to the correct route tables.
+02:20 Emily Zhang: question about private endpoints — is that AWS PrivateLink or an ENI we host inside our account?
+02:30 Maya Chen: it's effectively a managed PrivateLink/ENI pattern. we can publish a service endpoint into your VPC and you call that endpoint using private IPs. for some deployments we also support cross-account TGW attachments where our compute lives in a dedicated account under your org.
+02:48 Priya Kapoor: cross-account TGW sounds promising but our security team is picky about which accounts can assume roles. what's the auth flow?
+02:56 Samir Patel: we generally use a short-lived cert-based or STS-assume-role mechanism depending on the pattern. for PrivateLink it's TLS mutual auth and certs if needed; for cross-account TGW we do a least-privilege IAM role with explicit trust. we'll share templates.
+03:12 Diego Morales: any constraints on port ranges? we can't open 0-65535 broadly.
+03:18 Maya Chen: standard: control plane uses 443 and some healthcheck ports, data plane is HTTPS to the endpoint — we can allowlist source IPs or use SGs to restrict. heavy throughput uses high-concurrency TCP, but it's still tunneled over HTTPS typically.
+03:35 Jordan Lee: curious about NAT and egress for updates — if we host the model pieces in a Redwood-managed subnet attached to our TGW, will model fetches at boot contact public endpoints? we need to control that.
+03:48 Alex Rivera: we can bake images in an air-gapped fashion or provide an update proxy that lives in your account. we also support bringing-your-own-images and supply signed model artifacts.
+04:02 Priya Kapoor: good. compliance checklist — SOC2, encryption, audit logs. can you confirm audit logs are available and we can push them to our KMS and centralized logging?
+04:14 Samir Patel: yes — audit logs (control plane and runtime) can be forwarded to your S3/CloudWatch/Splunk with KMS encryption using your CMK. we also retain audit trails in our control plane but can disable storage if you want everything in your account.
+04:28 Emily Zhang: any region constraints? we prefer primary in us-east-1 for latency, with read/replicas in us-west-2 and eu-west-1 for DR. are all those regions supported for dedicated pools?
+04:42 Maya Chen: us-east-1 and us-west-2 are standard, eu-west-1 is supported but with some instance-type limitations historically; we'll check current GPU availability. if you need deterministic hardware we can do a dedicated pool reservation.
+05:00 Jordan Lee: and how does split-write / stateful KV cache behave across regions? we need low-latency KV local to the model serving region.
+05:09 Samir Patel: KV cache is per-instance; cross-region synchronous replication is not recommended due to latency. typical pattern: keep state local to each region and use async replication for metrics/aggregates.
+05:20 Diego Morales: that may impact our template for session-state. ok.
+05:28 Alex Rivera: want to zone in on routing: if you're using TGW, we recommend creating explicit route table entries for the Redwood attachment and disabling broad 0.0.0.0/0 propagation for that attachment. also we provide a small set of IP ranges to allow in NGFWs.
+05:45 Jordan Lee: can you supply those ranges? we have automated NGFW rule changes that need CIDRs.
+05:52 Samir Patel: yes we'll generate the minimal CIDR list; in PrivateLink mode you don't need wide-range CIDRs, it's just the ENI in your subnet.
+06:05 Priya Kapoor: what's the latency profile? if the model is in us-east-1 and our app is in the same region, we need 50ms p95 or better for single-turn calls — is that realistic?
+06:20 Maya Chen: depends on model size and batch settings. for smaller 7-13B family models we often hit <30ms p95 on single-token generation when using a colocated dedicated pool with KV cache warm. larger models push that higher. we'll include sample SLOs.
+06:38 Emily Zhang: what about streaming? we need partial responses as they generate for user UX.
+06:45 Samir Patel: streaming over the private endpoint is supported — it's chunked HTTP/2. you just need to permit long-lived TCP in the SGs.
+06:55 Jordan Lee: security: KMS integration detail — can Redwood encrypt with our CMKs? we don't want keys in your account.
+07:05 Maya Chen: yes, we support customer-managed KMS keys; our control plane can encrypt request payload metadata but the customer CMK remains in your account and we only receive ciphertext. we'll send a whitepaper on the KMS flow.
+07:19 Diego Morales: and SSO? we want RBAC via SAML.
+07:23 Alex Rivera: Redwood supports SSO via SAML/OIDC and SCIM provisioning for user sync. admin roles, reader roles, and API key scoping are supported.
+07:34 Priya Kapoor: explain rollback/fallback: if us-east has an outage, do you automatically route to eu-west? what about data residency — we can't have PII cross region unless masked.
+07:45 Samir Patel: automatic geo-failover is policy-driven. default is no cross-region failover for in-flight PII; you can set policies to failover only for stateless requests or for non-PII traffic. many customers use a canary plus manual DR runbook.
+08:02 Emily Zhang: ok can we talk about pricing form-factor? dedicated capacity vs private hosted?
+08:10 Alex Rivera: yes — dedicated is reserved GPUs inside Redwood-managed pools for a customer (predictable throughput, enterprise SLAs). private-hosted (VPC endpoints) is a hybrid where compute can still be in our accounts but the network path is private. fully private on-prem lets you manage everything but has a higher onboarding cost.
+08:28 Jordan Lee: licensing nuance: does Dedicated allow us to control model updates? we want to vet each model version before roll to prod.
+08:36 Maya Chen: yes, you can pin model versions and control rollouts; we support canary rollouts and A/B testing. we also allow a manual model approval process in the private control plane.
+08:50 Diego Morales: any egress metering? we need to bill back to teams.
+08:55 Samir Patel: yes token-level metering and per-route cost breakdowns show up in the console and can be pushed to your billing export.
+09:05 Emily Zhang: technical deep-dive possibility: we might want a follow-up with your infra SEs to run a short benchmark against a 13B model and our sample prompts.
+09:14 Alex Rivera: absolutely — standard POC includes latency/cost benchmarks. we'll need a small corpus and some representative traffic patterns.
+09:20 Jordan Lee: network nit: for TGW attachment we have strict route table segregation per account; will add route propagation require manual approval?
+09:29 Samir Patel: depends on your policy. we can provide CloudFormation/Terraform that explicitly creates the attachment and route maps so you can review in PR flow.
+09:38 Priya Kapoor: one potential blocker is VPC CIDR overlap — we use 10.0.0.0/8 ranges broadly. do you support NAT'd or translated IPs so we don't have to readdress?
+09:50 Maya Chen: with PrivateLink we sit inside your subnet so no overlap. with TGW attachments you need unique prefixes — some customers NAT inside their transit VPC. we can document approaches.
+10:03 Diego Morales: what about TLS termination? do we terminate at the ENI or keep end-to-end TLS?
+10:10 Samir Patel: we support end-to-end TLS. if you want us to terminate, that's opt-in. for mutual TLS with client certs we can also do periodic rotation using your CA.
+10:20 Emily Zhang: curious about observability — can we get token-level traces and request/response latency per route?
+10:27 Alex Rivera: yes, console exposes per-route model latency, token counts, and sampling of outputs. for sensitive data you can disable content sampling and only send metadata.
+10:40 Jordan Lee: integration question: we use Hashicorp Vault for secrets and an internal KMS proxy. can Redwood call our proxy to unwrap model keys or do you expect KMS in AWS?
+10:52 Maya Chen: we can integrate with Vault via a signed attestation flow; typically customers either give us a CMK or we use an in-account proxy to perform unwraps. will need engineering touch.
+11:05 Priya Kapoor: time for a quick recap and next steps?
+11:10 Alex Rivera: yes — recap: 1) Hightower needs private/VPC deployment with no public payload egress, TGW-friendly design, strict NGFW allowlist, and KMS/SSO integration. 2) Redwood to share architecture doc, terraform templates, CIDR list, SOC2 + KMS whitepaper, and cost/latency spreadsheet. 3) Customer to share TGW diagram, CIDRs, and a small prompt corpus for bench. 4) follow-up POC week of 2026-03-30.
+11:42 Priya Kapoor: sounds right. Diego, Jordan — anything to add?
+11:47 Diego Morales: just verify the NGFW changes won't require us to change peering with internal partners. we'll surface that.
+11:52 Jordan Lee: i'll pull route tables and send them to alex.
+11:55 Alex Rivera: perfect. i'll also include a short runbook for TGW attachment and recommended route table entries.
+12:03 Emily Zhang: one last quick thing — competitor evaluation: our procurement is also talking to Anthropic and OpenAI enterprise on private options; curious how you differ on operational tooling.
+12:14 Samir Patel: two quick diffs: one, our runtime picks kernels and batching heuristics tuned for steady-state production workloads which tends to reduce cost/latency in long-running deployments; two, we provide model lifecycle + rollout automation and token-level cost breakdowns baked into the console.
+12:34 Alex Rivera: ok we'll get the artifacts over today/tomorrow and coordinate on dates for the POC. thanks everyone.
+12:45 Priya Kapoor: thank you all.
+12:47 Meeting end.
+
+Notes about transcription: occasional speaker labels were generic; some technical terms transcribed as 'K-V cash' or 'transit gateway' spelled inconsistently. External doc references: "Redwood private endpoint architecture" (link to be shared), "SOC2 + KMS whitepaper" (link to be shared), benchmark spreadsheet (link to be shared).

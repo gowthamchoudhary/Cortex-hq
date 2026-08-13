@@ -1,0 +1,153 @@
+Quick follow-up: Hosted trial options and rate routing for FinLytics POC
+
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: Alex Rivera <alex.rivera@finlytics.com>, Priya Sundar <priya.sundar@finlytics.com>
+Cc: Jordan Blake <jordan.blake@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>
+Date: Thu, 14 Jun 2028 15:08:00 -0700
+Subject: Quick follow-up: Hosted trial options and rate routing for FinLytics POC
+
+Hi Alex / Priya —
+
+Thanks again for the demo earlier today — really appreciate the detail on the user flows and the latency expectations. Quick recap and recommended next steps so we can get a Hosted POC standing up this week if that still meets your priorities.
+
+Recap of what we heard:
+- Primary goal: evaluate model-driven document summarization + live chat for 10k monthly active users (peak concurrency ~350 q/s).
+- SLO target: 95th percentile generation latency <= 450ms for short prompts (<= 256 tokens).
+- Data residency: US-only for now; need audit logs for requests/response metadata (no raw payload retention policy TBD).
+- Decision point: prefer fastest time-to-value (Hosted API) for initial POC; consider Dedicated if sustained throughput / PKI requirements emerge.
+
+Hosted trial suggestion (our recommended quick path):
+1) Provision sandbox Hosted endpoints (three logical endpoints: /generate, /chat, /embed) mapped to a single model family with conservative ratecaps.
+2) Configure per-endpoint ratecaps + per-API-key limits (we can do per-client keys) — sample table attached.
+3) Enable prefix/KV caching for doc summarization prompts to reduce token costs; we'll walk through warm-up best practices.
+4) Short ops call (30 min) with Ben to agree on initial ratecaps, warm-up window, and observability hooks.
+
+What we need from you to move fast:
+- A rough traffic spreadsheet (concurrent q/s by endpoint + expected token lengths) — I attached a template (finlytics_poc_traffic_estimate.xlsx).
+- Confirmation that Hosted (US region) is acceptable for the POC.
+- Any procurement or contractual constraints (procurement@finlytics.com included) so we can align pricing cadence.
+
+Attachments: finlytics_poc_traffic_estimate.xlsx, redwood_quickstart-checklist.pdf
+
+Proposed next actions:
+- Alex: send the traffic estimate by EOD Friday;
+- Ben/Jordan: schedule 30-min ops preflight for Monday to lock ratecaps;
+- Marissa: I'll provision sandbox endpoints once we have the estimate and schedule.
+
+If you're leaning toward Dedicated from day one, tell us and we'll surface capacity/lead time estimates — but Hosted is usually the fastest way to validate integration and user metrics.
+
+Thanks — happy to adjust based on what procurement needs.
+
+Best,
+Marissa Cole
+Senior Account Executive | Redwood Inference
+marissa.cole@redwoodinference.com
+(+1) 415-555-0128
+
+---
+Attachment: finlytics_poc_traffic_estimate.xlsx (spreadsheet stub)
+Attachment: redwood_quickstart-checklist.pdf (doc stub)
+From: Alex Rivera <alex.rivera@finlytics.com>
+To: Marissa Cole <marissa.cole@redwoodinference.com>
+Cc: Priya Sundar <priya.sundar@finlytics.com>
+Date: Thu, 14 Jun 2028 17:01:00 -0700
+Subject: Re: Quick follow-up: Hosted trial options and rate routing for FinLytics POC
+
+Marissa —
+
+Thanks for the clear recap. Hosted sounds right for the initial POC. A couple quick clarifying questions before we fill out the traffic sheet: 
+
+1) Ratecaps: do you do per-API-key rate limiting only, or can we apply per-endpoint throttles that differ per customer (we plan to simulate multi-tenant traffic with variable client weights)?
+2) KV/prefix caching: you mentioned warm-up — do we need to pre-load anything on your side or is it purely a traffic-pattern warm-up?
+3) Logs/retention: we need request/response metadata for debugging but can’t retain raw user PII — what are the default retention windows and can we get a logging export for 30 days?
+
+I'll loop procurement (procurement@finlytics.com) if there are any contract items. Priya and I will work on the traffic estimate but may ping Ben for SLO sizing questions.
+
+On Thu, Jun 14, 2028 at 3:08 PM Marissa Cole <marissa.cole@redwoodinference.com> wrote:
+> Hi Alex / Priya —
+> 
+> Thanks again for the demo earlier today — really appreciate the detail on the user flows and the latency expectations. Quick recap and recommended next steps so we can get a Hosted POC standing up this week if that still meets your priorities.
+> 
+> (excerpted)
+
+Thanks,
+Alex Rivera
+Head of ML | FinLytics
+alex.rivera@finlytics.com
+
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: Alex Rivera <alex.rivera@finlytics.com>
+Cc: Priya Sundar <priya.sundar@finlytics.com>, Jordan Blake <jordan.blake@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>
+Date: Thu, 14 Jun 2028 18:15:00 -0700
+Subject: Re: Quick follow-up: Hosted trial options and rate routing for FinLytics POC
+
+Great questions, Alex — short answers below and we can cover details on the ops call.
+
+1) Ratecaps: Hosted supports both per-API-key and per-endpoint limits. For multi-tenant simulation you can:
+   - Create separate API keys per simulated client and apply per-key caps, or
+   - Use per-endpoint caps combined with per-key caps for tighter control.
+   (Ben will share a recommended mapping based on your expected concurrency.)
+
+2) KV/prefix caching: warm-up is traffic-driven (we cache frequently seen prefixes and KV entries at inference runtime). There's no manual "push" step for customers — you just need a warm-up window or targeted synthetic traffic to prime the cache. We’ll include recommended warm-up scripts in the quickstart.
+
+3) Logs/retention: default telemetry exports (request metadata, token counts, latency) are retained for 30 days on Hosted; raw request/response bodies are not retained by default unless you opt-in. We can provide a daily export to your S3 bucket for 30 days (or a shorter window) if that helps debugging without long-term retention.
+
+Attached again: redwood_quickstart-checklist.pdf.
+
+I'll coordinate with Ben to get the ratecap table and a sandbox endpoint mapping — can you confirm a 30-min window on Monday (Jun 17) at 10:00 AM PT for the ops preflight?
+
+Thanks,
+Marissa
+Senior Account Executive | Redwood Inference
+marissa.cole@redwoodinference.com
+
+---
+On Thu, Jun 14, 2028 at 5:01 PM Alex Rivera <alex.rivera@finlytics.com> wrote:
+> Marissa —
+> 
+> Thanks for the clear recap. Hosted sounds right for the initial POC. A couple quick clarifying questions before we fill out the traffic sheet: 
+> 
+> (excerpted)
+
+Attachment: redwood_quickstart-checklist.pdf (doc stub)
+From: Ben Carter <ben.carter@redwoodinference.com>
+To: Alex Rivera <alex.rivera@finlytics.com>, Priya Sundar <priya.sundar@finlytics.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Jordan Blake <jordan.blake@redwoodinference.com>
+Date: Fri, 15 Jun 2028 09:21:00 -0700
+Subject: Sandbox ratecap and endpoint mapping (proposal) — FinLytics POC
+
+Hi Alex / Priya —
+
+Following up with the concrete sandbox proposal so you can validate locally. We can provision this in Hosted (US region) within 24 hours of confirmed traffic sheet.
+
+Proposed sandbox endpoints and initial ratecaps (adjustable after warm-up):
+- /generate (model-x-small family): 150 q/s default, 300 q/s burst for 2m windows
+- /chat (context-enabled model-x-mid): 100 q/s default, 250 q/s burst for 2m windows
+- /embed (embedding-1): 200 q/s default, 400 q/s burst for 2m windows
+
+Per-API-key caps: default 50 q/s per key, configurable up to the endpoint default. We recommend issuing separate keys per simulated tenant during the POC.
+
+Caching & warm-up guidance:
+- Run a 1-hour synthetic traffic run at ~30% of your peak to prime KV/prefix caches; warm-up scripts available in the quickstart.
+- After warm-up we expect effective token cost reductions of 15–30% for repeated doc summarization patterns.
+
+Fallbacks & scaling note:
+- If sustained baseline traffic exceeds the sandbox caps for 72 hours we’ll schedule a dedicated capacity assessment (lead time typically 2–4 weeks). Hosted supports graceful fallback across model variants to keep latency SLOs.
+
+Attachments: ratecap_table.csv (CSV stub)
+
+Next steps:
+1) Alex/Priya: confirm the traffic spreadsheet and Monday ops window (Marissa proposed Mon Jun 17, 10:00 AM PT).
+2) We provision sandbox and share endpoint keys + observability links.
+3) Run warm-up scripts; Ben will monitor metrics and propose cap adjustments after 24/72h.
+
+Happy to jump on a quick call to walk the table — I can be available Mon at 10:00 AM PT if that works.
+
+Thanks,
+Ben Carter
+Principal Solutions Engineer | Redwood Inference
+ben.carter@redwoodinference.com
+(+1) 650-555-0199
+
+---
+Attachment: ratecap_table.csv (CSV stub)

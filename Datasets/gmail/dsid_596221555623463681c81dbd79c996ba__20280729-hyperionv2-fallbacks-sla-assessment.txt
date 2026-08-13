@@ -1,0 +1,115 @@
+HyperionV2: elevated 5xx/timeouts — customer report and recovery plan
+
+From: Samir Khan <samir.khan@novaapps.com>
+To: Rafael Mendes <rafael_mendes@redwood.example.com>
+Cc: novaapps-sre@novaapps.com
+Date: Fri, 29 Jul 2028 09:12:23 -0700
+Subject: HyperionV2 - intermittent 5xx/timeouts seen in production
+
+Rafael,
+
+We're seeing a burst of 5xx responses and client-side timeouts from the HyperionV2 model in our staging and production apps starting ~08:45 PT this morning. Symptoms: ~20% of requests return 502/504, many others hang for >10s before timing out. I attached a short dump of error responses and sample request IDs (invocation ids).
+
+Sample errors: 
+- {"error": "model/runtime_error", "message": "KV cache miss + kernel load timeout"} (req: 0x7a3b9)
+- 504 Gateway Timeout (req: 0x7a3d4)
+
+This is affecting several user-facing flows. We're temporarily routing some traffic to a smaller model but that increases latency. Can you confirm whether there's an ongoing deployment or kernel-level change on your side? If you need more logs, we can share additional invocation traces.
+
+Thanks,
+Samir
+Samir Khan
+Senior Platform Engineer, NovaApps
+On Fri, Jul 29, 2028 at 09:45 Rafael Mendes <rafael_mendes@redwood.example.com> wrote:
+> Hi Samir — received, thanks. We’re pulling traces now and engaging ops. Can you paste 2-3 request IDs (you mentioned you have them) and let me know if requests show any common prompt pattern? Will update in 20–30m.
+
+Attachments: hyperionv2-error-samples.txt (text), invocation-trace-20280729.log (text)
+From: Rafael Mendes <rafael_mendes@redwood.example.com>
+To: Samir Khan <samir.khan@novaapps.com>
+Cc: laura_bennett@redwood.example.com, ben_carter@redwood.example.com, monica_patel@redwood.example.com, novaapps-sre@novaapps.com
+Date: Fri, 29 Jul 2028 09:37:10 -07:00
+Subject: Re: HyperionV2 - intermittent 5xx/timeouts seen in production
+
+Samir — quick update from my side:
+
+1) We've confirmed elevated 5xx counts for the HyperionV2 variant in the us-west-2 pool beginning 08:40 PT. Error signature matches a kernel/quantization fallback path where the runtime stalls while loading a quantized attention kernel under high concurrent KV cache churn.
+
+2) Immediate mitigation: ops is throttling new long-running generation requests to HyperionV2 in your dedicated routing policy and enabling automatic fallback to HyperionV2-lite for flows where you accept slightly lower token quality. That should cut visible 5xxs within ~10–15 minutes while we triage.
+
+Action items I own:
+- laura_bennett to run a targeted rollback of the HyperionV2 rolling update (if a rollout is implicated) and validate kernel caches.
+- ben_carter to confirm routing policy throttle and track SLO impact; he’ll coordinate credits if SLA breach looks likely.
+- I’ll continue collecting invocation traces and share a short postmortem and timeline no later than EOD PT.
+
+Can you confirm the three request IDs from your attachment (0x7a3b9, 0x7a3d4, 0x7a3ee) map to the sample log you sent? If you can paste any prompt sizes/sequence lengths that would help prioritize root cause.
+
+—Rafael
+Rafael Mendes
+Enterprise Sales — US West
+Redwood Inference
+
+On Fri, Jul 29, 2028 at 09:12 Samir Khan <samir.khan@novaapps.com> wrote:
+> Attached the trace chunk and three representative request IDs. Prompts are typical user queries (400–900 tokens).
+
+Attachments (from Samir): hyperionv2-error-samples.txt
+From: Laura Bennett <laura_bennett@redwood.example.com>
+To: Rafael Mendes <rafael_mendes@redwood.example.com>, Ben Carter <ben_carter@redwood.example.com>, Monica Patel <monica_patel@redwood.example.com>
+Cc: novaapps-sre@novaapps.com
+Date: Fri, 29 Jul 2028 10:08:45 -07:00
+Subject: INTERNAL: Ops update — HyperionV2 kernel load contention (initial RCA and mitigations)
+
+Team,
+
+Summary (TL;DR): We identified a regression in the HyperionV2 rollout that increased cache thrash on high-concurrency workloads when running the new 4-bit kernel path. That caused the runtime to serially reload quant kernels for some shards, producing transient stalls and 5xx responses.
+
+What happened:
+- New HyperionV2 variant (v2.3.1) introduced a revised kernel selector that prefers the 4-bit attention kernel for large sequence lengths. Under high concurrency the kernel selector triggers frequent cache evictions.
+- Evictions + on-demand kernel loads introduced contention and an I/O wait pattern on the device which can manifest as timeouts or internal 5xxs.
+
+Impact & scope:
+- nv-usw2 pool only; observed spike from ~08:40–09:05 PT with peak error rates at 08:51 PT. NovaApps traffic represented ~12% of the affected requests (their routing policy hit the impacted pool).
+
+Immediate mitigations applied (08:55–09:10 PT):
+- Rolled back HyperionV2 to v2.3.0 on nv-usw2 nodes that serve NovaApps traffic.
+- Enabled a device-side kernel pre-warm path for high-concurrency customers while we tune the selector.
+- Applied a short-rate throttle (10–15% reduction of accepted concurrent generations) for routes pinned to HyperionV2; traffic that tolerates alternate quality was routed to HyperionV2-lite.
+
+Observed outcome: visible 5xx rate dropped to baseline within ~12 minutes of mitigations. We continue to monitor for residual errors.
+
+Next steps:
+- Laura to complete a full postmortem doc (timeline, root cause, remediation plan) and share by EOD PT Jul 30.
+- Platform engineering to deliver a kernel-selector patch and controlled rollout with additional pre-warm heuristics. Estimated fix → canary rollout in 72 hours.
+- Ben to propose a customer credit offer for NovaApps; Rafael to review customer comms.
+
+Attachments: invocation-trace-20280729.log (ops trace excerpt)
+
+Laura Bennett
+Head of Incident Response
+Redwood Inference
+
+On Fri, Jul 29, 2028 at 09:37 Rafael Mendes <rafael_mendes@redwood.example.com> wrote:
+> Thanks Laura — appreciate the quick rollback. I’ll update NovaApps now and route any incoming escalation to you/Ben.
+> —Rafael
+From: Aisha Moreno <aisha.moreno@novaapps.com>
+To: Rafael Mendes <rafael_mendes@redwood.example.com>
+Cc: Samir Khan <samir.khan@novaapps.com>, novaapps-sre@novaapps.com, laura_bennett@redwood.example.com, ben_carter@redwood.example.com
+Date: Sat, 30 Jul 2028 15:42:00 -07:00
+Subject: Re: HyperionV2 - elevated 5xx/timeouts — customer report and recovery plan
+
+Rafael/Laura/Team — thank you for the quick response and rollback. We observed error rates drop to baseline by ~09:20 PT and traffic is stable. No production data loss on our side. Appreciate the detailed interim mitigation and the plan for a postmortem.
+
+A couple asks for the postmortem:
+- Please include the exact node pools affected and the rollout window for v2.3.1.
+- Can you share the planned canary schedule for the kernel-selector patch? We’d like to opt in to an earlier canary if possible.
+- Requesting formal confirmation on whether this incident will count towards SLA credits and the mechanism to claim them (we have a committed latency SLA under our contract).
+
+Thanks again — Aisha
+Aisha Moreno
+VP Product, NovaApps
+
+On Sat, Jul 30, 2028 at 10:02 Rafael Mendes <rafael_mendes@redwood.example.com> wrote:
+> Aisha — I’ll follow up with the postmortem link and details by EOD PT today (see HS-12345). Ben will propose a credit. Laura will share canary schedule and an opt-in path for your team to join a restricted early canary.
+>
+> Rafael Mendes
+> Redwood Inference
+>

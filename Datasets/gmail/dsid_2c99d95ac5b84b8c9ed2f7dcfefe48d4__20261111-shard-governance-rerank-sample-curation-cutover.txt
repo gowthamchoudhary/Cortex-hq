@@ -1,0 +1,146 @@
+Index shard governance & rerank sample curation — production cutover
+
+From: Samantha Lee <samantha@acmecorp.com>
+To: camila_reyes@redwood.ai
+Cc: Tim O'Neill <tim@acmecorp.com>
+Date: 2026-11-08T09:12:00-08:00
+Subject: Re: Embeddings + rerank cutover planning (Acme)
+
+Hi Camila —
+
+Thanks for taking this on. We need a concrete plan for the backfill and rerank evaluation that doesn’t block our November feature release. High level asks: a) timeline for index backfill (we have ~45M documents), b) vectorstore partitioning / sharding approach (we want to avoid cross-shard fanout on reads), and c) a proposal for the rerank eval set (how many queries, labeling approach) so we can budget vendor labeling.
+
+Attached is a small sample of our existing mapping and a week of search logs to start. Can you send a checklist and owners we can agree to?
+
+Thanks — Sam
+
+Attachments: current-search-sample.csv (csv, 12KB)
+
+--
+Samantha Lee
+Product Manager, Search
+Acme Corp
+
+From: Camila Reyes <camila_reyes@redwood.ai>
+To: Samantha Lee <samantha@acmecorp.com>, Tim O'Neill <tim@acmecorp.com>
+Cc: marissa_cole@redwood.ai, priya_natarajan@redwood.ai
+Date: 2026-11-08T13:02:00-08:00
+Subject: Re: Embeddings + rerank cutover planning (Acme)
+
+Sam — thanks, forwarding a concise plan below. This is designed to keep your November release date while minimizing read amplification. Please confirm the owners and approve the rerank sample size and the Weaviate partitioning pattern.
+
+High-level proposal (week-by-week):
+1) Week 1 (now — 11/15): final mapping + sample approval; select shard keys and index schema; vendor label RFP for rerank sample.
+2) Week 2 (11/16 — 11/22): staging backfill (10% of corpus by priority) + rerank labeling begins.
+3) Week 3 (11/23 — 11/29): full backfill in gated waves (use partitioned writes to avoid hot spots); rerank evaluation runs; smoke tests.
+4) Week 4 (11/30 — 12/06): cutover window, monitoring SLOs, fallback to legacy index for 72h.
+
+Vectorstore / shard governance recommendation:
+- Use your existing Weaviate cluster (weaviate-sales is on copy) to avoid new infra procurement.
+- Shard key: customer_id + month (YYYYMM) — partitions will bound write fanout for backfill and allow time-based TTL later.
+- Read routing: query router will fan-in across at most 3 recent partitions; older partitions are cold and only used for long-tail queries.
+- Index schema: 512-d float32 embeddings, cosine distance; approximate search via HNSW with M=16 | ef=128 for staging; tune for prod after staging results.
+- KV cache: warm top-100 queries per shard to avoid tail latency spikes during backfill.
+
+Rerank eval proposal:
+- Candidate set: 2,000 query anchors sampled from production logs (stratified by query length and tenant).
+- Labels: 5 judgments per query (mix internal SME + vendor) — expected labeling run ~10k judgments.
+- Metrics: primary = MRR@10, secondary = NDCG@10 and MAP. Use bootstrapped CIs; target a p<0.05 effect size detection for +5% relative MRR.
+
+Owners & asks:
+- Acme: confirm sample approval and prioritization rules (Sam).
+- Redwood: staging backfill runbook (Camila), rerank eval notebook & scripts (Marissa), vectorstore tuning & shard script (Karthik).
+
+Attachments I’ll drop after we align: ACME_embedding_mapping_v2.csv, prod-shard-plan.md
+
+If this looks good I’ll send a single-page cutover checklist and schedule a 30-min alignment call with Tim and the infra team.
+
+Best,
+Camila Reyes
+Senior Customer Solutions Engineer
+Redwood Inference
+
+From: Camila Reyes <camila_reyes@redwood.ai>
+To: marissa_cole@redwood.ai, priya_natarajan@redwood.ai, karthik_iyer@redwood.ai, jordan_blake@redwood.ai
+Date: 2026-11-09T10:15:00-08:00
+Subject: INTERNAL: Acme shard plan + quick decisions needed
+
+Team — looping you in so we can finalize decisions before I send the cutover checklist to Acme. Quoting Sam’s asks above. Key decision points:
+
+1) Vector DB choice: Acme prefers not to add infra. Weaviate is available; we need to validate version and vector dimension (their sample indicates 512). Karthik, can you confirm compatibility with our HNSW defaults and quantization options?
+
+2) Shard layout: proposal is customer_id-month. Pros: bounds backfill writes and allows TTL per-month. Cons: cross-shard queries across months create fan-in. Jordan, confirm router will limit to 3 shards by default and fallback to broad scans only behind a flag.
+
+3) Backfill approach: recommend phased backfill by priority (most-searched docs first) using write windows to avoid saturating Weaviate. We'll use our continuous batching runner with max_batch_tokens=4096 and concurrency=6.
+
+4) Rerank evaluation: Marissa, propose an evaluation harness that can accept vendor labels. We want the notebook to compute MRR and NDCG with bootstrapped confidence intervals. Also include a small A/B gating criterion (min 5% relative MRR uplift to approve).
+
+Deliverables (owners & due dates):
+- Product mapping & sample approval: Camila -> 2026-11-10
+- Weaviate compatibility & tuning params: Karthik -> 2026-11-11
+- Eval notebook + labeling template: Marissa -> 2026-11-12
+- Cutover checklist + rollback plan: Jordan -> 2026-11-12
+
+I’ll attach the prod-shard-plan.md and a starter rerank sample archive to the external thread after we confirm.
+
+Thanks — Camila
+
+> On 2026-11-08, Samantha Lee wrote:
+> > We need a concrete plan for the backfill and rerank evaluation that doesn’t block our November feature release.
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: camila_reyes@redwood.ai, priya_natarajan@redwood.ai, karthik_iyer@redwood.ai, jordan_blake@redwood.ai
+Date: 2026-11-09T15:30:00-08:00
+Subject: Re: INTERNAL: Acme shard plan + quick decisions needed
+
+Camila / team — quick notes from the evaluation side. I’ll build the notebook in the Drive link below.
+
+Rerank sample & labeling:
+- Query anchors: 2,000 (stratified: 60% short tail, 40% mid/long tail).
+- Candidate pool per query: up to 100 candidates sampled across embeddings + BM25 fallback.
+- Labeling plan: vendor labels for 80% (approx 8k judgments) + internal spot-checks for quality (2k).
+- Inter-rater QA: include 200 gold queries with known labels to compute vendor accuracy and apply a small bias correction.
+
+Evaluation metrics & thresholds:
+- Primary: MRR@10 — require >= +5% relative improvement to propose promotion.
+- Secondary: NDCG@10 and recall@100.
+- Stability: bootstrapped 95% CI and permutation test for significance.
+
+Smoke tests:
+- Staging: run full rerank eval on 10% of queries and validate latency P95 < 300ms end-to-end.
+- Prod-read: run evaluation queries against prod read-only replicas for one hour pre-cutover; verify no unexpected token cost spikes.
+
+Links: evaluation notebook (Drive): https://drive.google.com/drive/folders/1aBcD-example-eval-notebook
+
+I’ll start the labeling RFP draft; we should expect vendor turnaround ~7-10 business days. If we compress labeling we need to expand internal annotation hours.
+
+—Marissa
+
+--
+Marissa Cole
+Lead Applied ML Engineer, Eval & Instrumentation
+Redwood Inference
+
+From: Jordan Blake <jordan_blake@redwood.ai>
+To: camila_reyes@redwood.ai, marissa_cole@redwood.ai, priya_natarajan@redwood.ai, karthik_iyer@redwood.ai
+Date: 2026-11-10T09:00:00-08:00
+Subject: Re: INTERNAL: Acme shard plan + quick decisions needed
+
+All — confirmed on my side. A few operational notes before we publish to Acme: 
+
+- Networking & firewall: Acme’s VPC peering needs a short whitelist for the Weaviate endpoint earlier than cutover (Jordan to own; estimate 2 business days for their infra team).
+- On-call & rollback: set a 48-hour elevated-monitoring window post-cutover with rotation: Jordan (day 1), Karthik (day 2), Camila on-call for customer escalations.
+- Runbook: I’ll produce the single-page cutover checklist (prod-shard-plan.md) and include a rollback command set and traffic-switching play.
+
+Attachments I’ll add to external thread after we finalize: rerank-eval-sample.zip (contains query anchors + candidate sets + labeling template).
+
+If no objections I’ll merge and Camila can share with Acme and schedule the alignment call.
+
+—Jordan
+
+> On 2026-11-09, Camila Reyes wrote:
+> > Deliverables (owners & due dates):
+> > - Product mapping & sample approval: Camila -> 2026-11-10
+> > - Weaviate compatibility & tuning params: Karthik -> 2026-11-11
+> > - Eval notebook + labeling template: Marissa -> 2026-11-12
+> > - Cutover checklist + rollback plan: Jordan -> 2026-11-12

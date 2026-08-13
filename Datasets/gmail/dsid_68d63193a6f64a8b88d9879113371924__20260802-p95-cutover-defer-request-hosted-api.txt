@@ -1,0 +1,127 @@
+Request: defer P95 cutover for Hosted API during BrightEdge promotional spike
+
+From: Ellen Park <ellen.park@brightedge.com>
+To: Logan Wright <logan.wright@redwood.ai>
+Cc: BrightEdge Legal <contracts@brightedge.com>
+Date: Tue, 28 Jul 2026 09:12:00 -0700
+Subject: Upcoming marketing promo — request to delay P95 SLA cutover
+
+Hi Logan,
+
+Quick context: BrightEdge is running a large marketing promotion starting Aug 1 that will drive a very uneven traffic spike (we expect a handful of short-lived bursts that increase qps 4–6x for 90–120 minutes). We appreciate the new SLA commitments you proposed, but given the promo timing we'd like to request a temporary deferment of the P95 cutover you planned to enable on Aug 1.
+
+Ask: Can Redwood defer the tightened P95 commitment for our Hosted API integration for two weeks (Aug 1–Aug 14) or apply a transient burst carveout tied to traffic originating from the promo campaign? We want to avoid automatic breach events during the promo while keeping the P50 unchanged.
+
+We understand there are operational limits; if needed we can accept a short-term credit/penalty adjustment rather than a full SLA suspension. Also attaching a traffic snapshot from a previous run for reference.
+
+Thanks,
+Ellen Park
+Head of Platform Partnerships
+BrightEdge
+
+Attachment: promo_traffic_snapshot_0726.csv (CSV, 1.2MB)
+From: Logan Wright <logan.wright@redwood.ai>
+To: Ellen Park <ellen.park@brightedge.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Tue, 28 Jul 2026 11:03:00 -0700
+Subject: Re: Upcoming marketing promo — request to delay P95 SLA cutover
+
+Hi Ellen — thanks for the heads-up and for the snapshot, that helps. We can discuss options. High-level thoughts:
+
+- We prefer not to fully suspend P95 commitments; it creates calibration and billing ambiguity.
+- Two pragmatic approaches we can offer: 1) a short-term exception window where P95 measurement excludes identified promo traffic (IP ranges/UTM tags) and 2) a deferred cutover where the tightened P95 takes effect after Aug 14.
+- We will need BrightEdge to share an allowlist of promo source identifiers (IPs, UTM campaign keys) and confirm whether requests will carry a stable header we can filter on.
+
+I'll loop in Marissa and Karthik to draft an exception plan and a proposed remediation/backstop (credits, fallbacks).
+
+Cheers,
+Logan Wright
+Director, Customer Success — Hosted API
+Redwood Inference
+
+
+From: Logan Wright <logan.wright@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: Wed, 29 Jul 2026 08:22:00 -0700
+Subject: Fwd: BrightEdge promo — need exception plan / recommended tech mitigations
+
+Team — forwarding BrightEdge's request. Key constraints: they want either a 2-week defer or carveout for promo traffic; they expect bursts up to 6x. Requirements for carveout: we must be able to reliably identify promo traffic.
+
+Please propose a minimal-risk exception we can operationalize quickly, including:
+- precise measurement change (how we compute P95 during exception)
+- identification method (IP ranges / campaign header / query param / signed token)
+- mitigation/backstop (dynamic routing to dedicated pool, fallback to quantized model, or temporary crediting rules)
+- rollback criteria and monitoring dashboards
+
+I'll coordinate communications with BrightEdge and Legal once we have a proposal.
+
+Thanks — Logan
+
+On Tue, Jul 28, 2026 at 9:12 AM Ellen Park <ellen.park@brightedge.com> wrote:
+> (original message attached)
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Logan Wright <logan.wright@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: Thu, 30 Jul 2026 10:40:00 -0700
+Subject: RE: BrightEdge promo — proposed short-term exception and mitigation (draft)
+
+Folks — draft we can share with BrightEdge and Legal. Attaching a one-page SLO exception proposal (slo_exception_proposal_v2.pdf). High level:
+
+Proposal summary (two options — we ask BrightEdge to pick):
+
+1) Promo-carveout (preferred): Aug 1–Aug 14, P50 remains as-is; P95 measurement for the exception window will exclude requests that match an allowlist provided by BrightEdge (IP ranges and a required header: X-BE-PROMO: true). Excluded requests will still be counted for billing and telemetry but not for P95 breach calculations. Sub-clauses: allowlist must be provided by Jul 30 EOD; Redwood will run a 48h dry-run starting Jul 31 to validate identification. If identification cannot be reliable, option 2 applies.
+
+2) Deferred cutover: Redwood delays the new tightened P95 target for BrightEdge until Aug 15. No carveout. During the defer window we'll provide a one-time service credit cap (2% of last 3 months' spend) for any legitimate P95 breaches attributable to promotional bursts.
+
+Mitigations we will commit to during either option:
+- Autoscaling prioritization: temporarily increase burst capacity in the US region for their tenant (no SLA change to other tenants).
+- Transparent routing: promote a subset of their production traffic to a higher-throughput model variant while preserving model output quality; this will be gated and telemetry-monitored.
+- Monitoring: create a custom dashboard (p50/p95, token-level breakdown, request identifiers) and a 24/7 on-call handover for the promo window.
+
+Rollback and acceptance criteria:
+- If our dry-run shows >2% misclassification of promo traffic, automatically default to Deferred Cutover (option 2).
+- Both parties sign a short addendum covering identification, credits, and monitoring.
+
+PT: I've attached the proposal and a short CSV from their historical run for our reference. Feedback? I'll prepare the version we send to BrightEdge Legal if the team signs off.
+
+— Marissa
+Head of Enterprise Success, Redwood Inference
+
+Attachments: slo_exception_proposal_v2.pdf, promo_traffic_snapshot_0726.csv
+From: Logan Wright <logan.wright@redwood.ai>
+To: Ellen Park <ellen.park@brightedge.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, BrightEdge Legal <contracts@brightedge.com>
+Date: Sat, 01 Aug 2026 09:08:00 -0700
+Subject: Re: Upcoming marketing promo — request to delay P95 SLA cutover
+
+Ellen — thanks for the quick turnaround. BrightEdge legal + product: please review the two options attached (we prefer option 1, the promo-carveout). Key operational asks from our side:
+
+1) Provide the allowlist by EOD Jul 31 (IPs and confirmation you will set X-BE-PROMO: true on promo requests).
+2) Authorize Redwood to perform a 48-hour dry-run starting Jul 31 to validate tagging.
+3) Accept the monitoring and rollback clauses in the addendum (Marissa will send the draft to your legal).
+
+If we get the allowlist and can validate identification in the dry-run, we'll apply the carveout for Aug 1–14 and stand up the autoscaling and routing mitigations. If not, we'll enact Deferred Cutover with the one-time credit.
+
+I'll be on-call Aug 1 if anything spikes.
+
+Best,
+Logan
+Director, Customer Success — Hosted API
+Redwood Inference
+
+Attachment: slo_exception_proposal_v2.pdf
+From: Ellen Park <ellen.park@brightedge.com>
+To: Logan Wright <logan.wright@redwood.ai>
+Cc: BrightEdge Legal <contracts@brightedge.com>
+Date: Mon, 02 Aug 2026 16:45:00 -0700
+Subject: Re: Upcoming marketing promo — request to delay P95 SLA cutover
+
+Hi Logan — thanks, we reviewed internally and will go with option 1 (promo-carveout). We are attaching the allowlist and confirm we'll set X-BE-PROMO: true for all campaign requests. BrightEdge legal will review your addendum and loop in any redlines by EOD Aug 3.
+
+Appreciate the rapid response and the standby support. Please proceed with the dry-run and monitoring setup.
+
+— Ellen
+Head of Platform Partnerships
+BrightEdge
+
+Attachment: allowlist_ips_and_guidelines.txt (plain text, included in follow-up email)

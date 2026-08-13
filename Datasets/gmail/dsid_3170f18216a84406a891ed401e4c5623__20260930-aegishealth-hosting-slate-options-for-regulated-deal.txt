@@ -1,0 +1,133 @@
+AegisHealth - hosting slate options for isolated/regulatory deployment
+
+From: Sarah Jenkins <sarah.jenkins@aegishealth.com>
+To: michael_grant@redwood.ai
+Cc: Daniel Park <daniel.park@aegishealth.com>, procurement@aegishealth.com
+Date: 2026-09-30 09:12 PDT
+Subject: Intro + hosting posture questions for our pilot (AegisHealth)
+
+Hi Michael,
+
+Thanks again for the demo yesterday — our engineering and security teams liked the latency profile and the observability features. As we move toward procurement, a couple of quick questions to help us compare Redwood Dedicated vs a Private deployment:
+
+- Peak inference: our pilot will see ~450 concurrent sessions, avg request = 220 tokens, 50 requests/sec sustained during business hours, spiking to ~120 requests/sec for short windows. Can you map that to GPU counts for Dedicated vs Private?
+- Data residency and audit: we must keep PHI inside our VPC and retain audit logs for 7 years. Is the Private control plane the only way to get that level of isolation, or can Dedicated meet it with contract controls?
+- Lead time & procurement: procurement wants a rough MRR and expected lead time for Dedicated reserved pool vs an on-prem Private appliance offering.
+
+Can you and your team put together a short comparison and sizing recommendation for our pilot? We’re aiming to finalize hosting choice in the next 3 weeks.
+
+Thanks,
+Sarah
+Sarah Jenkins
+Head of ML Platforms, AegisHealth
+--
+AegisHealth (secure)
+
+From: michael_grant@redwood.ai <michael_grant@redwood.ai>
+To: Sarah Jenkins <sarah.jenkins@aegishealth.com>
+Cc: priyom_das@redwood.ai, naomi_feldman@redwood.ai
+Date: 2026-09-30 11:05 PDT
+Subject: Re: Intro + hosting posture questions for our pilot (AegisHealth)
+
+Sarah — thanks for the clear ask. Looping Priyom (Deal Engineering) and Naomi (Customer Success / Compliance) to draft a short, actionable slate. High level answers up front:
+
+- Quick map: for the model you saw (redwood-llm-70b quantized to 8-bit, average generation 220 tokens) we estimate ~12 A100-80GB GPUs to sustain 50 rps with p95 latency < 350ms using continuous batching and prefix cache; handle 120 rps spikes with autoscaling + burst capacity (or explicit burst pool). Private on-prem with H100s reduces GPU counts by ~25% for the same tail latency (better memory & kernels) but requires longer procurement + setup.
+- Data residency/audit: Private delivers customer-managed control plane and HSM/KMS integration to meet your 7-year retention and PHI boundaries. Dedicated can be contractually segregated (dedicated pools + dedicated VPC egress) and we provide audit logs, but some customers prefer Private for the absolute control (air-gapped options).
+- Lead time & MRR: Dedicated pools can be provisioned inside 2–4 weeks after PO; typical monthly committed MRR for a 12 GPU reserve (A100-80GB equivalent) is ~USD 72k (ballpark) before discounts. Private on-prem appliance (4x H100 nodes) is typically a 12–14 week delivery and a larger one-time platform fee + managed support.
+
+Priyom / Naomi — can you prepare a 1-page table (Dedicated vs Private) with: GPU counts, tail latency assumptions, monthly committed price, lead time, compliance notes, and a short fallback/escape-hatch (e.g., start Dedicated with private migration path)? Sarah — we’ll aim to get this back to you by tomorrow EOD.
+
+—Michael
+Michael Grant
+Director, Solutions Engineering
+Redwood Inference
+
+From: priyom_das@redwood.ai <priyom_das@redwood.ai>
+To: michael_grant@redwood.ai
+Cc: Sarah Jenkins <sarah.jenkins@aegishealth.com>, naomi_feldman@redwood.ai
+Date: 2026-09-30 15:28 PDT
+Subject: Re: Intro + hosting posture questions for our pilot (AegisHealth)
+
+Sarah / team — pulled numbers and considerations (see inline). Attaching a short comparison PDF and an XLS with the throughput math. Key assumptions (please confirm):
+- Model: redwood-llm-70b / 8-bit quantized
+- Avg generation: 220 tokens / request (decode-only output)
+- KV/prefix cache hit rate assumption: 35% (savings on per-request compute)
+- Target p95 latency <= 400ms (client requirement stated during demo)
+
+Sizing options (pilot 3-month horizon):
+Option A — Dedicated Reserved (fastest onboarding, predictable cost)
+- Baseline: 12x A100-80GB in a dedicated pool (supports 50 rps sustained, 450 concurrent sessions with batching and multiplexing).
+- Burst: allow burst to 18x A100 for short windows (contracted burst credits).
+- Estimated committed MRR (list): USD 68k–80k depending on term/discount.
+- Lead time: 2–4 weeks after PO.
+- Compliance: Dedicated + VPC egress + customer-specific routing + dedicated tenant logging; logs retained per contract (we can ship logs to your S3).
+- Pros/cons: quick, lowest time-to-value; less hardware control than Private.
+
+Option B — Private (VPC / on-prem appliance)
+- Baseline: 3x H100-80GB nodes (we size nodes so each provides higher per-node throughput vs A100); effective parity for 50 rps with p95 < 350ms. For headroom and spiking, we recommend 4x H100 to match burst requirements.
+- One-time platform fee + HW procurement: $1.2M–1.6M capex (depending on vendor/hw choices) + annual managed support (15–20% of capex).
+- Lead time: 10–14 weeks (procurement, on-site installation, security review).
+- Compliance: full control over keys, audit logs retained on your storage, optional air-gapped setup.
+- Pros/cons: maximum data control and slightly better unit economics at scale; long lead time and heavier ops ownership.
+
+Operational recommendations:
+- Hybrid path: start with Dedicated (quick onboarding) with a documented migration path and playbook toward Private if Aegis decides to buy hardware after pilot. The migration plan includes: (1) pinning model versions, (2) exporting KV cache priming sets, and (3) a traffic cut-over window with dual-write tracing.
+- Quantization & model tradeoffs: consider an 8-bit fine-tune and an eval prompt set to validate quality delta. If quality regressions occur at 8-bit on your prompts, reserve an option for 16-bit slices for critical routes.
+- Autoscaling policy: set conservative cooldowns and pre-warming for predictable spikes. Use burst credits to avoid cold starts.
+
+Attachment stubs: aegis_qsp_v1.xlsx (throughput math), hosting_slate_comparison_v3.pdf (1-pager), mutual_action_plan_draft.docx
+
+Happy to jump on a short call to walk through the numbers.
+
+—Priyom
+Priyom Das
+Senior Deal Engineer
+Redwood Inference
+
+From: Sarah Jenkins <sarah.jenkins@aegishealth.com>
+To: priyom_das@redwood.ai, michael_grant@redwood.ai
+Cc: naomi_feldman@redwood.ai, procurement@aegishealth.com, Daniel Park <daniel.park@aegishealth.com>
+Date: 2026-10-01 08:40 PDT
+Subject: Re: Intro + hosting posture questions for our pilot (AegisHealth)
+
+Thanks — this is super helpful. A few clarifications from procurement/security: 
+1) On audit logs: we want retention in our own S3 bucket in us-west-2 with server-side encryption and HSM-backed keys. Can Dedicated push logs to our S3 with the retention policy enforced on our side?
+2) On the Hybrid path: what is the expected data migration effort for the KV cache / priming? Can you estimate downtime or data-sync windows?
+3) On cost: if we sign for a 12-month committed Dedicated reserve, what typical discount bands should we expect (ballpark) and are there references we can speak to who migrated from Dedicated -> Private later?
+
+Also — we’re scheduling an internal security review on Oct 8. Would you and Priyom be available for a 30-min session to answer SOC-related questions and architecture?
+
+Best,
+Sarah
+
+From: michael_grant@redwood.ai <michael_grant@redwood.ai>
+To: Sarah Jenkins <sarah.jenkins@aegishealth.com>
+Cc: priyom_das@redwood.ai, naomi_feldman@redwood.ai
+Date: 2026-10-01 14:03 PDT
+Subject: Re: Intro + hosting posture questions for our pilot (AegisHealth)
+
+Sarah — quick answers inline, and we’ll bring details to the Oct 8 security review.
+
+1) Logs to your S3: yes — Dedicated can forward audit logs to your S3 (us-west-2) with SSE-KMS. We can configure direct delivery and set object lifecycle rules on your side to enforce 7-year retention. We also offer log TTL controls on the Redwood side if you want a managed copy.
+
+2) KV cache migration: typical approach is a priming export of high-frequency prefixes (CSV of keys + context) and a short cutover where we route a percentage of traffic to the new Private nodes for parallel warm-up. Expected downtime: minimal (we plan a staged ramp over 2–4 hours with monitoring). The XLS attached includes estimated priming sizes and time windows.
+
+3) Discount bands: ballpark — 10% for 12-month commit at pilot scale, 15–25% for larger multi-quarter commitments or multi-account contracts. We can provide customer references (two customers who moved from Dedicated -> Private) under NDA; Naomi will share those.
+
+Next steps: I’ll upload the 1-pager to the shared Drive and schedule a 30-min slot on Oct 8 at 09:30 PT for the security deep-dive. If procurement wants a redline for the Dedicated PO, we can surface standard terms and a draft SOW.
+
+Attachments: mutual_action_plan_draft.docx (attached)
+
+—Michael
+
+
+On Thu, Oct 1, 2026 at 08:40 AM Sarah Jenkins <sarah.jenkins@aegishealth.com> wrote:
+> Thanks — this is super helpful. A few clarifications from procurement/security: 
+> 1) On audit logs: we want retention in our own S3 bucket in us-west-2 with server-side encryption and HSM-backed keys. Can Dedicated push logs to our S3 with the retention policy enforced on our side?
+> 2) On the Hybrid path: what is the expected data migration effort for the KV cache / priming? Can you estimate downtime or data-sync windows?
+> 3) On cost: if we sign for a 12-month committed Dedicated reserve, what typical discount bands should we expect (ballpark) and are there references we can speak to who migrated from Dedicated -> Private later?
+> 
+> Also — we’re scheduling an internal security review on Oct 8. Would you and Priyom be available for a 30-min session to answer SOC-related questions and architecture?
+> 
+> Best,
+> Sarah

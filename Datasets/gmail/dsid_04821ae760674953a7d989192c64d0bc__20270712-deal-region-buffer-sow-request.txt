@@ -1,0 +1,122 @@
+SOW request: deal-led region buffer & minimum node allocation for Lumina
+
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>
+Date: Mon, 12 Jul 2027 09:14:00 -0700
+Subject: Sizing ask: Lumina deal — region buffer & minimums
+
+Team,
+
+Lumina (Peter) sent their Q4 forecast this morning and have asked for a tight SOW that guarantees a burst buffer across APAC and a firm minimum across US/EU for the first 12 months. Key asks:
+- Guaranteed APAC burst (peak 120k tokens/min for 2hr windows, expected 5% of traffic but mission-critical)
+- Minimum reserved sustained throughput per region (US: 600k tokens/day, EU: 240k tokens/day)
+- SLA target: 99.9% availability for dedicated pool; latency SLOs we can propose later
+
+Can you sketch a region-by-region node allocation (GPUs / nodes) that covers sustained + burst with a conservative buffer, and call out any assumptions (peak to sustained ratios, batching, quantized model variant assumptions)? We need a proposal by EOD Wednesday to include in the SOW draft (attached baseline).
+
+Attachments: lumina-q4-traffic-forecast.csv (Peter provided)
+
+Thanks,
+Priya Natarajan
+Strategic Accounts — Redwood Inference
+priya_natarajan@redwood.ai
++1 (415) 555-0123
+
+---
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Irene Choi <irene_choi@redwood.ai>
+Date: Mon, 12 Jul 2027 11:02:00 -0700
+Subject: Re: Sizing ask: Lumina deal — region buffer & minimums
+
++1 on the ask. Quick notes from Sales/GT team perspective before Eng chimes in:
+- Lumina wants committed Reserved capacity (monthly) with a burst billing mechanism for overage. They asked explicitly for an APAC burst lane with hard priority.
+- Pricing ask is aggressive; we should model two options (conservative buffer vs. lean buffer) to show tradeoffs.
+
+Action items:
+- Marissa, can you provide a conservative node split (sustained + 30% buffer) and an alternate lean split (sustained + 10%)? Include GPU type assumptions (A100 80GB vs H100) and whether quantized 4-bit path is expected.
+- Ben, we will need to line up contractual clauses for burst billing and a clause for cross-region failover.
+
+Irene, please flag any compliance/regional constraints for EU data residency that might affect placement.
+
+Karthik
+Head of Sales — Americas
+
+---
+
+From: Peter Cho <peter@luminalabs.com>
+To: Priya Natarajan <priya_natarajan@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: ops@luminalabs.com
+Date: Tue, 13 Jul 2027 08:33:00 +0100
+Subject: Re: Sizing ask: Lumina deal — region buffer & minimums
+
+Thanks Priya / team — quick clarifications from our side so you size correctly:
+- Our projected steady-state Q4 usage per region (attached): US 580k/day, EU 230k/day, APAC 90k/day. Peaks: US +25% during ET business hours, EU +35% during CET mornings, APAC +350% during APAC campaign windows (hence the burst ask).
+- APAC burst windows are unpredictable but typically 60-120 minutes; we need guaranteed priority during those windows.
+- We prefer H100s if that materially reduces latency for our model family (decoder-only Llama derivatives). If cost delta is high, we can accept mixed fleets.
+- Compliance: EU PII flows must remain in EU for persisted logs.
+
+Attaching: lumina-q4-traffic-forecast.csv
+
+Peter Cho
+Ops Lead, Lumina Labs
+peter@luminalabs.com
+
+---
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Irene Choi <irene_choi@redwood.ai>
+Cc: Peter Cho <peter@luminalabs.com>
+Date: Wed, 14 Jul 2027 14:28:00 -0700
+Subject: Re: Sizing ask: Lumina deal — region buffer & minimums
+
+Folks — drafted two sizing options below based on Peter's forecast and the requested guarantees. Assumptions: 1 H100 node = ~2.8x token throughput vs A100 for their Llama-derivative model with our optimized kernels; quantized FP4 path assumed for cost-forward variant. Sustained numbers include 48% p95 concurrency headroom for variance.
+
+Option A — Conservative (sustained + 30% buffer):
+- US: Sustained 600k/day -> ~8 H100 nodes reserved; Buffer: +3 nodes for burst/failure -> Total reserved US = 11 H100 nodes
+- EU: Sustained 240k/day -> ~4 H100 nodes reserved; Buffer: +2 nodes -> Total reserved EU = 6 H100 nodes (all EU-local for residency)
+- APAC: Sustained 90k/day -> ~2 H100 nodes reserved; APAC burst lane: +6 ephemeral H100 nodes (prioritized, billed separately) -> Total reserved APAC = 2 H100 nodes + burst policy (6 ephemeral)
+
+Option B — Lean (sustained + 10% buffer):
+- US: 9 H100 nodes (7 sustained + 2 buffer)
+- EU: 5 H100 nodes (4 sustained + 1 buffer, EU-local)
+- APAC: 3 H100 nodes (2 sustained + 1 buffer) + burst lane 4 ephemeral H100 nodes
+
+Notes / tradeoffs:
+- Cost delta between A/B ~ 22% monthly. Option A provides more headroom for marketing bursts without immediate overage.
+- If Lumina accepts a mixed fleet (A100 for sustained + H100 for burst), we can reduce monthly cost ~12% but pay a latency penalty for persistent requests.
+- For API-level SLOs, we recommend a canary + staged rollout with a 2-week monitoring period before firming SLOs in the SOW.
+
+Attached: sow-draft-Lumina-v2.pdf (SOW template with both sizing tables embedded)
+
+Marissa Cole
+Customer Solutions — Redwood Inference
+marissa_cole@redwood.ai
+
+---
+
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Peter Cho <peter@luminalabs.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Irene Choi <irene_choi@redwood.ai>
+Date: Thu, 15 Jul 2027 16:43:00 -0700
+Subject: Re: Sizing ask: Lumina deal — region buffer & minimums
+
+Peter — thanks for the clarity and Marissa — excellent options. Next steps:
+1) Priya to send updated SOW with Option A + explicit burst billing language for APAC (attached).
+2) Karthik / Ben to draft commercial term for burst pricing and cross-region failover clause.
+3) Marissa / Operations to schedule a 40-minute ops sync with Lumina (include Infra + Network) — propose Friday 11:00am PT.
+
+Peter, can you confirm Friday 11:00am PT works for your ops team? If yes, I'll send an invite and upload the SOW to the shared Drive link below.
+
+Drive (SOW & artifacts): https://drive.google.com/drive/folders/1LuminaSharedSOW
+HubSpot deal: https://app.hubspot.com/contacts/12345/deal/DL-2027-0793
+
+Thanks,
+Priya
+Strategic Accounts — Redwood Inference
+priya_natarajan@redwood.ai
++1 (415) 555-0123
+
+Attachments: sow-draft-Lumina-v2.pdf

@@ -1,0 +1,112 @@
+Urgent: EU ingress chokepoint causing 5xx/429 density - Finova checkout impact
+
+From: Sanjay Kapoor <sanjay@finova.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 14 May 2029 08:12:00 -0400
+Subject: Checkout failures - EU region 502/503 spike
+
+Jonas / Marissa,
+
+We're seeing a sudden spike of 502/503/504 errors originating from EU endpoints starting ~07:50 UTC. Customers report checkout failures and a ~35% drop in completed transactions. Attached is a short screenshot and the error sample from our frontend (finova-checkout-5xx-logs.png).
+
+Our team needs an immediate root cause and mitigation plan. We are running on your hosted EU edge and can't fail over traffic without coordination due to data residency. Can you confirm whether this is a platform-side ingress/load-balancer issue or something on our side? We need an ETA and whether you can offer credits given customer impact.
+
+Sanjay
+VP, Payments - Finova
+Sanjay.Kapoor@finova.com
+
+---
+Attachment: finova-checkout-5xx-logs.png (screenshot/png)
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Sanjay Kapoor <sanjay@finova.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Tue, 14 May 2029 08:30:00 -04:00
+Subject: Re: Checkout failures - EU region 502/503 spike
+
+Sanjay — thanks for the flag and the logs. I'm escalating to ops and looping in Rishi for any customer/contract implications. Evelyn, can you take point on triage? Initial asks: 1) can you confirm whether the pattern is ingress (LB) backends failing or a downstream KV/cache amplification causing cascading 5xx/429? 2) any quick mitigations we can deploy to reduce customer impact without violating data residency?
+
+I'll schedule a short sync in 30 minutes. Marissa, please prepare a customer-facing status note summarizing what we've observed and next steps. Rishi, please prepare options for credits/expedited remediation support.
+
+-Jonas
+Head of Incident Escalations
+Redwood Inference
+
+---
+Attachment: collect-labs-request.pdf (pdf)
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Sanjay Kapoor <sanjay@finova.com>
+Date: Tue, 14 May 2029 08:45:00 -04:00
+Subject: Re: Checkout failures - EU region 502/503 spike
+
+On it. I'll own customer communications and commercial options. Preliminary ask: do we have an estimate for affected percent of Finova traffic? If ops can provide a short ETA for mitigations (minutes/hours), I'll include that in the message. Also confirming Finova's contract includes a support SL clause; I'll pull the applicable credit policy.
+
+-Rishi
+Director, Strategic Accounts
+Redwood Inference
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: Sanjay Kapoor <sanjay@finova.com>
+Date: Tue, 14 May 2029 09:05:00 -04:00
+Subject: Re: Checkout failures - EU region 502/503 spike
+
+Quick triage notes (observed at 08:50 UTC):
+- Symptom: concentrated 502/503/504 and elevated 429s across the eu-* regional edge. Error density tracks to a handful of NLBs that front our EU ingress fleet. 429s suggest retry amplification from upstream clients increasing connection concurrency.
+- Probable cause: intermittent connection drops between edge proxy and pooled backend hosts combined with aggressive client retry logic -> retry storm amplifies backend load -> sporadic 5xx responses.
+
+Immediate mitigations we've applied (08:58 UTC):
+- Enabled stricter circuit-breaking on affected NLBs (reduce max concurrent upstream to 8 per connection).
+- Increased idle timeout on the proxy->backend to 10s to reduce premature 502s from short-lived connections.
+- Throttled aggressive healthcheck flapping by pushing a short backoff window.
+
+Short-term plan (next 60-180 mins):
+- If errors persist, we'll BGP-shift a slice of Finova's traffic to an alternative EU PoP with spare capacity and warm backends (requires Finova sign-off due to data residency).
+- Implement a deployable L4 rate-limit at the ingress to dampen retry storms for problematic client IP prefixes.
+- Run a rapid canary for config changes and monitor error-rate, p95 latency, 429/5xx ratios.
+
+I've attached the raw metrics snapshot (eu-ingress-metrics.csv). Please confirm whether Finova can accept temporary traffic shift or if we must keep all traffic in EU PoPs. If they can't shift, we'll proceed with L4 throttling and the circuit-breakers as the primary mitigation.
+
+-Evelyn
+VP, Platform Reliability
+Redwood Inference
+
+---
+Attachment: eu-ingress-metrics.csv (csv)
+
+From: Sanjay Kapoor <sanjay@finova.com>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Tue, 14 May 2029 09:22:00 -04:00
+Subject: Re: Checkout failures - EU region 502/503 spike
+
+Thanks Jonas and Evelyn — appreciate the rapid triage notes. We have to keep data in EU at least for EU customers; routing to a non-EU PoP is not acceptable. Please proceed with L4 throttling and circuit-breakers, and keep us updated on any customer-impacting changes. We also want a short explainer we can share with our legal/compliance team about steps being taken.
+
+Can we do a quick Zoom at 10:00 to run through the plan?
+
+-Sanjay
+
+---
+Zoom: https://zoom.us/j/1234567890?pwd=call
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Tue, 14 May 2029 11:03:00 -04:00
+Subject: Exec summary + next steps (Finova EU ingress)
+
+Summary for leadership:
+- Incident: Elevated 5xx/429 density affecting Finova EU customers starting 07:50 UTC; caused by retry amplification + intermittent proxy->backend drops at EU ingress NLBs.
+- Impact: ~35% checkout failure rate for impacted sessions; customer requests credits.
+- Actions taken: circuit-breakers, increased backend idle timeouts, throttled healthcheck frequency, L4 throttling staged (live at 09:12 UTC for offending prefixes). Metrics snapshot attached.
+- Open asks: 1) Commercial decision on credits (Rishi), 2) Formal incident write-up for Finova legal/compliance (Marissa), 3) Longer-term mitigation plan: adaptive client-retry detection + preferential routing for critical customers (Evelyn).
+
+Please confirm owners and next steps. I'll join the 10:00 call notes and follow up with a customer-facing brief we can publish.
+
+-Jonas
+Head of Incident Escalations
+Redwood Inference
+
+---
+Attachment: exec-escalation-brief.pdf (pdf)

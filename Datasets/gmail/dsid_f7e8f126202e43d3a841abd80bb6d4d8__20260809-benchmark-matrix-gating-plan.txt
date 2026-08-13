@@ -1,0 +1,118 @@
+Pilot benchmark matrix & gating criteria
+
+From: Marcus Lin <marcus@redwood.ai>
+To: Simon Taylor <simon.taylor@bluescale.ai>
+Cc: Neha Kapoor <neha@redwood.ai>, Ben Carter <ben@redwood.ai>, Lauren Bishop <lauren@redwood.ai>
+Date: Mon, 09 Aug 2026 15:02:00 -0700
+Subject: Pilot benchmark matrix & gating criteria
+
+Simon — thanks for the call earlier. Quick recap + concrete next steps to keep the pilot moving. I’ve sketched a benchmark matrix below and attached a simple template you can populate with the sample workload.
+
+High-level pilot objectives
+- Validate latency and throughput at target scale for the text-classification pipeline we discussed.
+- Quantify per-token inference cost for 50k daily inference volume.
+- Surface quality delta vs your current model on the labeled 1k sample.
+
+Proposed gating criteria (pass/fail for acceptance):
+- Latency: P95 <= 350 ms for 512-token requests (single-region).
+- Throughput: Sustained 120 requests/sec for the steady-state scenario; short bursts to 200rps without errors.
+- Cost: Target inference cost <= $0.0008 per token (end-to-end, including batching overhead).
+- Quality: Task F1 >= 88% on the labeled evaluation set; human preference in blind A/B >= 70% (vs current baseline).
+- Reliability: Error rate (5xx or timeouts) < 0.5% during soak.
+
+Evaluation plan (timeline):
+- Week 0 (this week): Align dataset + attach sample workload to the benchmark template. Owner: BlueScale (Simon) + Redwood (Marcus).
+- Week 1 (tech kickoff + smoke): Run smoke tests on a small subset (1k requests) to validate config and KV-caching. Owner: Ben (orchestration).
+- Week 2 (ramp and steady-state): 2–3 day ramp up to target sustained throughput, then 48h soak at target. Collect token-level cost and latency distributions. Owner: Ben + Redwood infra.
+- Week 3 (quality readout + acceptance): Run labeled evaluation and blind human preference test; review results with BlueScale and decide accept/reject. Owner: Marcus + Lauren (CS).
+
+Data + workload details needed from BlueScale
+- Representative sample workload (JSONL) — ideally 1k labeled rows and a 10k unlabeled set for throughput tests.
+- Expected request size distribution (median/95th token lengths).
+
+Operational notes and fallbacks
+- If latency P95 cannot meet 350ms under the standard model, we will test a quantized variant and a smaller context trimming policy.
+- If cost/token exceeds target, Redwood will propose batching optimizations and a quantization/parallelization tradeoff.
+
+Immediate asks / next steps
+1) Please attach the 1k labeled sample in response to this thread (or drop it into the attached template).
+2) Confirm whether pilot can run in our hosted environment (recommended) or whether you require a private VPC (this affects timeline).
+3) Approve a technical kickoff slot — propose Aug 12 (US morning) or Aug 13.
+
+Attachments: pilot-benchmark-template.xlsx, sample-workload-1k.jsonl (stubs attached)
+
+Thanks — I’ll schedule the kickoff once we have your availability.
+
+— Marcus
+Marcus Lin
+Account Exec, Redwood Inference
+marcus@redwood.ai | +1 415-555-0142
+
+-----Original Message-----
+From: Simon Taylor <simon.taylor@bluescale.ai>
+Sent: Mon, 09 Aug 2026 17:10:00 -0400
+To: Marcus Lin <marcus@redwood.ai>
+Cc: procurement@bluescale.ai
+Subject: Re: Pilot benchmark matrix & gating criteria
+
+Thanks, Marcus — good call. A couple clarifying points so we can check internally:
+1) Latency target: can you justify 350ms P95? Our on-prem baseline is ~250ms P95; we may need tighter latency to commit.
+2) Workload size: 10k unlabeled sounds fine, but could you confirm the concurrency profile you’ll use for the 120rps steady-state?
+3) Procurement: I’ve looped in procurement; they’ll want the pilot SOW and an estimate of potential infra egress costs.
+
+I’ll aim to get the 1k labeled sample by EOD tomorrow.
+
+— Simon
+CTO, BlueScale Analytics
+simon.taylor@bluescale.ai
+
+On Tue, 10 Aug 2026 09:00:00 -0700 Marcus Lin <marcus@redwood.ai> wrote:
+
+Simon — really helpful questions. Short answers below plus one slightly more conservative acceptance path.
+
+1) Latency rationale: 350ms P95 assumes a hosted GPU instance with our KV-caching enabled and average request length of ~400 tokens. If your baseline is 250ms on-prem, we can target 300ms P95 as an aggressive pass condition for hosted pilot and add a stretch objective of 250ms for private deployment.
+
+2) Concurrency profile: for the 120rps steady-state we’ll run 12 concurrent workers issuing requests with an average think time tuned to match your production inter-arrival distribution. For bursts we’ll briefly push 200rps using 25 workers. Test harness and generator will be shared from Ben.
+
+3) Procurement / costs: pilot SOW + estimated infra are attached (pilot-benchmark-template.xlsx includes a cost tab). For hosted pilots we typically absorb the first week of infra for evaluation; we’ll surface potential egress costs separately.
+
+Alternative gating (two-tier acceptance):
+- Tier 1 (hosted pilot acceptance): Latency P95 <= 300ms, Throughput steady 120rps, Cost/token <= $0.001.
+- Tier 2 (final acceptance for production): Latency P95 <= 250ms on private or tuned hosted config, Cost/token <= $0.0008, Quality thresholds as above.
+
+Next steps I’ll take now:
+- Ben will prepare the load generator and share runbook + scripts.
+- I’ll drop the sample harness and the template to this thread (see attachments).
+- Proposed kickoff: Aug 12, 10:00–11:00 PT. Does that work for you?
+
+— Marcus
+
+From: Neha Kapoor <neha@redwood.ai>
+To: Marcus Lin <marcus@redwood.ai>, Ben Carter <ben@redwood.ai>, Lauren Bishop <lauren@redwood.ai>
+Cc: Simon Taylor <simon.taylor@bluescale.ai>
+Date: Tue, 10 Aug 2026 09:15:00 -0700
+Subject: RE: Pilot benchmark matrix & gating criteria
+
+Looping in details on internal ownership:
+- Ben Carter: lead for orchestrating the runs, creating the load profiles, and collecting token/latency logs.
+- Lauren Bishop: CS lead for BlueScale; will coordinate reporting and acceptance readout with their stakeholders.
+- Neha Kapoor: engineering liaison for private deployment options (if BlueScale requests VPC).
+
+Ben — can you confirm you have capacity for the week-of Aug 12 run? If not, propose an alternate date.
+
+Neha
+Senior Solutions Engineer, Redwood Inference
+neha@redwood.ai
+
+-----Original Message-----
+From: Simon Taylor <simon.taylor@bluescale.ai>
+Sent: Tue, 10 Aug 2026 12:30:00 -0400
+To: Marcus Lin <marcus@redwood.ai>
+Cc: Neha Kapoor <neha@redwood.ai>, Ben Carter <ben@redwood.ai>, Lauren Bishop <lauren@redwood.ai>, procurement@bluescale.ai
+Subject: Re: Pilot benchmark matrix & gating criteria
+
+Thanks — Aug 12 at 10:00 PT works for our team. Procurement contact is procurement@bluescale.ai; they’ve been cc’d. I’ll upload the 1k labeled sample to the sheet by EOD tomorrow.
+
+Simon
+CTO, BlueScale Analytics
+

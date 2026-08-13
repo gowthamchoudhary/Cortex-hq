@@ -1,0 +1,139 @@
+Intermittent 5xx and high tail latency — Cartica (urgent)
+
+From: Alan Cheng <alan.cheng@cartica.com>
+To: Aditya Rao <aditya_rao@redwood.ai>
+Cc: Megan Li <megan.li@cartica.com>
+Date: Fri, 11 Dec 2026 16:04:00 -0000
+Subject: Sudden spike in 5xx + tail latency impacting checkout
+
+Aditya,
+
+We started seeing a spike in errors (5xx) and tail latency on calls to your hosted endpoint around 15:40 UTC. The failures are intermittent but enough to cause checkout timeouts for about 8% of our requests during the window. We've attached traces and some RTT samples. Our security team (cc'd) is concerned because this coincides with a rollout on our side — but we've already rolled that back and the issue persists.
+
+Can you confirm if anything changed on your side (deploy, config, routing)? This is now an exec-level issue for us; our Ops lead has looped in their platform VP. We need an incident contact and an ETA for root cause or mitigation.
+
+Attachments: cartica-trace-20261211.zip (traces), rtt-sample-12k.txt (samples)
+
+- Alan Cheng
+Platform Engineer, Cartica
+alan.cheng@cartica.com
+
+On Fri, Dec 11, 2026 at 15:00 Cartica Platform <support@cartica.com> wrote:
+> Incident ID: C-63171
+> Error sampling: 5xx (504, 502) from Redwood endpoints; tail p99 latency increased from 180ms -> 1.9s
+> 
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Alan Cheng <alan.cheng@cartica.com>
+Cc: Megan Li <megan.li@cartica.com>, marissa_cole@redwood.ai, vivek_kulkarni@redwood.ai, neha_kapoor@redwood.ai
+Date: Fri, 11 Dec 2026 16:22:00 -0000
+Subject: Re: Sudden spike in 5xx + tail latency impacting checkout
+
+Alan — thanks for the quick flag. I'm escalating internally now.
+
+Immediate asks: can you confirm the customer-observed timestamp window (UTC) and one example request id from the trace so we can match on ingress logs? Also, are you pinned to a particular region (us-east-1) or using multi-region routing?
+
+We'll triage with networking and serving infra; I'll coordinate an update within 60 minutes.
+
+Incident contact: I'll be primary POC (aditya_rao@redwood.ai). Looping in Marissa (network lead), Vivek (ops lead), and Neha (customer reliability).
+
+— Aditya
+Senior Solutions Engineer, Redwood Inference
+aditya_rao@redwood.ai
+
+
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: marissa_cole@redwood.ai, neha_kapoor@redwood.ai, vivek_kulkarni@redwood.ai
+Cc: Alan Cheng <alan.cheng@cartica.com>
+Date: Fri, 11 Dec 2026 16:30:15 -0000
+Subject: Fwd: Sudden spike in 5xx + tail latency impacting checkout
+
+Team — forwarding Cartica traces. Summary: sudden p99 rise and ~8% 5xx (mix of 502/504) starting ~15:40 UTC. Customer initially thought recent rollout, but they've rolled back and issue remains. They are pinned to our us-east-1 edge and report traffic from a single CIDR range.
+
+Quick checks we need now:
+- VPC peering metrics and counters for the customer's VPC (throttles, retransmits)
+- DNS resolution success/latency from our front-tier to origin and any recent DNS config changes (TTL, resolver changes)
+- Firewall/proxy 502/504 signatures (payloads show proxy 5xx before reaching model)
+- Any recent kernel/iptables/HAProxy restarts on the serving pool in us-east-1
+
+Attaching cartica traces. Recommend: short-term mitigation might be routing them to alternate peering path or bypassing proxy chain. Need quick read from infra.
+
+Aditya
+
+Attachments: cartica-trace-20261211.zip
+
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: aditya_rao@redwood.ai, neha_kapoor@redwood.ai, vivek_kulkarni@redwood.ai
+Cc: Alan Cheng <alan.cheng@cartica.com>
+Date: Fri, 11 Dec 2026 17:05:42 -0000
+Subject: Re: Fwd: Sudden spike in 5xx + tail latency impacting checkout
+
+Quick findings from initial triage (15:45–16:55 UTC):
+- VPC peering metrics: packet retransmits increased by ~12% for Cartica's peer connection starting ~15:38 UTC. No peering route flaps recorded, but sustained retransmits indicate congestion or MTU anomalies.
+- DNS: Our edge resolvers observed intermittent NXDOMAIN -> SERVFAIL flapping for the customer's internal resolver chain; median DNS resolution 20ms -> 320ms at p95 in same window.
+- Proxy/firewall: HAProxy front-tier logs show elevated 502 responses where backend never accepted the connection; some proxies returned 504 due to read timeouts. The proxy cluster also shows a recent config reload at 15:35 UTC on a subset of nodes (automated rolling reload).
+
+Interim hypothesis: the automated proxy reload combined with a transient DNS resolver instability pushed more traffic over a congested peering path, causing retransmits and backend timeouts => elevated 5xx and tail latency.
+
+Recommended immediate actions (within 30m):
+1) Shift Cartica traffic to alternate peering (peer-b) for us-east-1 (temp route) — avoids congested path.
+2) Increase DNS cache TTL at edge for Cartica hostnames to reduce resolver load (and mitigate flapping).
+3) Roll back automated proxy reload to stable config on affected front-tier nodes; restart only after traffic stabilizes.
+
+I'll prepare a short runbook and the telemetry slices for postmortem. If leadership wants an exec note, I can draft.
+
+— Marissa
+Network Reliability Lead, Redwood Inference
+marissa_cole@redwood.ai
+
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+To: Alan Cheng <alan.cheng@cartica.com>, Aditya Rao <aditya_rao@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: Fri, 11 Dec 2026 18:10:00 -0000
+Subject: Exec summary / proposed mitigations for Cartica incident
+
+Alan / Cartica execs — quick executive summary for your security and product leadership:
+
+What happened: between 15:38–16:10 UTC we observed a simultaneous spike in DNS resolution latency and an automated proxy/HAProxy rolling reload. The combination appears to have caused disproportionate traffic on a single peering path where packet retransmits rose, leading to connection resets and proxy read timeouts (502/504).
+
+Impact: ~8% of Cartica's requests experienced 5xx or >1s p99 latency during the window; checkout timeouts reported.
+
+What we're doing now (immediate):
+- Shifted Cartica traffic to an alternate peering path for us-east-1 (completed at 18:02 UTC).
+- Reverted the rolling proxy reload and quarantined the node set that had the reload; front-tier now on stable config.
+- Increased DNS cache TTL and set resolvers to a pinned fallback for Cartica hostnames.
+
+Next steps (24–72h):
+- Deep dive on peering telemetry and MTU/fragmentation checks; verify if peering provider saw microbursts.
+- Postmortem with timeline, root cause, and permanent mitigations (route diversity and improved reload guardrails).
+- Offer Cartica a one-time service credit for the impact window and free dedicated capacity consult to harden routing.
+
+We apologize for the outage and the business impact. Aditya will coordinate the incident bridge and provide hourly updates until resolved.
+
+— Vivek Kulkarni
+VP, Platform Operations, Redwood Inference
+vivek_kulkarni@redwood.ai
+
+
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Alan Cheng <alan.cheng@cartica.com>, Megan Li <megan.li@cartica.com>, Cartica Platform <support@cartica.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Vivek Kulkarni <vivek_kulkarni@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: Fri, 11 Dec 2026 18:20:00 -0000
+Subject: Update: Cartica incident — temporary mitigations applied, next steps
+
+Alan / Megan — thanks for your patience. Short update:
+- We routed your traffic to an alternate peering path at 18:02 UTC; error rates and p99 latency have dropped back to baseline in our monitoring.
+- We rolled back the automated proxy reload and increased DNS TTLs to reduce immediate resolver pressure.
+
+Attachments/links:
+- Postmortem runbook (draft): https://redwood.infra/runbooks/cartica-20261211 (link)
+- Incident ticket: https://redwood.atlassian.net/browse/INF-7891
+- HubSpot: hubspot:deal_334122
+
+Next: Marissa will lead the telemetry deep dive and we'll follow up with a postmortem and remediation plan within 72 hours. We are proactively offering a credit for impacted usage during the window; please let me know the best contact for procurement.
+
+If you'd like, we can schedule a 30-minute bridge with our network and security leads to walk through the findings.
+
+— Aditya
+Senior Solutions Engineer, Redwood Inference
+aditya_rao@redwood.ai

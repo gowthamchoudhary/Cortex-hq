@@ -1,0 +1,145 @@
+Integration kickoff: SDK timeouts, retry behavior, and rate safety
+
+From: Bianca Rios <bianca@atlaspay.com>
+To: camila_reyes@redwood.com
+Date: 2027-01-10T08:14:00-08:00
+Subject: Integration question: SDK timeouts + retry semantics
+
+Hi Camila,
+
+Quick question as we start the integration: our payments flow is sensitive to duplicate requests — if a retry happens it can result in duplicate settlement attempts. The AtlasPay team is evaluating your SDK and wants to know your recommended timeout/retry policy, idempotency guidance, and whether there are built-in toggles for automatic retries. Also: we're planning to migrate from the v1 endpoints to v2 next month; any recommended cutover pattern to avoid double processing while we validate?
+
+Could you share sample code (Node/Python) for idempotent request patterns and any guidance on the headers you expose (Retry-After, X-RateLimit-Remaining, etc.)?
+
+Thanks,
+Bianca
+Lead Engineer, AtlasPay
+
+--
+Bianca Rios
+bianca@atlaspay.com
+
+From: Camila Reyes <camila_reyes@redwood.com>
+To: Bianca Rios <bianca@atlaspay.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2027-01-10T09:08:00-08:00
+Subject: Re: Integration question: SDK timeouts + retry semantics
+
+Hi Bianca — thanks for flagging this early. Putting an implementation-focused reply below and attaching a lightweight sample SDK bundle + the onboarding milestones sheet for the migration plan. (See attachments: sample-sdk.zip, onboarding-milestones.xlsx)
+
+High-level recommendations (summary):
+- Idempotency: Always surface an idempotency-key header for state-changing endpoints (Idempotency-Key: <uuid>). Server will persist key for 24–72h depending on operation class; we recommend client generate v4 UUID per user action.
+- Retry semantics: Default client SDK has exponential backoff with jitter (base 250ms, multiplier 2.0, max 8s) and a total retry budget of 3 attempts for idempotent-safe calls. For non-idempotent (payments/settlements) the SDK disables automatic retries by default.
+- Timeouts: Default socket timeout 10s; overall request deadline 30s for long-running ops. For latency-sensitive requests we recommend socket 5s and deadline 15s.
+- Duplicate-safety: Server honors Idempotency-Key and will return 409 when a conflicting request is detected; client should surface a distinct user-facing message and avoid automatic re-submit.
+- Headers to inspect: Retry-After (on 429), X-RateLimit-Remaining, X-RateLimit-Limit, X-RateLimit-Reset (epoch seconds). We also expose X-Request-Id for tracing.
+
+Cutover migration pattern we suggest:
+1) Dual-write validation: send to v2 with a header X-Shadow-Write: true so v2 validates but does not commit.
+2) Shadow-reads: periodically compare v1 vs v2 responses for a sample set.
+3) Canary rollout: enable v2 for 5% traffic with idempotency keys strongly enforced, monitor for divergences for 48–72 hours.
+4) Remove shadow header and shift increasing percentages.
+
+Sample snippets (high level):
+Node (idempotent POST):
+```
+const id = uuidv4();
+await client.post('/v2/charge', body, { headers: { 'Idempotency-Key': id }, retry: { attempts: 0 } });
+```
+Python (safe retry wrapper):
+```
+with client.request('POST', '/v2/charge', json=payload, headers={'Idempotency-Key': id}) as r:
+  if r.status_code == 409:
+    # surface duplicate error to UX
+```
+
+On rate limiting: prefer client-side rate fences (token bucket) tuned to X-RateLimit-Limit and fall back on 429 handler with Retry-After. For high-volume embedding/stream endpoints we recommend batching with our SDK batching helper to reduce token usage.
+
+Next steps: Monica will schedule the technical handoff and provide a test-plan template for acceptance. Vivek — can you confirm the monitoring knobs we should enable on the Redwood console (traces/alerts) for the canary?
+
+Thanks — happy to jump on a 30m sync later today.
+
+Best,
+Camila Reyes
+Customer Solutions Engineer, Redwood Inference
+camila_reyes@redwood.com
+
+On 2027-01-10 08:14, Bianca Rios wrote:
+> Quick question as we start the integration: our payments flow is sensitive to duplicate requests — if a retry happens it can result in duplicate settlement attempts.
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Camila Reyes <camila_reyes@redwood.com>, Bianca Rios <bianca@atlaspay.com>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2027-01-10T10:40:00-08:00
+Subject: Re: Integration question: SDK timeouts + retry semantics
+
+Thanks Camila — I created a short handoff checklist and blocked a 30m slot for tomorrow 11:00 PST for the implementation leads. The checklist (short):
+- Confirm sandbox token + scopes (camila to share)
+- Run sample-sdk unit tests (provided in sample-sdk.zip)
+- Implement Idempotency-Key on write operations
+- Configure SDK: automatic_retry: false for payment endpoints; backoff config attached
+- Run dual-write shadow checks for 24h with sample traffic
+- Acceptance criteria: parity >= 99.5% on business outcomes for sampled corpus
+
+Node snippet (explicit no-retry config + idempotency):
+```
+const opts = { retry: { enabled: false }, headers: { 'Idempotency-Key': id } };
+await Client.call('POST', '/v2/settle', body, opts);
+```
+Curl quickcheck for idempotency:
+```
+curl -X POST https://api.redwood.com/v2/settle \ 
+  -H "Authorization: Bearer $SANDBOX_TOKEN" \ 
+  -H "Idempotency-Key: $(uuidgen)" \ 
+  -d '{"amount": 1000, "currency":"USD"}'
+```
+
+I also added monitoring playbooks to the Drive link so the AtlasPay SREs can onboard alerts.
+
+Monica
+Implementation Lead, Redwood Inference
+
+On 2027-01-10 09:08, Camila Reyes wrote:
+> High-level recommendations (summary):
+
+From: Bianca Rios <bianca@atlaspay.com>
+To: Camila Reyes <camila_reyes@redwood.com>
+Cc: Monica Patel <monica_patel@redwood.com>
+Date: 2027-01-10T13:02:00-08:00
+Subject: Re: Integration question: SDK timeouts + retry semantics
+
+Thanks Camila / Monica — that is helpful. A couple quick follow-ups: 
+1) Does the SDK bundle include a toggle to disable automatic retries per-endpoint (we saw a global flag but want per-endpoint control)?
+2) For the dual-write phase, can you confirm how the X-Shadow-Write header is ignored from committing (i.e., what response code should we expect from v2 for shadow writes)?
+3) Is there a sandbox token we can use that is scoped to test-only settlements (so we don't touch production data)?
+
+We'll join the 11:00 PST slot. Also: our infra team asked whether the SDK will surface backoff metadata (e.g., next_retry_at) in the response object so we can wire it into our queuing system.
+
+—Bianca
+
+On 2027-01-10 10:40, Monica Patel wrote:
+> Thanks Camila — I created a short handoff checklist and blocked a 30m slot for tomorrow 11:00 PST for the implementation leads.
+
+From: Camila Reyes <camila_reyes@redwood.com>
+To: Bianca Rios <bianca@atlaspay.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2027-01-10T15:22:00-08:00
+Subject: Re: Integration question: SDK timeouts + retry semantics
+
+Great questions — quick answers: 
+1) SDK config: yes — per-endpoint retry policy is supported. Each client method accepts a retry config object; default is conservative but you can override retry.attempts / retry.backoff / retry.enabled per-call. See sample-sdk.zip / docs/README.md.
+2) X-Shadow-Write: v2 will respond 200 with header X-Shadow-Response: snapshot and we add X-Shadow-Committed: false. Shadow writes intentionally do not persist — you should see a 200 with the same validation errors as a commit path, but nothing is committed. We publish a /v2/shadow-report endpoint to pull diffs for the sampled set.
+3) Sandbox tokens: shared link to a scoped sandbox token (read/write test-set) is in the Drive link above. If you prefer per-engineer tokens we can issue them — Monica can coordinate.
+4) Backoff metadata: the SDK surfaces a Retry-Metadata object on 429 that includes next_retry_ms and retry_attempts. We also emit X-Request-Id and return X-RateLimit-Remaining in response headers for live rate fences.
+
+Meeting confirm: 2027-01-11 11:00 PST — I'll send a calendar invite with the handoff doc and the acceptance test template.
+
+If you want, we can also run a focused 1-hour pairing session during the canary to validate idempotency key behavior.
+
+Thanks,
+Camila Reyes
+Customer Solutions Engineer, Redwood Inference
+camila_reyes@redwood.com
+
+On 2027-01-10 13:02, Bianca Rios wrote:
+> Thanks Camila / Monica — that is helpful. A couple quick follow-ups:

@@ -1,0 +1,178 @@
+Orchid Labs - SDK connection safety, retries, and throttling roadmap
+
+From: Alex Kline <alex.kline@orchidlabs.com>
+To: Irene Choi <irene_choi@redwood.com>
+Cc: Sara Moreno <sara.moreno@orchidlabs.com>, eng-ops@orchidlabs.com
+Date: 2026-10-21 09:18 -0700
+Subject: Orchid Labs - Integration kickoff: SDK setup & rate limits
+
+Hi Irene,
+
+Thanks for taking the kickoff with us earlier. Per our notes, Orchid Labs will start a small pilot this week to validate tokenization latency and rate shaping when we move traffic from our legacy gateway to Redwood. High level asks:
+
+- Quickstart SDK guidance for Node + Go (we'll run both).
+- Recommended retry/backoff and per-tenant rate limits.
+- Endpoint migration sequence (canary -> shift -> cutover) and any server-side behaviors we should expect (prefix cache warming, cold-starts).
+
+I've attached our minimal integration matrix (orchid-mvp-mapping.xlsx). Goal is a low-risk weekend cutover next Friday if we get aligned.
+
+Two quick questions to unblock us:
+1) What's the safe default connection timeout and retry policy you recommend for the hosted API when the client is behind aggressive NAT/load balancers?
+2) Do you have a small sample for connection pooling + token streaming in Node?
+
+Appreciate it — Alex
+
+--
+Alex Kline
+Head of Platform, Orchid Labs
+alex.kline@orchidlabs.com
+
+From: Irene Choi <irene_choi@redwood.com>
+To: Alex Kline <alex.kline@orchidlabs.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2026-10-21 11:02 -0700
+Subject: Re: Orchid Labs - Integration kickoff: SDK setup & rate limits
+
+Hi Alex — great to see this scoped. Quick answers up front, then a short plan and attachments.
+
+Defaults we recommend (hosted API):
+- Connection timeout (initial TCP connect): 5s.
+- Read/idle timeout (socket): 30s for normal generation calls; 90s for long-stream jobs.
+- Retry policy (idempotent calls like embedding/ranking): up to 3 retries with exponential backoff (base 300ms, factor 2, jitter).
+- For streaming/text-generation: avoid automatic request-level retries; instead implement client-side reconnect logic with resume tokens.
+
+Rate shaping:
+- Tenant-level token quota: suggest starting with 10 TPS (tokens/s) soft limit per tenant, enforced client-side + 429 guardrails server-side.
+- Burst window: allow short bursts up to 3x for 10s then smooth to steady rate.
+
+Endpoint migration sequence (suggested):
+1) Canary (5%): route non-critical traffic, no cache prime.
+2) Warm prefix cache: run synthetic prime requests for top 10 prompts under the canary pool.
+3) Ramp (5->40% over 4 hours): monitor latency and 429s.
+4) Full shift (overnight window): final cutover and deprecate legacy endpoints.
+
+Attached: ri-integration-checklist-v1.pdf with a checklist and the Node + Go quickstart snippets below.
+
+Node sample (HTTP streaming connect):
+const fetch = require('node-fetch');
+const res = await fetch('https://api.redwood.ai/v1/generate', {
+  method: 'POST',
+  headers: { 'Authorization': 'Bearer YOUR_KEY', 'Content-Type': 'application/json' },
+  body: JSON.stringify({ model: 'rwd-medium', stream: true, input: '...' }),
+  timeout: 30000 // wrapper-level timeout, not socket-level
+});
+// implement incremental read on res.body with backpressure-aware loop
+
+Go sample (client pooling + backoff):
+client := &http.Client{Transport: &http.Transport{MaxIdleConnsPerHost: 50}, Timeout: 30 * time.Second}
+// Retry wrapper: exponential backoff with full jitter (300ms base)
+
+Plan & next steps:
+- Vanessa will own telemetry and alert thresholds.
+- Vivek will own the SDK config suggestions and the production cutover checklist.
+- We'll run a pre-cutover dry run on Wed to exercise caching and retry behavior.
+
+If that works for you we'll lock the cutover window and send a short MRT (mutual runbook).
+
+Thanks,
+Irene
+
+--
+Irene Choi
+Implementation Lead, Redwood Inference
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+To: Alex Kline <alex.kline@orchidlabs.com>, Irene Choi <irene_choi@redwood.com>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2026-10-22 08:31 -0700
+Subject: Re: Orchid Labs - Integration kickoff: SDK setup & rate limits
+
+Hi Alex — adding telemetry and ops details so your SREs know what to look for.
+
+Key telemetry to enable before ramp:
+- 95th/99th token latency per model variant (30m buckets).
+- 429 count and 5xx spikes per endpoint and per-tenant.
+- Prefix cache hit ratio (this will surface how effective warmup is).
+- Concurrent KV cache entries and memory churn events (if you use client-side caching patterns).
+
+Alert thresholds (starter):
+- 5xx rate > 0.5% sustained for 10m -> priority-1 paging.
+- 429 spikes > 1% and sustained for 5m -> paging + auto-throttle engagement.
+- Token latency 99th > 2x baseline -> warn; >3x baseline -> page.
+
+Operational suggestions:
+- Synthetic warmers: run them from your canary region using the same client config to replicate connection behavior.
+- Backoff tuning: on 429 return, have clients wait 1s * (2^attempt) with full jitter and cap at 8s.
+- Graceful degradation: implement a cached best-effort response path for non-critical requests.
+
+I've uploaded a short telemetry dashboard template to the Drive link in the thread.
+
+-Vanessa
+
+--
+Vanessa Ortiz
+Sr. Customer Engineer, Redwood Inference
+
+From: Alex Kline <alex.kline@orchidlabs.com>
+To: Irene Choi <irene_choi@redwood.com>
+Cc: Sara Moreno <sara.moreno@orchidlabs.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2026-10-22 10:12 -0700
+Subject: Re: Orchid Labs - Integration kickoff: SDK setup & rate limits
+
+Thanks — this is super helpful. A couple clarifications: 
+
+1) For streaming reconnects you mentioned resume tokens — can you point to the exact pattern? Is the SDK exposing a resume token on disconnect or do we need to implement idempotency on our side?
+2) On quota enforcement: if a tenant hits the 10 TPS soft limit and we get 429s, is the recommended pattern to implement local smoothing or to fall back to a lower-cost model variant server-side?
+
+We plan to run a synthetic warm-up job tomorrow 09:00 PDT. We'll loop in our SRE channel and share results.
+
+— Alex
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: Alex Kline <alex.kline@orchidlabs.com>, Irene Choi <irene_choi@redwood.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: 2026-10-23 12:40 -0700
+Subject: Re: Orchid Labs - Integration kickoff: SDK setup & rate limits
+
+Alex — quick responses to your points and a compact checklist for your dry run.
+
+Streaming resume pattern:
+- The SDK exposes chunked resume IDs for long-running responses. On an unexpected disconnect the client should reopen the stream and include header X-RW-Resume: <resume-id>. The server will respond with the next token index to resend. For HTTP clients that can't use that header, use idempotency keys for short-generation replays (note: repeated tokens count towards quota).
+
+Quota fallback best-practice:
+1) Local smoothing: priority #1 — smooth at client ingress to avoid hard bursts.
+2) If smoothing is insufficient, implement model variant fallback server-side (e.g., rwd-small) for non-critical user tiers.
+3) For critical paths, surface a 429->user message with ETA and optionally queue for background completion.
+
+Dry-run checklist (pre-cutover):
+- [ ] Run synthetic prefix warmers (top 20 prompts) against canary 5% pool.
+- [ ] Validate telemetry dashboards show cache hit ratio > 60% after warmers.
+- [ ] Simulate 2x normal traffic bursts and verify client backoff behaves (no sustained 5xx).
+- [ ] Verify resume token behavior on forced disconnect test.
+- [ ] Confirm alerting and paging rules in your operations channel.
+
+If all green, post results in the Jira ticket and we'll approve the weekend cutover. I'll join the dry-run call.
+
+- Vivek
+
+--
+Vivek Kulkarni
+CS Implementation Lead, Redwood Inference
+
+From: Alex Kline <alex.kline@orchidlabs.com>
+To: Irene Choi <irene_choi@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Sara Moreno <sara.moreno@orchidlabs.com>
+Date: 2026-10-23 16:05 -0700
+Subject: Re: Orchid Labs - Integration kickoff: SDK setup & rate limits
+
+Team — thanks for the rapid turnaround. We'll run the warmer and the forced-disconnect tests tomorrow at 09:00 PDT. I'll post results to OD-4739 and share the synthetic run logs and telemetry dashboards.
+
+Assume tentative cutover window: Saturday 23:00 PDT -> Sunday 02:00 PDT. Will confirm after dry run.
+
+Appreciate the checklist and the SDK notes — very clear.
+
+Alex
+
+--
+Alex Kline
+Head of Platform, Orchid Labs

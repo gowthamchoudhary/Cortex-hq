@@ -1,0 +1,138 @@
+Site-bound storage and erase confirmation — follow-up Q&A
+
+From: Alex Garner <alex.garner@finwell.com>
+To: sofia.ivanova@redwood.ai
+Cc: ops-security@finwell.com
+Date: 2028-12-01T09:12:00-08:00
+Subject: Quick Qs: site-bound storage, backups & proof of purge for Dedicated cluster
+
+Hi Sofia,
+
+Thanks again for the walkthrough yesterday. Our security team asked for a concise Q&A so we can close the dedicated deployment checklist. Can you confirm the following for the FinWell tenant on the Dedicated pool?
+
+1) Physical/site binding: is the tenant's primary data (request logs, KV cache snapshots, backups) stored only in the US-east site we pinned, and do you have a documented map of cluster-to-datacenter mappings we can review?
+
+2) Backups & snapshots: what is your backup cadence for tenant-level snapshots, where are snapshots stored (same site vs cross-region), and what retention windows apply?
+
+3) Deletion/wipe evidence: when we request a tenant wipe, can you provide a cryptographic or time-stamped proof-of-deletion artifact? What is the expected completion SLA for a full tenant purge (including backups)?
+
+4) Logical isolation: are there any shared volumes, cross-tenant caches, or global telemetry that may persist FinWell-identifiable data outside the tenant boundary?
+
+5) Emergency/incident: if we need legal hold or a forensic freeze, what's the workflow and who are the escalation contacts?
+
+If you can respond with short, actionable answers and attach any internal runbooks or a diagram, that will help our audit.
+
+Appreciate it — Alex
+
+--
+Alex Garner
+Head of Infrastructure Security
+FinWell, Inc.
+
+From: Sofia Ivanova <sofia.ivanova@redwood.ai>
+To: Alex Garner <alex.garner@finwell.com>
+Cc: ops-security@finwell.com, dev.patel@redwood.ai, marissa.cole@redwood.ai
+Date: 2028-12-02T10:05:00-08:00
+Subject: Re: Quick Qs: site-bound storage, backups & proof of purge for Dedicated cluster
+
+Alex —
+
+Thanks for the clear list. Below are concise answers and I'm attaching a tenant-to-site mapping PDF plus our tenant wipe checklist workbook. High level answers first; we can expand any point on a call.
+
+1) Physical/site binding: FinWell's Dedicated tenant is pinned to the US-EAST site (site id: us-e-3). Primary runtime data (in-memory models/kv-caches) and ephemeral storage are only on nodes within that site. Persistent blobs (request logs, model cache artifacts) are archived to the same site by default. See attachment: redwood-dedicated-data-map.pdf for the cluster-to-dc mapping and rack-level boundaries.
+
+2) Backups & snapshots: We take tenant-level snapshots every 24 hours. Snapshots are stored encrypted at rest in the same regional site by default. Cross-region replication is opt-in; we do not replicate FinWell snapshots outside US-EAST unless you enable geo-replication. Retention default is 30 days; we can customize per contract.
+
+3) Deletion/wipe evidence: Tenant wipe includes: (a) live data eviction from nodes, (b) deletion of tenant metadata and indexes, (c) overwrite of KV cache markers, and (d) removal of snapshots. We produce a time-stamped audit bundle (signed event log + deletion manifest) that includes per-step checksums. SLA: full wipe completion target is 72 hours for the standard wipe (includes snapshots). For expedited erasure (legal order), we run an accelerated pipeline and aim for 24 hours.
+
+4) Logical isolation: No tenant-shared persistent volumes are used for FinWell. There is a small amount of global, aggregated telemetry (rollup metrics) that is scrubbed of tenant identifiers. Customer-identifiable logs remain tenant-scoped. We can provide a telemetry scrub policy excerpt.
+
+5) Emergency/incident: For legal hold / forensic freeze, submit requests to ops-security@redwood.ai and we will: suspend scheduled deletions, snapshot the current state (retention trap), and assign an incident lead. Escalation contacts: Dev Patel (dev.patel@redwood.ai) and Marissa Cole (marissa.cole@redwood.ai).
+
+Attachments: redwood-dedicated-data-map.pdf, tenant-wipe-checklist.xlsx
+
+If you want, Dev can add a short technical appendix on snapshot internals.
+
+Best,
+Sofia
+
+--
+Sofia Ivanova
+Head of Customer Security, Redwood Inference
+sofia.ivanova@redwood.ai
+
+From: Dev Patel <dev.patel@redwood.ai>
+To: Alex Garner <alex.garner@finwell.com>, sofia.ivanova@redwood.ai
+Cc: marissa.cole@redwood.ai
+Date: 2028-12-03T08:30:00-08:00
+Subject: Re: Quick Qs: site-bound storage, backups & proof of purge for Dedicated cluster
+
+Hi Alex — quick technical clarifications to back Sofia's answers and give you the artifacts you'll need for audit:
+
+- Snapshot architecture: snapshots are filesystem-level, created from a consistent point-in-time on the tenant's logical volume. Snapshots are encrypted with a tenant-specific data key derived from your tenant id and a KMS root. The manifest includes the KMS key id, snapshot GUID, and SHA256 checksums for each object.
+
+- Storage location & replication: default writes and snapshot storage remain in us-e-3. If you choose cross-region replication we create a second encrypted copy under a separate KMS envelope in the target region; replication is disabled by default for FinWell.
+
+- Proof-of-deletion artifact: when a wipe completes we emit a signed deletion-manifest JSON (we included a sample in the drive link). The manifest contains: wipe_start/finish timestamps, snapshot GUIDs removed, list of affected object GUIDs and SHA256, node eviction records, and the operator run id. The manifest is signed by our platform signing key (x509) and stored in the customer's audit bucket for 90 days.
+
+- Backup retention on S3-compatible store: s3 lifecycle rules are tenant-scoped and operate inside the regional tenant bucket. Cross-tenant keys are never used.
+
+Operational notes:
+- If you request a legal-hold we pause the lifecycle expiration for affected snapshots and tag them legal-hold-<req-id>.
+- For full cryptographic proof we can provide the signed manifest and a PKI chain.
+
+Let me know if you want a short demo of the manifest verification process.
+
+Cheers,
+Dev
+
+--
+Dev Patel
+Senior Systems Engineer, Redwood Inference
+dev.patel@redwood.ai
+
+From: Ops Security <ops-security@finwell.com>
+To: sofia.ivanova@redwood.ai, dev.patel@redwood.ai
+Cc: alex.garner@finwell.com, marissa.cole@redwood.ai
+Date: 2028-12-03T15:42:00-08:00
+Subject: Re: Quick Qs: site-bound storage, backups & proof of purge for Dedicated cluster
+
+Sofia / Dev —
+
+Thanks for the clear answers and the attachments. This addresses most of our audit checklist. A couple of follow-ups before we close:
+
+- Please confirm the sample signed-deletion-manifest is stored at the Drive link and that we receive a live manifest when we trigger a wipe (not a simulated sample).
+- Can Redwood provide a one-page attestation on company letterhead stating: "FinWell tenant data is pinned to US-EAST (us-e-3) and will not be replicated outside the region unless explicitly enabled by contract." Signed and dated will suffice for our compliance team.
+
+If you can drop the attestation PDF and confirm the live-manifest behavior by EOD PST tomorrow we'll move to final sign-off.
+
+Thanks —
+Ops Security Team
+FinWell
+
+On Mon, Dec 3, 2028 at 10:05 AM sofia.ivanova@redwood.ai wrote:
+> Alex —
+>
+> Thanks for the clear list. Below are concise answers and I'm attaching a tenant-to-site mapping PDF plus our tenant wipe checklist workbook. High level answers first; we can expand any point on a call.
+>
+> 1) Physical/site binding: FinWell's Dedicated tenant is pinned to the US-EAST site (site id: us-e-3). Primary runtime data (in-memory models/kv-caches) and ephemeral storage are only on nodes within that site. Persistent blobs (request logs, model cache artifacts) are archived to the same site by default. See attachment: redwood-dedicated-data-map.pdf for the cluster-to-dc mapping and rack-level boundaries.
+>
+> 2) Backups & snapshots: We take tenant-level snapshots every 24 hours. Snapshots are stored encrypted at rest in the same regional site by default. Cross-region replication is opt-in; we do not replicate FinWell snapshots outside US-EAST unless you enable geo-replication. Retention default is 30 days; we can customize per contract.
+>
+> 3) Deletion/wipe evidence: Tenant wipe includes: (a) live data eviction from nodes, (b) deletion of tenant metadata and indexes, (c) overwrite of KV cache markers, and (d) removal of snapshots. We produce a time-stamped audit bundle (signed event log + deletion manifest) that includes per-step checksums. SLA: full wipe completion target is 72 hours for the standard wipe (includes snapshots). For expedited erasure (legal order), we run an accelerated pipeline and aim for 24 hours.
+>
+> 4) Logical isolation: No tenant-shared persistent volumes are used for FinWell. There is a small amount of global, aggregated telemetry (rollup metrics) that is scrubbed of tenant identifiers. Customer-identifiable logs remain tenant-scoped. We can provide a telemetry scrub policy excerpt.
+>
+> 5) Emergency/incident: For legal hold / forensic freeze, submit requests to ops-security@redwood.ai and we will: suspend scheduled deletions, snapshot the current state (retention trap), and assign an incident lead. Escalation contacts: Dev Patel (dev.patel@redwood.ai) and Marissa Cole (marissa.cole@redwood.ai).
+>
+> Attachments: redwood-dedicated-data-map.pdf, tenant-wipe-checklist.xlsx
+>
+> If you want, Dev can add a short technical appendix on snapshot internals.
+>
+> Best,
+> Sofia
+>
+> --
+> Sofia Ivanova
+> Head of Customer Security, Redwood Inference
+> sofia.ivanova@redwood.ai

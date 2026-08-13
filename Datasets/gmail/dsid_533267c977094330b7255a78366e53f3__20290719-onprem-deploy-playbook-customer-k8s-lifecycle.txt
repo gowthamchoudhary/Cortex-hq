@@ -1,0 +1,152 @@
+On-prem deployment playbook: customer K8s lifecycle & storage
+
+From: Michael Lowe <michael@veridianinc.com>
+To: ben_carter@redwood.com
+Cc: marissa_cole@redwood.com, irene_choi@redwood.com
+Date: Fri, 19 Jul 2029 09:12:00 -0700
+Subject: Initial on-prem questions for Veridian private deploy
+
+Hi Ben (and team),
+
+Thanks again for the demo last week. Veridian's security and infra leads have a few concrete constraints they want us to address before we lock the SOW:
+
+- Site is air-gapped in Austin colo (no direct internet egress except via a vetted gateway).
+- Two ToR switches per rack, single 10Gb uplink to spine; per-rack throughput expected to be ~5Gb sustained, bursts to 8Gb.
+- Storage: on-site SAN (iSCSI) for archive, but we want fast local NVMe for model cache/cold-starts.
+- Compliance: AES-256 at rest; KMIP/HSM available but we'd like to understand integration options.
+- Retention: logs must be kept for 3 years; audit trail accessible to their SOC.
+
+Before our architecture review next Tuesday, can you summarize the recommended cluster layout (control plane HA, node pool split, storage topology), network VLAN/BGP requirements, and the upgrade/maintenance window expectations? Also attaching current site inventory.
+
+Attachment: veridian-site-inventory.xlsx (spreadsheet)
+
+Thanks,
+Michael
+Michael Lowe
+Infrastructure Manager, Veridian Inc.
+
+From: ben_carter@redwood.com
+To: Michael Lowe <michael@veridianinc.com>
+Cc: marissa_cole@redwood.com, irene_choi@redwood.com
+Date: Fri, 19 Jul 2029 10:03:00 -0700
+Subject: Re: Initial on-prem questions for Veridian private deploy
+
+Michael —
+
+Appreciate the details and the inventory. High level: we can support the air-gapped footprint and the SAN+local NVMe pattern you described. I've looped in Marissa and Irene to draft a short playbook and the technical decisions we'll want to lock prior to SOW sign.
+
+Proposed next steps (quick):
+1) Architecture review (45m) — Tue 23 Jul, 10:00-10:45 CT — we&apos;ll run through control plane, node pools, storage choices and ops runbook.
+2) Post-review deliverable: 1-page cluster layout + recommended PVC policies + upgrade windows.
+3) SOW revision to include HSM/KMIP integration options and DR runbook.
+
+Marissa — can you put together the suggested nodepool sizing and storage layout (bullet points) so we can send ahead of the review? Irene — please note any network gating / firewall rules we should confirm with Veridian (ports, egress patterns).
+
+I'll attach a base playbook after you both add notes.
+
+Cheers,
+Ben Carter
+Senior Solutions Engineer | Redwood Inference
+T: (415) 555-0112
+
+From: marissa_cole@redwood.com
+To: ben_carter@redwood.com
+Cc: irene_choi@redwood.com, Michael Lowe <michael@veridianinc.com>
+Date: Mon, 22 Jul 2029 08:34:00 -0700
+Subject: RE: Initial on-prem questions for Veridian private deploy
+
+On Mon, Jul 19, 2029 at 10:03 AM ben_carter@redwood.com wrote:
+> Marissa — can you put together the suggested nodepool sizing and storage layout (bullet points) so we can send ahead of the review?
+
+See notes below — rough-first-pass recommendations to discuss on Tue.
+
+Cluster topology (recommended)
+- Control plane: 3x control-plane VMs on dedicated hosts, anti-affinity across racks. K8s version: 1 minor behind upstream stable (we'll pin).
+- Etcd: co-located with control plane but on separate disks (RAID1 or mirrored NVMe). Snapshots to object gateway nightly.
+
+Node pools
+- infra-pool (3-5 nodes): 32 vCPU / 128GB each, run kube-system addons, logging/metrics (Prometheus remote write to local object store), ingress, and CSI controllers. Tolerations for critical DaemonSets.
+- model-cpu-pool (4-12 nodes): 48 vCPU / 256GB, local NVMe (2TB) for model cache; mount as ephemeral local PVs + CSI-local for fast workloads. Use liveness/readiness probes with appropriate timeouts (models may cold-start).
+- model-gpu-pool (2-6 nodes): 8x A40/T4 equivalency per node (or customer-provided GPUs), 256GB RAM, nodes labeled gpu=true. Use device-plugin and nodeFeatureDiscovery.
+- storage-pool (2-4 nodes): attach to on-site SAN (iSCSI) for block volumes, run Rook/Ceph as an option if customer prefers software-defined storage. Provide CSI + StorageClass with reclaimPolicy=Retain for archive volumes.
+
+Storage strategy
+- Model cache: local NVMe (CSI local PVs) — very low latency, not replicated; acceptable for cache; rehydrate from SAN/object-store on eviction.
+- Persistent model artifacts & metadata: Ceph/RBD or SAN-backed PVCs with encryption at rest (we will rely on host-level dm-crypt + KMS keys).
+- Backups: nightly incremental snapshots to on-site object gateway (S3-compatible) with 90-day hot retention; archives to the SAN with lifecycle policy.
+
+Encryption & KMS
+- Support for KMIP/KMS client to fetch CEK from the customer's HSM (KMIP gateway). If HSM not available, use customer-managed KMS in a locked subnet. We will document key rotation and access controls in the SOW.
+
+Network & gating
+- VLANs: control-plane, infra, models, storage, mgmt. Tagging on ToR required.
+- MTU: prefer jumbo frames (9000) on the rack interconnect for NVMe traffic; fall back to 1500 if network cannot support.
+- Egress: all outbound traffic must go through vetted gateway; we will provide a small set of CIDR/IPs and FQDNs for update mirrors (only required for initial OS/package distribution).
+- Firewall rules: allow kube API (TCP 6443) to and from infra nodes; etcd port range; node-to-node high ports for container traffic; NFS/iSCSI ports only on storage VLAN.
+
+Operations & lifecycle
+- Maintenance window: weekly 2-hour windows (Saturday 02:00-04:00 local) for node upgrades; canary strategy: drain 1 node at time in model pools, observe QPS/cold-start impact.
+- PodDisruptionBudgets: set for critical services and set maxUnavailable=1 for model-serving deployments to limit simultaneous evictions.
+- Observability: Prometheus + node-exporter, central logging to on-site ELK; audit logs sent to immutable object store for SOC.
+
+POC/Canary plan
+- Phase 1: infra + control plane + one model-cpu-nodepool (2 nodes) + basic CSI local. Run sample traffic, validate cold-start < 2s for cached models.
+- Phase 2: add GPU pool, integrate SAN/backup, KMS, and finalize SLOs.
+
+I'll attach a short playbook page for the review. Questions for Michael before the review: 1) confirm whether jumbo frames are acceptable 2) if HSM/KMIP endpoint is available 3) target RTO/RPO for model artifacts.
+
+—Marissa
+Marissa Cole
+Principal Infrastructure Architect | Redwood Inference
+
+From: Michael Lowe <michael@veridianinc.com>
+To: marissa_cole@redwood.com, ben_carter@redwood.com
+Cc: irene_choi@redwood.com
+Date: Tue, 23 Jul 2029 09:05:00 -0700
+Subject: Re: Initial on-prem questions for Veridian private deploy
+
+Marissa, Ben — thanks for the detailed notes. A few clarifying items before the call:
+
+1) HSM/KMIP: we do have a KMIP gateway (Thales) that we can expose to the cluster control subnet; want to confirm Redwood supports KMIP v2.
+2) IOPS: expected steady-state model traffic ~2k token/sec across peers, plus heavy bursts during rehydrates. Can you give a rough IOPS per node estimate for model-cpu-pool (cache hits vs rehydrate)?
+3) Backups: SOC wants immutable audit logs. Is there a recommended configuration for WORM on the object gateway?
+
+Attaching the site inventory you asked for.
+
+Attachment: veridian-site-inventory.xlsx (spreadsheet)
+
+-Michael
+
+From: ben_carter@redwood.com
+To: Michael Lowe <michael@veridianinc.com>
+Cc: marissa_cole@redwood.com, irene_choi@redwood.com
+Date: Tue, 23 Jul 2029 15:47:00 -0700
+Subject: Re: Initial on-prem questions for Veridian private deploy
+
+On Tue, 23 Jul 2029 at 09:05 AM Michael Lowe <michael@veridianinc.com> wrote:
+> Marissa, Ben — thanks for the detailed notes. A few clarifying items before the call:
+> 
+> 1) HSM/KMIP: we do have a KMIP gateway (Thales) that we can expose to the cluster control subnet; want to confirm Redwood supports KMIP v2.
+> 2) IOPS: expected steady-state model traffic ~2k token/sec across peers, plus heavy bursts during rehydrates. Can you give a rough IOPS per node estimate for model-cpu-pool (cache hits vs rehydrate)?
+> 3) Backups: SOC wants immutable audit logs. Is there a recommended configuration for WORM on the object gateway?
+
+Michael — quick answers below, and attaching our playbook PDF and a draft SOW link for signatures.
+
+1) KMIP/HSM: yes — we support KMIP v2 and have a client implementation that integrates with both host dm-crypt and Ceph auto-unlock. We'll include an HSM integration appendix in the SOW.
+
+2) IOPS guidance (very rough):
+- Cache hit (local NVMe): ~5k-15k IOPS per NVMe depending on drive model; plan for 10k IOPS baseline per model-cpu node to cover bursty inference and small random reads.
+- Rehydrate from SAN/object-store: depends on SAN characteristics; plan for 200-600 MB/s per node during rehydrate if NVMe saturates. We will run a workload profile during Phase 1 to refine these numbers.
+
+3) Immutable logs (WORM): yes — configure object gateway lifecycle and bucket-level WORM with an immutable retention policy. We'll document retention windows and access controls; Redwood will write audit logs to that bucket via dedicated service account and rotation key.
+
+Attachments (for your review):
+- Redwood-onprem-playbook-v1.pdf (architecture summary, nodepool table, storage decisions)
+- SOW draft: https://app.redwood.com/sow/VER-3491/preview (editable)
+
+Next steps: we&apos;ll run the architecture review at the scheduled time, and I&apos;ll follow up with the 1-page decision doc after the call. If the Thales team can share KMIP endpoint details ahead of time that&apos;d be helpful.
+
+Best,
+Ben Carter
+Senior Solutions Engineer | Redwood Inference
+Attachments: Redwood-onprem-playbook-v1.pdf (application/pdf), SOW_VER-3491.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)

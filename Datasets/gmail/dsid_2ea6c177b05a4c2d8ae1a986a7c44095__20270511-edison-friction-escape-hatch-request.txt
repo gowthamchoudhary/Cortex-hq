@@ -1,0 +1,111 @@
+EDISON: SDK connection growth + temporary escape hatch request
+
+From: Samantha Reynolds <samantha@edisonhealth.com>
+To: Naomi Feldman <naomi_feldman@redwood.ai>
+Cc: Daniel Park <daniel.park@edisonhealth.com>
+Date: Tue, 11 May 2027 09:02:00 -0700
+Subject: Re: Redwood POC - intermittent connection growth when prefetching
+
+Hi Naomi,
+
+Quick note from our SRE team after running the POC for a week: we see a steady growth in active SDK connections when prefetch is enabled. It starts fine but after ~8 hours we see memory pressure and a large number of half-closed streams in the app. We attached a short repro log and a minimal repro script.
+
+This is blocking our evaluation because we need predictable capacity for the pilot. Can your team provide a temporary configuration flag or recommended client-side workaround we can toggle while we evaluate a fix? Also need a sense of how long a runtime fix would take.
+
+Thanks — Samantha
+Samantha Reynolds
+Platform Lead, Edison Health
+
+Attachment: edison-repro-logs.txt (text)
+Attachment: repro-script.py (text)
+
+-----Original Message-----
+On Mon, 10 May 2027 14:21:00 -0700 Naomi Feldman <naomi_feldman@redwood.ai> wrote:
+> Hi Samantha — thanks for the logs. Looping in our sales eng and runtime folks to triage. We should be able to propose a short-term escape hatch and a mutual action plan by EOD PT.
+> 
+> Naomi
+> Naomi Feldman
+> Senior Sales Engineer, Redwood Inference
+>
+------------------------------------------------------------
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Samantha Reynolds <samantha@edisonhealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Logan Wright <logan_wright@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 11 May 2027 10:15:00 -07:00
+Subject: Re: Redwood POC - intermittent connection growth when prefetching
+
+Samantha — quick update from our side: I opened a triage ticket with runtime and attached your repro. Karthik and Logan, can you confirm whether this matches the prefetch/connection lifecycle issue we recently patched in internal canary? For Edison we need a short-term toggle they can apply client-side and a quick rollback plan for safety.
+
+Proposed immediate asks:
+- Runtime: advise a client flag that disables background prefetch/kvcache priming per-session (non-breaking toggle).
+- Sales eng: propose a canary runway and suggested throttling values for Edison to run overnight (8–12hr window).
+- Ops: a guardrail playbook if connections rise > X over baseline (we should define X).
+
+I'll hold a 30-min sync if you want to walk the logs together.
+
+Thanks — Naomi
+
+------------------------------------------------------------
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Naomi Feldman <naomi_feldman@redwood.ai>, Logan Wright <logan_wright@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Samantha Reynolds <samantha@edisonhealth.com>
+Date: Tue, 11 May 2027 13:02:00 -07:00
+Subject: Re: Redwood POC - intermittent connection growth when prefetching
+
+Thanks Naomi, Samantha — I dug through the repro. Short summary: repro-script.py uses our Node SDK with prefetch=auto and opens short-lived sessions per request pattern that triggers background KV priming. The runtime currently keeps a per-session lease on a multiplexed connection while the KV priming job is in-flight; under certain timing distributions the lease reference counter isn't decremented if the client shuts down mid-priming. This leaks an in-memory session object that holds a reference to the stream.
+
+Short-term mitigation (non-invasive):
+- We can expose an SDK runtime toggle: REDWOOD_PREVENT_PREFETCH=true (env var) or sdk option preventPrefetch:true. That will make the client skip scheduled prefetch jobs; it avoids holding the lease and should stop connection growth. Non-breaking for generation, but will raise token latency for first-hit prefixes.
+- Suggested throttle window: preventPrefetch=true for the overnight canary (8–12hr), with a 5s request-level connect timeout and backoff to avoid client retries amplifying open connections.
+
+Timeline for a proper runtime fix (no leak):
+- Patch (runtime): 3–5 business days including unit tests and perf run.
+- Canary: 24–48 hours on dedicated test pool.
+- Rollout: 1–2 weeks depending on SLA tiers and canary observations.
+
+I can push the temporary SDK flag today (small client patch + docs). Logan — can you review the safety playbook and define the X threshold for active connections? Marissa — heads up for customer comms and to align on the canary window.
+
+— Karthik
+Staff Engineer, Runtime
+
+------------------------------------------------------------
+From: Logan Wright <logan_wright@redwood.ai>
+To: Naomi Feldman <naomi_feldman@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Samantha Reynolds <samantha@edisonhealth.com>
+Date: Tue, 11 May 2027 15:12:00 -07:00
+Subject: Re: Redwood POC - intermittent connection growth when prefetching
+
+Thanks all — reading Karthik's notes. Proposed operational threshold: X = +30 active connections above baseline per instance for more than 10 minutes should trigger automatic mitigation steps:
+1) Signal: increase logging level for the session and attach to tracing span.
+2) Auto-toggle suggestion: send a short-lived feature flag to the SDK to set preventPrefetch=true for sessions from Edison account (temporary).
+3) If after 30 minutes the count remains > X, route traffic to a backup pool with dedicated throttling and open a high-priority incident.
+
+I'll draft the safety playbook and the small feature-flagging JSON. Naomi, recommend we schedule the canary tonight PST for 22:00–06:00 and run the preventPrefetch toggle for half of their traffic first. Marissa, can you own the customer note and runbook?
+
+— Logan
+Principal SRE, Redwood Inference
+
+------------------------------------------------------------
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Samantha Reynolds <samantha@edisonhealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Logan Wright <logan_wright@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 11 May 2027 16:18:00 -07:00
+Subject: Re: Redwood POC - intermittent connection growth when prefetching
+
+Samantha — quick plan and asks (TL;DR):
+- Temporary workaround: we will push an SDK toggle today (preventPrefetch) you can set on the client. It avoids the leak and is opt-in.
+- Canary: schedule 22:00 PT tonight — we'll start at 50% traffic with preventPrefetch=true for Edison for an 8-hour window.
+- Safety playbook: Logan will run the +30 active connection threshold and auto-toggle to backup pool if needed.
+- Timeline for runtime fix: 3–5 business days for a full leak fix, 1–2 weeks rollout.
+
+Action items:
+- (Runtime) Karthik: push small SDK patch + release notes and a snippet on how to set preventPrefetch (ETA: today EOD).
+- (SRE/Customer) Samantha: run the canary tonight 22:00–06:00 PT, capture logs and traces.
+- (SRE/Redwood) Logan: draft playbook and feature-flag JSON.
+- (Sales) Marissa & Naomi: send customer note with expected impact and rollback steps.
+
+Samantha — anything else you need to proceed? We aim to keep this non-disruptive and isolated to Edison while we deliver the fix.
+
+Thanks — Naomi
+Senior Sales Engineer, Redwood Inference
+

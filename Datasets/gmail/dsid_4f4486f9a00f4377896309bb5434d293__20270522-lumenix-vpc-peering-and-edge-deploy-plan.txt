@@ -1,0 +1,139 @@
+Lumenix private deployment — VPC peering & edge deploy plan
+
+From: Hannah Schmitt <hannah.schmitt@redwood.ai>
+To: Oliver Sykes <oliver.sykes@lumenix.com>, Maria Chen <maria.chen@lumenix.com>
+Cc: Dev Patel <dev.patel@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+Date: Sat, 22 May 2027 09:03:00 -0700
+Subject: Lumenix private deployment — VPC peering & edge deploy plan
+
+Hi Oliver / Maria —
+
+Thanks again for choosing Redwood for the private deployment. To keep momentum, I put together a short network-first checklist we can run through in the first session: CIDR and IP ownership, peering vs PSC options, NAT & egress strategy, port/ACL expectations, and staging cutover plan.
+
+Can you confirm who from your networking and security teams should join a 60-minute review? We can do Tues 5/25 or Thurs 5/27 (PST). I attached a baseline RedWood VPC checklist for you to skim.
+
+Attachments: redwood-vpc-checklist.xlsx (network checklist)
+
+Next steps I propose:
+- Network review meeting to lock CIDRs and routing approach
+- Staging install (on-prem package) in your lab region
+- Production cutover window + fallback plan
+
+If you prefer Private Service Connect (PSC) instead of classical peering we can include architecture pros in the call — PSC has pros for multi-region routing but changes how we handle internal DNS.
+
+Thanks —
+Hannah
+Hannah Schmitt
+Account Executive, Redwood Inference
+hannah.schmitt@redwood.ai
++1 415-555-2101
+
+From: Oliver Sykes <oliver.sykes@lumenix.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Maria Chen <maria.chen@lumenix.com>, procurement@lumenix.com, Dev Patel <dev.patel@redwood.ai>
+Date: Sat, 22 May 2027 11:47:00 -07:00
+Subject: Re: Lumenix private deployment — VPC peering & edge deploy plan
+
+Hi Hannah —
+
+Thanks, this is helpful. Maria and I reviewed the checklist. Quick questions before we lock a meeting:
+1) Our infra team prefers to reserve 10.10.0.0/16 for Lumenix internal services — can Redwood operate in 10.11.0.0/16 or do you require a /20 minimum contiguous block for cache/kv nodes?
+2) Do you have documented ports/protocols for the edge agents? We are trying to scope firewall exceptions.
+3) We're open to PSC if it simplifies routing; can you include the tradeoffs in the review?
+
+We can do Tue 5/25, 10:00–11:00 PDT; CCing procurement for budget visibility.
+
+—Oliver
+Oliver Sykes
+Head of Infrastructure, Lumenix Health
+oliver.sykes@lumenix.com
+
+From: Dev Patel <dev.patel@redwood.ai>
+To: Oliver Sykes <oliver.sykes@lumenix.com>, Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+Date: Mon, 24 May 2027 08:12:00 -07:00
+Subject: Re: Lumenix private deployment — VPC peering & edge deploy plan
+
+Hi Oliver —
+
+Short answers: we can absolutely use 10.11.0.0/16 for the inference fleet; there is no /20 minimum for the short-term staging cluster. For production we recommend reserving at least /18 for autoscaling headroom if you expect high concurrency.
+
+Edge agent ports (high-level):
+- TLS control channel: 443 (outbound)
+- Token refresh/metrics: 8443 (outbound)
+- KV sync (internal): 10250–10260 (peer-only)
+- Health and admin: 9100 (optional to expose to management subnet)
+
+If you choose VPC peering: you are responsible for route propagation and cross-account route table entries; no NAT required between peered VPCs if CIDRs do not overlap. PSC: we can publish private endpoints and avoid peering, but it requires proxying and changes to DNS resolution.
+
+For the on-prem package: we will provide onprem-installer-v2.1 (attached) which includes an offline bundle + install manifest. The installer requires a 500 MB ephemeral download for third-party libs if not using fully air-gapped mode.
+
+Attachments: onprem-installer-v2.1.tar.gz (installer bundle)
+
+I’ll add a short config template to the Drive before the review.
+Thanks —
+Dev
+Dev Patel
+Solutions Engineer, Redwood Inference
+
+From: Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+To: Oliver Sykes <oliver.sykes@lumenix.com>, Dev Patel <dev.patel@redwood.ai>
+Cc: Hannah Schmitt <hannah.schmitt@redwood.ai>
+Date: Mon, 24 May 2027 10:05:00 -07:00
+Subject: Re: Lumenix private deployment — VPC peering & edge deploy plan
+
+Hi all —
+
+A few operational points for the network review:
+- TLS termination: We support client TLS with mutual auth for agent-to-cloud control plane; if you need HSM-backed certs we can integrate with your KMS (PKCS#11 flow).
+- DNS: If you pick PSC we ask for an internal DNS zone (e.g., redwood.lumenix.internal) so our SRV records resolve for service discovery.
+- MTU: if you have jumbo frames in your datacenter, set MTU >= 1500 on peering interfaces to avoid fragmentation.
+
+Also attaching a short install checklist that our infra team uses for air-gapped installs. It lists required packages, container image whitelists, and manifest keys.
+
+Attachments: onprem-install-checklist.md
+
+See you Tue 10:00 PDT.
+—Stephanie
+Stephanie Nguyen
+Senior Solutions Engineer, Redwood Inference
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Oliver Sykes <oliver.sykes@lumenix.com>, Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Maria Chen <maria.chen@lumenix.com>, procurement@lumenix.com
+Date: Tue, 25 May 2027 09:47:00 -07:00
+Subject: Lumenix — mutual action plan & onboarding timeline
+
+Oliver / Maria —
+
+Great to get this moving. I attached a 3-phase mutual action plan (network review, staging install, production cutover + runbook handoff). Proposed milestones:
+- Week 1: Network review (lock CIDRs, peering vs PSC decision)
+- Week 2: Staging install in Lumenix lab (validate KV sync and latency)
+- Week 4: Production cutover and 7-day monitoring window
+
+Please sign the M-A-P so we can schedule dedicated infra hours. DocuSign link: https://docusign.com/lumenix-m-a-p
+
+Attachments: mutual-action-plan-lumenix.pdf
+
+Ping if you need a change to the SLA during the initial 30-day ramp — we can scope an exception window with engineering.
+
+Thanks —
+Vivek Kulkarni
+Customer Success Manager, Redwood Inference
+
+From: Oliver Sykes <oliver.sykes@lumenix.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Maria Chen <maria.chen@lumenix.com>, procurement@lumenix.com
+Date: Tue, 24 May 2027 14:16:00 -07:00
+Subject: Re: Lumenix — mutual action plan & onboarding timeline
+
+Vivek —
+
+Thanks. Team confirmed: networking is Samir Rao (samir.rao@lumenix.com), security is Maria Chen, and legal/procurement is on copy. We will sign the M-A-P and need a temporary SLA exception for the first 30 days allowing for up to 2x token latency during warm-up. Can you route that request to the product SLA team?
+
+I'll sign the DocuSign this afternoon.
+
+Regards —
+Oliver
+
+(End of thread)

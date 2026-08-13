@@ -1,0 +1,118 @@
+[Skybound AI] Regional GPU degradation — customer update & evaluation package
+
+From: Alex Mercer <alex@skybound.ai>
+To: ben.carter@redwood.com
+Cc: support@skybound.ai
+Date: Wed, 1 Dec 2027 09:12:00 -0700
+Subject: Sudden regional throughput drop — us-west dedicated pool
+
+Ben —
+
+We're seeing a sustained ~45% drop in tail throughput for our us-west dedicated pool since ~07:30PT this morning. Latency P50 is unchanged but P90/P99 token throughput is spiking and a subset of our production endpoints are timing out on long generations (~3k tokens). This is impacting a handful of critical production flows (itemization pipeline + user-facing chat).
+
+We opened a support ticket (#SB-1129) and attached a short trace. Can you confirm whether this aligns to anything on Redwood's side (warmup/eviction/autoscaler activity)? We need ETA on mitigation and whether there will be any credit/bridging plan.
+
+Attachments: skybound_traces_20271201.zip (logs), sample-request-ids.txt
+
+Thanks —
+Alex Mercer
+Head of Platform
+Skybound AI
+
+From: Ben Carter <ben.carter@redwood.com>
+To: marissa.cole@redwood.com, connor.obrien@redwood.com
+Cc: neha.kapoor@redwood.com
+Date: Wed, 1 Dec 2027 09:28:00 -07:00
+Subject: Fwd: Sudden regional throughput drop — us-west dedicated pool
+
+Marissa / Connor / Neha — looping you in on an urgent customer impact: Skybound (RD-8342) reports a regional throughput regression in their us-west dedicated pool affecting long generations. They attached traces; customer reports P90/P99 throughput spikes but not p50.
+
+Initial ask: confirm whether any autoscaler warmup, node eviction waves, or maintenance windows overlapped 07:20–08:00PT. Also need a quick assessment: is this a scheduling/allocator backlog (eviction warmup) vs kernel-level slowdown vs NVLink saturation?
+
+Customer-facing constraints: they want an ETA and provisional credit/bridging commitment. I'll own comms but need technical bullet points ASAP to share.
+
+Ben
+Director, Customer Solutions
+Redwood Inference
+
+-----Forwarded message-----
+
+From: Connor O'Brien <connor.obrien@redwood.com>
+To: ben.carter@redwood.com, marissa.cole@redwood.com
+Cc: neha.kapoor@redwood.com
+Date: Wed, 1 Dec 2027 10:05:00 -07:00
+Subject: Re: Fwd: Sudden regional throughput drop — us-west dedicated pool
+
+Ben / Marissa —
+
+Quick summary from infra telemetry: beginning 07:22PT we observed a warmup fanout spike in the us-west reserved pool for instances with long-seq workloads. The allocator held some lanes while warming new nodes; concurrent warmups plus a config change to the autoscaler warm-start threshold (rolled 07:15 PT) created a backlog for requests > 2k tokens. NVLink and GPU driver traces show elevated memcpy stalls for a subset of nodes (node group gw-usw-12).
+
+Immediate remediation taken (07:35 PT):
+- Temporarily increased warm-start concurrency and drained the lowest-util nodes into warm pools (reduced queue headroom).
+- Applied a transient scheduler bypass for requests tagged with "skybound-longgen" to route to warm nodes only.
+- Rolled back the autoscaler warm-start threshold change at 08:05 PT.
+
+Current status (10:00 PT): throughput is recovering, P90 gap reduced from ~45% to ~12%, tail timeouts still intermittent. We're packaging telemetry and kernel traces for a deeper postmortem.
+
+Action items for next 48h:
+1) Full timeline & root cause writeup (Connor) — due 2027-12-03 EOD PT
+2) Customer-facing package: incident_timeline.pdf + KPIs (Ben) — due 2027-12-02 12:00 PT
+3) Engineering remediation: NVLink memcpy regression investigation and kernel hotfix backlog (Neha) — triage scheduled 12/1 11:30 PT
+
+Connor
+Principal SRE, Serving Runtime
+Redwood Inference
+
+> On Wed, 1 Dec 2027 at 09:28 Ben Carter <ben.carter@redwood.com> wrote:
+> > Marissa / Connor / Neha — looping you in on an urgent customer impact...
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Alex Mercer <alex@skybound.ai>, Priya Raman <priya.raman@skybound.ai>
+Cc: marissa.cole@redwood.com, connor.obrien@redwood.com, neha.kapoor@redwood.com
+Date: Thu, 2 Dec 2027 11:50:00 -07:00
+Subject: Skybound — immediate mitigation update and next-step package
+
+Alex / Priya —
+
+Thanks again for flagging this early. Short summary of what happened and what to expect next:
+
+What we saw: a combination of an autoscaler warm-start threshold change (rolled 07:15 PT) and a transient warmup fanout for long-sequence workloads caused an allocator backlog in us-west beginning ~07:22 PT. While P50 remained stable, P90/P99 token throughput for generations >2k tokens degraded and produced intermittent timeouts for a subset of your calls.
+
+What we did immediately:
+- Reverted the autoscaler warm-start threshold (08:05 PT) and increased warm-start concurrency (07:35 PT) to allow more ready nodes for long-gen requests.
+- Applied a temporary routing rule to steer requests with your longgen tag to warm nodes (reduced your error surface while we investigate).
+- Collected full evidence bundle (attached) with kernel traces, allocator logs, and sample request IDs.
+
+Current impact: throughput is recovering; error rate tied to long generations is down by ~70% vs peak. Some intermittent tail timeouts remain for very long prompts; our SREs are monitoring and expect full resolution within 24h barring regression.
+
+Customer commitments and next steps:
+1) Formal post-incident report (timeline, root cause, and technical mitigations) — delivery by 2027-12-03 EOD PT. (attachment: incident_timeline.pdf)
+2) Evidence package for your SOC/infra review — attachment: evidence_log.tar.gz
+3) Proposed commercial remediation: pro-rated credit for affected usage window and a one-time operational review call with our serving runtime team. I'll follow up with a proposed credit amount by 12/2 17:00 PT.
+
+If this timeline works, we'll schedule a 30-minute postmortem walkthrough on 2027-12-06 with your platform team.
+
+Immediate ask: can you confirm whether the routed longgen tag covers all of your production flows that saw failures? If not, please send the sample request IDs you included prior and we'll expand routing scope.
+
+Ben Carter
+Director, Customer Solutions
+Redwood Inference
+Attachments: incident_timeline.pdf, kpi_snapshot.csv
+
+From: Priya Raman <priya.raman@skybound.ai>
+To: Ben.Carter@redwood.com
+Cc: Alex Mercer <alex@skybound.ai>, support@skybound.ai
+Date: Fri, 3 Dec 2027 16:48:00 -07:00
+Subject: Re: Skybound — immediate mitigation update and next-step package
+
+Ben —
+
+Appreciate the clear update and the evidence bundle. The routed longgen tag covered 80% of impacted flows; we've just uploaded three additional sample IDs to your ticket (SB-1129) that correspond to batch jobs we run off-hours. Please include those in the routing rule and the evidence timeline.
+
+The proposed 12/06 walk-through works for us; Priya and Alex will be on the call. In the meantime, our compliance team will review the evidence bundle and reach out if they need further artifacts.
+
+Thanks for the rapid response — means a lot at this scale.
+
+— Priya Raman
+Platform Reliability Lead
+Skybound AI

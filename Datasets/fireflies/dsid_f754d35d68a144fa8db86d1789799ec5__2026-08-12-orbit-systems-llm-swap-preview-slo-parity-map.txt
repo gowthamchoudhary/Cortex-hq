@@ -1,0 +1,88 @@
+Orbit Systems LLM Swap Preview: SLO & Parity Mapping
+
+Meeting header:
+Date: 2026-08-12
+Start: 16:00 PDT
+Duration: 57m
+Attendees (Redwood): Alice Johnson (AE), Marcus Lee (Solutions Eng), Priya Khatri (Product)
+Attendees (Orbit): Daniel Park (Head of ML), Sofia Ruiz (Platform), Ethan Cole (CTO), Maya Lin (Data Eng)
+
+Summary (auto):
+Quick preview/demo focused on parity mapping from Orbit's current mix (OpenAI + Anthropic + Together) to Redwood API. Primary goals: validate functional parity for existing endpoints (chat, streaming, function/tool-calling, embeddings), discuss SLOs (p99 latency targets), cost tradeoffs and private deployment options (VPC/KMS). Agreed next steps: share parity spreadsheet, run small pilot with 2 prompt families, exchange security docs.
+
+Topics:
+- API parity: chat vs streaming vs function calls
+- Tokenization and sampling differences
+- Embeddings alignment and dimensional parity
+- Latency SLOs, batching and KV cache implications
+- Dedicated vs hosted vs private (VPC/KMS)
+- Security: SOC2, KMS, SSO
+- Pilot plan and benchmarks
+
+Transcript body:
+[00:00] Alice Johnson: Hey everyone, thanks for jumping on. Quick intros from the Redwood side, I'm Alice, AE on this account, Marcus is our SE who will run the parity and perf side. Priya is product and will chime on Optimize suggestions.
+[00:10] Daniel Park: Hey all, Daniel here. We're excited to see how close we can get to parity, we run a mix of OpenAI for chat, Anthropic for safety experiments and Together for some tuned LLMs. Main ask: minimal regressions and predictable p99 latency under load.
+[00:22] Marcus Lee: Great, thanks Daniel. To set expectations, we'll map feature-by-feature: request/response shapes, streaming behavior, function/tool calling surface, embeddings dims, and sampling controls. Also we'll propose a pilot that measures cost and tail latency.
+[00:38] Sofia Ruiz: Quick infra note — Orbit runs in GCP, we have strict VPC peering requirements and use Cloud KMS. We want to know if you support a customer-managed KMS in a private deployment.
+[00:48] Priya Khatri: Yes we do. For Redwood Private we support customer KMS in VPC and we have an HSM option for enterprise. We'll share the exact integration notes in the security pack.
+[00:59] Ethan Cole: How about SSO and SCIM? We need role-based access and audit logs for model calls for compliance.
+[01:05] Alice Johnson: We support SSO (SAML/OIDC) and SCIM for provisioning, plus token-level audit logs in Console. We'll include example audit payloads.
+[01:14] Daniel Park: Ok, let's dive into parity. Our biggest pain is subtle differences in streaming and function calling between providers; we rely on streaming partial responses with a stable token stream and then a final delta.
+[01:26] Marcus Lee: Right. Redwood's streaming follows chunked events similar to OpenAI's server-sent events. One difference to watch for: the chunk framing for function call preambles can differ, so we'll provide a small shim in the parity sheet — nothing big but important for low-latency clients.
+[01:40] Maya Lin: When you say function call shim, do you mean we have to change client logic? We have long-lived websocket clients in product.
+[01:46] Marcus Lee: Potentially minimal parsing tweak. We'll annotate exactly where to change — typically it's a few lines to detect the "name"/"arguments" payload ordering. If you want zero-change, we can run a small middleware proxy as part of the pilot.
+[02:00] Daniel Park: Embeddings — we use Anthropic for some semantic search vectors and Together for others. Important that dims and normalization are compatible or we need reindexing.
+[02:10] Priya Khatri: We'll map your existing embedding dims to Redwood's model choices. Redwood supports multiple embedding models and we can match dims. We'll flag if retraining/reindexing is required. In many cases we can provide a migration strategy that minimizes reindex work by mapping to the closest dims and running a delta-reindex.
+[02:30] Sofia Ruiz: Tokenization differences have bitten us before. How do you handle tokenizer mismatches and token counting for billing?
+[02:36] Marcus Lee: Good callout. Tokenization can vary across model families. For billing we provide transparent token accounting per request and an SDK util to compute token counts locally with our tokenizer that mirrors server-side. We'll share the tokenizer reference and a lightweight python package you can run in CI.
+[02:50] Ethan Cole: Performance — our target is p99 < 850ms for 512-token responses under baseline qps. Can Redwood meet that on hosted or do we need dedicated?
+[03:00] Marcus Lee: Depends on model and seq length. For many open-weights style models we see p50/p95 fine on hosted; p99 tends to improve on Dedicated with reserved GPUs and pinned KV cache to avoid cold cache misses. In the parity sheet we'll show rough latency ranges for the models you use and recommend Dedicated if you require consistent p99 under sustained load.
+[03:20] Daniel Park: Cost delta — we need an apples-to-apples compare with our current spend.
+[03:24] Alice Johnson: We'll produce estimated cost per 1M tokens with your workload mix. Redwood Optimize will also recommend batching and KV cache configs to reduce per-token cost while meeting your latency SLOs.
+[03:36] Maya Lin: About KV cache — our chat use relies heavily on cached KV across turns to reduce compute. How does Redwood manage KV expiry across sessions?
+[03:46] Marcus Lee: We have per-session KV caching plus an optional prefix cache for common system prompts. Cache TTLs are configurable and you can pin caches for dedicated workloads. The tradeoff is memory vs cost; we'll recommend settings in the config section of the pilot.
+[03:58] Daniel Park: Any gotchas moving from Together models specifically? We rely on some of their fine-tuned variants.
+[04:05] Marcus Lee: Together's tuned models sometimes use different layernorm variants and quantization assumptions. We can run a quick transfer eval — run your sample prompts through the Redwood-equivalent + quantization profile and measure regression. Often it's a small delta; when it's not, we can suggest light re-finetuning or using Redwood's tuned catalog model variants.
+[04:24] Sofia Ruiz: Security — show us the SOC2 report, any pen tests? We need to present to our security committee.
+[04:30] Alice Johnson: We'll share SOC2 Type II and our recent third-party pen test report in the security packet. Also include network architecture for VPC peering and the KMS integration notes.
+[04:40] Ethan Cole: Does Redwood support egress filtering and private endpoints? We cannot allow public internet egress for some traffic.
+[04:46] Priya Khatri: Yes private endpoints and enforced egress policies are supported in Redwood Private. We'll attach the deployment diagram.
+[04:52] Daniel Park: Ok, pilot specifics — what do you need from us to run the initial bench?
+[04:58] Marcus Lee: We'll need 2 representative prompt families (you mentioned heavy tail and short transactional prompts), expected QPS, desired sequence lengths, and one embedding workload sample. With that we will:
+  - Map API calls (chat/chat-stream/function calls) and provide a shim/adapter example
+  - Run 24-72h pilot measuring p50/p95/p99, token cost, and output quality deltas on your eval set
+  - Produce a pilot report and recommended config (Dedicated vs hosted, batching, KV TTL, quantization profile).
+[05:32] Maya Lin: How do you measure output quality? We have safety and hallucination sensitivity metrics.
+[05:36] Marcus Lee: We use a mix: exact-match for deterministic tasks, embedding-similarity for semantic tasks, and a few safety heuristics plus your labeled examples. We'll run both automated evals and a small human-in-loop review for safety-sensitive queries.
+[05:50] Daniel Park: Anything special about API rate limits? We currently throttle client-side assuming OpenAI rate buckets.
+[05:56] Alice Johnson: We have account-level rate limits on hosted, can configure higher burst limits for Dedicated. Rate limit responses include headers similar to industry norms so your throttle logic should port easily. We'll document the exact header names.
+[06:08] Sofia Ruiz: For the SDK, do you have language support for Java, Node, Python?
+[06:12] Marcus Lee: Python, Node, Java and Go SDKs. The Node SDK has a small streaming helper for websockets. We'll share links to the SDK repo and a code sample of how to swap endpoints.
+[06:22] Ethan Cole: Does the Redwood Console let us trace per-route latency and correlate tokens to cost? That's crucial for our billing back to product teams.
+[06:29] Priya Khatri: Yes, Console has per-route token breakdowns, per-model cost estimates, and trace view to correlate requests to spans and costs. You can export CSVs for internal chargeback.
+[06:40] Daniel Park: Ok, one more question — multi-region routing. We need failover to a second region and prefer routing by latency.
+[06:46] Marcus Lee: Smart routing supports region and waypoint policies; we can configure primary/secondary regions and automatic fallback. We also support model variant fallback when capacity constrained.
+[06:56] Maya Lin: Can you show a quick demo of the parity mapping spreadsheet and the small adapter snippet?
+[07:02] Marcus Lee: Sure — screen share starts. [screen sharing noises] Here is a parity spreadsheet — columns: Provider API, Redwood endpoint, request shape diff, shim required, expected quality delta, recommended config. For example: OpenAI chat.completions -> redwood/v1/chat -> streaming chunk differences noted, shim needed for function-call preamble.
+[07:28] Marcus Lee: Code snippet: small node middleware that maps OpenAI SSE chunk events to Redwood streaming frames. We'll paste this after the call. It's ~12 lines.
+[07:36] Daniel Park: Looks reasonable. Would you be willing to run a blind A/B on 5k prompts comparing outputs?
+[07:42] Alice Johnson: Absolutely — that's part of the pilot scope, we'll run an A/B, collect quality metrics and present results.
+[07:48] Ethan Cole: Licensing and pricing — can you give a ballpark for reserved Dedicated pricing?
+[07:53] Alice Johnson: We'll include ranges in the spreadsheet; depends on GPU type and commit. We'll include modeled costs for your expected qps and token volumes.
+[08:02] Daniel Park: Great. Any remaining risks you foresee?
+[08:06] Marcus Lee: Biggest risks are model-specific regressions (we'll catch with A/B) and network/VPC setup delays. Those are mitigations in our runbook.
+[08:14] Alice Johnson: Recap and next steps: 1) We'll send parity-mapping sheet + adapter snippets + security packet by Friday (2026-08-14). 2) Orbit to share eval prompts and qps by Monday (2026-08-16). 3) SEs to schedule pilot kickoff week of 8/17.
+[08:30] Daniel Park: Sounds good, thanks everyone.
+[08:33] Maya Lin: Thanks.
+[08:34] Sofia Ruiz: Bye.
+[08:35] Alice Johnson: Thanks all, we'll follow up with calendar invites and the docs.
+
+End of meeting.
+Alice to share parity-mapping spreadsheet and estimated pricing by 2026-08-14
+Marcus to schedule 1h pilot kickoff with Orbit infra (wk of 8/17)
+Orbit to provide 2 representative prompt sets and 3 eval queries by 2026-08-16
+Exchange SOC2 + network architecture docs link via email
+Alice Johnson - Send parity mapping spreadsheet, sample mapping and cost delta - due 2026-08-14
+Marcus Lee - Book pilot kickoff and include SE runbook and benchmark checklist - due 2026-08-16
+Daniel Park - Share three heavy tails prompt families and expected qps - due 2026-08-16
+Sofia Ruiz - Confirm network/VPC constraints and KMS provider - due 2026-08-18

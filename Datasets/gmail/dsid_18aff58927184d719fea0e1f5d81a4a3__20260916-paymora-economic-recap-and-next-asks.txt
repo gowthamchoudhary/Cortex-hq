@@ -1,0 +1,130 @@
+Post-call recap — PayMora inference economics, levers & next steps
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Evan Reed <evan.reed@paymora.com>, Megan Liu <megan.liu@paymora.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 14 Sep 2026 15:22:00 +0000
+Subject: Post-call recap — PayMora inference economics, levers & next steps
+
+Thanks again for the time today — quick recap and the concrete next steps we discussed. I captured the pieces that matter for your finance/procurement review so you can share with Megan.
+
+Key pain points you shared
+- High cost per customer interaction when using the dispute-assist flow (chat-like prompts with variable length responses).
+- Large fraction of traffic is repetitive (same templates/questions across users) which currently re-runs full context.
+- Procurement needs a clear TCO case and a 30–60 day pilot option before committing to reserved capacity.
+
+Goals (what success looks like)
+- Reduce inference unit cost to a level that makes in-house dispute automation + agent-assist net-positive vs. manual triage (target: <$0.002 per txn).
+- Validate model output quality for compliance / audit trails.
+- 60–90 day runway to decide on reserve vs hosted.
+
+Preliminary token economics (back-of-envelope from call)
+- Avg session: ~3.5k tokens (prompt + response).
+- Baseline monthly sessions: 1.0M -> ~3.5B tokens/month.
+- Hosted list price assumption used for modelling: $0.40 per 1M tokens (we used conservative public equivalent in the attached sheet).
+- Baseline monthly spend (no levers): ~ $1,400 (this is an illustrative price placeholder in the spreadsheet, see actual lines) — see detailed model in attachment.
+
+Recommended levers & expected impact (pilot scope)
+1) Prefix (KV) caching for templated prompts — expected 30–55% token reduction on repeat flows.
+2) Workload-aware batching for async reconciliation jobs (batch size 8–16) — reduces compute overhead and amortizes KV loads.
+3) Quantized model variant for lower-cost inference on non-sensitive paths (8-bit) — 20–35% cost delta.
+4) Short-lived dedicated pool for heavy peak windows if you decide to commit (predictable unit economics).
+
+Pilot proposal (practical next step)
+- 30-day pilot: 100k sessions sampled from the dispute-assist flow, Redwood provides:
+  - Baseline run (no levers) + a run with caching + batching enabled.
+  - Dashboard with token breakdown, latency, and quality flags.
+  - One month of trial credits and a fixed-price SOW for the pilot (attached).
+
+Attachments: paymora-3month-tco-model.xlsx (detailed assumptions & sensitivity), redwood-quick-pilot-sow.pdf
+
+Next actions I’ll take
+- Send a cleaned TCO summary and a one-page exec brief for procurement (by EOD tomorrow).
+- Share quick pilot SOW + DocuSign link for review.
+
+Can you confirm the procurement threshold (monthly commit) that triggers an internal approval path? You mentioned ~$20k/month but I want that confirmed for the pilot conversation with Procurement.
+
+Thanks — Karthik
+
+Karthik Iyer
+Senior Solutions Engineer | Redwood Inference
+karthik.iyer@redwood.com | +1 (415) 555-0192
+
+
+From: Evan Reed <evan.reed@paymora.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Megan Liu <megan.liu@paymora.com>
+Date: Wed, 15 Sep 2026 09:04:00 -0400
+Subject: Re: Post-call recap — PayMora inference economics, levers & next steps
+
+Appreciate the fast follow-up, Karthik — this is useful. A few clarifying Qs from my side before I loop procurement: 
+
+1) Latency SLOs: our customer-facing flows need <250ms p95. Will caching change tail latencies?
+2) Freshness: for complaint text we need near-real-time facts (cannot serve stale KV responses for >10m). How does Redwood handle TTLs and invalidation?
+3) Conservatism on pricing: procurement will want an executive one-pager that shows baseline vs. three lever combos with dollarized outcomes. Can you include absolute $ numbers rather than only %s?
+
+Also — procurement threshold: we typically trigger a formal procurement review for anything >$20k/mo. For pilot, they need either a short-term credit or a paid POC under $20k. If you can do a 30-day pilot credit + an exec one-pager, I can get Megan to route to procurement this week.
+
+Thanks, Evan
+Evan Reed
+Head of Product | PayMora
+evan.reed@paymora.com
+
+On Tue, Sep 14, 2026 at 15:22, Karthik Iyer <karthik.iyer@redwood.com> wrote:
+> Thanks again for the time today — quick recap and the concrete next steps we discussed...
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Evan Reed <evan.reed@paymora.com>, Megan Liu <megan.liu@paymora.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Thu, 16 Sep 2026 14:12:00 +0000
+Subject: Re: Post-call recap — PayMora inference economics, levers & next steps
+
+Evan — quick answers and an updated, dollarized sketch in the attached sheet. High level numbers below (pilot-sized run, 100k sessions/mo):
+
+Assumptions used in the table (see tab "Pilot-sample"):
+- Avg session 3.5k tokens.
+- Baseline hosted unit price used in model: $0.40 per 1M tokens (conservative).
+
+Pilot (100k sessions / month) — ballpark costs
+- Baseline (no levers): 100k * 3.5k tokens = 350M tokens -> cost = $140.00 (model placeholder).
+- With prefix caching (avg 40% reduction) + batching for async 8x (where applicable): effective tokens ~ 140M -> cost = $56.00.
+- With quantized model-path for 30% of requests (cheaper variant): blended cost to ~$42.00.
+
+Notes on numbers: the absolute dollar figures in the sheet are illustrative and use conservative per-token pricing; the point is the relative delta and operational savings you'll see once we validate on your live traffic. I also included two scenarios where we assume Redwood Dedicated reserved pricing (committed) vs hosted burst pricing.
+
+Answers to your questions:
+1) Latency: prefix caching reduces token volume but for cache-miss paths the p95 is the same as hosted; we can guarantee sub-250ms p95 for short prompt/responses in our Dedicated pool. For hosted, p95 varies by model and length; the pilot includes p95 charts.
+2) Freshness & TTLs: we support per-key TTLs and explicit invalidation APIs. By default we suggested a 10-minute TTL for dispute templates and immediate invalidation on state change.
+3) Exec one-pager + DocuSign: attached SOW and a one-page exec summary (see redwood-quick-pilot-sow.pdf). I can also produce a single-slide procurement summary with the exact $ scenarios Megan wants — will send by EOD PST.
+
+Attachments: paymora-3month-tco-model.xlsx (updated with pilot numbers), redwood-quick-pilot-sow.pdf
+
+If this looks good, can you confirm Megan is the procurement lead I should send the DocuSign to? Also can you confirm the internal procurement email and whether they need a PO vs DocuSign?
+
+— Karthik
+
+Karthik Iyer
+Senior Solutions Engineer | Redwood Inference
+
+On Wed, Sep 15, 2026 at 09:04, Evan Reed <evan.reed@paymora.com> wrote:
+> Appreciate the fast follow-up, Karthik — this is useful...
+
+From: Evan Reed <evan.reed@paymora.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Megan Liu <megan.liu@paymora.com>
+Date: Thu, 16 Sep 2026 18:05:00 -0400
+Subject: Re: Post-call recap — PayMora inference economics, levers & next steps
+
+Thanks — that helps a lot. I’m looping in Megan (procurement) here. Megan — can you confirm the PO vs DocuSign preference and whether we have an existing Redwood vendor record?
+
+We can do a 30-day pilot but procurement wants a clear cap: if Redwood provides a 30-day credit that caps our exposure at $5k, procurement can approve the pilot this week. Can Redwood commit to that? Also propose a 30 min follow-up next Wed (22 Sep) at 10:00am ET to kick off scope and data access.
+
+If procurement confirms DocuSign is fine, we’ll need the exec one-pager + the SOW and the DocuSign link.
+
+Evan
+
+Evan Reed
+Head of Product | PayMora
+
+On Thu, Sep 16, 2026 at 14:12, Karthik Iyer <karthik.iyer@redwood.com> wrote:
+> Evan — quick answers and an updated, dollarized sketch in the attached sheet...

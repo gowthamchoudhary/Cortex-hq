@@ -1,0 +1,71 @@
+ForgeWell LLM fit & hosting paths discovery
+
+Intro call to scope model selection for customer-facing claims assistant. Discussed hosted vs dedicated vs private, context length needs (8k vs 32k), multilingual support, and tool-calling for policy lookups. Agreed to run a short Dedicated pilot and exchange benchmark materials.
+Meeting header:
+Date: 2028-08-14
+Start: 15:30 UTC
+Dur: ~52 minutes
+Attendees: Maya R. (Redwood AE), Jamal N. (Redwood SE), Priya Singh (Redwood SE), Priya Menon (ForgeWell Head of AI), Ethan Cole (Platform), Liam O'Connor (Security), Sara Lim (Product)
+Links shared: Redwood pilot deck (link), security pack (link), shared bench spreadsheet placeholder: /redwood/pilots/forgewell/benchmarks.xlsx
+
+Auto-generated summary: short: ForgeWell building consumer claims assistant, needs long-context retrieval for multi-doc claims, multilingual support for EN/ES/FR/ZH, strong security/SSO and data residency asks.
+
+[00:00] Maya: hey everyone thanks for joining, um I'm Maya from Redwood, i'll hand off to Jamal to do a quick tech run and then we'll talk hosting options and next steps
+[00:12] Jamal: hey, thanks Maya. hi Priya, Ethan, Liam, Sara. quick check, is this still mostly about the claims assistant and live customer chat + backend policy lookup?
+[00:20] Priya Menon: yep that's right. we have existing rules engine but want an LLM layer for summarization and auto-fill suggestions, and also retrieval across multiple policy docs, pdfs, attachments
+[00:33] Ethan: and we need it to work across english and spanish first, french later, and maybe simplified chinese for a pilot region
+[00:40] Jamal: great. couple of quick qualifiers: latency SLO you expect? per-query tokens? and any constraints on hosting — are you open to Redwood Hosted or do you require private VPC/on-prem?
+[00:52] Priya Menon: latency ideally sub-600ms for the user-facing generation. for batch async tasks it's fine to be slower. on hosting — our security team prefers Dedicated or Private; we can do Dedicated reserved capacity if that's enough for isolation, otherwise Private VPC for on-prem sensitive data.
+[01:10] Liam: (security) we need SOC2, SSO via SAML, audit logs for prompt history, and support for customer-managed KMS/HSM for keys. also data residency: EU for EU customers
+[01:25] Maya: yep we support all of that, we have SOC2, SAML/SSO, RBAC and KMS integrations. for Private you'd get a managed control plane and customer-managed networking. we'll share the security pack after this call.
+[01:40] Sara: question on context lengths — some claims involve dozens of attachments, pdfs, and long transcripts. what's realistic? 8k enough? 32k? more?
+[01:52] Jamal: depends on approach. for retrieval+KV cache you'd usually keep the prompt window to 8k for cost/latency, and rely on tool-calling/retrieval to bring in the right snippet. we also support 32k models if you want fewer trips to retrieval but cost/latency goes up. for some open models we can do 32k context with quantized variants and get decent perf.
+[02:15] Priya Menon: are you recommending hosted vs dedicated for that use case?
+[02:20] Jamal: if you want predictable throughput and data isolation without managing infra, Dedicated reserved pools are a good middle ground. Hosted is fastest to start but shared. Private is for strict regulatory/air-gapped setups. many customers do a Dedicated pilot to validate latency/cost then move to Private if they need tighter network controls.
+[02:36] Ethan: ok that matches our initial thinking. next, model selection — we want open models to reduce vendor lock and cost. are there specific open models you'd recommend for cross-lingual summarization and tool-calling?
+[02:48] Jamal: yes. Quick callouts: Llama-family (Llama-2 variants) for strong base, Mistral picks up on many benchmarks, some newer 8/16/70B open models vary. for multilingual, some families handle spanish/french well, others less so — we'd test on your prompts. also function/tool-calling support differs; Redwood has structured tool-calling and streaming support across our runtime but model compatibility depends on function-tokenization semantics.
+[03:18] Priya Menon: we care about hallucination suppression when pulling policy clauses and exactness for citations. how do you measure that?
+[03:25] Jamal: we run evals tied to prompt sets — exact-match recall for citations, and we can run reranking + grounding via retrievers to reduce hallucinations. Redwood Optimize can recommend quant profiles and reranking thresholds. we'll demo that in the pilot.
+[03:40] [00:04:00] Speaker 3: (mumble) um when you say retriever, are you talking about vector store?
+[03:50] Jamal: yes, vector store + hybrid retrieval, and prefix KV cache so repeated prompts are faster. for attachments we typically chunk and embed then store in a vector DB.
+[04:05] Maya: i want to call out costs — for 32k context models per-token costs are notably higher; part of the pilot is to show cost/bene tradeoffs. we'll include token-level cost breakdowns by route in the bench sheet.
+[04:20] Ethan: also curious about throughput — we expect bursts during claims spikes; autoscaling?
+[04:26] Jamal: Dedicated has configurable autoscaling and burst capacity policies; Private can autoscale but depends on infra you provide. fallback policies are available to route to a cheaper model if capacity constrained.
+[04:40] Priya Menon: any constraints on tool-calling? we have internal APIs for policy lookup, payments, and a signature microservice. we want the model to call the right API and only surface sanitized outputs to users.
+[04:53] Jamal: Redwood supports structured tool-calling and can enforce output schemas and sanitization rules; you can configure per-route policies. we also support function-like calls where the model emits JSON and Redwood validates it. there are a few caveats with some open models around tokenization of function markers which we note in the bench doc.
+[05:12] Liam: on encryption, will logs contain prompts? we need redact for PII.
+[05:18] Maya: you can configure prompt logging policies. for Private we can disable storage or store only hashed values; for Dedicated we offer retention controls and redaction pipelines. KMS integration for keys as requested.
+[05:31] [00:10:00] Jamal: quick live example — we ran a small test on 8k context Llama-2-70b quantized and on a 32k Mistral variant. results: 8k Llama with retriever + rerank hit our latency target ~450ms median in Dedicated pool, 32k Mistral gave fewer retrieval hops but median latency was ~780ms and cost ~2.4x. caveat: Mistral 32k had better multilingual quality on Spanish prompts we checked but we need your prompt set to be sure.
+[06:05] Priya Menon: that's helpful. can you put those numbers in the sheet?
+[06:09] Jamal: yes, we'll populate as part of the benchmark doc.
+[06:12] Sara Lim: about the pilot duration and ops — what do you recommend? 2 weeks? 30 days?
+[06:18] Maya: most customers do a 2-week Dedicated pilot: we provision a small reserved pool, run your prompt set plus synthetic traffic, do a security review, and then iterate. if you need more time for regulatory signoff, we can extend.
+[06:31] Ethan: fine. what infra access do you need from our side for Dedicated?
+[06:36] Jamal: for Dedicated we need network peering or VPN, SSO metadata, and an initial data sample for evals; for Private we'd ask for an infra contact to install the package (if on-prem). we'll share an infra checklist.
+[06:50] [00:20:00] Priya Menon: question on governance — version pinning and rollbacks? we want to avoid model regressions in prod.
+[06:58] Jamal: Redwood Console supports version pinning, canary rollouts, A/B tests, and automatic fallback to previous variants if the new model underperforms per your eval suite. we also emit tracing for token-level cost broken down by route.
+[07:15] Liam: and compliance: can we get audit logs for every prompt+response, and admin role separation?
+[07:22] Maya: yes audit logs are available; RBAC with admin/engineer roles is standard. we'll include sample logs in the security pack.
+[07:33] Sara Lim: a little concern — some vendors force you into API-first flows that are hard to migrate from. how portable is Redwood if we ever want to self-host?
+[07:43] Jamal: portability is a goal — models and configs are abstracted; you can move from Hosted to Dedicated to Private with the same API and routing policies. model artifacts for Private are deployed under your control.
+[07:56] Priya Menon: okay next — evaluation metrics: beyond latency and cost, we want hallucination rate, citation exactness, and multilingual BLEU-style metrics. can you measure those?
+[08:08] Jamal: yes - we can run those evals; Redwood Optimize has hooks to run your tests and raise regression alerts on predetermined thresholds.
+[08:18] [00:30:00] Maya: quick recap and notes on deliverables — we'll send the benchmark template, populate initial example numbers for 8k vs 32k on two model families, share security pack, and propose a 2-week Dedicated pilot for week of 8/21.
+[08:34] Priya Menon: on the pilot — assuming acceptable security review and SLA, what ramp looks like after pilot?
+[08:40] Maya: usually teams either expand Dedicated reserved capacity or go Private if they need extra network control. we can propose a tiered reserved commit to manage cost commitments.
+[08:50] Ethan: another specific — multilingual: do you recommend separate multilingual models or single large multilingual model?
+[08:56] Jamal: tradeoffs: single large multilingual models simplify pipeline but may be heavier and more expensive; language-specific models can be cheaper and faster but add routing complexity. for initial pilot we often test 1 multilingual and 1 language-specialized path.
+[09:14] Sara Lim: ok let's talk about timeline — security signoff usually two weeks with our legal and security teams; procurement another month.
+[09:23] Maya: understood — we'll align kickoff to your internal approvals and try to accelerate the security review with pre-filled docs.
+[09:30] [00:40:00] Jamal: small tech caveat — some open models have spotty function-call semantics which can cause the model to format calls slightly differently; for critical tool-calling we recommend we either wrap the model responses with a lightweight validation layer or use a model variant that we've validated. we'll document exact model compatibility in the bench sheet.
+[09:52] Priya Menon: any rough cost ballpark for Dedicated for a small reserved pool for 2 weeks?
+[09:58] Maya: we'll provide a conservative estimate in the bench doc; initial ballpark is $Xk/month equivalent for the short pool — we'll convert to per-token + reserved cost in the spreadsheet.
+[10:08] Liam: last question — data residency: EU-only for EU customers. can Redwood route requests so EU data never leaves region?
+[10:13] Jamal: yes — smart routing by policy can keep requests in-region and fallback to same-region replicas. Private deployments can be fully localized.
+[10:22] Maya: ok i'll summarize the immediate next steps in an email and attach the bench sheet and security pack.
+[10:29] Priya Menon: thanks everyone, this was helpful.
+[10:32] Maya: thanks all, we'll follow up with materials and proposed pilot dates.
+
+End transcript.
+
+Notes on transcription: occasional speaker mislabels and minor garbled words (typical of call transcripts).

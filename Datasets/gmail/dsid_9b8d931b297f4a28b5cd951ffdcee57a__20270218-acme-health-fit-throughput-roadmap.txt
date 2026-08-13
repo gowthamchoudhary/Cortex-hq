@@ -1,0 +1,119 @@
+ACME Health — model fit recap & throughput roadmap
+
+From: Priyom Das <priyom@redwood.ai>
+To: Maria Gonzalez <m.gonzalez@acmehealth.com>, Julian Park <j.park@acmehealth.com>
+Cc: Neha Kapoor <neha_k@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: Thu, 18 Feb 2027 15:12:00 -0800
+Subject: ACME Health — model fit recap & throughput roadmap
+
+Thanks again for your time today — really helpful call. Quick recap and proposed next steps so we’re all aligned: 
+
+Summary of discovery notes:
+- Primary user flow: clinical summarization and triage for inbound referral messages (structured outputs + extract entities).
+- Key constraints: low tolerance for hallucinations on PHI fields, soft SLA for token latency (95th < 400ms for short requests), throughput target ~15k tokens/min for batch nightly processing.
+- Data for eval: you’ll share ~1.2k de-identified samples (we already received a preview set).
+
+Redwood recommended next steps (short list):
+1) We’ll run an initial 3-model fit evaluation (7B, 13B, 34B families) against your prompt set and golden-labels. We’ll report accuracy, entity F1, and a simple hallucination metric.
+2) Parallel micro-bench: baseline FP16 runs + AWQ-4/6 + GPTQ-4 + FP8 (where supported) to surface throughput / quality tradeoffs.
+3) Canary plan: if eval looks good, we’ll propose a 2-week canary on Dedicated with automatic fallback to FP16 for safety-critical routes.
+
+Deliverables we’ll share by EOD tomorrow (attached/links):
+- acme-eval-promptset-v1.jsonl (prompt + expected outputs)
+- latency-benchmark-20270218.csv (initial microbench harness)
+- preliminary schedule for canary + decision gates
+
+Open questions for you:
+- Are there any remaining PHI constraints we should be aware of that would prevent us from running AWQ/FP8 experiments on your de-id dataset?
+- Who will own the PO/contract path if we proceed to Dedicated? (Finance contact + procurement timeline)
+
+Proposed near-term dates:
+- Deep eval results: 2027-02-19 (internal) / 2027-02-22 (share with ACME)
+- Canary start window: 2027-03-01 to 2027-03-05
+
+Thanks — I’ll loop in Neha with the technical notes.
+
+—Priyom
+Priyom Das | Account Executive, Redwood Inference
+priom@redwood.ai | +1 415 555 0172
+
+Attachments: acme-eval-promptset-v1.jsonl, latency-benchmark-20270218.csv
+From: Julian Park <j.park@acmehealth.com>
+To: Priyom Das <priyom@redwood.ai>
+Cc: Maria Gonzalez <m.gonzalez@acmehealth.com>
+Date: Thu, 18 Feb 2027 17:03:00 -0800
+Subject: Re: ACME Health — model fit recap & throughput roadmap
+
+Thanks Priyom — useful summary. A couple quick clarifying items from our side: 
+
+1) We are comfortable with de-identified samples for the eval, but we need confirmation that models running with AWQ/FP8 on Dedicated do not cause any change in access controls or logging behavior.
+2) For the micro-bench numbers: can you give a rough expected throughput delta between AWQ-4, GPTQ-4, and FP8 on a standard A100/80GB vs an nvidia T4-equivalent? Our infra team wants a ballpark to evaluate hosting options.
+
+We’re generally leaning toward starting with a smaller model if quality holds. Also availability — Maria and I can do a 30min follow-up Monday 2027-02-22 10:00am PT.
+
+—Julian
+Julian Park | VP Product, ACME Health
+j.park@acmehealth.com
+
+From: Neha Kapoor <neha_k@redwood.ai>
+To: Julian Park <j.park@acmehealth.com>, Maria Gonzalez <m.gonzalez@acmehealth.com>
+Cc: Priyom Das <priyom@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: Fri, 19 Feb 2027 09:45:00 -0800
+Subject: Re: ACME Health — model fit recap & throughput roadmap (technical notes)
+
+Hi Julian / Maria — Neha here (solutions engineer). I ran the initial microbench against your preview prompt set and a small gold set (n=150) overnight. High level results and recommended starting point below. Full raw CSV attached.
+
+Executive recommendations:
+- Start: Mistral-13B (FP16) as the functional baseline for quality checks. If accuracy and entity F1 are within your acceptance thresholds, run AWQ-6 for latency-sensitive endpoints and GPTQ-4 for batch-heavy pipelines where throughput matters more than the last % of quality.
+- Safety: for any route that writes back PHI to patient records, serve FP16 or have FP16 fallback. Quantized variants should only be used on de-identified or review queues until we pass an expanded hallucination validation.
+
+Tradeoffs we observed (summary):
+- FP16 baseline (Mistral-13B): entity F1 0.88, hallucination rate 3.2% (on our small gold set), median token latency 95ms on A100-80GB.
+- AWQ-6 (13B): entity F1 0.86 (-0.02 delta), hallucination 3.8% (+0.6pp), median latency 45ms (~2.1x throughput uplift vs FP16).
+- GPTQ-4 (13B): entity F1 0.87 (-0.01 delta), hallucination 3.5% (+0.3pp), median latency 60ms (~1.6x uplift).
+- FP8 experimental (13B): entity F1 0.84 (-0.04 delta), hallucination 4.8% (+1.6pp), median latency 32ms (~2.8x uplift). FP8 has larger variance on rare-entity tasks (we saw 4 cases of swapped entity labels in the 150 sample set).
+
+Notes on operational behavior: 
+- AWQ provides the best balance for latency-sensitive interactive routes (lower quantizer noise on prefix tokens, better KV cache compatibility).
+- GPTQ tends to preserve tail-quality better for rare tokens but is costlier to compile and has slightly higher memory footprint at runtime compared to AWQ-coded kernels.
+- FP8 gives the biggest throughput win but increases risk on hallucination and entity fidelity; requires a stricter QA gate before production.
+
+Suggested configuration by route:
+- Clinical triage (interactive): Mistral-13B AWQ-6 with FP16 fallback, prefix/KV cache enabled, 95th latency SLO monitor.
+- Nightly batch (bulk summarization): Mistral-13B GPTQ-4 (or AWQ-4 if you want simpler ops), run in Dedicated reserved capacity to hit throughput targets.
+- Safety-critical writes: FP16 only.
+
+Benchmarks / artifacts attached: latency-benchmark-20270218.csv, tradeoff-matrix-20270219.xlsx. Also uploaded the full evaluation output here: https://drive.google.com/drive/folders/1a2b3c-acme-eval
+
+Quick operational checklist for your infra team:
+- Confirm whether Dedicated nodes will be allowed to run custom kernels (AWQ/GPTQ) or if we should keep quantized experiments in our hosted sandbox.
+- Decide on fallback policies (auto-fallback to FP16 on hallucination threshold breach).
+
+If helpful I can join Monday’s 10am call for a 15–20 minute technical deep-dive.
+
+—Neha Kapoor
+Solutions Engineer, Redwood Inference
+neha_k@redwood.ai | +1 510 555 0128
+
+Attachments: tradeoff-matrix-20270219.xlsx, latency-benchmark-20270218.csv
+
+On Thu, Feb 18, 2027 at 15:12 Priyom Das <priyom@redwood.ai> wrote:
+> Thanks again for your time today — really helpful call. Quick recap and proposed next steps so we’re all aligned:
+> ...
+From: Priyom Das <priyom@redwood.ai>
+To: Julian Park <j.park@acmehealth.com>, Maria Gonzalez <m.gonzalez@acmehealth.com>
+Cc: Neha Kapoor <neha_k@redwood.ai>
+Date: Fri, 19 Feb 2027 10:12:00 -0800
+Subject: Re: ACME Health — model fit recap & throughput roadmap
+
+Appreciate the quick turnaround Neha and the clear guidance. Sounds like a sensible, staged approach. Next steps from our side: 
+
+- Action: Neha to drop a short canary run playbook + rollout checklist (by EOD Fri).
+- Action: ACME to confirm procurement path (PO/contacts) and whether we can run quantized experiments on Dedicated or if they prefer hosted sandbox first.
+- Scheduling: confirm Monday 2027-02-22 10:00am PT for the follow-up.
+
+I’ll send a calendar invite. If nobody objects, we’ll plan to start the expanded eval tomorrow and surface a full report by Monday.
+
+—Priyom
+Priyom Das | Account Executive, Redwood Inference
+priom@redwood.ai

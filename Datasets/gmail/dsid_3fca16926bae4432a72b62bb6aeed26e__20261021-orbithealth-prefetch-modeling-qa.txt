@@ -1,0 +1,161 @@
+MAP: Prefetch modeling & unit-price validation for Orbit Health
+
+From: Jordan Avery <j.avery@orbithealth.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Tue, 20 Oct 2026 16:12:00 -0700
+Subject: MAP: Prefetch modeling & unit-price validation for Orbit Health
+
+Hannah / Ben —
+
+Thanks again for yesterday's demo. The execs liked the latency numbers; before we lock timelines into the MAP we need a short (2–3 item) sanity check on unit economics that we can include in the plan for procurement. High level asks:
+
+- Given our expected traffic profile (see summary below) can you confirm tokens-per-request assumptions and an estimate of tokens/$ under a dedicated-prefetch configuration?
+- What caching and batching assumptions would you bake into the MAP to preserve our latency SLO (p95 < 180ms) while keeping token spend reasonable?
+
+Quick traffic summary (Orbit product):
+- 25k daily active users; peak concurrency ~220 sessions/min
+- Avg payload ~180 tokens request / 620 tokens response (multi-step flows)
+- 40% of requests are repeat prompts with high prefix overlap
+
+We are trying to reconcile your pricing to our internal model and get a mutual action plan that includes: evaluation milestones, preflight cost simulation (prefetch/caching enabled), and a 6-week pilot close timeline.
+
+Attached: none in this message — sharing the Org MAP template once procurement asks it.
+
+Appreciate a short, concrete response we can include in the MAP.
+
+—Jordan
+Jordan Avery
+Head of Product, Orbit Health
+j.avery@orbithealth.com
++1 415-555-0124
+
+
+From: Hannah Schmitt <hannah_schmitt@redwood.ai>
+To: Jordan Avery <j.avery@orbithealth.com>
+Cc: Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Tue, 20 Oct 2026 18:03:00 -0700
+Subject: Re: MAP: Prefetch modeling & unit-price validation for Orbit Health
+
+Jordan —
+
+Thanks for the clear asks. We'll keep this tight so you can paste into procurement. Ben will sketch the unit-price and discount framework; Karthik will list the operational assumptions (caching/prefetch/batch sizes) and a short sim.
+
+Proposed next steps (for the MAP):
+1) We’ll send a 1-page econ summary (tokens/$ table + key levers) by tomorrow morning.
+2) Karthik will attach a small prefetched-sim CSV with conservative/worst-case and expected-case runs.
+3) Quick 30-min alignment call Thursday to lock the MAP milestones and pilot dates.
+
+Can you confirm the contact from procurement who will own the SOW review? Also, if you can drop a short sample of the most common prompt (or one anonymized example) that helps the sim be realistic.
+
+—Hannah
+Hannah Schmitt
+Enterprise Sales, Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Jordan Avery <j.avery@orbithealth.com>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>
+Date: Wed, 21 Oct 2026 07:38:00 -0700
+Subject: Re: MAP: Prefetch modeling & unit-price validation for Orbit Health
+
+Jordan / team —
+
+Quick technical assumptions we used for the prefetched simulation (attached): prefetch-sim-results.csv
+
+1) Caching model
+- Prefix cache hit expected: 40% (per your note). We modeled low/med/high at 20/40/60%.
+- When cache hit: KV lookup only, no full decode (reduces per-request tokens consumed by ~70% on avg).
+
+2) Batching and latency tradeoffs
+- Continuous batching window: 10–15ms at peak; we modeled 3 batching strategies: none, fixed 10ms, adaptive workload-aware batching.
+- With adaptive batching and prefix cache, p95 latency simulated < 160ms for your payload distribution. We included a worst-case tail run.
+
+3) Tokens per logical request (median/95th)
+- Expected-case: request 180 tokens; response 620 tokens => 800 tokens total logical request.
+- With prefix reuse (hit): incremental token issuance ~ 240 tokens (warm response reuse + short tail decoding).
+
+4) Throughput assumptions for cost calc
+- Peak QPS modeled: 220 sessions/min -> ~3.7 QPS sustained for peak minute; our sim scales traffic to 10k concurrent to stress test possibility and derive tokens/day.
+
+Notes: the sim includes KV caching efficiencies and a conservative 15% headroom for rerenders/auxiliary calls. See attached CSV for three scenario curves.
+
+Happy to walk through the CSV on the call.
+
+—Karthik
+Karthik Iyer
+Solutions Architect, Redwood Inference
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Jordan Avery <j.avery@orbithealth.com>
+Cc: Hannah Schmitt <hannah_schmitt@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Wed, 21 Oct 2026 08:24:00 -0700
+Subject: Re: MAP: Prefetch modeling & unit-price validation for Orbit Health
+
+Jordan —
+
+Attached is the econ workbook: orbit_map_econ_v1.xlsx. Below is the 1-page summary you can paste into the MAP and procurement:
+
+Summary (two scenarios):
+- Expected MAP (prefetch + adaptive batching + 40% prefix hit):
+  - Tokens/day (modeled): ~20.8M tokens/day (aggregated requests + responses after caching reductions)
+  - Effective cost: $0.0115 per 1k tokens (after pilot discount, reserved commit guidance)
+  - Monthly estimate (30d): ~$7,200
+
+- Conservative MAP (20% prefix hit, minimal batching):
+  - Tokens/day: ~32M tokens/day
+  - Effective cost: $0.018 per 1k tokens
+  - Monthly estimate (30d): ~$17,280
+
+Key levers that move the needle:
+- Prefix cache hit rate (most impactful): improving from 20% -> 60% reduces monthly spend by ~55% in our model.
+- Batching strategy (adaptive vs none) reduces per-token run inefficiency—savings up to ~12% on token compute at peak.
+- Reserved capacity commit (3–6 month) yields additional effective unit cost reduction (~15–25%) vs on-demand.
+
+Notes & assumptions (in workbook): tokenization modeled on GPT-like tokenizer; average prompt/response sizes per Karthik's sim; infra overprovision of 20% to protect SLO during peaks. Workbook tabs: Inputs, Scenario-Curves, Sensitivity (cache/batch/discount), Pilot-Budget.
+
+If procurement wants a line-item SOW for a 6-week pilot (including sim runs, instrumentation, and two rollback windows), we can draft the SOW this week.
+
+—Ben Carter
+Director, Solutions Economics, Redwood Inference
+Attachment: orbit_map_econ_v1.xlsx
+
+From: Jordan Avery <j.avery@orbithealth.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Leah Park <leah.park@orbithealth.com>, Tom Reynolds <tom.reynolds@orbithealth.com>
+Date: Wed, 21 Oct 2026 11:03:00 -0700
+Subject: Re: MAP: Prefetch modeling & unit-price validation for Orbit Health
+
+Thanks team — this is exactly what procurement wanted. Appreciate the clear expected vs conservative numbers. A couple quick confirmations for inclusion in the MAP:  
+
+- Procurement lead: Tom Reynolds (cc'd) will own SOW and cost approvals.
+- Timeline: we’ll lock a 6-week pilot starting Nov 8 if the SOW is ready the week of Oct 25; pilot milestone: week 2 preflight sim with restricted traffic, week 4 end-to-end QA with telemetry, week 6 pilot close + decision.
+- Deliverables to include in MAP: econ workbook (Ben), preflight sim CSV (Karthik), MAP draft PDF (we uploaded a starter: orbit_map_draft.pdf).
+
+Jordan (on behalf of Orbit) — please go ahead and add these three short bullets to the MAP and I’ll circulate to procurement. We’ll take the conservative estimate for budget planning but hope to optimize during pilot.
+
+—Jordan Avery
+Head of Product, Orbit Health
+
+On Wed, Oct 21, 2026 at 08:24 AM Ben Carter <ben_carter@redwood.ai> wrote:
+> Jordan —
+>
+> Attached is the econ workbook: orbit_map_econ_v1.xlsx. Below is the 1-page summary you can paste into the MAP and procurement:
+>
+> Summary (two scenarios):
+> - Expected MAP (prefetch + adaptive batching + 40% prefix hit):
+>   - Tokens/day (modeled): ~20.8M tokens/day (aggregated requests + responses after caching reductions)
+>   - Effective cost: $0.0115 per 1k tokens (after pilot discount, reserved commit guidance)
+>   - Monthly estimate (30d): ~$7,200
+>
+> - Conservative MAP (20% prefix hit, minimal batching):
+>   - Tokens/day: ~32M tokens/day
+>   - Effective cost: $0.018 per 1k tokens
+>   - Monthly estimate (30d): ~$17,280
+>
+> Key levers that move the needle: 
+> - Prefix cache hit rate (most impactful): improving from 20% -> 60% reduces monthly spend by ~55% in our model.
+> - Batching strategy (adaptive vs none) reduces per-token run inefficiency—savings up to ~12% on token compute at peak.
+> - Reserved capacity commit (3–6 month) yields additional effective unit cost reduction (~15–25%) vs on-demand.
+>
+> —Ben
+>

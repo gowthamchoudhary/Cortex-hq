@@ -1,0 +1,91 @@
+Amberleaf VPC Egress, DNS & KV-Cache Batching Diagnostics
+
+Deep diagnostic session focusing on intermittent P95 latency spikes during peak hours for Amberleaf's private VPC deployment. Main suspects: VPC egress NAT capacity, DNS resolver timeouts, and suboptimal KV cache sharding causing tail latency. Discussed temporary mitigations, long-term architectural changes (PrivateLink multihoming, dedicated NAT pools, resolver caching, KV cache affinity), and a plan for an on-prem load test + synthetic traffic run. Agreed next steps and owners.
+P95/P99 latency investigation
+KV cache shard affinity & batching
+VPC egress/NAT capacity and hairpinning
+DNS resolver TTLs and outbound resolver path
+PrivateLink multihoming vs NAT gateway
+Quantization/throughput tradeoffs (brief)
+Anna Park: Share VPC subnet table + NAT gateway metrics by AZ (due 2027-04-07)
+Marco Ruiz (Redwood SE): Provide kv-cache affinity test harness + synthetic load script (due 2027-04-05)
+Priya Nair: Export Redwood runtime config used in pilot (model config, batch settings) to Amberleaf Slack (due 2027-04-04)
+Ritu Malhotra: Confirm required compliance artifacts (SOC2 scoping) for private deployment (due 2027-04-09)
+Run 3-hour soak with kv-cache affinity enabled and split NAT pools (Amberleaf + Redwood co-run)
+Schedule follow-up call week of 2027-04-12 to review soak results and SLOs
+Redwood to send security whitepaper and PrivateLink multihoming diagram
+Meeting header: 2027-04-02 15:00 UTC | Duration: 62m | Recording: yes
+Attendees: Ivy Chen (Redwood AE), Marco Ruiz (Redwood SE), Priya Nair (Redwood SE), Anna Park (Amberleaf Lead Infra), Devon Hale (Amberleaf Platform), Ritu Malhotra (Amberleaf Security), Samir (Amberleaf ML)
+
+[00:00] Ivy (Redwood AE): hey everyone, thanks for joining, appreciate you blocking the time. quick agenda, we want to 1) walk the telemetry you shared 2) talk through root cause hypotheses for the p95 spikes, and 3) agree mitigations and next steps. Anna, do you want to add anything?
+[00:18] Anna (Amberleaf): yeah thanks Ivy. main thing is the spikes are hitting our user-facing inference endpoints around 4–6pm PST, so it's customer-visible. we tried increasing nat gw capacity but it only helped a little. also seeing intermittent resolver timeouts.
+[00:35] Marco (Redwood SE): mmhmm, ok, thanks. Devon, can you confirm whether your inference nodes are in multiple AZs with per-AZ NAT or a shared NAT model? sometimes hairpinning across AZs can blow up tail latency.
+[00:48] Devon (Amberleaf): currently one nat gw per private subnet, so same AZ, but our load is uneven across AZs. we do have cross-az egress for retries.
+[01:05] Marco: got it. two quick flags — first, kv cache sharding: if requests frequently land on cold shards, you see tail latency because you fetch larger kv blocks, also batching behavior can be suboptimal if affinity isn't enforced. second, DNS: if resolver TTLs are low and upstream is rate-limited, you'll get spikes.
+[01:28] Samir (Amberleaf ML): quick q — the kv cache is the redwood runtime kv-cache right? is it per-model or per-cluster? we've seen our own app level caches get hot.
+[01:38] Priya (Redwood SE): yes it's the runtime kv-cache — we shard by session key by default but affinity can be tuned, we can pin shards to instances to reduce cross-shard fetches. the config we used in the pilot had default affinity which might be too loose for your traffic pattern.
+[01:56] Anna: hmm ok so if we pin shards, will that increase memory footprint? we're tight on instance vram.
+[02:06] Marco: it can, yes. pinning increases memory usage slightly because shards are sticky, but it reduces network fetches. tradeoff is memory vs tail latency. we can propose a mixed strategy — pin hot shards, leave cold shards dynamic.
+[02:25] Devon: what about quantization? could lower-precision models reduce tokens and therefore reduce kv cache churn?
+[02:33] Priya: quant helps inference throughput but doesn't change kv index size much; it can reduce per-token compute time, but the nvlink / egress paths remain the same. so it's a secondary lever.
+[02:46] Ritu (Amberleaf Security): from security perspective we need to avoid sending any PHI or reg data through public endpoints. PrivateLink is preferable; we need to understand how PrivateLink multihoming would interact with your routing and failover.
+[03:02] Ivy: good point Ritu. we'll map PrivateLink + NAT hybrid. Marco, can you sketch the options?
+[03:09] Marco: sure. Option A: route all egress via PrivateLink endpoints to Redwood private control plane — this reduces egress to public internet but requires cross-account endpoint setup and SGs. Option B: keep model runtime in-customer VPC but use dedicated NAT GW pair per busy subnet and add resolver caches. Option C: multihome PrivateLink across two regions/AZs so if an endpoint path degrades we failover without touching NAT. each has pros/cons on cost and operational complexity.
+[03:45] Devon: ok cost's a factor; dedicated NAT pairs sound cheaper than managing two PrivateLinks. but we worry about scaling nat throughput without a big bill.
+[03:56] Ivy: also, we saw in your telemetry a bunch of TCP retransmits and occasional 504s on the resolver path. can you paste the resolver logs?
+[04:05] Anna: yes uploading in chat — link is in the meeting notes (docs/amberleaf/resolver-logs-20270401). note sometimes it gloms on to a single resolver and saturates.
+[04:20] Marco: that matches. if a resolver gets slammed and clients start switching resolvers, DNS latency increases because of retries and timeouts. set longer TTL on service endpoints and add a local caching resolver (unbound or dnsmasq) per subnet, that often flattens the curve.
+[04:40] Samir: we've already got tcpdump traces; can Redwood run the kv-cache affinity profiler without us changing prod? we need a low-risk run.
+[04:51] Priya: yes we have a profiler and a non-intrusive sampling tool. recommended path: 1) mirror a fraction of traffic to a staging pool with affinity enabled, 2) run the synthetic warmup to warm kv shards, 3) compare p95. marco will share script.
+[05:08] Ivy: let's talk about immediate mitigations to reduce customer-facing impact while we validate longer fixes. suggestions?
+[05:14] Marco: short-term: increase NAT throughput (add an extra nat per hotspot subnet), add per-AZ resolver cache, and enable short lived in-flight retry limits in the runtime to avoid cascading backoff. also change batch window to slightly larger for burst workloads — that reduces per-token overhead if latency cost is acceptable.
+[05:41] Devon: would increasing batch window cause noticeable latency for interactive use? our target is sub-250ms p95 for standard prompts.
+[05:50] Priya: depends — increasing batch window from 10ms to 20–30ms adds a potential queuing latency but can drop compute wait time per token. we should test with synthetic traffic that mirrors your interarrival distribution.
+[06:06] Anna: ok agreed. we also saw specific tails that correspond with cold-starts of some shards at around 30k active sessions. is that a kv cache size limit?
+[06:16] Marco: not exactly size limit — it's a working set issue. if working set exceeds cache RAM, you get more evictions and misses. sharding scheme and affinity reduce cross-node fetches which are costlier than local memory read.
+[06:31] Ritu: about compliance — PrivateLink is ideal but we need the KMS handshake documented. can you email the HSM/KMS flow?
+[06:38] Ivy: yes Priya will share.
+[06:41] [07:02] (speaker overlap, crosstalk) Anna: sorry — are we suggesting we pin all hot users?
+[07:06] Marco: pin hot shards only. we can detect hot keys in telemetry and then pin dynamically.
+[07:15] Anna: is that reactive or can we schedule pinning ahead of peak?
+[07:19] Priya: both; you can schedule sticky periods based on known peak windows. that's what most customers do.
+[07:29] Samir: curious — what's the cost delta of pinning vs not pinning? rough numbers please.
+[07:34] Marco: ballpark — incremental memory footprint per pinned shard ~50–150MB depending on model and kv block sizes. if you pin 20 hot shards across 6 nodes, ~ few GBs extra RAM across fleet, small relative to GPU RAM but may require 1–2 extra inference instances if you want to keep headroom.
+[07:54] Devon: thanks. Anna, can you share current instance types?
+[07:58] Anna: posted in chat: g5.2xlarge equivalents, 256GB host memory, 40GB GPU memory.
+[08:08] Marco: ok that helps. next, the NAT pattern — we're seeing bursts that exceed the per-NAT connection tracking (conntrack) default which can cause drops. suggest increasing conntrack and/or using multiple NAT egress points with a per-subnet egress policy.
+[08:27] Devon: how do we route sticky sessions to the same NAT? we prefer affinity per user session.
+[08:33] Ivy: you can do source-ip based egress via egress-only IGW mapping or use NAT per subnet and route sessions to subnets via consistent-hash placement. it's operationally heavier but doable.
+[08:44] Ritu: any network ACL or firewall changes we need to be mindful of? we have strict outbound rules.
+[08:50] Marco: only that PrivateLink endpoints need SG openings and route tables entries. NAT changes are internal. We'll draft a runbook.
+[09:01] Anna: ok, let's talk about the soak test plan — we want to run a 3-hour soak with synthetic traffic that mimics 4–6pm PST. what metrics should we collect?
+[09:10] Marco: p50/p95/p99 latency, KV miss rate, cross-node kv fetch count, DNS lookup latency, TCP retransmit rate, NAT conntrack usage, per-node memory pressure, and GPU utilization. also collect distributor logs for batching latency distribution.
+[09:28] Samir: add model output quality checks — we don't want quantization to drift outputs unexpectedly during test.
+[09:33] Priya: will do. we'll use evaluation prompts.
+[09:36] Devon: timeline — we can run soak on Thursday if you send the scripts by Monday.
+[09:40] Marco: we will. Marco to share script (link: github.com/redwood/diagnostics/amberleaf-scripts) and a terraform snippet to spin up per-AZ nat pairs.
+[09:52] (brief silence as people read links)
+[10:05] Anna: question — what about PrivateLink multihoming; you said it helps failover, but how do we monitor and detect when to failover?
+[10:12] Marco: we instrument endpoint health via active pings and egress success rate. if error rate crosses threshold, traffic shifts by route table modification or BGP weight changes if cross-account. We can automate via our console with canary policies.
+[10:27] Ritu: and audit logs? we need per-request logs for compliance retention windows.
+[10:33] Ivy: Redwood Private can emit audit logs to your S3 and integrate with your SIEM; retention config is customer controlled. we will share the logging spec.
+[10:44] Devon: curious about deployment rollback — if pinning causes memory pressure, what's the fastest rollback?
+[10:49] Priya: removal of affinity flag is config-only, no model restart needed; reversal is quick. but if you provision extra instances and they're added to load balancer, you'd drain them. so plan instance lifecycle accordingly.
+[11:05] Anna: ok good. we want an ordered checklist for the soak: 1) add nat pair to hotspot subnets 2) enable resolver cache per subnet 3) mirror 5% traffic to affinity-enabled staging 4) run synthetic warmup and then 3-hour soak 5) collect metrics and share dashboards.
+[11:23] Ivy: perfect. we'll own steps 3 and 5 with you.
+[11:28] Marco: I'll prepare a dashboard template (grafana) and the sampling profiler.
+[11:34] Samir: small nit — the runtime currently logs kv hits as 'k v hits' in telemetry which makes parsing tricky, could you normalize field names?
+[11:42] Priya: noted, we'll standardize field names in the next telemetry push.
+[11:47] Anna: any quick wins we can do before Thursday?
+[11:50] Marco: yes, add an extra nat gw and enable local dns cache, both low risk.
+[11:55] Ritu: and send the KMS/HSM flow doc plus SOC2 scoping checklist pls.
+[12:01] Ivy: will do.
+[12:04] (recap) Ivy: quick recap: Amberleaf to share VPC/NAT metrics and instance inventory; Redwood to share scripts, profiler, dashboard template, security docs. Run soak Thursday pending scripts Monday. Follow-up week of 2027-04-12. Any objections?
+[12:18] Devon: none.
+[12:21] Anna: sounds good.
+[12:23] Ritu: ok from security.
+[12:26] Ivy: thanks everyone. end.
+
+Post-call notes: Links shared during call: 1) docs/amberleaf/resolver-logs-20270401 2) github.com/redwood/diagnostics/amberleaf-scripts 3) redwood.com/security/private-kms-hsm.pdf
+
+Transcript end.

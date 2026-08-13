@@ -1,0 +1,127 @@
+Clarify audit/access log territory TTL and handback options
+
+From: Morgan Ellis <morgan.ellis@finvera.com>
+To: Soojin Lee <soojin.lee@redwood.com>
+Date: Mon, 2 Nov 2026 09:12:00 -0800
+Subject: Audit log handback + TTL questions
+
+Hi Soojin,
+
+Thanks for the quick demo last week. Our security team is finalizing requirements and we need a short Q&A to confirm how Redwood handles audit/access logs for our upcoming production onboarding. Can you confirm:
+
+- Which geographic copies of audit logs you retain for hosted customers (US/EU separation)?
+- Typical retention windows you support out of the box and whether we can request longer retention for a single tenant?
+- Export formats and delivery channels (S3 signed URL, encrypted bundle, syslog stream)?
+- Whether you can certify deletions (tombstone + manifest) after handback?
+
+We need answers by EOD Thursday so we can include them in our procurement checklist.
+
+Thanks,
+Morgan
+Security Engineer, Finvera
+
+---
+Finvera is subject to GLBA; we need regional proof for any SaaS vendor.
+
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Morgan Ellis <morgan.ellis@finvera.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 2 Nov 2026 10:03:00 -0800
+Subject: Re: Audit log handback + TTL questions
+
+Morgan — appreciate the clear list. Looping in Karthik (infra) and Marissa (customer ops) so we can cover both the technical and delivery sides. High-level answers up front, then Karthik will add details: 
+
+- Geography: For hosted customers we store primary audit/access traces in the region of the tenant (US or EU). Copies used for processing may temporarily exist in US for telemetry pipelines but are not retained beyond 24 hours. For Dedicated/Private we can agree regionally isolated delivery.
+
+- Retention windows: Default hosted retention is 90 days for audit/access events; we offer configurable retention up to 3 years on Dedicated. We can discuss a custom retention SLA for your tenant if needed.
+
+- Export formats/delivery: Exports can be delivered as encrypted JSONL or parquet bundles via S3 presigned URL, or as a one-time syslog stream for live forwarding. We also support bulk delivery (chunked) for very large slices.
+
+- Deletion attestation: We provide a handback manifest that lists object ids + SHA256 checksums and a tombstone list after export. For Dedicated/Private we can provide a signed deletion certificate post-handoff.
+
+Karthik — can you add specifics on timelines, encryption, and legal hold behavior? Marissa — I'll need you to confirm operational steps for a 3rd‑party export request (SLA, pricing, and contact).
+
+Best,
+Soojin
+Director, Cloud Security Partnerships
+Redwood Inference
+
+Attachment: retention-matrix-2026.xlsx (summary of default windows per plan)
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Soojin Lee <soojin.lee@redwood.com>; Morgan Ellis <morgan.ellis@finvera.com>
+Cc: Ben Carter <ben.carter@redwood.com>
+Date: Tue, 3 Nov 2026 14:22:00 -0800
+Subject: Re: Audit log handback + TTL questions
+
+Morgan — adding the infra specifics: 
+
+1) Region and copies
+- Primary storage is tenant-region; ephemeral processing copies are wiped within 24 hours and never included in retention counts. For EU tenants we keep everything inside EU regions (no US egress) unless customer enables cross-region exports.
+
+2) Retention levels
+- Hosted: 90 days default (rolling window), snapshots available on request for 6–12 months for compliance reviews.
+- Dedicated: configurable, commonly 1y/3y options; bespoke terms for >3y.
+
+3) Export mechanics
+- Formats: JSONL (indexable), CSV (for summary reports), Parquet (columnar, compressed).
+- Delivery: S3 presigned, SFTP with key exchange, or multipart transfer to your provided bucket. For live streaming we support rsyslog/CEF over TLS.
+- Encryption: AES-256 envelope encryption with customer-provided KMS for Dedicated; hosted uses Redwood KMS but we can use customer KMS for Private deployments.
+
+4) Legal hold & deletion
+- If a legal hold is active, we will not purge data; exports will reflect legal hold status.
+- Post-export deletion: we provide a manifest (object ids + checksums) and a tombstone file. For Dedicated/private we can provide a signed deletion attestation (PKI-signed) stating the erase completed on X timestamp. Hosted customers can request an attestation; delivery depends on the support tier.
+
+5) Timeline & throughput
+- Small slices (<50GB): typical turnaround 2 business days.
+- Medium (50GB–5TB): 3–10 business days depending on slice complexity and retention range.
+- Large (>5TB): custom schedule.
+
+Ben — adding request handling (cost lead) and brief playbook. I attached the handoff playbook PDF.
+
+—Karthik
+Principal Infra Engineer
+
+Attachment: redwood-log-handoff-playbook-v1.pdf
+
+From: Morgan Ellis <morgan.ellis@finvera.com>
+To: Soojin Lee <soojin.lee@redwood.com>
+Cc: security@finvera.com
+Date: Wed, 4 Nov 2026 08:41:00 -0800
+Subject: Re: Audit log handback + TTL questions
+
+Thanks — that's very helpful. A couple of follow-ups from our control owners:
+
+- For hosted tenants that are US-regioned but require EU residency for records older than 180 days, is there a supported migration/handover path?
+- For the deletion attestation: would the signed attestation include a SHA256 manifest of deleted objects and the KMS key IDs used for envelope encryption?
+- Cost: can you provide an estimate for a one-off 2TB handback and a separate ongoing 12‑month export subscription (monthly)?
+
+We can accept the S3 presigned delivery. If you can confirm the attestation contents we will proceed to add language to our vendor agreement.
+
+Morgan
+
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Morgan Ellis <morgan.ellis@finvera.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Fri, 6 Nov 2026 16:48:00 -0800
+Subject: Re: Audit log handback + TTL questions
+
+Morgan — quick answers and next steps so you can move forward with legal: 
+
+- Cross-region migration: We support scheduled handbacks from US to EU buckets as a one-time cross-region export. For historical retention beyond 180 days we recommend a staged export (chunks) with verification between stages. This is a common pattern for customers moving older records to a different sovereignty boundary. We'll provide a playbook and checksum verification for each chunk.
+
+- Attestation contents: For Dedicated/Private we supply a PKI-signed deletion attestation that includes: export manifest (object ids + SHA256), deletion timestamp (ISO8601), and KMS key IDs used for envelope encryption. For hosted customers we can provide the same contents but the attestation is support-tier dependent; if required for contract we can include attestation deliverable in the SOW.
+
+- Pricing estimate (ballpark): one-off 2TB handback (S3 presigned delivery, verification): $4,200 USD. Ongoing 12-month export subscription (monthly recurring, up to 1TB/month): $1,200/month. These are estimates — Ben will send an official quote and SOW items.
+
+Next steps:
+1) Ben to issue a quote and SOW line items for attestation + handback cadence.
+2) I'll share the playbook link and checklist to your security team.
+3) If you want the attestation in the contract, legal can have a redline and we'll confirm timing for inclusion.
+
+Ben — please loop in pricing. Marissa — can you prepare the operational onboarding checklist and SLA addendum if Finvera agrees to a 12-month subscription?
+
+Thanks,
+Soojin
+
+Related: https://app.hubspot.com/contacts/123456/company/Finvera (HubSpot record)

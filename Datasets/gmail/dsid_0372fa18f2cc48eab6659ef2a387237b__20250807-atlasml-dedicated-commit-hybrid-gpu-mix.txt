@@ -1,0 +1,126 @@
+AtlasML dedicated commit — GPU mix, perf/$ and throughput guarantees
+
+From: Megan Torres <megan.torres@atlasml.com>
+To: lauren_bishop@redwood.ai
+Date: Sun, 3 Aug 2025 09:12:00 -0700
+Subject: Dedicated capacity — initial sizing & GPU preference question
+
+Hi Lauren,
+
+Thanks for taking our call last week. AtlasML is moving from proof-of-concept to production for our real-time summarization pipeline (average request ~1,200 tokens, p95 latency target 250ms). We expect steady baseline throughput of ~250 qps during business hours with periodic spikes up to 1,200 qps for short windows.
+
+Two questions where we could use Redwood’s recommendation before we lock commits:
+- Given our model and token lengths, how should we think about A100 vs H100 vs L40S for a Dedicated pool? Memory requirements are tight for some of our ensembles (one model needs ~60GB of context + kv), but many requests are served by a smaller distilled model.
+- We need an SLO for throughput and predictable unit economics. What reserved commit structures do you recommend (monthly committed gpus, burst credits, canary capacity)?
+
+Can you share a ballpark pricing comparison and any tradeoffs on perf/$, memory headroom, and risk of noisy neighbors? We’ll share an internal traffic profile spreadsheet as well.
+
+Appreciate the quick turnaround — Megan
+Megan Torres
+Head of Platform Engineering, AtlasML
+megan.torres@atlasml.com
+Procurements: procurements@atlasml.com
+
+Attachment: AtlasML_traffic_profile.csv (referenced)
+From: lauren_bishop@redwood.ai
+To: Megan Torres <megan.torres@atlasml.com>
+Cc: marcus_lin@redwood.ai, aditya_rao@redwood.ai
+Date: Mon, 4 Aug 2025 10:05:00 -0700
+Subject: Re: Dedicated capacity — initial sizing & GPU preference question
+
+Megan — thanks for the clear brief and the traffic profile. High level recommendations first, then a compact pricing/throughput matrix attached.
+
+Summary recommendations:
+- Baseline commit: L40S-focused baseline + small H100 headroom. L40S gives the best perf/$ for medium-length sequences and distilled models; it’s significantly cheaper per-hour and has good FP16 inference characteristics.
+- Memory-sensitive workers: reserve a small H100 pool for the 60GB+ kv model (we suggest 6–8 H100s depending on replication and hot-cache needs). H100s offer ~1.9–2.2x perf on large-context workloads vs A100 but cost ~35–45% more per-hour at list price.
+- A100s: avoid as primary unless you need the specific memory-sized A100 80GB configuration at a lower price point; for your mix they don’t hit the perf/$ sweet spot vs the other two.
+- Hybrid approach: commit to a baseline of 40 L40S equivalents for steady state and 8 H100s as reserved burst capacity. Add a 20% monthly burst credit pool to cover short spikes; autoscale policies route first to cached L40S instances, then to H100s for cache-miss heavy or large-context requests.
+
+Throughput & perf/$ notes (ballpark, normalized):
+- L40S (48GB-class): baseline perf metric = 1.0 perf-unit, list hourly price = $1.0 (normalized). Best perf/$ for medium models and high qps when requests are cache-friendly.
+- A100 (40GB/80GB): perf-unit = ~1.1–1.3 vs L40S for many models, but memory/kv handling falls behind H100. Cost per hour often similar to or slightly higher than L40S in our vendor pool; perf/$ is marginal.
+- H100 (80GB): perf-unit = ~2.0 vs L40S for large-context transformer runs; list hourly price = ~1.4x–1.5x L40S. For memory-heavy sessions it’s substantially better, but for your distilled model traffic it’s overkill.
+
+Reserve commit structure we recommend:
+- 12-month committed baseline (monthly billing): 40 L40S-equivalent capacity with a 28% discount vs hosted list (this covers steady-state qps).
+- Dedicated H100 block: 8 H100 reserved with 22% discount.
+- Burst credits: equivalent of 8 L40S for short bursts (replenished monthly); additional bursts billed at reduced overage rates.
+- SLA: 99.5% pool availability with automatic region fallback and a throughput credit of up to 8% of monthly committed capacity for missed SLO windows (formalized in contract).
+
+I attached a quick pricing matrix and an example cost-run for your current weekly profile. Key trade-offs you should validate internally:
+1) How often those 60GB+ context queries occur (they drive the H100 sizing).
+2) Whether you can quantize some models (INT8 / FP16 mixed) to reduce memory and push more work on L40S.
+3) Appetite for multi-year commit (we can improve discounts materially for 24–36 month).
+
+Next steps: I’ll loop in Monica from Customer Success for rollout/runbook planning and Marcus from Sales to bake a formal commercial. If you’d like, we’ll run a short (2–3 week) pilot with metrics and an HA test for your spikes.
+
+Cheers,
+Lauren Bishop
+Senior Account Executive, Redwood Inference
+lauren_bishop@redwood.ai
+
+Attachment: AtlasML_Dedicated_Pool_Pricing_v1.xlsx
+From: marcus_lin@redwood.ai
+To: lauren_bishop@redwood.ai, aditya_rao@redwood.ai
+Cc: monica_patel@redwood.ai
+Date: Tue, 5 Aug 2025 09:28:00 -0700
+Subject: Fwd: AtlasML dedicated commit — GPU mix, perf/$ and throughput guarantees
+
+Looping you all in — got questions from procurement around discount cadence and burst economics. My suggested variant to present: an elasticity-first bundle that reduces committed baseline by 25% but adds a predictable burst bank and a 10% lower H100 block to make headroom cheaper.
+
+Sketch: 
+- Baseline: 30 L40S-equivalents committed (12 months) at 32% discount.
+- Headroom: 12 H100s on a 12-month reserved (20% discount) + a burst bank sized to cover 1.5x baseline for 4 peak hours/month.
+- Overage: reduced overage rate for any additional usage during spikes (we invoice at a blended effective rate).
+
+Rationale: Atlas cares about peak economics more than always-on. If we shift to a smaller baseline and larger burst bank we can offer better effective costs during big events while reducing their on-the-book committed spend. We should model two scenarios: Behavior A (spikes < 10% of monthly time) and Behavior B (spikes > 35% of monthly time) to show sensitivity.
+
+If we go elasticity-first we should lock a higher SLA credit for burst failures (e.g., 12% monthly credit if bursts are not served) — procurement will want that.
+
+Marcus
+Director, Sales Engineering
+marcus_lin@redwood.ai
+From: lauren_bishop@redwood.ai
+To: Megan Torres <megan.torres@atlasml.com>
+Cc: marcus_lin@redwood.ai, monica_patel@redwood.ai, aditya_rao@redwood.ai
+Date: Wed, 6 Aug 2025 11:03:00 -0700
+Subject: Re: AtlasML dedicated commit — GPU mix, perf/$ and throughput guarantees
+
+Megan — Marcus and I discussed an alternative commercial that might match AtlasML’s risk profile better: an elasticity-first plan (short summary below). Marcus also attached the scenario sensitivity model — I’ll paste the highlights.
+
+Elasticity-first proposal (summary):
+- Committed baseline: 30 L40S-eq (12 months), 32% discount.
+- Reserved H100 headroom: 12 H100s (12 months), 20% discount.
+- Burst bank: capacity equivalent to 1.5x baseline for 4 hours/month (replenished each month). This bank is priced into the committed package so burst usage up to bank is not billed as overage.
+- Overage beyond bank: billed at a capped 1.6x list rate.
+- SLA/credits: 99.5% pool availability; if burst bank is unable to serve announced capacity we provide 12% of that month’s invoice as a credit (greater protection for burst-dependent apps).
+
+Why it fits your profile: Atlas can cut written committed budget while retaining predictable effective cost when peaks happen. If your spikes are infrequent this is cheaper; if spikes become sustained we can pivot to a larger baseline at renewal with a step-down price.
+
+Quick ask from your side so we can finalize: please confirm (a) approximate % of monthly time spent in spike mode (from your profile), (b) whether you can trial INT8/FP16 quantization on the 60GB-context model (we can help), and (c) whether procurement needs a PO or SOW early to start legal review.
+
+If you’re comfortable I’ll draft a concise commercial term sheet and route it to legal/procurement.
+
+Best,
+Lauren
+
+--
+On Tue, Aug 5, 2025 at 09:28, marcus_lin@redwood.ai wrote:
+> Looping you all in — got questions from procurement around discount cadence and burst economics...
+> (see attached scenario model)
+From: Megan Torres <megan.torres@atlasml.com>
+To: lauren_bishop@redwood.ai
+Cc: procurements@atlasml.com
+Date: Thu, 7 Aug 2025 15:30:00 -0700
+Subject: Re: AtlasML dedicated commit — GPU mix, perf/$ and throughput guarantees
+
+Lauren/Marcus — thanks, this is very helpful. Atlas prefers the elasticity-first variant to avoid committing capital we don’t need today. Quick answers: 
+1) Spikes: current telemetry suggests spikes are ~6% of monthly time but concentrated (we get 4–6 large events/month, each 1–3 hours).
+2) Quantization: engineering is willing to trial FP16 and INT8 on a copy of the 60GB-context model — expect results in ~10 days.
+3) Procurement: we’d like a draft term sheet and a preliminary SOW so legal can start review; we will submit a PO after legal signoff.
+
+Please include the burst-bank SLA credit language and a short pilot plan (2–3 weeks) that validates peak handoff and 95/99 latency at target load. Once we have the term sheet I’ll introduce our procurement lead for formal redlines.
+
+Megan
+
+Attachment: PO_Timeline.pdf (referenced)

@@ -1,0 +1,142 @@
+Dedicated capacity options and activation cadence for SentryWell
+
+From: Christine Liu <christine.liu@sentrywell.ai>
+To: Jonas Weber <jonas_weber@redwood.ai>
+Date: 2026-11-30T09:12:00-08:00
+Subject: Exploring dedicated capacity for SentryWell - initial details
+
+Hi Jonas,
+
+Thanks for the quick intro the other week. We went through our usage patterns and want to start exploring a Dedicated deployment with predictable capacity tied to an upcoming pilot. A few quick context points: 
+- Current production: 2 models (chat + rerank) hosted on a mix of cloud endpoints, average monthly tokens ~250M, peak qps ~45.
+- Target latency: p95 generation <= 200ms for customer-facing workflows; some background batch jobs can tolerate higher latency.
+- Security: we need VPC and SOC2 evidence for the procurement packet.
+- Timeline: pilot start target is late Jan; procurement + legal needs a clear MAP.
+
+Can you send proposed sizing options (min GPUs, cluster topology, ramp cadence) and a rough cost delta versus hosted API? I attached our RFP pdf with more details.
+
+Also looping in Alex (procurement). Looking for a straightforward set of options we can take to finance.
+
+Thanks,
+Christine Liu
+Head of ML Platforms
+SentryWell
+
+Attachment: SentryWell_RFP_v1.pdf
+
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Christine Liu <christine.liu@sentrywell.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>
+Date: 2026-12-01T10:04:00-08:00
+Subject: Re: Exploring dedicated capacity for SentryWell - initial details
+
+Hi Christine — great to see the RFP, thanks. High level we can offer three pragmatic 'slates' tailored to pilot -> scale. Attached is a concise worksheet with sizing and cost sketches. Summary here: 
+
+1) Pilot Slate (low-friction)
+- Min GPUs: 4 A100-equivalent (shared across chat + rerank)
+- Burst pool: +4 GPUs for spiky traffic (managed auto-burst)
+- Ramp: 2-week warm-up (traffic mirroring) then full pilot activation at week 4
+- Use-case: validate latency, end-to-end tracing, and integration with your VPC
+
+2) Production Steady (recommended for p95 SLA)
+- Min GPUs: 8 (balanced for 99th-percentile targets)
+- Burst pool: +8 GPUs available as paid burst credits
+- Ramp: phased 8-week activation (2 weeks prewarm, 4 weeks staged traffic shift, 2 weeks stable ops)
+- Includes KV prefix caching & persistent warm workers to reduce cold starts
+
+3) High-throughput Slate (for growth)
+- Min GPUs: 20 (for predictable throughput and headroom)
+- Burst pool: +20 for short-term peaks
+- Ramp: 12-week laddered activation with weekly GPU activations to smooth burn
+
+Notes / assumptions:
+- Model footprints: estimates assume 70B-class open models with quantization; we can revise for your exact model artifacts.
+- Latency targets rely on continuous batching policies tuned for interactive traffic; we recommend enabling prefix caching for rerank to cut token cost.
+
+Next steps: if any of these sound like a fit I can schedule a 30-min sizing walkthrough with Karthik and Grace to align on kernel/optimizations and finalize a MAP.
+
+Best,
+Jonas Weber
+Senior Solutions Engineer
+Redwood Inference
+
+Attachment: sentrywell_capacity_options.xlsx
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Jonas Weber <jonas_weber@redwood.ai>, Christine Liu <christine.liu@sentrywell.ai>
+Cc: Grace O'Connor <grace_oconnor@redwood.ai>
+Date: 2026-12-02T08:22:00-08:00
+Subject: Re: Dedicated capacity options and activation cadence for SentryWell
+
+On Tue, Dec 1, 2026 at 10:04 AM Jonas Weber <jonas_weber@redwood.ai> wrote:
+> High level we can offer three pragmatic 'slates'...
+
+Christine / team — adding a few technical guardrails to the options Jonas outlined so you have concrete observability and fallback knobs: 
+
+- Kernel/Execution: for your 70B-class models we suggest int8 quantization with mixed-precision kernels on first 4 GPUs; that gives ~1.6-2x throughput improvement without significant regen divergence.
+- KV cache sizing: assume 12GB per worker for session-heavy chat; smaller for rerank. We recommend sticky routing for long-lived sessions to avoid cache thrash.
+- Batch sizing: keep soft-latency gates at ~60ms per batch to maintain interactive p95 targets — continuous batching will auto-adjust but we want the early guardrail.
+- Min GPU sizing rationale: 8 GPUs steady aligns with a 99th percentile latency window <150ms for your peak qps (45) with our batching and cache strategy; 4 GPUs will work for a pilot but expect higher p99s under sustained peaks.
+- Fallbacks: automatic model fallback to a lighter quantized variant + cross-region spillover if capacity constrained. We can codify this in a rollout policy so your app never fully degrades.
+
+I'll attach short infra notes and a command-ready checklist for warm-starting a cluster to avoid noisy neighbor slowdowns. Happy to walk through the micro-ops during the sizing call.
+
+Thanks,
+Karthik
+Principal Infra Solutions
+Redwood Inference
+
+Attachment: infra_notes.txt
+
+From: Alex Mendez <alex.mendez@sentrywell.ai>
+To: Jonas Weber <jonas_weber@redwood.ai>, Christine Liu <christine.liu@sentrywell.ai>
+Date: 2026-12-07T11:37:00-08:00
+Subject: Re: Dedicated capacity options and activation cadence for SentryWell
+
+Jonas / Karthik — quick follow on procurement questions: 
+
+1) Can you provide a headline estimate (pilot vs production steady) we can table for procurement? Line items: monthly reserved cost, burst credit costs, one-time onboarding/engineering work.
+2) How do you handle evidence for SOC2 and data residency in the Private deployment? We need a short checklist for our security review.
+3) If we sign for the Steady Slate (8 GPUs) but traffic grows quickly, what's the process to add capacity mid-contract and how long does activation typically take?
+
+Also attaching our procurement timeline doc with target approval windows. Please keep the answers brief — procurement wants a compact MAP.
+
+Thanks,
+Alex Mendez
+Director, Procurement
+SentryWell
+
+Attachment: procurement_timeline.docx
+
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Christine Liu <christine.liu@sentrywell.ai>, Alex Mendez <alex.mendez@sentrywell.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>
+Date: 2026-12-09T16:45:00-08:00
+Subject: Re: Dedicated capacity options and activation cadence for SentryWell
+
+Alex / Christine — thanks, quick MAP below that you can hand to procurement. Happy to convert to your internal template.
+
+Mutual Action Plan (high level) — SentryWell (deal SW-2026-089)
+1) Discovery & sizing (this week) — finalize model artifacts and confirm exact token profiles (owner: SentryWell)
+2) Pilot (Pilot Slate: 4 GPUs + 4 burst) — timeline: 4 weeks from kickoff (includes 2-week warm mirror + 2-week pilot traffic)
+   - One-time onboarding: $18,000 (agent integration, VPC peering, access controls)
+   - Monthly reserved: $21,000 (4 GPU baseline)
+   - Burst credits: $0.25 / GPU-hour used beyond baseline
+3) Production Steady (recommended) — 8 GPUs baseline
+   - Ramp: 8 weeks activation cadence as described (prewarm, staged shift, stable)
+   - Monthly reserved: $38,000 (8 GPUs)
+   - Burst credits: $0.20 / GPU-hour
+4) Scale path — adding GPUs mid-contract: typically add capacity within 72 hours for +4 GPU increments (hot-add into the pool), 7–14 days for >8 GPUs while we schedule capacity and prewarm.
+5) Security/compliance — we will provide SOC2 attestation, architecture diagram, and KMS integration checklist within 3 business days of request. Private control plane option available if required by policy.
+6) SLA & fallbacks — target p95 latency guarantees tied to the Steady Slate; policy-based fallback to a quantized variant and cross-region spillover in case of sustained shortages.
+
+Attachments: MAP-SentryWell-20261209.pdf (formal MAP), sentrywell_capacity_options.xlsx (detailed cost worksheet)
+
+If that aligns with your procurement windows, I'll open a HubSpot record and draft the order form for signature (DocuSign link included). Let me know if you want a short 30-min walkthrough tomorrow to finalize numbers.
+
+Best,
+Jonas Weber
+Senior Solutions Engineer
+Redwood Inference
+
+Related links: https://app.hubspot.com/records/contacts/HS-1092387, https://www.docusign.com/LinkToEnvelope/ENVELOPE-83492

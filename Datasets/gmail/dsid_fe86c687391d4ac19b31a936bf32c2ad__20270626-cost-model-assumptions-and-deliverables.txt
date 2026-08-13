@@ -1,0 +1,108 @@
+Inference cost model assumptions and deliverables — post-call alignment
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Asha Patel <asha@mercari-pay.com>, Tom Li <tom.li@mercari-pay.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: 2027-06-26T15:12:00-07:00
+Subject: Inference cost model assumptions and deliverables — post-call alignment
+
+Thanks again for taking time today — quick write-up to lock in what we heard and the immediate actions so we stay aligned. Short summary and then proposed assumptions / asks.
+
+Pain points (you called these out):
+- Checkout chat and price-discovery chat are driving most of the token spend and are latency-sensitive (target ~200ms p50)
+- Huge month-end burst patterns (3x baseline) that blow budget ceilings
+- Embedding pipeline for search/personalization is high-volume and running on a different cadence — opportunities to batch/cascade
+- Lack of visibility today into per-route token economics, making it hard to justify a pilot.
+
+Goals you shared:
+- Validate a predictable cost baseline for the buyer journeys that matter (checkout flows + search)
+- Demonstrate we can meet latency SLO on checkout while lowering unit cost vs current managed provider
+- Get procurement-friendly artifacts (MAP + assumptions workbook) to move to internal signoff within ~3 weeks
+
+Key assumptions (proposed; will update once you share traffic mix):
+- Prompt + system tokens per chat request: avg 120 tokens
+- Average generated response: 220 tokens (conservative)
+- Embedding calls: 8M vector ops / month (background jobs, batched)
+- Prefix/KV cache hit rate: 25% (saves ~0.5x token slices on cached requests)
+- Effective batching on background flows: ~18% per-token cost reduction without impacting user-facing latency
+- Quantization profile: use int8 for background models (expect ~30% cost delta vs fp16 for that workload)
+- Pilot budget target (hosted + 1 small reserved pool): $20,000 / month cap
+- Success metric (pilot): 30–45% reduction in effective cost per 1k active sessions while holding checkout p50 <=200ms
+
+Immediate next steps / owners (proposed):
+- Jordan: share assumptions workbook + MAP by EOD (attachment: cost workbook + MAP stub)
+- Marissa: run a quick ops feasibility check for a 2-GPU reserved pool for checkout; estimate throughput and SLOs (deliverable: ops checklist, due 7/2)
+- Ben: update per-token model with your 3-run sensitivity (deliverable: cost scenarios with embedding mix toggled, due 7/1)
+- Asha / Tom: share a 2-day sample of traffic mix (anonymized) and procurement ramp constraints (who needs to sign), ideally by 6/30
+
+Open items we need from you to finalize the workbook:
+- Confirm embedding monthly volume (we used 8M as a working number)
+- Confirm % of requests that must be sub-200ms vs background async
+- Any hard budget ceiling for a 6-week pilot (tell us the number and we will adapt)
+
+Attached: 20270626-mercari-cost-assumptions.xlsx (workbook — assumptions tab + sensitivity tabs) and a mutual-action-plan doc ([Attachment: 20270626-mutual-action-plan.docx]).
+
+If this looks good I’ll schedule the MAP + kickoff for next Wednesday and send a short SOW-lite for procurement to review.
+
+—
+Jordan Blake
+Enterprise Solutions — Redwood Inference
+jordan.blake@redwood.com | +1 (415) 555-0199
+
+From: Asha Patel <asha@mercari-pay.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: Tom Li <tom.li@mercari-pay.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: 2027-06-26T18:45:00-07:00
+Subject: Re: Inference cost model assumptions and deliverables — post-call alignment
+
+Jordan — thanks for the clear summary. Couple quick clarifications from our side:
+
+1) Embeddings: our most recent run shows closer to ~12M embedding calls / month (we batch at the worker side but volume is higher than the estimate you used).
+2) Budget: procurement has set a soft pilot ceiling at ~$12k/month unless we can guarantee a failover plan that prevents bursts from exceeding that (they were explicit about this).
+3) Latency priority: checkout flows are non-negotiable on latency. For background personalization we are happy to accept higher p95 as long as cost drops.
+4) Signoff: Tom will be leading procurement review; he needs a short MAP + clear checkpoints to brief legal.
+
+If you can re-run the workbook with 12M embeddings and a $12k pilot cap and call out the tradeoffs (what we must budget vs what we must reserve for latency), that will let us circulate internally. Also call out the minimum reserved capacity we need to guarantee 200ms p50 at our peak burst (will help Tom).
+
+Appreciate the quick turnaround.
+
+—
+Asha Patel
+Head of Product Operations, Mercari Pay
+asha@mercari-pay.com | +81 80-1234-5678
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Asha Patel <asha@mercari-pay.com>, Tom Li <tom.li@mercari-pay.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: 2027-06-28T09:04:00-07:00
+Subject: Re: Inference cost model assumptions and deliverables — post-call alignment
+
+Thanks Asha — great context. I updated the workbook and adjusted the ask based on your notes. Quick summary of changes and a concrete pilot proposal below. Updated files attached + MAP link above.
+
+What changed (workbook updates):
+- Embedding volume: updated to 12M / month across the board; pushed embedding flows onto a hosted, high-batch path in the model (saves ~22% vs naively running in reserved GPUs)
+- Pilot budget: re-baselined scenarios to a $12k/month cap; showed two options that fit within $12k:
+  a) Latency-first: 1 small reserved pool (2x A100 equiv) pinned for checkout + hosted for everything else; expected pilot spend ~ $11.5k/mo; guarantees p50 <200ms under typical burst; constrained on peak headroom (we'll add a fallback to smaller cheaper model for overspill).
+  b) Cost-first: all-hosted with aggressive batching + int8 quantization for background; estimated $9.2k/mo but checkout p50 climbs ~40ms in median and p95 is higher — must validate if that is acceptable.
+- Assumptions table: made the cache-hit sensitivity explicit (15/25/35% rows) so you can see marginal benefit of investing in a persistent prefix cache.
+
+Proposed pilot phases and timeline (2 phases / 6 weeks):
+- Phase 1 (2 weeks): latency validation for checkout — reserve 2-GPU pool, run synthetic + small live shadow test, measure p50/p95 and failover behavior. Owner: Marissa (ops). Deliverable: SLO report + runbook. Target start: 7/5.
+- Phase 2 (4 weeks): cost/runbook validation — move embedding workload onto hosted batched path, evaluate token spend vs baseline, iterate on cache and batching knobs. Owner: Ben (econ modeling). Deliverable: cost report + recommended steady-state configuration. Target start: 7/19.
+
+Next concrete asks for your team (Asha/Tom):
+- Confirm that $12k/month is the pilot ceiling we should model for procurement (Tom: confirm in reply)
+- Share a 48-hour anonymized request log (we can accept a minimal schema) by 6/30 so we can tune the SLO simulation
+- Approve the MAP sign-off path (I will send a MAP-lite to Tom and cc legal)
+
+If you approve the latency-first option I’ll:
+- Lock in an ops checklist for the reserved pool and a runbook for overflow fallback (Marissa will do)
+- Have Ben deliver the updated scenario suite showing expected variance across the 15/25/35% cache rows
+- Send a short SOW-lite for procurement to review (1 page).
+
+Thanks again — attaching updated workbook: [Attachment: 20270626-mercari-cost-assumptions.xlsx] and MAP doc: [Attachment: 20270626-mutual-action-plan.docx].
+
+—
+Jordan Blake
+Enterprise Solutions — Redwood Inference
+jordan.blake@redwood.com | +1 (415) 555-0199

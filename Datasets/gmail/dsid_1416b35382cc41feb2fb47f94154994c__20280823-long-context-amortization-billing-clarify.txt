@@ -1,0 +1,101 @@
+Clarifying billing math for long-context streaming and session amortization
+
+From: Kelly Martinez <kelly@shopworks.com>
+To: ava_chen@redwood.com
+Cc: Paul Huang <paul.h@shopworks.com>
+Date: Thu, 23 Aug 2028 09:14:00 -0700
+Subject: Billing question — how do you handle rounding for long streams / context amortization?
+
+Hi Ava,
+
+We're going through the Q2 invoice and a couple of items are unclear -- specifically how Redwood charges for long streaming sessions vs per-call (we have a mix of a streaming webhook and batch requests). A few concrete asks:
+
+- When a conversation runs for 25k tokens over a single connected streaming session, does Redwood bill 25k tokens or do you apply a "session amortization" that floors/rounds in buckets?
+- If we switch the same workload from streaming to discrete per-call requests (shorter calls, same total tokens), will rounding/minimums make a measurable difference?
+- What gives in a hybrid case where we stream the first part and then do a large replay that reuses cached prefix tokens?
+
+I attached a sample invoice and a short csv of request patterns. Can you help with a short worked example (the finance team wants an expectation for billing if we move more traffic to streaming)?
+
+Thanks,
+Kelly
+Kelly Martinez
+Director, Platform Engineering
+ShopWorks Inc.
+
+Attachment: shopworks_sample_invoice_q2.csv (csv, 12KB)
+From: Ava Chen <ava_chen@redwood.com>
+To: Kelly Martinez <kelly@shopworks.com>, Paul Huang <paul.h@shopworks.com>
+Cc: kimberly_park@redwood.com
+Date: Thu, 23 Aug 2028 11:02:00 -0700
+Subject: Re: Billing question — how do you handle rounding for long streams / context amortization?
+
+Hi Kelly — thanks for the clear examples and the sample invoice. Quick summary up front: for the scenarios you described, Redwood bills raw token usage but applies three operational levers that affect the invoice: token quantum (rounding unit), minimums (per-stream or per-call floors), and prefix/KV caching reuse (which prevents recharging for identical tokens). Below are short worked examples and then a few notes specific to ShopWorks patterns.
+
+1) Straight streaming session (single connection, 25k tokens)
+- Billing model: token-based metering (input+output).
+- Rounding: tokens are counted exactly; we round invoice line items to our billing quantum (currently 100-token units) for presentation/discount granularity only. The actual charge is proportional to the counted tokens, then the invoice lines are grouped into quanta. Example: 25,148 tokens -> recorded 25,148 charged tokens -> invoice line may show 251 quanta of 100 tokens. No extra per-session multiplier.
+
+2) Same total volume, per-call splitting (many shorter calls totaling ~25k tokens)
+- Minimums: per-call minimum applies only if the call itself falls below the configured per-request floor.
+- Effect: If you split into many microcalls below our 20-token per-call minimum, you could incur more rounding/ floors. If you split into reasonably sized calls (>> floor), the measured token total will be similar and friction is low.
+
+3) Hybrid with prefix reuse
+- When you stream and later make a replay that reuses the same prefix, our KV cache recognizes identical token sequences within the rolling retention window and we do not recount the cached portion for the purpose of compute (we charge the compute actually executed). Practically: if the replay is purely a re-emit of cached tokens (no recomputation), it should not double-charge. If the replay triggers re-generation, those regenerated tokens are counted.
+
+Worked sample (attached workbook has the math):
+- Baseline: 25,148 total tokens, unit price $0.0009/token -> raw = $22.6332
+- Billing quantum grouping (100-token quanta) means the invoice groups to 251 quanta; no step-up charge beyond raw tokens.
+- If split into 500 calls of 50 tokens: raw tokens ~25k, but if per-call floor is 20 tokens there is no extra floor hit. If floor were 60 tokens you'd see 500 * floor => large delta.
+
+ShopWorks notes: I looked at your sample pattern and saw many short replay calls that are ~30 tokens each; that pattern is safe under current 20-token per-call floor, but if you move to a lower-cost streaming tier we can discuss lowering the floor for committed volume.
+
+I'll copy Kim from billing to confirm wording for the invoice and to propose a small pilot concession to offset any unexpected rounding blips while you migrate traffic.
+
+Best,
+Ava Chen
+Account Executive, Redwood Inference
+ava_chen@redwood.com | (415) 555-0178
+
+Attachment: redwood_billing_examples.xlsx (xlsx, 48KB)
+From: kimberly_park@redwood.com
+To: Ava Chen <ava_chen@redwood.com>, Kelly Martinez <kelly@shopworks.com>
+Date: Fri, 24 Aug 2028 09:33:00 -0700
+Subject: Re: Billing question — billing quantum, minimums, and concession for migration
+
+On Thu, Aug 23, 2028 at 11:02 AM Ava Chen <ava_chen@redwood.com> wrote:
+> I'll copy Kim from billing to confirm wording for the invoice and to propose a small pilot concession to offset any unexpected rounding blips while you migrate traffic.
+
+Hi Kelly / Ava — quick official note from Billing: the platform records precise token usage and our invoice line-generation groups into 100-token quanta for readability. The only times customers see a material delta are: (a) many thousands of tiny calls that hit a per-request minimum higher than the request size, or (b) cross-tier fallbacks where a lower-cost model is swapped for a higher-cost variant mid-call.
+
+For ShopWorks specifically, given the sample, we recommend two things:
+1) Pilot change: give you a one-month billing credit equal to the expected rounding noise (we estimate ~$250 based on your sample patterns) while you route 60%+ of traffic through streaming. This is a one-time concession tied to deal SHOP-2028-0421.
+2) Operational: if you commit to a 12-month Dedicated or Reserved volume, we can lower the per-call floor to 10 tokens in contract.
+
+If that sounds good I'll prepare an amendment/credit memo for signatures.
+
+Thanks,
+Kimberly Park
+Billing Manager, Redwood Inference
+kimberly_park@redwood.com
+From: Ava Chen <ava_chen@redwood.com>
+To: Kelly Martinez <kelly@shopworks.com>, Paul Huang <paul.h@shopworks.com>
+Cc: kimberly_park@redwood.com
+Date: Fri, 25 Aug 2028 15:02:00 -0700
+Subject: Re: Billing question — billing quantum, minimums, and concession for migration
+
+Kelly / Paul — following on Kim's note: we're happy to issue the one-month rounding credit (approx $250) and to put the per-call-floor reduction in the contract if you commit to the 12-month reserved volume discussed in last week's call. Next steps I propose:
+
+- I will send an amendment to the SOW that includes the $250 credit and language about the 10-token floor when the Reserved commitment is signed.
+- Paul, can you confirm the percentage of traffic you expect to migrate to streaming by end of Q4? That number will set the credit precisely.
+- Finance: we'll loop in legal for a short amendment; I'll attach the updated pricing appendix once drafted.
+
+Thanks again, appreciate the clear examples in your spreadsheet — made this straightforward.
+
+Best,
+Ava
+
+--
+Ava Chen
+Account Executive, Redwood Inference
+ava_chen@redwood.com
+(Attachment stub referenced: redwood_billing_examples.xlsx)

@@ -1,0 +1,112 @@
+Backup erasure propagation and restore visibility — evidence request
+
+From: Sanjay Rao <sanjay.rao@hyperion.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Cc: IT Ops <itops@hyperion.com>
+Date: Tue, 1 Dec 2026 09:14:00 -0800
+Subject: Quick Q: backup deletion propagation timing and proof for compliance audit
+
+Hi Vivek,
+
+We're preparing for an internal compliance audit focused on customer data erasure requests. A few clarifying questions came up about how Redwood's backup retention and deletion propagation behave:
+
+- If a primary record is deleted under a customer erasure request, what is the expected window before that data is removed from offsite backups and DR replicas?
+- During that window, can you provide an auditable trace that shows when the primary record was deleted and when the corresponding backup tombstone/expunge occurred?
+- For restores, when a restore operation is performed for an earlier snapshot, what guarantees exist that data which should be erased will not be resurrected?
+
+We need concrete evidence we can present to our auditors (timestamps, logs, and a short explanation of the propagation path). Can you point me to the artifacts and an estimated timeline?
+
+Thanks,
+Sanjay Rao
+Director, IT Compliance
+Hyperion Financial
+
+--
+Please advise if you prefer a call; we've allocated 30 minutes this week for this task.
+From: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+To: Sanjay Rao <sanjay.rao@hyperion.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: Wed, 2 Dec 2026 11:03:00 -08:00
+Subject: Re: Quick Q: backup deletion propagation timing and proof for compliance audit
+
+Hi Sanjay — thanks for the clear list. High-level answers first, then I'll attach the artifacts.
+
+Short answers:
+- Typical propagation window: we aim to propagate tombstone markers to regional backups within 24–72 hours, and final expunge from replicated cold stores within 7–14 days, depending on ongoing DR snapshot cycles and offsite replication windows.
+- Audit traces: we can provide an expunge trace that ties the original delete event (primary write with deletion flag) to the snapshot/tombstone events in backup manifests and the final expunge job. Those are timestamped and verifiable.
+- Restore guarantees: our restore logic consults the retention/erasure index before materializing any historical snapshot; if a record is flagged as "erased" and the retention rule applies, restores will skip resurrecting that record. For additional assurance we also produce a post-restore validation report that lists skipped record IDs.
+
+I'll attach a sanitized sample expunge trace and a diagram that maps the propagation path (primary -> hot cache -> regional snapshot -> offsite archive). One caveat: exact timelines can vary for customers with custom retention overrides or legal holds.
+
+Attachments: "hyperion-evidence-erase-log.csv" (sample trace), "retention-policy-snapshot-diagram.pdf"
+
+If you want, Marissa can run this against your account with live data to produce a dated evidence bundle. Sean can scope the run and confirm there are no legal-hold exceptions.
+
+Best,
+Vivek Kulkarni
+Head of Product — Inference Platform
+Redwood Inference
+
+--
+Vivek: attaching the diagrams and an anonymized CSV. Will follow up once Sean confirms account status.
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Sanjay Rao <sanjay.rao@hyperion.com>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: Mon, 8 Dec 2026 14:20:00 -08:00
+Subject: Re: Quick Q: backup deletion propagation timing and proof for compliance audit
+
+Hi Sanjay — looping in with the run plan and a couple of concrete examples from your account (we kept them redacted).
+
+Planned evidence bundle:
+- Expunge trace CSV (attached): shows delete_event_id, primary_delete_ts, snapshot_marker_ts, tombstone_marker_ts, final_expunge_job_ts.
+- Snapshot diagram (attached): labeled propagation stages and where tombstones are applied.
+- Post-restore validation sample: lists 12 record IDs that were intentionally skipped during restore due to erasure rules.
+
+Notes and clarifications:
+- The "24–72 hours" window is our typical SLA for marker propagation under steady state. In times of high snapshot churn (e.g., large-scale DR operations) propagation may extend; we surface that to customers in incident notes.
+- Final expunge from immutable offsite archives must respect retention minimums and any active legal hold; expunge jobs will not run if there's an outstanding hold.
+
+Next steps:
+1) Please confirm whether Hyperion has any active legal holds or retention overrides on the account.
+2) If not, we can run a one-off evidence extraction for a specified deletion event id and produce a signed bundle suitable for auditors.
+
+Best regards,
+Marissa Cole
+Senior Technical Account Manager
+Redwood Inference
+
+Attachment stubs: hyperion-evidence-erase-log.csv (CSV, 12KB); retention-policy-snapshot-diagram.pdf (PDF, 210KB)
+From: Sanjay Rao <sanjay.rao@hyperion.com>
+To: Marissa Cole <marissa.cole@redwood.com>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: Thu, 9 Dec 2026 16:42:00 -08:00
+Subject: Re: Quick Q: backup deletion propagation timing and proof for compliance audit
+
+Marissa / Vivek — this is exactly what we needed, thank you. A couple of quick follow-ups for the audit packet:
+
+- Can you include the checksum/hash of the expunge trace file and an internal signature (who ran the extraction) so we can demonstrate integrity?
+- For the post-restore validation, can you include the exact software version / job id that performed the validation?
+
+We have no active legal holds on the account. Please proceed with a live extraction against deletion_event_id: del-20261122-9a73.
+
+If you can provide the signed bundle by Friday EOD that will let us close this item on our side. Appreciate the quick turnaround.
+
+Thanks,
+Sanjay Rao
+Director, IT Compliance
+Hyperion Financial
+
+---
+On Wed, Dec 2, 2026 at 11:03 AM Vivek Kulkarni <vivek.kulkarni@redwood.com> wrote:
+> Hi Sanjay — thanks for the clear list. High-level answers first, then I'll attach the artifacts.
+> 
+> Short answers:
+> - Typical propagation window: we aim to propagate tombstone markers to regional backups within 24–72 hours, and final expunge from replicated cold stores within 7–14 days, depending on ongoing DR snapshot cycles and offsite replication windows.
+> - Audit traces: we can provide an expunge trace that ties the original delete event (primary write with deletion flag) to the snapshot/tombstone events in backup manifests and the final expunge job. Those are timestamped and verifiable.
+> - Restore guarantees: our restore logic consults the retention/erasure index before materializing any historical snapshot; if a record is flagged as "erased" and the retention rule applies, restores will skip resurrecting that record. For additional assurance we also produce a post-restore validation report that lists skipped record IDs.
+> 
+> I'll attach a sanitized sample expunge trace and a diagram that maps the propagation path (primary -> hot cache -> regional snapshot -> offsite archive). One caveat: exact timelines can vary for customers with custom retention overrides or legal holds.
+> 
+> Best,
+> Vivek

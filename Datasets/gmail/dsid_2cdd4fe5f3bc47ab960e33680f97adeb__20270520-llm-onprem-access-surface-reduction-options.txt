@@ -1,0 +1,115 @@
+Reducing on-prem access surface — VPC Peering vs PrivateLink vs S2S VPN
+
+From: Samir Patel <samir.patel@novum.com>
+To: kimberly_park@redwood.com
+Cc: Novum SRE <sre@novum.com>
+Date: Sun, 16 May 2027 09:12:00 -0700
+Subject: Connecting Novum's on-prem LLM cluster to Redwood Private (options question)
+
+Hi Kimberly —
+
+Quick background: we're standing up a small on-prem LLM inference cluster behind our firewall for regulated workloads and we're evaluating three patterns for access to Redwood Private control/data plane for the pilot: VPC peering, AWS PrivateLink (interface endpoints), and a site-to-site VPN to our VPC. Our goals are: least blast radius, predictable latency for token serving, and minimal operational surface for our NetOps.
+
+Could you do a short comparison with pros/cons and any immediate gotchas (e.g., SNAT, cross-account endpoint scale, private DNS behavior) and a recommended path for a 3-week pilot? We're fine with a hybrid plan if it helps us ramp safely.
+
+Thanks — Samir
+Samir Patel
+Director, Infrastructure
+Novum Analytics
+
+---
+Attachment: Novum-network-topology-draft.pdf (stub)
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Samir Patel <samir.patel@novum.com>
+Cc: ben_carter@redwood.com, marcus_lin@redwood.com
+Date: Mon, 17 May 2027 11:30:00 -0700
+Subject: Re: Connecting Novum's on-prem LLM cluster to Redwood Private (options question)
+
+Hi Samir —
+
+Thanks for the clear goals. I did a quick pass and attached a short write-up (redwood-network-eval-v2.pdf) and a few config snippets. High level guidance below; I'll summarize tradeoffs and a recommended pilot plan for the 3-week window.
+
+Short summary (TL;DR):
+- PrivateLink (interface endpoints): best isolation for the control plane and recommended if Novum wants minimal network exposure. No peering route table changes required on customer VPC, supports cross-account endpoints but watch AWS ENI scale and per-ENI IP consumption for large bursty workloads. Use private DNS to resolve endpoints inside your VPC. If you deploy PrivateLink from Redwood to Novum's VPC, you get explicit per-service access control and easier least-privilege ACLs. Latency is generally good but depends on region AZ placement and ENI saturation.
+- VPC Peering: simple L3 routing, low latency (no proxying), but broad routing surface — you must be comfortable with CIDR planning and ensuring least-privilege by using security groups and routing policies. Peering doesn't support transitive routing, so multi-account setups get complex. Also requires managing SNAT for outbound traffic if you want egress anonymity.
+- Site-to-site VPN: fastest to stand up (good for POC). Provides an externalized tunnel from your datacenter to a Redwood-managed VPC. Operational burden: key rotation, tunnel monitoring, and potentially higher and variable latency. If Strict SLAs are required, VPN is a fallback during POC but not ideal for long-term production.
+
+Key gotchas we see often:
+- SNAT/Source IP preservation: if you need client IPs preserved for routing or rate-limiting, peering preserves it but PrivateLink and some proxying setups may NAT behind ENIs.
+- ENI and IP exhaustion: for PrivateLink, ENI count and IP usage can grow quickly under large parallel connections. We'll share heuristics in the attachment.
+- Private DNS: PrivateLink depends on endpoint DNS names; ensure split-horizon DNS or route 53 private zones are configured appropriately.
+- Cross-account permission model: peering requires IAM/network coordination for route propagation in multi-account setups; PrivateLink has a simpler 'accept connection' pattern for service consumers.
+
+Recommended pilot (3 weeks):
+Week 0: Kickoff + establish SRE contact and shared runbook (we'll provide a checklist).
+Week 1: Stand up a two-tunnel S2S VPN as rapid POC -> validate baseline functional traffic and auth.
+Week 2: Deploy PrivateLink interface endpoint in your pilot VPC and run comparative latency/cost tests against the VPN.
+Week 3: If PrivateLink meets latency and ENI scale requirements, transition pilot traffic to PrivateLink. If PrivateLink fails on IP scale or latency for your workload, we switch to a scoped VPC peering with strict route/security-group controls.
+
+Next steps I need from you:
+- NetOps primary contact (name + jump host IP range + ACL owner)
+- Preferred AWS account ID and VPC CIDR we can target for endpoints/peering
+- Any IP whitelists for our control plane (we can provide a short list)
+
+I'll follow up with a short runbook and the config attachments.
+
+Kimberly Park
+Sr. Solutions Engineer, Redwood Inference
+kimberly_park@redwood.com
+Phone: +1 415-555-0128
+
+Attachment: redwood-network-eval-v2.pdf (stub)
+Attachment: privatelink-config-snippets.txt (stub)
+From: Ben Carter <ben_carter@redwood.com>
+To: kimberly_park@redwood.com, marcus_lin@redwood.com
+Date: Tue, 18 May 2027 08:45:00 -0700
+Subject: Re: Connecting Novum's on-prem LLM cluster — implementation notes
+
+Kimberly / Marcus —
+Quick thoughts from infra:
+- For PrivateLink POC we'll want to pre-warm ENIs in the target AZs we expect load in; otherwise cold ENI attach can add a few hundred ms tail latency during bursts. Add that to the runbook.
+- If Novum cares about preserving original source IPs for downstream model infra, call that out early — we'll likely need to recommend a peering setup (or keep UDP/TCP flows inside their VPC) because PrivateLink will look like a service endpoint and could NAT.
+- Cost note: interface endpoints incur hourly and per-GB costs; for a pilot we'd estimate ~15-20% higher than a straight peered path for the same throughput depending on region.
+I'll drop a short pre-warm script into the drive link.
+
+—Ben
+Ben Carter
+Networking & Field Infra, Redwood
+
+---
+Attachment: eni-prewarm.sh (stub)
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Samir Patel <samir.patel@novum.com>
+Cc: ben_carter@redwood.com, marcus_lin@redwood.com
+Date: Thu, 20 May 2027 16:05:00 -0700
+Subject: Re: Connecting Novum's on-prem LLM cluster to Redwood Private (options question) — recommendation & next steps
+
+Samir —
+Thanks again for the clear ask and topology sketch. After an infra review and a brief internal sync, here's our recommended course for the 3-week pilot:
+
+1) Pilot recommendation: Start with a 2-phase approach — S2S VPN for immediate functional testing (Week 1) and PrivateLink for the production-like pilot (Weeks 2–3).
+Why: VPN gets you up quickly and verifies auth/workflow without needing cloud changes. PrivateLink gives the best long-term isolation and easier ACLs; it reduces your VPC routing surface compared to peering. We only recommend VPC peering if you must preserve client source IPs or require the absolute lowest network hop latency.
+
+2) Acceptance criteria for moving to PrivateLink by end of Week 2:
+- 95th percentile token round-trip latency within 20% of peered baseline measured during Week 1 tests
+- No ENI IP exhaustion during scaled synthetic load (we'll help run the load tests)
+- Successful DNS resolution and TLS termination via interface endpoint, validated by your SREs
+
+3) Runbook & kickoff
+- Proposed kickoff: Mon, 24 May 2027 — 9:00am PT. (If that works, we'll invite Novum NetOps + SRE + our infra.)
+- Deliverables before kickoff: account ID, VPC CIDR, primary NetOps contact, and NAT/egress constraints.
+- We'll circulate a condensed checklist (config snippets attached) and a short ENI pre-warm script that Ben added.
+
+4) Risk mitigations
+- If PrivateLink shows higher-than-expected latency in your AZ mix, we will: a) add AZ-level ENI pre-warm and b) fall back to scoped VPC peering for performance-sensitive traffic while keeping management/control flows on PrivateLink.
+
+If you confirm kickoff and the account/VPC details, we'll schedule the invite and drop the runbook and test procedures into the Drive link.
+
+Best —
+Kimberly
+Sr. Solutions Engineer, Redwood Inference
+kimberly_park@redwood.com
+Phone: +1 415-555-0128
+
+---
+Attachments: redwood-network-eval-v2.pdf, privatelink-config-snippets.txt, eni-prewarm.sh (stubs)

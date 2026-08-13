@@ -1,0 +1,125 @@
+Execution locality, cache TTLs, and subprocessor evidence
+
+From: Alyssa Green <alyssa.green@horizonmedical.com>
+To: jonas_weber@redwood.ai
+Date: Thu, 4 Jun 2026 09:12:00 -0700
+Subject: Request: where requests execute / transient retention / subprocessor list
+
+Jonas,
+
+Thanks for taking a call with our security team earlier. We have a short list of follow-ups to close our procurement review:
+
+1) For inference requests to Redwood Hosted API, where do requests actually execute (regions / cloud providers)? We need a definitive list of regions used for processing PII and non-PII.
+2) Which subprocessors may handle request data in-flight or transiently (inference runtime, caching, logging)? Please include the service, region(s), and whether data is persisted.
+3) What are the TTLs for any runtime caches (KV/prefix caches) and how is deletion enforced? We need exact timelines for cache eviction and any async erasure processes.
+4) Are there any cross-border transfers (e.g., EU -> US) and what controls / contracts cover those transfers?
+
+Can you provide an exportable artifact we can attach to our evidence pack (CSV of regions, subprocessor roster, and a diagram of the deletion workflow)? We need it by end of next week.
+
+Thanks,
+Alyssa Green
+Director, InfoSec - Horizon Medical
+security@horizonmedical.com
+
+Attachment: horizon-eval-checklist.xlsx (we will attach our checklist)
+
+From: jonas_weber@redwood.ai
+To: Alyssa Green <alyssa.green@horizonmedical.com>
+Cc: marissa_cole@redwood.ai, karthik_iyer@redwood.ai
+Date: Thu, 4 Jun 2026 12:30:00 -0700
+Subject: Re: Request: where requests execute / transient retention / subprocessor list
+
+Hi Alyssa — thanks for the clear list. High level answers below; I'll attach the CSV/diagram and a short subprocessor roster in a follow-up once I pull the latest exports. Marissa and Karthik are on copy to add specific inventories.
+
+Summary (short):
+- Execution: Hosted inference runs in a small set of region clusters we control; primary regions are US (us-west-2, us-east-1) and EU (europe-west1). We also run customer-dedicated pools in APAC on request.
+- Subprocessors: runtime executes on our cloud infra (AWS/GCP) and uses a small set of CDN/edge caches (Fastly) for response streaming and a managed logging pipeline (Datadog for telemetry only).
+- Caching TTL: default prefix/KV caches are ephemeral (minutes). Longer-lived caches are opt-in per-customer. We enforce eviction via a TTL engine and periodic cryptographic key rotation that makes cached tokens unreadable after retention.
+- Cross-border transfers: default hosted routing may move transient data between regions for routing/efficiency; we provide locality controls (region pinning) and contractual protections (DPA standard, SCCs where applicable).
+
+I'll send the CSV + roster + erasure diagram tomorrow morning. If you need a signed attestation or SOC 2 artifact we can route the request via our legal/compliance team.
+
+Best,
+Jonas Weber
+Senior Solutions Architect, Redwood Inference
+jonas_weber@redwood.ai
+
+Attachment: none
+
+From: marissa_cole@redwood.ai
+To: jonas_weber@redwood.ai, karthik_iyer@redwood.ai
+Date: Fri, 5 Jun 2026 08:50:12 -0700
+Subject: Subprocessor roster and region CSV (draft)
+
+Folks —
+
+Attached are the artifacts Jonas requested:
+- processing-regions-20260605.csv — mapping of runtime components to cloud regions (US/EU/APAC)
+- subprocessor-roster-20260605.pdf — short list with roles (compute, storage, CDN, monitoring)
+- erasure-workflow-diagram.png — diagram of async deletion and cache eviction paths
+
+Quick notes to include in the outgoing email to the customer:
+- AWS (EC2/EKS) — compute: us-west-2, us-east-1 (persisted model weights only), europe-west1 is used via GCP for EU customers when region pinning requested.
+- GCP (europe-west1) — compute for EU-dedicated pools; data-at-rest encrypted with customer-managed keys (when customer enables).
+- Fastly — edge streaming; does not persist input bodies beyond the streaming session; TTLs are sub-1-minute by default.
+- Datadog / S3 logging — only telemetry and anonymized traces; no raw customer prompt storage in standard config.
+
+I flagged the few entries where we need legal to confirm SCC applicability for exports — marked in the PDF.
+
+Marissa
+Marissa Cole
+Product Compliance, Redwood Inference
+
+Attachments: processing-regions-20260605.csv; subprocessor-roster-20260605.pdf; erasure-workflow-diagram.png
+
+From: jonas_weber@redwood.ai
+To: Alyssa Green <alyssa.green@horizonmedical.com>
+Cc: marissa_cole@redwood.ai, karthik_iyer@redwood.ai
+Date: Fri, 5 Jun 2026 11:20:00 -07:00
+Subject: Re: Request: where requests execute / transient retention / subprocessor list
+
+Alyssa — attaching the artifacts Marissa prepared. Below is the verbatim Q&A and evidence pointers so you can drop into your pack. If you need a signed attestation, let me know and I'll escalate.
+
+Q: Where do requests execute?
+A: Hosted requests execute on Redwood-managed runtime clusters. Primary regions:
+  - US: us-west-2 (primary), us-east-1 (failover/scale).
+  - EU: europe-west1 (for EU-dedicated pools / region pinning).
+  - APAC: available by request in asia-southeast1 (customers must request region pinning).
+Evidence: processing-regions-20260605.csv (attached).
+
+Q: Which subprocessors may handle request data?
+A: Inventory (high level):
+  - AWS (EC2/EKS) — compute (US regions).
+  - GCP (Compute Engine / GKE) — EU compute when region pinning requested.
+  - Fastly — streaming/edge; ephemeral buffering only.
+  - Datadog — telemetry and aggregated traces (no raw prompt storage in default config).
+  - S3-compatible storage (Redwood-managed buckets) — model artifacts and optional customer logs (only if enabled).
+Evidence: subprocessor-roster-20260605.pdf (attached).
+
+Q: What are TTLs for runtime caches and how is deletion enforced?
+A: Defaults:
+  - KV/prefix caches: 30–120 seconds TTL depending on workload.
+  - Response streaming buffers: <60 seconds.
+  - Optional long-lived caches: customer opt-in; TTL configurable (days) and visible in console.
+Enforcement: eviction occurs at TTL expiry + background compaction jobs. For erasure requests (e.g., account deletion) we run an asynchronous erasure pipeline that:
+  1) Revokes access tokens and rotates encryption keys for any stored caches or persistent logs.
+  2) Runs targeted deletion jobs against object stores and index tables.
+  3) Writes an audit event and returns a completion status. Typical completion for transient caches: minutes; for persisted logs/objects: 24–72 hours depending on object size and replication.
+Evidence: erasure-workflow-diagram.png (attached); we can provide a CSV of deletion job run-ids if you want audit artifacts.
+
+Q: Cross-border transfers?
+A: Behavior: hosted requests may traverse regions for routing and efficiency. Controls:
+  - Region pinning: customers can request to have execution restricted to EU-only or US-only clusters.
+  - Contractual safeguards: our DPA includes SCCs for EU customers; we can also add additional clauses on data residency on negotiated contracts.
+Evidence: DPA excerpt available on request; see processing-regions-20260605.csv for region mapping.
+
+Next steps: I'll share the SOC 2 redacted report via secure link if that helps. Do you want an explicit statement about no raw prompt persistence in the default hosted configuration? We can provide that as a short attestation.
+
+Thanks — happy to join a technical call with your infra folks if you want us to walk the diagram.
+
+Best,
+Jonas Weber
+Senior Solutions Architect, Redwood Inference
+jonas_weber@redwood.ai
+
+Attachments: processing-regions-20260605.csv; subprocessor-roster-20260605.pdf; erasure-workflow-diagram.png

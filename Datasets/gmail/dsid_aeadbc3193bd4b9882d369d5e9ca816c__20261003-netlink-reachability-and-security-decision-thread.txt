@@ -1,0 +1,97 @@
+Netlink reachability & security: VPC Peering vs PrivateLink vs S2S VPN
+
+From: Jorge Ramos <j.ramos@blueharbor.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>
+Cc: Asha Patel <asha@aurumtech.com>
+Date: 2026-10-03T09:12:00-07:00
+Subject: Private deploy — connectivity options and compliance constraints
+
+Hannah,
+
+Thanks for pickup. We're about to sign the SOW for a Private deployment and need a short advisory from Redwood on connectivity choices. Our constraints:
+- Highly regulated data (PII) — prefer traffic not to traverse public internet.
+- Multi-account AWS setup (central infra account + per-business-account VPCs).
+- Low p99 inference latency target (~75ms for short requests).
+
+We keep hearing three main options: VPC Peering, PrivateLink (interface endpoints), and site-to-site VPN (with transit/VPN appliances). We need clear tradeoffs on: reachability (cross-account, cross-region), security surface (attack surface, IP visibility), operational complexity, and expected data egress costs.
+
+Quick ask: can you outline recommended default for a customer like us and a minimal test plan to validate latency and egress impact? Also attach any security whitepaper.
+
+I'll loop infra lead (Asha) for questions.
+
+—Jorge
+Jorge Ramos
+NetOps Lead, BlueHarbor Financial
+Attachments: none
+
+From: Hannah Schmitt <hannah_schmitt@redwood.ai>
+To: Jorge Ramos <j.ramos@blueharbor.com>
+Cc: Ben Carter <ben_carter@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Date: 2026-10-03T13:05:00-07:00
+Subject: Re: Private deploy — connectivity options and compliance constraints
+
+Jorge — thanks, useful constraints. High level summary up front: for regulated, cross-account setups we generally recommend PrivateLink (Redwood endpoint service + VPC interface endpoints) as the default for initial pilots; VPC Peering is a good low-latency choice when both sides can accept route propagation and are in same region/account-boundaries; site-to-site VPN is acceptable for remote datacenters or legacy on-prem but adds latency and operational overhead.
+
+Key tradeoffs (short):
+• Reachability: PrivateLink supports cross-account via VPC endpoint services and requires NLB/endpoint-service setup; VPC peering is direct L3 routing but doesn't scale well across many VPCs (N^2). VPNs rely on BGP and can be multi-region but add L3 hairpin and potential MTU issues.
+• Security: PrivateLink minimizes surface (no routes into your VPC, interface endpoints in your subnet). Peering exposes IP-level connectivity (any host can talk to service if routes/NACLs allow). VPNs traverse an encrypted tunnel — good, but requires managing keys/BGP and can increase blast radius if routing misconfig.
+• Latency & perf: Peering usually has the lowest RTT (no proxy/NAT). PrivateLink introduces a hop (ENI + NLB / endpoint service) — typical extra few ms, depends on AZ alignment and cross-AZ ENI path. VPNs have the highest variance.
+• Cost: PrivateLink charges per-hour + per-GB processed; peering is free for data transfer inside a region on some cloud providers but cross-account data transfer pricing depends on provider; VPN has appliance/data transfer costs and potential NAT gateway charges.
+
+Proposed minimal test plan (attached as connectivity-test-plan.md):
+1) Baseline: spin up lightweight inference client in customer's VPC that hits hosted Redwood endpoint over Peering (if you can provision). Measure p50/p95/p99 latency and tokens/sec for 1, 5, 20 concurrency.
+2) PrivateLink: configure interface endpoint -> Redwood endpoint service (we'll provide ARN) in same AZs; run same workload.
+3) VPN: configure a temporary S2S using a small virtual appliance or transit gateway test; repeat workload.
+4) Collect: RTT, p50/p95/p99, token throughput, per-GB egress measured by CloudWatch/billing estimates.
+
+I'll attach our PrivateLink security sheet (redwood-privatelink-security-sheet.pdf) and the test plan. Ben/Kimberly, can you add any operational or billing checks we should flag?
+
+Next step: if this looks good Jorge, we can schedule a 30-45m pilot kickoff next week and provision a trial endpoint.
+
+Thanks,
+Hannah Schmitt
+Solutions Architect, Redwood Inference
+Attachments: redwood-privatelink-security-sheet.pdf, connectivity-test-plan.md
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Jorge Ramos <j.ramos@blueharbor.com>
+Date: 2026-10-04T10:22:00-07:00
+Subject: Re: Private deploy — connectivity options and compliance constraints
+
+Adding some nitty-gritty for Jorge/ops:
+- PrivateLink behavior: when you use an interface endpoint (ENI) to our endpoint service, your source IP will be preserved to Redwood only if you use an NLB with proxy-protocol disabled and we support preserving source IPs in the service mode — but most customers see the apparent connection as coming from the ENI (depends on provider specifics). This affects inbound allowlists and geo-IP checks.
+- SNAT/NAT: If your clients are in private subnets behind a NAT, PrivateLink avoids crossing the NAT for some flows (good) but if you place endpoints in public subnets you may see SNAT behaviour. We'll help document the recommended subnet placement.
+- Cross-account: PrivateLink works cleanly cross-account with endpoint-service permissions. Peering requires explicit route table updates and potentially centralized route propagation if you use transit gateway (preferred at scale).
+- MTU & VPN: VPNs frequently require lowering MTU from 1500 -> 1400; large batching during inference can hit fragmentation affecting throughput. Test with realistic payload sizes.
+- Cost: estimate for a 1TB/mo workload: PrivateLink data processing + endpoint hours (~$X-$Y) typically exceeds peering inside region (if provider offers free intra-region). VPN appliances + egress NATs can be comparable depending on appliance size and egress pricing. We'll produce a simple cost delta table during the pilot.
+
+Operational checklist to include in pilot kickoff:
+1) AZ alignment (place interface endpoints and test clients in same AZs as Redwood endpoints for best latency).
+2) Route and security groups — least privilege SGs bound to endpoint ENIs.
+3) Observability: enable VPC Flow Logs and Redwood per-route tracing to capture latency + errors.
+4) Fallback policy: set up automatic fallback to hosted (Internet) with rate limits for testing only — do not use in production for regulated traffic.
+
+I'll prep a short cost estimate and a canned CloudWatch dashboard we can share.
+
+—Ben
+Ben Carter
+Principal Solutions Engineer, Redwood Inference
+Attachments: none
+
+From: Jorge Ramos <j.ramos@blueharbor.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>, Asha Patel <asha@aurumtech.com>
+Date: 2026-10-05T15:48:00-07:00
+Subject: Re: Private deploy — connectivity options and compliance constraints
+
+Thanks Hannah/Ben — this is exactly the level we needed.
+Asha and I reviewed the test plan. We want to run the pilot next Wednesday (2026-10-07) at 10:00 AM PT. Can Redwood stand up the endpoint service and provide the test ARN by Tuesday EOD? Also please include a short cost-delta estimate (ballpark monthly) between PrivateLink and peering for a 1TB egress profile.
+
+Attachments: blueharbor-procurement-checklist.pdf (our internal procurement steps)
+
+I'll send a calendar invite once you confirm.
+
+—Jorge
+Jorge Ramos
+NetOps Lead, BlueHarbor Financial

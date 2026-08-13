@@ -1,0 +1,112 @@
+Tenant ingress/egress validation & service-account ownership
+
+From: Sam Cho <sam@acmehealth.com>
+To: Soojin Lee <soojin_lee@redwood.com>; Ben Carter <ben_carter@redwood.com>
+Cc: infraops@acmehealth.com
+Date: 2028-05-17T16:12:00-07:00
+Subject: Tenant ingress/egress validation & service-account ownership
+
+Hi Soojin / Ben,
+
+Thanks again for walking us through the Private deployment options yesterday. We're ready to start the network validation for the tenant environment but want to confirm a few gating items so our security/compliance team can sign off. Top asks from our side:
+
+1) Confirm which Redwood-managed service account(s) will own the control-plane operations for the tenant (KMS key access, image pulls, telemetry egress). We need exact service-account names to add to our allowlist.
+2) A clear ingress/egress matrix (CIDR ranges, ports, destination FQDNs) so we can validate firewall rules and proxy exceptions.
+3) Any requirements for NAT, floating IPs, or active/passive egress paths for telemetry to your hosted endpoints.
+4) Evidence of where audit logs will be stored and retention policy (we have a 3-year retention requirement).
+
+Can you send a concise checklist we can use for our internal gate and a proposal for the mutual action plan (owners + dates) for completing these checks? We aim for a smoke validation window next week (May 22-24).
+
+I've attached our standard network intake template and an initial list of IP ranges we expect to allow from our side.
+
+Thanks,
+Sam Cho
+Head of Infrastructure
+Acme Health
+sam@acmehealth.com
++1 (415) 555-0123
+
+Attachments: acme_network_intake.xlsx (spreadsheet), acme_ip_ranges.csv (csv)
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Sam Cho <sam@acmehealth.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: 2028-05-17T18:03:00-07:00
+Subject: Re: Tenant ingress/egress validation & service-account ownership
+
+Sam — thanks for the clear list. Attaching a single-sheet checklist and a high-level egress diagram to accelerate your security review. Below is a condensed plan that covers the gating items you outlined.
+
+Redwood quick checklist (owner in parentheses):
+- Service accounts and IAM roles: redwood-tenant-ctl@redwood-svc (Kimberly)
+- KMS key access pattern and policy sample (Kimberly)
+- Ingress matrix: allowed inbound ports (SSH for jumpbox 22; API 443) and CIDR (Acme app subnets) (Karthik)
+- Egress destinations: telemetry.redwood.ai:443, model-cache.redwood.ai:443, s3-compatible endpoints for snapshot uploads (Karthik)
+- NAT / Floating IP guidance: recommend NAT for outbound-only paths and a single egress IP per region for allowlisting (Karthik)
+- Audit logs: we can ship logs to your S3 bucket or to a customer-managed SIEM; retention configurable up to 7 years (Ben)
+- Validation/smoke test owner: Ben (schedule + runbook)
+
+Suggested timeline:
+- By 2028-05-18: Redwood provides named service-account + KMS policy sample (Kimberly)
+- 2028-05-19: Karthik validates CIDR/nat recommendations and shares egress diagram (attached)
+- 2028-05-22: Smoke validation window (Ben runs tests; Soojin coordinates)
+
+I've attached: redwood_tenant_onboard_checklist.xlsx (checklist), egress-flow-diagram.png (diagram). Please confirm if the proposed owners/dates work for your side. If you prefer alternative names for service accounts we can accommodate, but we need final names before the smoke window so keys and IAM can be configured.
+
+Thanks — Soojin
+Soojin Lee
+Principal Solutions Engineer, Private Deployments
+Redwood Inference
+soojin_lee@redwood.com
+
+Attachments: redwood_tenant_onboard_checklist.xlsx, egress-flow-diagram.png
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Kimberly Park <kimberly_park@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2028-05-18T08:10:00-07:00
+Subject: Fwd: Tenant ingress/egress validation & service-account ownership — action items for network + security
+
+Team — forwarding Sam's request and our checklist. Quick asks: can each of you confirm below by EOD so I can update Acme and lock the smoke window?
+
+Karthik: confirm the egress destinations and NAT guidance are feasible on their setup (Acme indicated a transit VPC + firewall appliance). Also validate whether we should provide an active/passive egress recommendation or a single NAT IP approach.
+
+Kimberly: finalize the exact service-account names and provide a minimal KMS policy sample (we will need both a service-account and a key alias to hand off).
+
+Ben: draft a 20-minute smoke runbook and availability for May 22 (morning preferred).
+
+I left the original emails below for context.
+
+— Soojin
+
+On 2028-05-17T18:03:00-07:00 Soojin Lee wrote:
+> Sam — thanks for the clear list. Attaching a single-sheet checklist and a high-level egress diagram to accelerate your security review. Below is a condensed plan that covers the gating items you outlined.
+>
+> Redwood quick checklist (owner in parentheses):
+> - Service accounts and IAM roles: redwood-tenant-ctl@redwood-svc (Kimberly)
+> - KMS key access pattern and policy sample (Kimberly)
+> - Ingress matrix: allowed inbound ports (SSH for jumpbox 22; API 443) and CIDR (Acme app subnets) (Karthik)
+> - Egress destinations: telemetry.redwood.ai:443, model-cache.redwood.ai:443, s3-compatible endpoints for snapshot uploads (Karthik)
+> - NAT / Floating IP guidance: recommend NAT for outbound-only paths and a single egress IP per region for allowlisting (Karthik)
+> - Audit logs: we can ship logs to your S3 bucket or to a customer-managed SIEM; retention configurable up to 7 years (Ben)
+> - Validation/smoke test owner: Ben (schedule + runbook)
+
+Attachments: redwood_tenant_onboard_checklist.xlsx, egress-flow-diagram.png
+
+From: Sam Cho <sam@acmehealth.com>
+To: Soojin Lee <soojin_lee@redwood.com>
+Cc: infraops@acmehealth.com, Maya Henderson <maya@vendorops.com>
+Date: 2028-05-19T11:03:00-07:00
+Subject: Re: Tenant ingress/egress validation & service-account ownership
+
+Soojin / team — thanks, that plan looks good.
+
+Quick confirmations from our side:
+- We can allowlist a single egress IP per region — we'll publish the NAT IPs after your smoke test run.
+- Service account name to use: redwood_acme_ctl@redwood-svc (please confirm this exact value in your final note).
+- KMS: we'll provide an S3 bucket and a KMS key ARN; retention for logs will be handled in-house, 3-year retention is fine for this engagement.
+
+I've attached an updated ACL CSV with our preferred outbound ports and a point-of-contact in our networking team: Maya Henderson (maya@vendorops.com). If you can confirm the service-account string and drop the final checklist into the shared Drive link below, we'll lock the May 22 morning window.
+
+Appreciate it — Sam
+
+Attachments: updated-egress-acls.csv
+

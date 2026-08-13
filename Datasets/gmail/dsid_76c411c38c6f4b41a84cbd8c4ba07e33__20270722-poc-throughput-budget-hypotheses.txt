@@ -1,0 +1,105 @@
+POC throughput & budget hypotheses — next steps
+
+From: Tessa Morgan <tessa@redwood.ai>
+To: Claire Zhou <claire@orchidhealth.com>; Tom Alvarez <tom@orchidhealth.com>
+Cc: Dev Patel <dev@redwood.ai>, Monica Patel <monica@redwood.ai>
+Date: Thu, 22 Jul 2027 16:05:00 -0700
+Subject: POC throughput & budget hypotheses — next steps
+
+Thanks again for the time today — quick recap and proposed next steps so we keep momentum. High-level notes from our discovery call:
+
+- Primary workload: batch post-processing for clinical notes normalization (async requests).
+- Traffic shape: steady daytime arrival with short spikes at 09:00 and 17:30 local (peak 40–60 concurrent active requests, baseline ~8–12).
+- Typical prompt size: 60–120 input tokens (structured prompts + metadata).
+- Typical model output: 150–260 tokens (most responses ~200 tokens).
+- Desired latency: <800ms P95 for the user-facing endpoints, background jobs can tolerate up to 2s.
+- Security: VPC + SOC2 evidence required for production.
+
+Cost target (from your side): $/1M tokens target band $600–$1,200 depending on quantization and batching. You mentioned a monthly budget band of $8k–$25k for initial POC scope.
+
+Batching / concurrency assumptions we should validate in PoC:
+- Continuous coalescing expected: workload benefits from ~15ms coalescing window since arrivals have microbursts; this should raise batch efficiency without harming tail latency.
+- KV/prefix cache: high reuse for repeated prompts (~20–30% cache hit expected for patient-specific prefixes).
+- Peak concurrency for planning: 50 concurrent streams (to be safe).
+- Suggested runtime defaults for PoC: max batch size 32, coalescing window 15ms, warm pool of 2 GPUs, autoscale + burst to 6 GPUs for peaks.
+
+What Redwood will do next:
+1) Share a short cost-simulation workbook (attached) with a couple of cost scenarios and unit econ breakouts (batching on/off, quantized model variant).
+2) Provide a proposed PoC config (Docker image + infra recipe) and a small prompt set for you to run locally or in our private sandbox — attached prompt set.
+3) If you agree, spin up a 2-week controlled PoC with telemetry (per-token cost, P95 latency, cache hit-rate).
+
+Please confirm the budget band and whether we should include streaming token billing for the normalization pipeline (some outputs are streamed to the downstream system). Also confirm whether you want us to prioritize tighter P95 (<=600ms) vs. lower cost for the PoC.
+
+Next meeting: propose Wed 28 Jul 10am PT to review the workbook and lock PoC scope.
+
+Thanks — Tessa
+
+--
+Tessa Morgan
+Account Executive, Redwood Inference
+https://redwood.ai
+
+
+From: Claire Zhou <claire@orchidhealth.com>
+To: Tessa Morgan <tessa@redwood.ai>
+Cc: Tom Alvarez <tom@orchidhealth.com>; Dev Patel <dev@redwood.ai>
+Date: Thu, 22 Jul 2027 17:21:00 -07:00
+Subject: Re: POC throughput & budget hypotheses — next steps
+
+Tessa — thanks for the crisp recap. A few clarifications from our end:
+
+- Budget: the $8k–$25k band is accurate for the POC; we expect to evaluate three possible scale targets (light, med, heavy) and then map to production commitments.
+- Streaming: yes, about 30% of outputs will be streamed (step-by-step normalization) — please show the difference in the cost sim.
+- Latency preference: for the POC we care more about cost efficiency and realistic throughput metrics; keep P95 target at ~800ms for now. We will prioritize sub-600ms for the production SLA if numbers look good.
+- Security: SOC2 plus a basic network diagram will be required before any Dedicated or Private deployment.
+
+We'll review the workbook and follow up. Wed 28 Jul 10am PT works for Tom and me.
+
+Claire
+CTO, Orchid Health
+
+
+From: Dev Patel <dev@redwood.ai>
+To: Claire Zhou <claire@orchidhealth.com>; Tessa Morgan <tessa@redwood.ai>
+Cc: Monica Patel <monica@redwood.ai>
+Date: Fri, 23 Jul 2027 08:04:00 -07:00
+Subject: Re: POC throughput & budget hypotheses — next steps
+
+Claire / Tessa — attaching the initial cost-sim workbook and a compact prompt sample (see attachments). A couple of engineering hypotheses baked into the workbook that we want to validate in the PoC:
+
+1) Continuous batching / coalescing: with a 15ms coalesce window and max batch 32 we expect token-level cost reduction of ~22% for your median traffic (assumes average output 200 tokens).
+2) Cache hit: if prefix cache hit-rate is >=25% average, cost reductions approach ~30% because KV cache avoids full autoregressive decode on repeated prefixes.
+3) Quantized model variant: switching from fp16 -> int8-ish runtime reduces per-token inference cost by ~35% at a small quality delta; we show a quality delta check column.
+
+I also added a simple throughput sensitivity table — rows for avg tokens per request (120/180/240) and columns for concurrent streams (10/25/50). It outputs projected tokens/day and an estimated $/1M tokens.
+
+Action items from Eng:
+- Monica: add a short runbook for measuring cache hit-rate and how Orchid can tag repeated prefixes in PoC logs.
+- Tessa: confirm PoC dates and sign the mutual action plan link.
+
+I'll be on the Wed call to walk through the workbook.
+
+Cheers,
+Dev
+Senior SW Eng, Redwood Inference
+
+
+From: Monica Patel <monica@redwood.ai>
+To: Claire Zhou <claire@orchidhealth.com>, Tom Alvarez <tom@orchidhealth.com>, Tessa Morgan <tessa@redwood.ai>
+Date: Fri, 23 Jul 2027 09:12:00 -07:00
+Subject: Re: POC throughput & budget hypotheses — next steps
+
+Claire / Tom — quick note on measurement so the PoC yields actionable numbers:
+
+- We'll instrument three metrics streams: token-usage by direction (input/output), per-request latency histogram, and prefix-cache hit/miss with TTL.
+- Please add a stable request identifier to each message so we can stitch logs across retries and downstream acknowledgements.
+- For the continuous batching test, we'll run two parallel experiments during week 1:
+  * Experiment A: coalesce=0ms, batch_max=8 (baseline)
+  * Experiment B: coalesce=15ms, batch_max=32 (optim)
+  We'll compare P95 latency and tokens/$ for both.
+
+I'll add a short README to the Drive link before Wed. Looking forward to the call.
+
+-Monica
+Staff SRE, Redwood Inference
+Attachment stubs: orchid_poc_assumptions.xlsx (workbook), sample_prompt_set.txt (20 sample prompts)

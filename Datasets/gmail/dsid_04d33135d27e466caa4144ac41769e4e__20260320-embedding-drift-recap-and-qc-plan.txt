@@ -1,0 +1,114 @@
+Embedding validation recap + proposed QC plan (semantic search + drift checks)
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Jordan Lewis <jordan@acme.com>
+Cc: Rafael Mendes <rafael.mendes@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Fri, 20 Mar 2026 15:04:00 -0700
+Subject: Embedding validation recap + proposed QC plan (semantic search + drift checks)
+
+Thanks again for taking the call today — good discussion. Below is a short recap, our recommended next steps, and an initial quality-control plan so you can see how we’d validate model fit for your semantic search use case. I attached the prompt set you shared and the lightweight benchmark results we ran on the anonymized subset (emb-bench-results-20260318.csv).
+
+Call recap (high-level)
+- Business goal: Improve customer-support document retrieval relevance and reduce time-to-first-relevant by surfacing top-3 answers.
+- Current pain: Keyword matches show good precision on obvious queries but poor recall on follow-ups / paraphrases.
+- Data shape: ~1.2M docs, avg doc length 420 tokens; initial eval set is ~3k query-doc pairs.
+
+Initial findings from our quick bench (attached)
+- Models tested: text-embedding-3-large (512d), open-embedding-1 (384d), rw-emb-512q (quantized 512d).
+- Metrics we tracked: MRR@10, NDCG@10, mean cosine of matched pairs, and median pairwise distance (for drift insight).
+- Quick takeaway: text-embedding-3-large leads on MRR (0.42 vs 0.35 for open-embedding-1) but rw-emb-512q is close on NDCG while saving ~30% memory.
+
+Primary concerns / questions to validate
+1) Distributional drift: your last-indexed snapshot is 9 months old; we want to quantify drift by comparing embedding distributions (pairwise distance histograms) across time buckets.
+2) Dimensionality vs cost: 512d gives better separation on small paraphrase differences but increases storage & NN search cost.
+3) Quality regressions: need guardrails (prompt sets + eval harness) to detect regressions when we switch quantization/model.
+
+Proposed QC plan (what Redwood will deliver if you approve a short POC)
+- Step A (this week): Run full benchmark on your full eval sample (we need a secure snapshot of your 3k labelled pairs or we run on a redacted subset). Owner: Rafael. Deliverable: per-model CSV of metrics + distribution plots.
+- Step B (2 weeks): Drift analysis — compare month-over-month embedding distributions and compute KL-like divergence on reduced-dim projections; flag queries with >25% drop in cosine with their ground-truth doc. Owner: Marissa.
+- Step C (2–3 weeks): Cost/latency tradeoff matrix — throughput at 64/128 batch sizes, memory footprint, and expected per-query cost at your current QPS. Owner: Rafael.
+- Step D (ongoing): Regression harness and alerting — we’ll add a lightweight eval job that runs on every rollout and emails when MRR/NDCG drop >3% absolute.
+
+Attachments: acme_prompt_set_v1.jsonl (your prompts), emb-bench-results-20260318.csv (quick bench), sec_questionnaire.pdf
+
+Immediate asks (we agreed on these on the call):
+- Jordan: confirm whether you can share the 3k labelled pairs (redacted is fine) or we should run on the subset we already have.
+- Jordan: confirm target latency SLO for search (p50 / p95).
+
+If you’re OK, Rafael will start the full bench tomorrow morning and we’ll schedule a 30-min recap early next week.
+
+Best,
+Neha Kapoor
+Account Executive, Redwood Inference
+neha.kapoor@redwood.com
+
+---
+Note: this message summarizes our internal notes; see attached run_bench_instructions.md for the exact commandlines we’ll run if you give access.
+
+From: Jordan Lewis <jordan@acme.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>
+Cc: Samir Patel <samir@acme.com>
+Date: Fri, 20 Mar 2026 16:12:00 -0700
+Subject: Re: Embedding validation recap + proposed QC plan (semantic search + drift checks)
+
+Thanks Neha — very clear, appreciate the structured plan. A few clarifying Qs before we greenlight the POC:
+
+1) Can you confirm the impact on storage and search latency if we move from 384d -> 512d embeddings? We have tight storage constraints in our search cluster.
+2) On quantized options (rw-emb-512q) — what's the expected accuracy delta on paraphrase-heavy queries? Your quick bench looks promising but want to understand worst-case deg.
+3) We can share the 3k labelled pairs but we need Redaction: remove PII before you store anything; can you sign our POA?
+
+If you can answer 1–2 briefly, we’ll confirm sharing the dataset and I’ll loop in our infra PM to schedule the connectivity window next Tue.
+
+—Jordan
+Jordan Lewis
+Head of Search Engineering, Acme Corp
+jordan@acme.com
+
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Jordan Lewis <jordan@acme.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Sat, 21 Mar 2026 08:19:00 -0700
+Subject: Re: Embedding validation recap + proposed QC plan (semantic search + drift checks)
+
+Hi Jordan — quick answers, then next steps.
+
+1) Storage & latency tradeoffs (384d -> 512d):
+- Storage: +33% raw vector storage (512/384 - 1). With typical quantization (8-bit), delta in bytes is smaller but still ~25% uplift. For 1.2M docs that’s ~120GB additional raw bytes before any disk compression/codec adjustments.
+- Latency: NN search p95 increases depending on your ANN index config; with HNSW and tuned ef/search params, p50 impact is negligible, p95 can be ~10–20% higher if you keep the same efConstruction/efSearch. Recommendation: increase efSearch by 20% and tune index shards; we’ll run these numbers in Step C.
+
+2) Quantization accuracy (rw-emb-512q):
+- In our internal tests quantized 512d loses ~0.01–0.03 MRR compared to float32 512d on paraphrase-heavy sets — often within tolerance when balanced by cost savings. Worst-case on niche phrase-matching tests we’ve seen up to 0.05 MRR drop.
+- We’ll produce per-query deltas so you can see which query types regress; the regression harness will surface top-10 queries that cross the threshold.
+
+3) Dataset / POA / PII:
+- We can accept a redacted dump. We will not persist raw PII in plain text and can sign your POA/NDA. Our standard handling: ephemeral bench container, results only stored in your Drive / S3 (whichever you prefer).
+
+Practical next steps (my action items):
+- I’ll kick the full benchmark tomorrow (Sat AM) on the anonymized subset we already have; results should be in drive by EOD Sun. (attachment: run_bench_instructions.md)
+- If you confirm sharing full 3k pairs, please send link + preferred storage (S3 with limited role or Google Drive share).
+
+Technical notes for the bench (summary of run_bench_instructions.md):
+- Commands: python run_bench.py --models text-embedding-3-large,open-embedding-1,rw-emb-512q --eval-file acme_prompt_set_v1.jsonl --k 10 --metrics mrr,ndcg,cosine_delta
+- Batch sizes: 64 / 128 for throughput sweep.
+- Output: CSV per-model + a small HTML with distribution plots.
+
+I’ll ping once the bench is uploaded.
+
+Thanks,
+Rafael Mendes
+Solutions Engineer, Redwood Inference
+rafael.mendes@redwood.com
+
+> On Fri, Mar 20, 2026 at 15:04, Neha Kapoor <neha.kapoor@redwood.com> wrote:
+> > If you’re OK, Rafael will start the full bench tomorrow morning and we’ll schedule a 30-min recap early next week.
+
+From: Jordan Lewis <jordan@acme.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>, Rafael Mendes <rafael.mendes@redwood.com>
+Date: Sat, 21 Mar 2026 10:12:00 -0700
+Subject: Re: Embedding validation recap + proposed QC plan (semantic search + drift checks)
+
+Perfect — that all sounds reasonable. We’ll share the redacted 3k tomorrow (S3 link) and I’ll have infra open a short window Tue 9–11am PST for the bench (network + temporary role).
+
+Thanks for the quick turnaround. Looking forward to the results.
+
+—Jordan

@@ -1,0 +1,140 @@
+Incident brief and customer action plan — May 5 impact on inference latency
+
+From: Ben Carter <ben.carter@redwood.com>
+To: BlueHarbor IT Ops <it-ops@blueharbor.com>, Carlos Mendez <carlos.mendez@blueharbor.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>, Markus Klein <markus_klein@redwood.com>
+Date: Wed, 5 May 2027 09:15:00 -0700
+Subject: Incident brief and customer action plan — May 5 impact on inference latency
+
+Hi Carlos / BlueHarbor team,
+
+Thank you for your patience while we investigated the increased latency some of your inference requests experienced this morning. We take these incidents seriously and want to share an interim customer-facing summary plus our immediate remediation actions. A final post-incident report with a full timeline and long-term mitigations is attached (customer-facing-postmortem-draft.pdf).
+
+Quick summary
+- What happened: A surge of short-lived bursts caused the autoscaler to under-provision GPUs for a subset of generation workloads in the us-west-2 cluster, resulting in queued requests and elevated p95/p99 latency.
+- Impact window: 03:12:10 UTC — 03:49:22 UTC on 2027-05-05 (approx 37 minutes).
+- Customer impact: ~0.9% of total inference requests for BlueHarbor were delayed past your 1s target; tail latency increased up to ~4s for affected requests.
+
+Immediate actions taken (already completed)
+- Throttled incoming burst traffic and enabled an emergency autoscaler override to provision capacity faster.
+- Rolled back a recently deployed autoscaler tuning change that reduced aggressive pre-warming during short bursts.
+- Deployed a targeted mitigation to prioritize pinned production routes for paid customers during the corrective window.
+
+Next steps (customer-facing)
+- We will share a sanitized timeline and root cause analysis with timestamps and evidence (attached).
+- Short-term fixes: revert autoscaler tuning, add temporary conservative pre-warm thresholds, and increase warm pool size for your reserved routes.
+- Medium-term: implement improved burst-detection logic and synthetic load tests to exercise pre-warming.
+- We'll propose a technical review call to walk through the timeline and answer questions.
+
+Attachments included: incident-timeline-may5.csv, customer-facing-postmortem-draft.pdf
+
+Apologies again for the disruption. I will coordinate a short call if you’d like to review the details with our infra team; does tomorrow morning (May 6, 09:00 PT) work?
+
+Thanks,
+Ben Carter
+Account Executive, Redwood Inference
+ben.carter@redwood.com
++1 415-555-0123
+
+---
+
+
+From: Carlos Mendez <carlos.mendez@blueharbor.com>
+To: Ben Carter <ben.carter@redwood.com>
+Cc: BlueHarbor IT Ops <it-ops@blueharbor.com>
+Date: Wed, 5 May 2027 10:02:00 -0700
+Subject: Re: Incident brief and customer action plan — May 5 impact on inference latency
+
+Ben,
+
+Thanks for the quick update. Appreciate the interim notes and the draft. A couple quick asks:
+1) Can you quantify the absolute number of affected requests and what percent of our SLA-bound requests that represents?
+2) Will BlueHarbor receive a credit for the affected window as per our SLA or will this be adjudicated after the final postmortem?
+3) We want the timeline and any logs that demonstrate the autoscaler behavior — sanitized if necessary for broader distribution.
+
+We’re open to the May 6 call. Please loop in someone from infra and product engineering.
+
+Carlos
+Head of Platform, BlueHarbor Financial
+carlos.mendez@blueharbor.com
+
+> On Wed, May 5, 2027 at 09:15 -0700, Ben Carter <ben.carter@redwood.com> wrote:
+> > [original message trimmed]
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: Ben Carter <ben.carter@redwood.com>, Markus Klein <markus_klein@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Wed, 5 May 2027 12:00:00 -0700
+Subject: Internal: BlueHarbor impact — interim findings and remediation plan
+
+Team,
+
+Summary of engineering findings (internal):
+- Root cause: a recently merged autoscaler PR (INF-4521) introduced an optimization that inadvertently delayed pre-warm allocation for short, high-concurrency bursts. The optimization reduced warm-pool residency time for idle workers; combined with a burst of 1,200 concurrent short requests, this produced queueing.
+- Evidence: sampler traces and autoscaler logs show repeated scale-down then immediate scale-up cycles between 03:10 — 03:50 UTC; GPU queue depth peaked at 120 queued tokens for the primary host group.
+
+Immediate remediation already executed:
+- Rolled back the PR in production at 03:55 UTC.
+- Deployed temporary emergency thresholds to keep a 20% buffer of warm workers for pinned routes.
+
+Planned corrective items and owners (ETA):
+- Hotfix: guardrails in scaler logic to avoid oscillation during short bursts — owner: Markus Klein — ETA: 2027-05-12
+- Expanded warm pool telemetry + new alert (p95 queue depth) — owner: Marissa Cole — ETA: 2027-05-10
+- Synthetic burst testing harness for autoscaler — owner: Lauren Bishop — ETA: 2027-06-02
+- Customer SLA reconciliation and credit proposal — owner: Ben Carter / Revenue Ops — ETA: 2027-05-07
+
+Customer messaging: Ben, I prepared the attached customer-facing postmortem draft (customer-facing-postmortem-draft.pdf). Suggest we lead with the timeline, the concrete mitigations, and our proposed customer credit.
+
+Lauren
+VP, Engineering Operations
+lauren_bishop@redwood.com
+
+> On Wed, May 5, 2027 at 10:02 -0700, Carlos Mendez <carlos.mendez@blueharbor.com> wrote:
+> > [customer reply trimmed]
+From: Ben Carter <ben.carter@redwood.com>
+To: Carlos Mendez <carlos.mendez@blueharbor.com>, BlueHarbor IT Ops <it-ops@blueharbor.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>, Markus Klein <markus_klein@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Nidhi Rao <nidhi@consultingfirm.io>
+Date: Thu, 6 May 2027 08:30:00 -0700
+Subject: Final customer post-incident summary and action plan (BlueHarbor)
+
+Carlos / team,
+
+Thanks again for your time and feedback on the draft. Below is the customer-facing final summary and next steps. Attached is the full sanitized timeline and proof artifacts (incident-timeline-may5.csv) and our proposed remediation plan (proposed-remediation-plan.docx).
+
+Executive summary
+- Incident window: 2027-05-05T03:12:10Z — 2027-05-05T03:49:22Z (UTC).
+- Impact: Elevated tail latency for a subset of generation requests; approximately 11,400 BlueHarbor requests (0.9% of your daily inference volume) experienced p95/p99 degradation with worst-case latency ~4.1s.
+- Root cause: Autoscaler tuning change that reduced warm-pool residency created oscillation under brief concurrent bursts; scale-down then immediate scale-up cycles caused queuing.
+
+Sanitized timeline (high level)
+- 03:08 UTC: Background job batch and product traffic overlapped causing an unexpected short burst.
+- 03:12 UTC: Observability alerts triggered (elevated p95/p99).
+- 03:20 UTC: Engineering began triage; autoscaler logs show repeated scale cycles.
+- 03:35 UTC: Mitigation: emergency override engaged to increase warm pool.
+- 03:49 UTC: Tail latency subsided toward baseline.
+- 03:55 UTC: Autoscaler PR rollback completed.
+
+Customer-facing corrective actions and commitments
+1) Immediate (completed) — emergency override and PR rollback to restore baseline performance.
+Owner: Redwood Ops; Completed: 2027-05-05
+2) Short-term (1–2 weeks) — deploy hotfix to prevent scaler oscillation and maintain conservative warm-pool thresholds for pinned routes.
+Owner: Markus Klein; ETA: 2027-05-12
+3) Medium-term (3–6 weeks) — synthetic burst testing harness + additional telemetry/alerts on queue depth and scale oscillation.
+Owner: Lauren Bishop; ETA: 2027-06-02
+4) SLA reconciliation — Redwood will produce a credit calculation for the affected window and propose it for BlueHarbor review.
+Owner: Ben Carter / Revenue Ops; ETA: 2027-05-07
+
+Attachments: incident-timeline-may5.csv, proposed-remediation-plan.docx
+
+Proposed next steps
+- Technical follow-up call to review artifact set and logs (suggest May 6, 09:00 PT).
+- Review of credit calculation; will provide a written proposal by May 7.
+
+If you want additional detail (full traces, sanitized logs), we can package and share under the NDA terms we already have in place. Thanks for the partnership and we will follow up with the remediation status updates on the owner ETAs above.
+
+Best,
+Ben Carter
+Account Executive, Redwood Inference
+ben.carter@redwood.com
++1 415-555-0123
+
+---
+

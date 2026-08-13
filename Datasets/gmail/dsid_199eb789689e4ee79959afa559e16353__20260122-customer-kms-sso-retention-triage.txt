@@ -1,0 +1,147 @@
+Customer ask: KMS + SSO workflows + retention clarifications
+
+From: Samuel Klein <sam.klein@acmefinance.com>
+To: dev_patel@redwood.example, hannah_schmitt@redwood.example
+Cc: procure@acmefinance.com
+Date: Sun, 18 Jan 2026 09:12:00 -0800
+Subject: KMS + SSO + retention — clarifications before procurement
+
+Hi Dev / Hannah,
+
+Thanks for the demo last week. Before we get Procurement to circulate a PO we have a few technical clarifications from Security:
+
+1) BYOK/KMS: we need a clear list of supported KMS providers and whether Redwood will generate the data keys or if we retain exclusive control. Our infosec policy requires customer key generation and periodic rotation.
+
+2) Audit logs: retention options (30/365/indefinite), export formats, and whether logs can be pushed to our SIEM (Splunk).
+
+3) SSO: we need a SAML assertion flow diagram and confirmation that session timeout can be set to 1 hour.
+
+Can you share a single doc with these items and a timeline for any engineering work if features are not GA? Procurement would like to understand any dates that affect contract start.
+
+Thanks,
+Sam
+Samuel Klein
+Head of Cloud Security, Acme Finance
+
+Attachment: none
+
+From: dev_patel@redwood.example
+To: hannah_schmitt@redwood.example, laura_bennett@redwood.example
+Cc: neha_kapoor@redwood.example
+Date: Mon, 19 Jan 2026 08:45:00 -0800
+Subject: Fwd: KMS + SSO + retention — clarifications before procurement
+
+Hannah / Laura — forwarding Sam's note. Key asks from customer security. High level: they want BYOK where keys are customer-controlled, flexible retention/export for audit logs, and SAML session timeout control.
+
+Laura — can Product confirm what we can promise today vs. roadmap? Neha — can Security sketch required controls and any compliance blockers? Procurement timeline: they want start of Feb if we can commit.
+
+Short replies appreciated — I will reply to Sam with the summary once we have alignment.
+
+— Dev
+
+--- Forwarded message ---
+(original message from Samuel Klein)
+
+From: laura_bennett@redwood.example
+To: dev_patel@redwood.example, hannah_schmitt@redwood.example, neha_kapoor@redwood.example
+Date: Mon, 19 Jan 2026 11:03:00 -0800
+Subject: Re: Fwd: KMS + SSO + retention — clarifications before procurement
+
+Thanks — quick status from Product: 
+
+- BYOK/KMS: we support customer-provided KMS through our Private deployment today (VPC + KMS integration) and we have a Hosted-Using-Customer-Keys beta that uses envelope encryption with customer-managed keys (partnered KMS vendors only). We do not currently support customer key generation inside Hosted; customers provide a KMS key ARN and we use envelope keys. Full customer rotation controls are limited; rotation today follows KMS provider policy.
+
+- Audit logs: GA audit logs are available for admin actions; retention is configurable up to 13 months via Console. We have an internal ticket to add export-to-SIEM (push via syslog/HTTP) but it's not GA — target Q2. We can offer a CSV export now for manual ingestion.
+
+- SSO: SAML SSO and SCIM provisioning are GA. Session timeout is configurable in the Dedicated/private console; Hosted supports a default session timeout but not per-customer override yet.
+
+I'll draft a short note for Sam that outlines what we can commit to vs what is roadmap. If Security deems anything unacceptable, call it out.
+
+Action items I see:
+1) Security to confirm acceptable controls for Hosted BYOK beta (Neha).
+2) Engineering estimate for SIEM push (Product will request) — tentative Q2 target.
+3) Ops note for retention policy options in contract.
+
+Laura
+Product Director — Redwood Inference
+
+From: neha_kapoor@redwood.example
+To: laura_bennett@redwood.example, dev_patel@redwood.example, hannah_schmitt@redwood.example
+Date: Tue, 20 Jan 2026 09:30:00 -0800
+Subject: Re: Fwd: KMS + SSO + retention — clarifications before procurement
+
+Short security triage: 
+
+1) BYOK/KMS: Customer-managed keys for Hosted are acceptable only if the key material never leaves the customer KMS and we use envelope encryption with customer key policies that prevent export. For Procurement, we need a written guarantee in the contract that key access is limited to customer principals and that Redwood does not retain plaintext keys. This is compliant with our SOC2 controls if implemented correctly.
+
+2) Key rotation: rotation controls handled by customer KMS — we must document rotation windows and any required re-wrap operations. We also need an escalation plan if a customer-rotated key breaks pattern (e.g., a new key not accessible).
+
+3) Audit logs & SIEM: push-to-SIEM is medium priority for customers in finance. For now, provide an export API or scheduled export to an S3 bucket under customer control. Pushing directly to customer SIEM requires additional networking support (IP allowlisting) and must go through netsec review.
+
+4) SSO session timeout: acceptable; set expectation that Hosted will get per-org session override in roadmap but cannot guarantee before Q2.
+
+Neha
+Staff Security Engineer — Redwood Inference
+
+From: dev_patel@redwood.example
+To: Samuel Klein <sam.klein@acmefinance.com>, procure@acmefinance.com
+Cc: hannah_schmitt@redwood.example, laura_bennett@redwood.example, neha_kapoor@redwood.example
+Date: Wed, 21 Jan 2026 10:05:00 -0800
+Subject: Re: KMS + SSO + retention — clarifications before procurement
+
+Sam — quick summary and next steps:
+
+Thanks for the clear list. Here is what Redwood can confirm today and our roadmap items: 
+
+Confirmed today (can be added to contract):
+- Hosted using customer-managed KMS (envelope encryption) where customer keeps control of master key; Redwood will not have access to plaintext keys. Implementation details and required key ARNs will be documented.
+- Audit logs: GA admin audit logs available, retention configurable up to 13 months; manual/export CSV and scheduled S3 export available as an interim solution.
+- SAML SSO + SCIM are GA; session timeout default is 8 hours on Hosted; we will offer per-org override on Dedicated/Private.
+
+Roadmap / timeline:
+- Per-org session timeout control on Hosted: target Q2 2026.
+- SIEM push / real-time export: engineering planning for Q2 2026 (target: push-to-Splunk via HTTPS or syslog), requires network sign-off for direct pushes.
+- Hosted customer-key rotation policy doc & failover runbook: will be delivered by Feb 5, 2026.
+
+Requested from Acme: please confirm if Scheduled S3 export + CSV ingestion is acceptable short-term (we can deliver config + IAM role details this week). Also please provide any procurement-required language for key control we should include in the SOW.
+
+I'll set a 30-min follow-up call if you'd like to walk through the proposed interim SIEM flow.
+
+Thanks,
+Dev Patel
+Account Executive — Redwood Inference
+
+Attachment: Retention_Options_Table.xlsx (spreadsheet)
+From: Samuel Klein <sam.klein@acmefinance.com>
+To: dev_patel@redwood.example
+Cc: procure@acmefinance.com, hannah_schmitt@redwood.example, laura_bennett@redwood.example, neha_kapoor@redwood.example
+Date: Thu, 22 Jan 2026 16:07:00 -0800
+Subject: Re: KMS + SSO + retention — clarifications before procurement
+
+Dev / Team — this is helpful, thanks.
+
+Scheduled S3 export + CSV ingestion is acceptable as the interim path. Please share the IAM role template and any example CloudTrail mapping we should expect. For the contract SOW we will request the language explicitly stating Redwood does not retain customer plaintext keys and that key access is limited to our managed runtime using envelope encryption. Can you confirm the exact wording you prefer?
+
+We are aiming to close commercial terms next week; if you can get the Hosted rotation runbook by Feb 5 that works. Also let's schedule a short call — Thu 1/29 10:00 PT or Fri 1/30 9:00 PT — to confirm the S3 export setup and sign-off on SOW language.
+
+Sam
+
+Attachment: SSO_Flow_Diagram.png (image)
+From: hannah_schmitt@redwood.example
+To: dev_patel@redwood.example, laura_bennett@redwood.example, neha_kapoor@redwood.example, Samuel Klein <sam.klein@acmefinance.com>
+Date: Thu, 22 Jan 2026 16:45:00 -0800
+Subject: Re: KMS + SSO + retention — clarifications before procurement
+
+Looping back with next steps and owners:
+- Laura: produce the Hosted rotation runbook and the proposed contract language for key non-retention by Feb 5.
+- Neha: review the IAM role template and draft required security clauses for SOW by Jan 28.
+- Dev: send the IAM role template + sample CloudTrail mapping to Acme by Jan 25; schedule the follow-up call for Jan 29 (Dev, Sam, Neha).
+- Sales Ops: include RISK flag in the deal for networking/allowlist work (if Acme wants direct SIEM push).
+
+I will be available on the Jan 29 call to escalate any blockers. Thanks all — let's keep this tight, procurement is expecting quick turnaround.
+
+— Hannah
+Hannah Schmitt
+Director, Strategic Accounts — Redwood Inference
+
+Attachments referenced: KMS_Integration_Spec.pdf (stub)

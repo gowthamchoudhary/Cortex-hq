@@ -1,0 +1,117 @@
+[URGENT] Prod p99 spike & token/s collapse after kernel/quant rollout
+
+From: Jessica Park <jessica@fastlane.ai>
+To: aditya.rao@redwood.ai
+Date: 2028-03-11T09:12:00Z
+Subject: High p99 latency + token/s drop on /v1/generate — urgent
+
+Hi Aditya,
+
+We're seeing a severe degradation in our Redwood-hosted integration since ~02:00 UTC this morning. p95 is up ~2x and p99 has jumped 4–6x. Token-per-second throughput for our long-running streams collapsed from ~320 tps to ~60 tps on redwood-7b-q4 variants. Error rate also rose to 3.1% on our production traffic (mostly 503s and timeout truncations).
+
+We noticed this started right after your note about the kernel selector/quant rollout last night. Our SRE dug through traces and attached a set of p95/p99 graphs and a short log excerpt (fastlane_p99_graphs_20280311.png). The attached graphs show the inflection point at 02:07 UTC.
+
+Impact: checkout flows and chat-sync are timing out for paying customers. We're getting 10+ SLA alerts/min. Can you confirm whether you rolled any model kernel or quantization profile to hosted in the early hours? We need an estimate for rollback or mitigation timeline.
+
+Thanks — this is urgent for our renewal conversation next week.
+
+—Jessica
+Jessica Park
+Head of Platform, FastLane
+ops@fastlane.ai
+
+Attachment: fastlane_p99_graphs_20280311.png (image/png, 428KB)
+From: Aditya Rao <aditya.rao@redwood.ai>
+To: Jessica Park <jessica@fastlane.ai>
+Cc: marissa.cole@redwood.ai, markus.klein@redwood.ai, rishi.malhotra@redwood.ai
+Date: 2028-03-11T09:32:00Z
+Subject: Re: High p99 latency + token/s drop on /v1/generate — urgent
+
+Jessica — really sorry you're hitting this. We saw an anomaly alert this morning and are actively investigating. Short answers up front: yes, there was a kernel selector tweak and a quantization profile rollout for the q4_kv path at ~01:58 UTC as part of a staged experiment. That rollout should have been canary-limited, but looks like routing pushed a subset of hosted traffic to the new path earlier than expected.
+
+Immediate actions I'm triggering now:
+- Rolling back the kernel selector change for the hosted fleet (target: next 20 minutes).
+- Pinning FastLane's customer route to the prior stable model variant while we validate.
+- Opening an incident ticket and loop in infra on persistent 503s.
+
+Can you confirm the exact HubSpot account id or request id for traffic you saw so we can map routes? Also attaching the kernel deploy log we're pulling (kernel-deploy-log.txt). I'll update in 10–15 minutes.
+
+Apologies for the disruption — I'll make this the top priority.
+
+Thanks,
+Aditya Rao
+Director, Customer Reliability
+Redwood Inference
+
+Attachment: kernel-deploy-log.txt (text/plain, 12KB)
+From: Markus Klein <markus.klein@redwood.ai>
+To: aditya.rao@redwood.ai, marissa.cole@redwood.ai, rishi.malhotra@redwood.ai
+Cc: jonas.weber@redwood.ai
+Date: 2028-03-11T10:05:00Z
+Subject: Fwd: High p99 latency + token/s drop on /v1/generate — urgent
+
+Folks — forwarding the customer's data. Quick notes from infra: the kernel selector change we promoted altered kernel choice heuristics for sequence lengths >512 and changed the fallback path ordering; combined with the q4_kv quant profile it appears to increase KV cache miss activity and disrupt continuous-batch packing. That can dramatically reduce per-GPU token throughput in high-fanout workloads.
+
+Rishi: can your team confirm whether autoscaler/burst routing accidentally increased the canary weight for hosted earlier this morning? If so, we need a postmortem and tighter guardrails (probability gating + manual approve on traffic-tier > 50k/min).
+
+Marissa: I'll coordinate comms with the ACCT team and propose a short credit for today's incident. Aditya — keep me posted on rollback progress.
+
+—Markus
+Markus Klein
+VP, Solutions & Reliability
+Redwood Inference
+
+Quoted: 
+> From: Jessica Park <jessica@fastlane.ai>
+> We're seeing a severe degradation...
+
+Attachment: rollback_playbook.pdf (application/pdf, 85KB)
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: markus.klein@redwood.ai, aditya.rao@redwood.ai, marissa.cole@redwood.ai
+Date: 2028-03-11T10:28:00Z
+Subject: Re: Fwd: High p99 latency + token/s drop on /v1/generate — urgent
+
+Confirming — autoscaler logs show an unexpected spike in canary traffic from the hosted router at 01:59:42 UTC due to a tagging bug in routing policy PR #7412. The PR changed the header normalization which caused some traffic to be misclassified as "canary" for one of our regional routers. We're already rolling that tag fix and performing a weight rollback.
+
+Timeline:
+- 10:30 UTC: weight rollback completed for canary routing on hosted.
+- 10:33 UTC: pinned FastLane route to stable variant (redwood-7b-q4-stable).
+- 10:40 UTC: preliminary smoke shows p95 improving; p99 still elevated for certain long-tail sequences.
+
+Next steps:
+1) Full rollback of the kernel selector at the fleet level (Aditya to confirm initiates).
+2) Run the KV-miss profiler on affected nodes to quantify packing regressions (infra).
+3) Draft customer-facing timeline and offer 10% credit for today; Marissa will own comms.
+
+I'll attach the autoscaler trace and the short kernel trace excerpt in the incident ticket (INF-9721).
+
+—Rishi
+Senior SRE, Serving Runtime
+Redwood Inference
+
+Quoted earlier: 
+> From: Markus Klein <markus.klein@redwood.ai>
+> the kernel selector change we promoted altered kernel choice heuristics..."
+From: Aditya Rao <aditya.rao@redwood.ai>
+To: Jessica Park <jessica@fastlane.ai>
+Cc: marissa.cole@redwood.ai, markus.klein@redwood.ai, rishi.malhotra@redwood.ai, jonas.weber@redwood.ai
+Date: 2028-03-11T15:36:00Z
+Subject: Re: High p99 latency + token/s drop on /v1/generate — urgent
+
+Jessica — update from our side after the rollback and routing pin:
+- Kernel selector rollback completed at 10:12 UTC.
+- Routing pinned at 10:33 UTC to redwood-7b-q4-stable for your tenant.
+- We saw p95 return to baseline by ~10:55 UTC and token/s recover to ~290 tps on sample streams. p99 remains elevated for very long sequences (>3k tokens) while we complete KV-miss profiling and a targeted GC/packing remediation.
+
+We're treating this as a Sev2 until p99 is within SLA. Rishi's infra team will run an extended KV/memory profiling pass and we will schedule a follow-up regression test (internal) to validate quant+kernel permutations before future rollouts.
+
+Marissa will follow up on credits and exec comms. Full incident notes and the initial RCA draft are in INF-9721: https://jira.redwood.ai/browse/INF-9721.
+
+I know this came at a terrible time — we'll make it right and harden the rollout controls. I'll keep you updated hourly until we close.
+
+Best,
+Aditya Rao
+Director, Customer Reliability
+Redwood Inference
+
+Attachment: rollback_playbook.pdf (application/pdf, 85KB)

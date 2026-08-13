@@ -1,0 +1,131 @@
+Inference requests failing: spikes in latency and 5xx errors
+
+From: Lena Ortiz <lena.ortiz@acorntech.com>
+To: Sean Gallagher <sean_gallagher@redwood.ai>
+Cc: ops@acorntech.com
+Date: Tue, 11 Aug 2026 14:12:00 -0700
+Subject: Inference requests failing — sudden latency spikes and 5xx
+
+Hi Sean,
+
+We started seeing a sustained spike in inference latency at ~13:50 PDT and a growing percentage of 5xx responses across multiple endpoints. This is impacting our checkout flow — page load times are >7s and about 18% of calls are failing with 502/504.
+
+Attached are a short sampling of request traces and a traceroute out of our EU region (acorn_request_traces.txt, traceroute_acorn.png). Network team is seeing packet loss after the first transit hop toward your peering.
+
+Can you confirm if there are any ongoing infra changes or known peering issues? This is high-severity for us — our operations lead has queued this for executive visibility.
+
+Lena Ortiz
+Director, Platform Engineering
+Acorn Tech
+
+Attachment: acorn_request_traces.txt (text)
+Attachment: traceroute_acorn.png (image)
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Lena Ortiz <lena.ortiz@acorntech.com>, ops@acorntech.com
+Cc: grace_oconnor@redwood.ai, vivek_kulkarni@redwood.ai, marissa_cole@redwood.ai
+Date: Tue, 11 Aug 2026 14:28:00 -0700
+Subject: Re: Inference requests failing — sudden latency spikes and 5xx
+
+Lena — thanks for the heads up and the traces. We see an uptick in error rates on Acorn's traffic in our telemetry as well.
+
+Immediate plan:
+- I've looped in Infra (Grace) to run peering and DNS checks.
+- Vivek and Marissa are getting a succinct exec summary (for their situational awareness).
+- We'll open a bridged conference with CloudBelt NOC if remote peering looks degraded.
+
+Can you confirm impact window and if you want a customer-facing message drafted by us (we can share a short status update template)?
+
+I'll post incremental updates to this thread every 20–30 minutes.
+
+—Sean
+Sean Gallagher
+Head of Customer Reliability
+Redwood Inference
+
+On Tue, Aug 11, 2026 at 02:12 PM PDT, Lena Ortiz <lena.ortiz@acorntech.com> wrote:
+> We started seeing a sustained spike in inference latency at ~13:50 PDT and a growing percentage of 5xx responses across multiple endpoints.
+> Attached are traces...
+
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: sean_gallagher@redwood.ai, marissa_cole@redwood.ai, neha_kapoor@redwood.ai
+Cc: viva@redwood.ai
+Date: Tue, 11 Aug 2026 15:05:00 -0700
+Subject: Re: Inference requests failing — sudden latency spikes and 5xx
+
+Quick findings from infra side (initial):
+- Peering metrics show a latency jump and intermittent packet loss between our us-west peering fabric and CloudBelt ASN around 13:46 PDT. See exported counters (peering_metrics.csv).
+- DNS logs show increased NXDOMAIN/timeout responses for the resolver chain used by Acorn's flow starting 13:50 — correlates with trace hops.
+- Firewall/proxy service on our edge nodes is returning a higher fraction of 502s; early look at firewall snippet attached (firewall_logs_snippet.txt).
+
+Hypothesis: transient congestion at the CloudBelt peering edge causing packet drops -> DNS retries -> application proxies timing out and surfacing 502/504 to clients.
+
+Immediate mitigations in progress:
+1) We started a canary reroute for Acorn to alternate peering path (low-risk traffic only) — roll started at 15:01 PDT.
+2) Increased proxy thread pool and temporarily extended HTTP timeouts for impacted routes.
+3) Reached out to CloudBelt NOC to investigate peering queueing and BGP flap indicators.
+
+Next steps we will complete in the next 60 minutes: full traceroute sweep from our edge nodes, cross-validate packet loss with CloudBelt, and hold rollback if reroute increases error rate.
+
+Grace O'Connor
+SRE Lead, Serving Runtime
+Redwood Inference
+
+Attachment: peering_metrics.csv (csv)
+Attachment: firewall_logs_snippet.txt (text)
+
+On Tue, Aug 11, 2026 at 02:28 PM PDT, Sean Gallagher <sean_gallagher@redwood.ai> wrote:
+> Lena — thanks for the heads up and the traces. We see an uptick in error rates on Acorn's traffic in our telemetry as well.
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+To: sean_gallagher@redwood.ai, grace_oconnor@redwood.ai
+Cc: marissa_cole@redwood.ai, neha_kapoor@redwood.ai, lena.ortiz@acorntech.com
+Date: Tue, 11 Aug 2026 16:02:00 -0700
+Subject: Re: Inference requests failing — sudden latency spikes and 5xx
+
+Team — thanks for the fast loop. Two asks for prioritization: 1) We need a two-slide exec summary for the board (cause, impact, mitigation, ETA) within 30 minutes; 2) Please escalate to CloudBelt account team and request a committed remediation ETA — Acorn is a strategic customer and this needs board visibility.
+
+Marissa, can you coordinate the customer comms cadence? We should avoid hypothesizing in the external message — stick to observed impact and our mitigation steps.
+
+Vivek
+Vivek Kulkarni
+VP, Customer Success & Ops
+Redwood Inference
+
+On Tue, Aug 11, 2026 at 03:05 PM PDT, Grace O'Connor <grace_oconnor@redwood.ai> wrote:
+> Quick findings from infra side (initial): peering metrics show a latency jump...
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Lena Ortiz <lena.ortiz@acorntech.com>, ops@acorntech.com
+Cc: grace_oconnor@redwood.ai, vivek_kulkarni@redwood.ai, marissa_cole@redwood.ai, neha_kapoor@redwood.ai, ops@cloudbelt.io
+Date: Tue, 11 Aug 2026 18:03:00 -0700
+Subject: Re: Inference requests failing — sudden latency spikes and 5xx
+
+All — summary and action plan (current status at 18:03 PDT):
+
+Observed impact:
+- ~13:50 PDT onset; multi-region latency spike and 5xx rate peaked ~14:20–15:10 PDT. Customer reported checkout timeouts and ~18% error rate at peak.
+
+Root-candidate (work in progress):
+- Evidence points to transient congestion and queuing at the CloudBelt peering edge that produced packet loss and DNS timeouts; proxy layer then returned increased 502/504s. Logs and peering counters attached.
+
+Actions taken (completed):
+- Canary reroute of Acorn traffic to alternate peering (started 15:01 PDT) — reduced error rate to ~3% for canaried requests.
+- Increased proxy threads and extended timeouts at edge nodes (15:10 PDT).
+- Opened incident with CloudBelt NOC (ops@cloudbelt.io) and asked for immediate capacity tuning and BGP stability check.
+
+Next actions (underway, owners):
+- CloudBelt to confirm root cause and ETA for peering stabilization (CloudBelt NOC).
+- Redwood Infra (Grace) to perform full packet-loss sweep and confirm no residual DNS cache poisoning (ETA 45 min).
+- CS/Communications (Marissa) to send a short customer update in 20 minutes with an FAQ and an internal exec note for the board at 16:00 PDT. Template attached (customer_comm_template.md).
+
+If CloudBelt cannot commit to an ETA within 30 minutes, we'll extend the canary reroute to 100% traffic and, if needed, provide a temporary regional failover for write-critical flows.
+
+Lena — we will continue updates here. Also putting a short executive summary in Drive for board distribution.
+
+—Sean
+Sean Gallagher
+Head of Customer Reliability
+Redwood Inference
+
+Attachments: customer_comm_template.md (markdown), peering_metrics.csv, firewall_logs_snippet.txt

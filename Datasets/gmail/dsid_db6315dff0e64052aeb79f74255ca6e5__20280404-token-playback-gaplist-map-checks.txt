@@ -1,0 +1,111 @@
+Re: MAP: unit economics (tokens/$), caching and batching assumptions
+
+From: Priya Shah <priya@acmehealth.com>
+To: Grace O'Connor <grace@redwood.com>
+Cc: Procurement Team <procure@acmehealth.com>
+Date: 2028-04-01T09:12:00-07:00
+Subject: MAP request: unit economics + evaluation asks
+
+Hi Grace,
+
+Thanks for the demo yesterday — the team liked the latency numbers. Procurement has asked for a more concrete MAP that includes the unit economics we're committing to for the pilot: tokens/$ assumptions, expected hit rate for prefix/KV caching, batching windows and expected tail latency, and contingency fallbacks.
+
+Can you include two traffic scenarios (Baseline: 10k daily active sessions, Peak: 75k DAU bursts) and explicit tokens-per-session assumptions for each of the call shapes (short chat, document summarization, retrieval+generate)? We also need an evaluation plan that ties quality thresholds to rollback criteria (e.g., BLEU/ROUGE/semantic-sim thresholds or prompt-level pass/fail for our test-set).
+
+Timing: procurement wants a MAP and a draft contract redline by next Wednesday (2028-04-04) so we can budget for April production cutover. Is that timeline feasible?
+
+Attached: Procurement_Security_QA.pdf (requested fields highlighted).
+
+Thanks,
+Priya
+Priya Shah
+Senior Product Manager, ACME Health
+Priya Shah <priya@acmehealth.com>
+
+
+From: Grace O'Connor <grace@redwood.com>
+To: Priya Shah <priya@acmehealth.com>
+Cc: Kimberly Park <kimberly@redwood.com>, Jordan Blake <jordan@redwood.com>
+Date: 2028-04-02T10:24:00-07:00
+Subject: Re: MAP request: unit economics + evaluation asks
+
+Hi Priya —
+
+We can get you a MAP + evaluation plan by EOD 2028-04-04. Draft attached (acme_map_v0.3.xlsx, eval_plan_v0.2.md). High-level notes here so you have visibility before the spreadsheet walkthrough:
+
+- Tokens / $ assumptions:
+  - Hosted model baseline (gpt-4o-redwood) consumption: 1.8 tokens/word; we estimate 35 tokens per short-chat turn (user+assistant) and 750 tokens per long summary (document summarization).
+  - Tokens-per-session: Baseline chat session = 3 turns ~ 105 tokens; Doc-summarization session = 750 tokens; Retrieval+generate session = 420 tokens (retrieval context + generation).
+  - Unit price example: $0.0045 / 1k tokens (hosted list) -> implied token efficiency table in the spreadsheet.
+
+- Caching assumptions:
+  - Prefix/KV caching expected hit-rate: conservative 20% baseline, optimistic 45% with warm cache and repeated prompts. We include a sensitivity sheet showing cost delta at 10/20/35/50% hit rates.
+  - We recommend instrumenting route-level cache metrics and exporting per-route hit/miss to your telemetry during the eval phase.
+
+- Batching windows and latency tradeoffs:
+  - For real-time chat routes we assume batching window <= 10ms (continuous batching) to keep p50 latency under 120ms and p95 under 400ms for 95% of requests in Baseline.
+  - For high-throughput summarization jobs we propose an explicit batch window of 80ms (higher token throughput, lower unit cost) — described in the runbook.
+
+- Fallbacks & rollbacks:
+  - Canary plan: 10% traffic -> 50% -> 100% over 3 business days conditioned on quality gates (see eval_plan_v0.2.md).
+  - Fallback model: if unit-cost exceeds 15% of modeled budget or if quality regressions detected, we automatically route to a quantized variant (smaller model) per Smart Routing policy.
+
+- Evaluation plan highlights (eval_plan_v0.2.md):
+  - Test set: 1,200 representative prompts across three buckets (chat, summarization, retrieval).
+  - Pass criteria: >= 92% prompt-level acceptance for chat, and relative ROUGE-L delta < 3% for summarization vs. baseline samples.
+  - Monitoring: token consumption, latency distribution, and per-prompt quality score; automated regression alert on metric drift.
+
+Action items for you to confirm so we can finalize MAP by 4/4:
+  1) Confirm traffic profiles (the two we listed, or provide alternate numbers).
+  2) Sign off on the conservative caching hit-rate assumption (20%) for financial modeling.
+  3) Confirm that automatic routing to a smaller quantized variant is acceptable as a cost-safety fallback.
+
+If that all looks OK I’ll schedule a short walkthrough of the spreadsheet tomorrow with Jordan to show the sensitivity scenarios.
+
+Best,
+Grace O'Connor
+Head of Solutions, Redwood Inference
+grace@redwood.com
+
+
+From: Kimberly Park <kimberly@redwood.com>
+To: Grace O'Connor <grace@redwood.com>, Priya Shah <priya@acmehealth.com>
+Date: 2028-04-03T08:45:00-07:00
+Subject: Re: MAP request: unit economics + evaluation asks
+
+Quick add from infra/ops perspective —
+
+- Quantization & model variants: we plan two inference tiers for the pilot:
+  1) Full precision (fp16) for quality-critical routes (summaries + retrieval-heavy flows).
+  2) 8-bit quantized variant for high-volume chat when cost pressure hits.
+
+- Suggested default tokens-per-response to bake into the model: use 110 tokens/short-chat response (gives a small cushion over the 35-token-per-turn estimate Grace used since we see operator prompts + system tokens). I updated the spreadsheet cells (acme_map_v0.3.xlsx) with both conservative/expected numbers.
+
+- Ops note: enable per-route prefetch for the top 50 routes during initial pilot — we’ve seen prefetching lift effective cache hit-rates by +12-18% in similar accounts.
+
+Happy to walk through numbers in the spreadsheet during tomorrow’s call.
+
+Kimberly Park
+Senior Infra PM, Redwood Inference
+kimberly@redwood.com
+
+
+From: Priya Shah <priya@acmehealth.com>
+To: Grace O'Connor <grace@redwood.com>
+Cc: Procurement Team <procure@acmehealth.com>, Kimberly Park <kimberly@redwood.com>
+Date: 2028-04-04T16:03:00-07:00
+Subject: Re: MAP request: unit economics + evaluation asks
+
+Grace / Kimberly —
+
+Thanks — received the attachments and reviewed the sensitivity tabs. The two traffic scenarios are fine; we’ll start with your Baseline numbers and run the Peak scenario as part of a stress run during eval. Procurement is fine with the conservative 20% cache hit-rate assumption for budgeting.
+
+Automatic routing to a quantized variant is acceptable as a fallback; we’ll reserve rights to review the logs during the first two weeks.
+
+Next steps: please book a 30-minute spreadsheet walkthrough for 2028-04-05 10:00 AM PT. We aim to have contract redlines by EOD 4/06.
+
+Regards,
+Priya Shah
+Senior Product Manager, ACME Health
+Priya Shah <priya@acmehealth.com>
+

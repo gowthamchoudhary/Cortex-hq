@@ -1,0 +1,117 @@
+Urgent: OptiServe throughput & error spike after v4.2 precision-profile rollout
+
+From: Sara Kim <sara.kim@optiserve.com>
+To: Alex Martinez <alex.martinez@redwood.com>
+Cc: OptiServe SRE <sre@optiserve.com>
+Date: Fri, 18 Sep 2026 15:12:00 +0000
+Subject: Latency/errors up since your v4.2 precision-profile switch
+
+Alex —
+
+We started seeing a big signal right after you rolled v4.2 with the new precision-profile (P2) at ~14:30 UTC: p95 and p99 latency jumped, and our 5xx error rate climbed from ~0.6% to ~12% across the hotpath. Throughput dropped by roughly 40% under normal traffic.
+
+Quick facts from our end:
+- Window: 14:28–15:05 UTC
+- p50: +80ms, p95: +320ms, p99: +1.2s
+- 5xx rate: 12.1% (was 0.6% pre-rollout)
+- Token decode time per request increased ~2–3x for requests >512 tokens
+
+We attached traces and a short SLO summary. This is impacting search queries and our checkout flow — senior leadership is already on the line. We need an immediate mitigation plan: can you roll back the precision-profile or otherwise throttle traffic to the new variant?
+
+Sara
+Sara Kim
+Head of Platform Reliability, OptiServe
+Attachments: optiserve_traces_20260918.csv, slo_summary_20260918.png
+
+From: Alex Martinez <alex.martinez@redwood.com>
+To: Sara Kim <sara.kim@optiserve.com>
+Cc: Monica Patel <monica.patel@redwood.com>, Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Date: Fri, 18 Sep 2026 15:27:00 +0000
+Subject: Re: Latency/errors up since your v4.2 precision-profile switch
+
+Sara — thanks for the heads up and for the traces. I'm very sorry you're seeing this. I'm looping in Monica (CS) and Jonas (Applied ML infra) to triage immediately. Marissa and Vivek are on copy for exec visibility.
+
+Immediate plan:
+- Jonas and infra will look at kernel selection / runtime fallback events and confirm whether the P2 profile is triggering a slower execution path.
+- We can schedule an emergency rollback to the previous precision-profile (P1) as a mitigation. Please confirm: do you want us to proceed with an immediate rollback or hold for a 30-min troubleshooting window?
+- I'll open a call now to share logs live — proposed: 15:40 UTC (in ~13 minutes).
+
+We will prioritize this.
+
+—Alex
+Alex Martinez
+Director, Strategic Accounts — Redwood Inference
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Alex Martinez <alex.martinez@redwood.com>, Monica Patel <monica.patel@redwood.com>, Sara Kim <sara.kim@optiserve.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Fri, 18 Sep 2026 16:05:00 +0000
+Subject: Re: Latency/errors up since your v4.2 precision-profile switch
+
+Quick preliminary read after scanning the traces and runtime logs attached:
+- We see a sharp increase in kernel fallback events on the serving nodes handling OptiServe traffic immediately after the precision-profile P2 was enabled. Fallbacks are due to quantized attention kernels not matching the sequence length distribution for these hot routes — that forces a generic (slower) code path.
+- The increased 5xxs look like downstream timeouts from token decode stalls and queueing backpressure.
+
+Immediate recommendation (fastest mitigation):
+1) Roll P2 -> P1 (previous precision-profile) for the OptiServe deployment (can be done without a full model rollback). This should restore kernel selection to the fast path.
+2) If rollback is not acceptable, apply traffic-weighted canary: 5% -> 20% -> 50% while monitoring kernel fallback metrics.
+
+I can push the rollback now and validate with a smoke test. If we do this, expect p99 to drop within 2–5 minutes after the change if this is the root cause.
+
+Logs/IDs I looked at: trace ids 8f3a2c, 8f3a9e, 8f3b10 (included in CSV).
+
+—Jonas
+Senior Engineer, Inference Runtime — Redwood Inference
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Sara Kim <sara.kim@optiserve.com>, Alex Martinez <alex.martinez@redwood.com>
+Cc: Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Date: Fri, 18 Sep 2026 17:00:00 +0000
+Subject: Re: Latency/errors up since your v4.2 precision-profile switch
+
+Sara — thanks for the quick signal and for sharing the artifacts. We take responsibility for the impact and want to get you back to green ASAP.
+
+Planned mitigation (pending your approval):
+- Immediate rollback: roll OptiServe traffic from precision-profile P2 back to P1 at 17:05 UTC. This is a config-level change (no model file swap) and is reversible.
+- We will validate with a smoke test (10 test requests across hotpaths) and monitor p95/p99 and 5xx for 15 minutes.
+- Post-mitigation: we will perform a postmortem with root cause, timeline, and permanent safeguards (canary gating, additional perf tests for sequence-length distributions).
+
+If you approve, respond here with GO and we'll execute. We'll also credit this month according to our incident credit policy.
+
+—Monica
+Senior Customer Success Manager — Redwood Inference
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+To: Alex Martinez <alex.martinez@redwood.com>, Monica Patel <monica.patel@redwood.com>, Jonas Weber <jonas.weber@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Fri, 18 Sep 2026 17:10:00 +0000
+Subject: Re: Latency/errors up since your v4.2 precision-profile switch
+
+Let's not wait. If Jonas's analysis matches the traces, proceed with rollback immediately; keep OptiServe leadership updated as you execute. Marissa — please prepare a short exec note for OptiServe's C-levels and our CS leadership outlining remediation and credits.
+
+Jonas: coordinate the rollback and confirm once smoke tests pass. Alex: keep me updated.
+
+—Vivek
+CTO — Redwood Inference
+
+From: Sara Kim <sara.kim@optiserve.com>
+To: Monica Patel <monica.patel@redwood.com>, Alex Martinez <alex.martinez@redwood.com>
+Cc: OptiServe SRE <sre@optiserve.com>, Jonas Weber <jonas.weber@redwood.com>
+Date: Fri, 18 Sep 2026 17:22:00 +0000
+Subject: Re: Latency/errors up since your v4.2 precision-profile switch
+
+GO — please roll back now. Our checkout peak window starts at 18:00 UTC and we need this fixed before then. Appreciate the credits and would like the postmortem (timeline + remediation) by EOD Monday.
+
+Thanks — Sara
+On Fri, Sep 18, 2026 at 17:00 Monica Patel <monica.patel@redwood.com> wrote:
+> Sara — thanks for the quick signal and for sharing the artifacts. We take responsibility for the impact and want to get you back to green ASAP.
+> 
+> Planned mitigation (pending your approval):
+> - Immediate rollback: roll OptiServe traffic from precision-profile P2 back to P1 at 17:05 UTC. This is a config-level change (no model file swap) and is reversible.
+> - We will validate with a smoke test (10 test requests across hotpaths) and monitor p95/p99 and 5xx for 15 minutes.
+> - Post-mitigation: we will perform a postmortem with root cause, timeline, and permanent safeguards (canary gating, additional perf tests for sequence-length distributions).
+> 
+> If you approve, respond here with GO and we'll execute. We'll also credit this month according to our incident credit policy.
+> 
+> —Monica
+> Senior Customer Success Manager — Redwood Inference

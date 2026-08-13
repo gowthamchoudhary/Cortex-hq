@@ -1,0 +1,128 @@
+Multi-region pool intake + proposed autoscale & burst thresholds
+
+From: Tom Bauer <tom.bauer@oncohealth.com>
+To: Monica Patel <monica_patel@redwood.com>
+Cc: Cloud Ops <ops@oncohealth.com>, Procurement <procurement@oncohealth.com>
+Date: Mon, 28 Sep 2026 21:12:00 -0700
+Subject: Dedicated capacity intake — OncoHealth initial ask
+
+Monica,
+
+Thanks for the quick intro earlier. We want to move from trial to a dedicated GPU pool for phase 1 of our inference pipeline (clinical inference for imaging transcripts). High level:
+- Regional footprint: primary in us-west, fallback in eu-west (for DR)
+- Peak workload: expected burst events (daily) with peak token throughput ~250k tokens/minute, sustained baseline nearer 40k tokens/minute
+- Models: mix of 7B and 13B open models, will want quantized variants in prod
+- Compliance: SOC2 evidence and audit logs will be requested in procurement
+
+Questions for Redwood to help scope: lead times for reserved pool, recommended autoscale thresholds, whether we can set pre-warmed burst capacity, and a short mutual action plan so procurement can track milestones. Can we schedule an intake call tomorrow morning PT?
+
+Thanks,
+Tom Bauer
+Director, Cloud Procurement
+OncoHealth
+
+--
+Attachment: oncohealth_intake_sheet.pdf (stub)
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Tom Bauer <tom.bauer@oncohealth.com>
+Cc: Grace O'Connor <grace_oconnor@redwood.com>, Sean Gallagher <sean_gallagher@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Tue, 29 Sep 2026 09:08:00 -0700
+Subject: Re: Dedicated capacity intake — OncoHealth initial ask
+
+Tom — great to hear this. Yes, we can take an intake call tomorrow at 10:00 AM PT. Agenda proposal below and a short intake checklist attached so we can capture the sizing and security requirements during the call.
+
+Proposed 30m agenda:
+1) Quick use-case recap and success criteria (5m)
+2) Traffic characteristics, model mix & artifacts (10m)
+3) Proposed pool topology, autoscale & burst options (10m)
+4) Procurement/SOC2 asks, docs & timeline (5m)
+
+Pre-read items I attached: dedicated_intake_form + rough sizing workbook. Please add any stakeholders for the call (ops/security).
+
+Action items:
+- Please confirm call time (10:00 AM PT) and add any additional participants
+- If you can share a short traffic sample or a spike day summary, bring that to the call
+
+See you tomorrow — Monica
+
+Monica Patel
+Senior Customer Success Manager, Redwood Inference
+monica_patel@redwood.com
++1 415-555-0123
+
+--
+Attachments: oncohealth_dedicated_intake_form.pdf, sizing-estimates-oncohealth.xlsx
+
+From: Grace O'Connor <grace_oconnor@redwood.com>
+To: Monica Patel <monica_patel@redwood.com>, Tom Bauer <tom.bauer@oncohealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>
+Date: Tue, 29 Sep 2026 10:35:00 -0700
+Subject: Re: Dedicated capacity intake — OncoHealth initial ask
+
+Thanks for the call today — quick technical notes and follow-ups from my side.
+
+Summary of what I heard:
+- Models: 7B (primary) + 13B (occasional) — quantization planned; ~8k sequence average, 4k tokens prompt/response on bursts
+- Traffic pattern: baseline steady 40k tpm, 4–5 short daily spikes to ~250k tpm for ~10–20 minutes, occasional longer weekend batch runs
+- Latency target: p50 <= 120ms for single-turn generation on 7B quantized, p95 <= 400ms acceptable for larger 13B calls
+
+Initial pool proposal (draft):
+- Primary pool (us-west): 6x A100 equivalent reserved; autoscale threshold policy: scale up when 95th percentile GPU utilization > 70% for 3 consecutive minutes; scale step +2 GPUs; max autoscale to 14 reserved GPUs.
+- Burst layer: pre-warmed shared burst capacity that can be assigned at peak up to +8 GPUs for short windows (burst pools have ~5–10 minute warm-up if not pre-warmed). We can reserve pre-warm slots for recurring spike windows (savings vs immediate burst).
+- EU fallback: lightweight pool 2x A100 equivalent, cold standby with KV cache replication disabled initially to avoid cross-region data movement.
+
+Questions for Ops/Procurement:
+- Do you have hard constraints on burst locations (must stay in us-west) or can bursts come from cross-region shared capacity?
+- What is your target SLA/uptime and acceptable RTO for region failover?
+- Any compliance checklist items beyond SOC2 (e.g., data residency, egress controls)?
+
+I'll follow up with a short runbook and a proposed mutual action plan doc.
+
+Grace O'Connor
+Solutions Architect, Redwood Inference
+
+From: Tom Bauer <tom.bauer@oncohealth.com>
+To: Grace O'Connor <grace_oconnor@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Cc: Cloud Ops <ops@oncohealth.com>, Procurement <procurement@oncohealth.com>
+Date: Wed, 30 Sep 2026 08:12:00 -0700
+Subject: Re: Dedicated capacity intake — OncoHealth initial ask
+
+Grace, Monica — thanks, that matches our internal thinking and is a good starting point. A couple clarifications:
+- Bursts must originate from within the same cloud region (us-west) for data egress policy; cross-region bursts are not allowed for phase 1.
+- We will need pre-warmed capacity for the daily scheduled spikes (08:45–09:15 PT) to guarantee latency for clinical pipelines. If Redwood can offer pre-warm slots with heartbeat confirmation, procurement will accept a moderate premium for guaranteed pre-warm.
+- SOC2 + periodic penetration test reports are required. Also need an audit log export cadence (weekly) for the first 90 days.
+
+Procurement will start paperwork once we have the mutual action plan and a rough SOW. Can you push the draft SOW and timeline by EOD today so legal can review on our side?
+
+Tom
+
+--
+On Wed, Sep 30, 2026 at 08:12 AM Tom Bauer <tom.bauer@oncohealth.com> wrote:
+> Grace, Monica — thanks, that matches our internal thinking and is a good starting point.
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Monica Patel <monica_patel@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>, Sean Gallagher <sean_gallagher@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Wed, 30 Sep 2026 16:23:00 -0700
+Subject: Internal: OncoHealth handoff & next steps (SOW + runbook)
+
+Internal note for handoff — creating a short checklist to move this into implementation. Posting here so we have a single source of truth for next steps.
+
+Handoff DoD (minimum):
+- Draft SOW (attached) shared with OncoHealth (owner: Monica) — DUE EOD today to meet procurement window
+- Capacity workbook validated with OncoHealth (owner: Grace) — confirm peak sample and baseline numbers
+- Pre-warm schedule set and pre-warm SLA option documented (owner: Sean)
+- SOC2 evidence & weekly audit export cadence confirmed (owner: Karthik + Security team)
+- NetOps task for region placement and IP allowlist (owner: Sean)
+- Implementation kick: schedule 2-week activation sprint once contract signed (owner: Monica + CS/Eng lead)
+
+Attachments included in this thread: redwood-sow-draft-v1.docx, sizing-estimates-oncohealth.xlsx (please review and comment inline).
+
+I'll create a short Miro board and a mutual action plan (MAP) doc and link to HubSpot deal. Expect follow-up tomorrow with a kickoff date suggestion.
+
+Monica Patel
+Senior Customer Success Manager
+Redwood Inference
+
+On Wed, Sep 30, 2026 at 16:23:00 -0700 Monica Patel <monica_patel@redwood.com> wrote:
+> Internal note for handoff — creating a short checklist to move this into implementation. Posting here so we have a single source of truth for next steps.

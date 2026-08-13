@@ -1,0 +1,132 @@
+Pilot readout & next steps: localized model fit, risk telemetry, prompt suite
+
+From: Sofia Ivanova <sofia_ivanova@redwood.ai>
+To: Lucie Dubois <lucie@lingohealth.fr>, Alex Chen <a.chen@smartchat.jp>
+Cc: Neha Kapoor <neha_kapoor@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Sun, 10 Jun 2028 15:03:00 -0700
+Subject: Follow-up & quick readout from today’s discovery — EU/APAC localization needs
+
+Hi Lucie / Alex —
+
+Thanks again for the call today. Quick recap and proposed next steps so we’re aligned: 
+
+Summary of needs (from discovery):
+- LingoHealth: customer-support triage and automated response generation for FR/DE (EU) with strict hallucination tolerance and redaction before sending PHI-adjacent fragments.
+- SmartChat JP: multi-turn dialogue classification + canned-response suggestion for JA/KO with 50–100ms token-latency targets for in-app UX.
+
+Preliminary model recommendations (by workload):
+- NLU + classification (low-latency): rw-multilingual-7B-q4_k_m (low mem, good for short-turn intent/slot tasks)
+- Response generation (high-quality): rw-multilingual-13B-fp16 or rw-multilingual-13B-q4_k for cost-constrained pilots
+- Safety/regression guard: enable speculative prefix cache + deterministic decoding for FR/DE clinical phrasing checks
+
+What I attached for your review:
+- lingo_prompt_pack_v1.json — curated prompt sets (triage, escalation, redaction templates)
+- fr_de_eval_results.csv — small-sample benchmark: FR/DE BLEU/ROUGE + hallucination flags (50 conversations each)
+- pilot_scope_plan_v2.pdf — proposed 6-week pilot: model variants, success metrics, telemetry plan
+
+Immediate asks / next steps:
+1) Please confirm the pilot scope: EU-only (FR/DE) first, then APAC (JA/KO) as a second phase.
+2) Lucie: share any sample anonymized transcripts (50–100) we can run through prompt pack for initial evals.
+3) Alex: confirm whether SmartChat requires on-prem sandbox or we can use a VPC-hosted test; also confirm retention / data residency constraints for JP.
+
+I’ve copied Neha and Karthik to pull in qualification and security threads. I’ll schedule a short demo + evaluation walkthrough once you confirm availability next week.
+
+Cheers,
+Sofia
+Sofia Ivanova
+Enterprise Sales | Redwood Inference
+sofia_ivanova@redwood.ai
++1 (415) 555-0142
+
+Attachments: lingo_prompt_pack_v1.json (application/json), fr_de_eval_results.csv (text/csv), pilot_scope_plan_v2.pdf (application/pdf)
+From: Neha Kapoor <neha_kapoor@redwood.ai>
+To: Sofia Ivanova <sofia_ivanova@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Lucie Dubois <lucie@lingohealth.fr>, Alex Chen <a.chen@smartchat.jp>
+Date: Mon, 11 Jun 2028 09:22:00 -0700
+Subject: Re: Follow-up & quick readout from today’s discovery — EU/APAC localization needs
+
+On Sun, Jun 10, 2028 at 3:03 PM Sofia Ivanova <sofia_ivanova@redwood.ai> wrote:
+> (see above)
+
+Thanks for the crisp recap Sofia — a few quick qualification items from my side before we lock the pilot: 
+
+- Pilot sizing: recommend 1,000 end-user conversations per locale for the initial regression watch (we’ve found ~1k gives statistically meaningful regression signal across intents).
+- Success metrics: intent accuracy (macro), safe-response rate (>99.5%, where safe = no PHI leakage / no out-of-scope hallucination), latency p95 < 350ms for generation pipeline in EU region.
+- Monitoring: we’ll enable automated regression checks tied to the prompt pack and sample prompt harness. Need to confirm availability of transcripts from client for labelling (Lucie).
+
+Risk & regression concerns:
+- FR/DE clinical phrasing can trigger hallucinations when prompts include paraphrases of case notes. We should run the fr_de_eval_results.csv through deterministic decoding + ngram-blocking as a baseline.
+- For JA/KO, low resource idiomatic expressions cause failure modes; we’ll want a custom prompt augmentation strategy (examples attached in prompt pack).
+
+Ask: can infra run both 13B and quantized 7B variants during pilot so we can compare cost/quality tradeoffs? If yes, I’ll add cost delta to the pilot plan.
+
+I’ll put together a concise MOP and timeline; attaching a thin checklist in the pilot_scope_plan_v2.pdf.
+
+-Neha
+Neha Kapoor
+Solutions Engineer | Redwood Inference
+neha_kapoor@redwood.ai
+
+---
+Attachment referenced: pilot_scope_plan_v2.pdf
+From: Lucie Dubois <lucie@lingohealth.fr>
+To: Sofia Ivanova <sofia_ivanova@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Cc: Alex Chen <a.chen@smartchat.jp>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Wed, 13 Jun 2028 10:41:00 +0200
+Subject: Re: Follow-up & quick readout from today’s discovery — EU/APAC localization needs
+
+Bonjour Sofia / Neha,
+
+Thanks for the follow-up and the materials — the prompt pack looks promising. A few clarifications from LingoHealth: 
+
+- We can provide 70 de-identified transcripts today and another 30 next week (will scrub PHI as discussed). Are those numbers sufficient for your 1k pilot sample seeding? We can also provision a small sftp (read-only) for the team.
+- SOC2 + data retention: we need confirmation that telemetry and logs for the pilot will be kept within EU regions and that Redwood retains no long-term copies of raw transcripts; happy to sign a DPA or follow your template.
+- Sandbox access: if possible, we’d prefer a VPC-hosted sandbox so transcripts never leave our controlled environment. Is a VPC private deployment an option for the initial pilot? If cost is prohibitive, we’re okay with a dedicated EU-hosted instance with strict retention rules.
+
+Availability for the demo: June 20th or 22nd (CET) after 14:00.
+
+Merci,
+Lucie
+Lucie Dubois
+Head of Localization & Clinical Ops | LingoHealth
+lucie@lingohealth.fr
+
+---
+Forwarded: sample request form attached (we will upload the initial 70 transcripts to the SFTP once access details are shared.)
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Sofia Ivanova <sofia_ivanova@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>, Lucie Dubois <lucie@lingohealth.fr>, Alex Chen <a.chen@smartchat.jp>
+Date: Fri, 15 Jun 2028 09:18:00 -0700
+Subject: Action plan & telemetry thresholds — LingoHealth pilot (RDW-2028-247)
+
+Team —
+
+Thanks for the confirmations. Short action plan and guardrails so we can move to signed PO: 
+
+1) Data access & residency
+- LingoHealth will provision 70 scrubbed transcripts to our SFTP by EOD Jun 16. We’ll ingest into an EU-only test workspace and purge raw files after the initial pass (per DPA language).
+
+2) Pilot model variants
+- Run 13B FP16 and 7B q4_k variants in parallel for FR/DE, compare on: intent accuracy, hallucination flags, and cost per 1k tokens.
+
+3) Telemetry & regression thresholds (automated):
+- Safety / hallucination rate threshold: <= 0.5% for pilot target (alert if >0.8% in any batch)
+- Intent accuracy drop: alert if >5 percentage point drop vs baseline sample
+- Latency: p95 generation < 350ms (EU-hosted infra)
+
+4) Reporting & demo
+- Week 1: ingest + baseline eval (we’ll share dashboard link)
+- Week 3: mid-pilot readout with sample cases flagged for manual review
+- Week 6: final readout + recommended rollout config
+
+5) Commercial / procurement
+- Draft SOW and DPA to follow; Sofia will lead commercial terms with Lucie. Tentative deal id RDW-2028-247; I’ll include cost deltas for 13B vs 7B in the SOW.
+
+If that looks good I’ll open a pilot ticket with infra to reserve EU capacity and spin up the EU test workspace (ETA 48 hours).
+
+Karthik
+Karthik Iyer
+Product Ops | Redwood Inference
+karthik_iyer@redwood.ai
+
+---
+Attachments: pilot_scope_plan_v2.pdf (see action checklist), fr_de_eval_results.csv (short sample)

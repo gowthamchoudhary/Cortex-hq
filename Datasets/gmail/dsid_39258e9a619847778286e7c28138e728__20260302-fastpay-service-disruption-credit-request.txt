@@ -1,0 +1,130 @@
+Service disruption: elevated 5xx/429s and retry storm — credit request and remediation
+
+From: Olivia Barnes <olivia@fastpay.co>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Date: 2026-02-28T09:12:00-08:00
+Subject: Intermittent 5xx/429s & retry storms — production impact (Feb 27-28)
+
+Hi Stephanie,
+
+We're seeing a significant increase in 5xx and 429 responses from Redwood between ~2026-02-27 22:30 UTC and 2026-02-28 02:10 UTC. Error rate climbed to ~18% for our token-generation traffic and latency for successful calls spiked to 3-4x baseline. Our SDK triggered aggressive retries; that created a retry storm and amplified the backend pressure. The impact: several payment processing flows timed out and roughly 0.6% of authorizations failed end-to-end.
+
+We raised a PagerDuty incident and attached our request logs (brief CSV excerpt attached). We require:
+- a root-cause explanation
+- a mitigation plan to avoid recurrence
+- a proposal for service credit or refund for the affected window (this impacted critical revenue paths).
+
+Please escalate — we need executive-level engagement. Jacob Miller (cc) is our technical lead on this.
+
+Thanks,
+Olivia Barnes
+Head of Engineering, FastPay
+
+Attachments: fastpay_incident_timeline.csv
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+To: Olivia Barnes <olivia@fastpay.co>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Michael Grant <michael_grant@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: 2026-02-28T10:04:00-08:00
+Subject: Re: Intermittent 5xx/429s & retry storms — production impact (Feb 27-28)
+
+Hi Olivia — thank you for the heads up and the attached timeline. I'm very sorry for the disruption. We're treating this as a Sev 1 and I've looped in engineering and CS. Immediate items:
+
+1) Rishi is triaging root cause now (cc).
+2) We'll provide a timeline + mitigation plan within 8 business hours.
+3) I'll open a formal SLA credit evaluation and send an initial credit proposal for your review within 24 hours.
+
+Marissa will coordinate a post-incident call to run through details and any customer-facing comms. Michael, please pull the FP-4782 contract so we have the exact SLA language handy.
+
+I'll get back with an interim update in ~2 hours.
+
+— Stephanie
+Director, Customer Success
+Redwood Inference
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.ai>, Olivia Barnes <olivia@fastpay.co>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Date: 2026-02-28T11:38:00-08:00
+Subject: Re: Intermittent 5xx/429s & retry storms — production impact (Feb 27-28)
+
+Hi all — quick tech update from triage:
+
+Summary (interim):
+- Root cause: a combination of FastPay client-side retry policy (default SDK backoff disabled in a config roll last week) and an unfortunate Redis connection flapping on a subset of hosts in our EU pool (we routed some US traffic during capacity reshuffle). The client retries turned transient 503s into sustained load, exhausting asynchronous worker queues and causing 429s as the request admission controller started shedding traffic.
+- Impact window: 2026-02-27T22:28:15Z — 2026-02-28T02:08:42Z (we'll validate exact cutover and export full traces).
+- Mitigations applied during incident: temporarily increased worker pool and toggled admission thresholds to accept queued requests; rolled a targeted config to stabilize Redis connections; instructed our edge to serve a short retry-safety 429 to encourage clients to back off.
+
+Next steps (48h):
+1) Full trace export and token-level error breakdown (48h).
+2) Permanent fix: tighten admission control + improve autoscaling and add a circuit-breaker for upstream Redis errors (ETA 7 business days).
+3) SDK guidance: we'll publish a recommended retry/backoff configuration and coordinate an advisory with FastPay engineering.
+
+I've attached an internal RCA draft (ransom_root_cause_analysis.pdf) and a short CSV with the per-minute error spikes.
+
+— Rishi
+Senior Infra Engineer, Redwood Inference
+
+Attachments: ransom_root_cause_analysis.pdf
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+To: Olivia Barnes <olivia@fastpay.co>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Michael Grant <michael_grant@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: 2026-03-01T09:22:00-08:00
+Subject: Proposed remediation and credit offer for Feb 27-28 disruption
+
+Hi Olivia — following our internal review and the interim RCA from Rishi, we'd like to propose the following:
+
+1) Technical remediation: we will ship the admission-control + autoscale improvements as a high-priority patch (target deploy: 2026-03-05). We'll also publish a Best Practices note for SDK retry settings and schedule a short joint tech sync with your team (Mar 4).
+
+2) Credit proposal: Redwood proposes a service credit equal to 20% of the invoice for the affected billing window (2026-02-27 22:00 UTC — 2026-02-28 03:00 UTC). The credit will apply against your next monthly invoice.
+
+3) To finalize: we'll prepare a one-page amendment (DOCX) and send a DocuSign link for signature. If you prefer a cash refund, we can escalate to finance (may take 7–10 business days).
+
+Please let us know if the remediation timeline and the proposed credit are acceptable. We're open to adjusting if you have specific contractual expectations (per FP-4782).
+
+— Stephanie
+Director, Customer Success
+Redwood Inference
+
+Attachments: draft_credit_addendum.docx
+
+From: Olivia Barnes <olivia@fastpay.co>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+Cc: Jacob Miller <jmiller@fastpay.co>, FastPay Ops <ops@fastpay.co>, Marissa Cole <marissa_cole@redwood.ai>
+Date: 2026-03-02T08:11:00-08:00
+Subject: Re: Proposed remediation and credit offer for Feb 27-28 disruption
+
+Stephanie — thanks for the rapid response and the remediation plan. We appreciate the 20% credit offer, but given the direct revenue impact (authorization failures + customer support load), FastPay is asking for 35% for the affected window or a cash equivalent. Our legal & finance teams are copied here.
+
+Two asks before we sign anything:
+- confirm that the admission-control change will be restricted to avoid routing US production traffic into non-US pools (that routing caused the spike)
+- provide a short postmortem for our compliance team we can attach to our internal audit (SOC pipeline).
+
+If you can escalate the credit to 35% or offer expedited cash refund, we'll prioritize signing.
+
+— Olivia
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+To: Olivia Barnes <olivia@fastpay.co>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Date: 2026-03-04T16:43:00-08:00
+Subject: Re: Proposed remediation and credit offer for Feb 27-28 disruption — finalizing
+
+Olivia — thank you for the clarity and the asks. Executive note: I've escalated a fast-track credit approval with finance and can confirm the following:
+
+- Redwood will increase the offered credit to 30% of the affected invoice as a gesture of goodwill while we finalize the RCA. We can provide a cash-equivalent refund (accelerated) if you prefer; finance will prioritize FP-4782 for a 5–7 business day turnaround.
+- Rishi confirms the admission-control fix will include hard rules to prevent cross-region routing of US production traffic (we'll include this in the postmortem).
+- We'll provide a SOC-ready postmortem within 5 business days and a redacted trace bundle for your compliance team.
+
+Next steps: we'll send the DocuSign amendment reflecting 30% credit and the expedited refund option (please indicate preference). Once signed, finance will process the credit/refund and CS will schedule the technical sync for Mar 4.
+
+Appreciate your partnership — we'll continue to keep you closely updated.
+
+— Stephanie
+Director, Customer Success
+Redwood Inference
+
+Related links: https://docusign.example/template/fastpay-credit-amendment
+

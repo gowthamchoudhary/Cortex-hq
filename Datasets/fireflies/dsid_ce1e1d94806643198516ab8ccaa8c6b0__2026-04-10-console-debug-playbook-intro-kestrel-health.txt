@@ -1,0 +1,110 @@
+Kestrel Health — Console Debug Playbook Intro (traces, request logs, fallbacks)
+
+AE/SE intro followed by a console-oriented debug playbook demo. Focus on tracing, request logs, error analysis, KV cache fallbacks, and audit/security controls. Customer crowded with SRE and privacy questions; ask for sample traffic and KMS details. Agreed next steps: security pack, benchmark run, sandbox tenant.
+Console trace capture and playback
+Request logs and structured search
+Error analysis and root cause triage
+KV cache / prefix cache observations and 'fallback' behavior
+Private deployment constraints (VPC/KMS)
+Benchmarking and test harness setup
+[00:00] Lydia (Redwood AE): hey everyone, thanks for joining, i'm Lydia from Redwood inference. quick roll call?
+[00:08] Priya (Kestrel): hi this is Priya, engineering manager on inference infra, hey.
+[00:11] Ethan (Kestrel SRE): Ethan here, SRE, will be running the benchmarks.
+[00:14] Samantha (Kestrel Privacy): Samantha, privacy and data residency.
+[00:17] Marcus (Redwood SE): Marcus, i'm the systems engineer, i'll walk through the console and debug flows.
+[00:27] Lydia: agenda quick — show our console tracing + request logs, go through common failure modes and the playbook, talk about dedicated vs hosted fallbacks, and Q&A.
+[00:35] Priya: sounds good, the two things for us are: one, low 99th latency spikes and two, audit logs for PHI.
+[00:42] Marcus: noted. i'll surface the trace-first workflow — capture a slow request, replay it in the console, and inspect token-level latency and kernel attribution.
+[00:52] Marcus: opening the console, um, we have the request inspector — you'll see a timeline bar, each segment maps to token generation, KV cash — sorry, KV cache — hits get highlighted. sometimes the transcriber swaps that word, but in the UI it's KV cache.
+[01:10] Ethan: can you show a realistic example, like a multi-turn chat where latency jumps at turn 3?
+[01:15] Marcus: sure — loading an actual sample trace from our demo tenant. here's the trace id — note this is synthetic but uses patterns similar to production.
+[01:27] Marcus: see at 00:01:20 we have a spike, token generation time doubled. opening the request log panel shows a partial OOM fallback on the quantized kernel, fallback to fp16, which increased latency.
+[01:40] Priya: when fallback to fp16 happens, is there a visibility for which kernel was chosen?
+[01:44] Marcus: yes. the console annotates kernel selections; we also expose kernel hints in the raw request log, so you can filter by kernel name. sometimes kernel names are vendor specific — e.g. cuShmmv or something — we try to normalize.
+[01:58] Samantha: for audit — are request logs redacted automatically? PHI concern.
+[02:03] Lydia: good question. by default we mask tokens marked as sensitive in the prompt via our redaction rules, but we can integrate with customer-side redaction and provide redact-at-source guidance. also we have retention settings per route.
+[02:18] Samantha: do you produce an audit trail that shows who accessed a specific trace?
+[02:21] Marcus: yes, the trace metadata includes actor id from SSO, IP range, and an immutable audit log entry — that's accessible in the ops panel.
+[02:33] Marcus: switching to request search — you can query by model, route, status code, latency > threshold, or custom tags. here's a saved query we use for 95p latency regressions.
+[02:45] Priya: what's the time granularity? can we do sub-second histograms?
+[02:49] Marcus: we store per-token timestamps, so you get high resolution. histograms are approximate but accurate for triage.
+[02:56] Ethan: how does sampling work? we have very high qps and don't want to log everything.
+[03:01] Marcus: there are adaptive samplers — deterministic sampling for error traces plus probabilistic session sampling. you can also set dynamic rules: e.g., sample all traces above N ms or when fallback occurred.
+[03:15] Priya: show the error analysis playbook, like how you'd triage a 500 that only happens for certain contexts.
+[03:20] Marcus: yeah — step 1: find failing requests via query; step 2: group by model+route+quantization profile; step 3: examine kernel and memory metrics; step 4: attempt playback with same inputs in the sandbox.
+[03:33] Marcus: i'll demonstrate grouping; here we have a cluster of failures that all share the same prefix token length and the same custom embedding middleware. that hints at an input pattern.
+[03:47] Lydia: i'd also call out our automatic regression alerts — if a saved eval set changes quality or latency, we create a linked incident and populate the playbook with suggested remediation.
+[03:59] Priya: that eval set — can we upload our own prompts for regression checks?
+[04:03] Marcus: absolutely, customers can attach prompt suites and expected outputs, and the console will run periodic evals and send alerts on drift.
+[04:13] Ethan: about KV cache — we've noticed some cache-eviction patterns that cause cold starts for multi-turn sessions. any tooling to see prefix cache hit rates?
+[04:24] Marcus: yes, in the request inspector you'll see prefix hit % and a timeline of KV hits. also the Optimize tab suggests idle TTLs and batch sizes to improve hit rate.
+[04:36] Priya: you mentioned fallbacks earlier — can you explain the fallback hierarchy?
+[04:40] Marcus: fallback chain is: primary kernel -> quantized alternative -> lower-memory model variant -> remote fallback (hosted) -> queue/429 depending on policy. in Dedicated setups you can pin rollouts to avoid remote fallbacks.
+[04:55] Samantha: remote fallback concerns me for PHI — if remote fallback routes to hosted, is data sent off-prem?
+[05:01] Lydia: by default, in Private deployments we disable remote fallback. we can also enforce strict routing policies and log any attempted fallback attempts as security events.
+[05:12] Priya: good. show us a case where a route hit a fallback due to sudden load.
+[05:17] Marcus: pulling a recent incident — you can see initial requests processed on-device, then at spike we hit memory pressure and the orchestrator routed new requests to a fallback model variant in a different region. the console marks that and shows the routing decision tree.
+[05:32] Marcus: here's the trace overlayed with the autoscaler events — note the timestamp where a new pod came up and latency dropped back down.
+[05:41] Ethan: is that autoscaler event correlated with capacity commits? we need to know billing impact of sudden scale-up.
+[05:47] Lydia: yes, we surface cost delta per rollout in the console and you can set budget caps to avoid runaway spend.
+[05:55] Priya: okay. show the replay feature — play a failing request in sandbox.
+[06:00] Marcus: hitting replay now. the replay uses the exact tokenized input and forces the same kernel and config; you can toggle quantization on/off to see impact.
+[06:12] Marcus: play back shows the same 2.4s token spike when quantized kernel is used, but when we force the fp16 kernel the median is higher but stable — helps narrow cause.
+[06:27] Priya: do you capture GPU metrics like SM utilization and memory alloc?
+[06:31] Marcus: yes, GPU telemetry is attached to traces for Dedicated or if the host exposes metrics in Hosted. SM utilization, tensor core activity, and memory headroom are all available.
+[06:43] Samantha: is that telemetry retained with the trace or obfuscated to avoid PHI leakage?
+[06:49] Marcus: metrics are numeric and not PHI; trace input is subject to redaction. we can also provide a policy to never store raw inputs in hosted mode.
+[06:59] Ethan: for our POC we'll likely run a Dedicated pilot. what's the onboarding time for a sandbox with i-3 or A100 equivalents?
+[07:08] Lydia: typical onboarding for Dedicated sandbox is 3–5 business days for reserved lanes; for quick proofs we can spin a hosted trial in hours.
+[07:18] Priya: we need to decide by end of month. cost/latency tradeoff will drive it.
+[07:24] Marcus: i'd recommend starting with hosted to run the first workload, capture traces, then move to Dedicated if we see predictable throughput needs.
+[07:33] Marcus: next, overlaying the request log you can expand the raw headers — most people forget the client-side retry headers and we often see thundering retry storms. here's a real example where 3xx retries caused burst.
+[07:47] Ethan: nice, that would explain the transient 503s we saw.
+[07:50] Priya: security question — how is SSO mapped? we need per-route RBAC.
+[07:55] Marcus: we support SAML/SSO with SCIM provisioning and per-route RBAC. audit logs map user IDs to actions.
+[08:04] Samantha: can we configure redaction rules per route? some routes touch PHI, others don't.
+[08:09] Lydia: yes, route-level retention and redaction policies. we can also export anonymized traces for external debug.
+[08:18] Marcus: showing the timeline again — here's a compressed view and a raw view. raw view shows each token latency, kernel call, and the exact memory allocation when the token executed.
+[08:33] Priya: what about long-running sessions? do you show end-to-end session time?
+[08:37] Marcus: session aggregator groups related requests by session id or cookie; you can see cumulative token count and total time.
+[08:45] Ethan: we'd like to capture cold-cache vs warm-cache behavior in charts.
+[08:49] Marcus: Optimize tab surfaces cold-start heatmaps; we can export CSVs for your plotting.
+[08:57] Priya: do you offer synthetic load drivers for benchmark fidelity?
+[09:01] Marcus: yep — we provide a test harness that can replay traffic at scale with adjustable timing to mimic your real qps and prefix lengths.
+[09:10] Marcus: moving to the incident playbook portion: once you identify a root cause, the console can create an incident, assign owners, and attach the failing traces + remediation checklist.
+[09:22] Lydia: the checklist can be customized per customer — e.g., run KV cache TTL bump, increase worker pool, change batch size.
+[09:30] Priya: can that be integrated with our PagerDuty?
+[09:33] Marcus: yes, alerts and incidents push to PD, Slack, or email.
+[09:38] Ethan: for the benchmark run, i assume we'll want to stress the quantized path since that's our expected production config.
+[09:44] Marcus: we'll set the harness to prefer quantized kernels and also force fallback scenarios to measure tail latency.
+[09:52] Samantha: please include a privacy-preserving mode for the harness so we can scrub inputs.
+[09:57] Marcus: we can run harness with token-length preservation but replace semantic content with synthetic tokens.
+[10:05] Lydia: quick aside, competitor question — you asked about OtherAI. we have a few customers that compared and picked Redwood for better traceability and fallback controls.
+[10:15] Priya: do you support on-prem air-gapped installs?
+[10:18] Marcus: yes, Private offers air-gapped install with a customer-controlled control plane; in that mode remote fallback is disabled by default and there's no outbound traffic.
+[10:29] Priya: can you show the audit export? we need to hand that to compliance occasionally.
+[10:33] Marcus: exporting now — it's a gzipped CSV with trace id, user id, event, timestamp. secure download link is time-limited.
+[10:42] Ethan: one more operational question — how are rolling updates handled for model variants without causing cache churn?
+[10:48] Marcus: rollouts are canaryed by routing percentage and we keep KV cache compatibility modes; we recommend warming caches by replaying a representative prefix set before migrating traffic.
+[10:59] Priya: show how the console surfaces a canary failure and auto-roll back.
+[11:03] Marcus: here's a sample where the canary showed regression on our evals; the console automatically marked the deployment unhealthy and routed 100% back to previous variant. rollback event logs are available.
+[11:17] Lydia: that automation avoids manual firefights during deploys.
+[11:22] Priya: everything looks promising. can we go deeper on the test harness and what we need to provide?
+[11:27] Marcus: ideal: 24h sample traffic, SLO targets for p50/p95/p99, and a representative prompt set. we'll handle tokenization and match your production batch sizes.
+[11:36] Ethan: sending that by monday.
+[11:38] Samantha: on the doc side, please include language for our privacy team on data handling.
+[11:42] Lydia: i'll include a short appendix with redaction and retention controls.
+[11:48] Marcus: quick demo of a deep error trace — note sometimes the transcription will confuse acronyms like KV cash or KMS, but the console shows the exact field.
+[12:00] Marcus: here's a trace where a model variant returned malformed structured output; we can rerun the request in a validation mode that checks schema and flags regression.
+[12:13] Priya: can the console auto-roll back on schema violations?
+[12:17] Marcus: yes, you can configure automatic block rules on certain failure types.
+[12:22] Lydia: ok let's surface the practical next steps: we'll send security docs, set up a sandbox, and schedule the benchmark.
+[12:29] Priya: agreed. any blockers on your side?
+[12:32] Lydia: none, just need the sample traffic and KMS requirements.
+[12:36] Ethan: we'll pull a 24-hour window and the SLO doc.
+[12:39] Samantha: and we'll review the redaction appendix when you send it.
+[12:43] Marcus: last thing — sharing a small ops playbook link in chat: https://redwood.ai/ops-playbooks/console-debug-playbook (this is a demo link).
+[12:55] Lydia: thanks everyone, we'll follow up with the artifacts.
+[12:59] Priya: thanks, helpful demo.
+[13:02] Ethan: thanks all.
+[13:04] Samantha: bye.

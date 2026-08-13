@@ -1,0 +1,115 @@
+MAP weekly checkpoint — ops lab results & next-step owners
+
+From: Alicia Gomez <agomez@acmehealth.com>
+To: karthik_iyer@redwood.ai
+Cc: marissa_cole@redwood.ai, laura_bennett@redwood.ai
+Date: 2027-04-11T09:12:00-07:00
+Subject: Re: MAP kickoff / ops lab timeline
+
+Thanks for running the ops lab last week. Team is aligned on the evaluation plan but we wanted a weekly checkpoint specifically for the performance numbers so we can sync internal timelines (procurement + clinical window). Can we confirm you'll share p50/p95 latency and sustainable throughput numbers by end of next week? Also, can you include any guidance on quantization tradeoffs we should expect?
+
+Best,
+Alicia
+Sr. Dir., Platform Engineering
+Acme Health
+
+From: karthik_iyer@redwood.ai
+To: Alicia Gomez <agomez@acmehealth.com>
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai, laura_bennett@redwood.ai
+Date: 2027-04-12T11:03:00-07:00
+Subject: RE: MAP kickoff / ops lab timeline
+
+Hi Alicia —
+
+Quick update and plan: we ran the ops lab against the evaluation set you shared (clinical summaries, avg seq len ~420 tokens). High-level results attached; below are the headline metrics from the 1000-request run:
+
+- Baseline (fp16, no KV cache): p50 = 78ms, p95 = 310ms, sustained throughput = 145 reqs/sec (median tokens/sec 48k)
+- With KV prefix caching (warm cache for repeated patient prompts): p50 = 42ms, p95 = 180ms, sustained throughput = 220 reqs/sec
+- Quantized INT8 (Q8): p50 = 55ms, p95 = 260ms, sustained throughput = 195 reqs/sec; note a measurable drop in certain long-tail answer fidelity on the clinical QA set (~1.8% on our eval metric)
+
+Immediate recommendations:
+- Enable prefix/KV caching for the first rollout; big latency win with minimal quality risk. Owner: ben_carter
+- Run a small canary with Q8 quantization on non-critical traffic to validate the fidelity drop against your key prompts. Owner: marissa_cole
+- If Acme needs strict p95 < 200ms, keep fp16 with caching and increase dedicated pool size; procurement lead: laura_bennett to provide ETA on reserved capacity quotes
+
+I'll attach raw CSV and a condensed slide for your execs. Want to discuss next steps in the 30-min checkpoint on Thursday.
+
+Thanks,
+Karthik
+Director, Solutions — Redwood Inference
+
+From: marissa_cole@redwood.ai
+To: karthik_iyer@redwood.ai, ben_carter@redwood.ai, laura_bennett@redwood.ai
+Date: 2027-04-13T08:44:00-07:00
+Subject: Re: MAP weekly checkpoint — ops lab results & next-step owners
+
+On Tue, Apr 12, 2027 at 11:03 AM karthik_iyer@redwood.ai wrote:
+> Hi Alicia —
+> 
+> Quick update and plan: we ran the ops lab ...
+
+Notes from my side after validating samples tonight:
+- The fidelity delta for Q8 looks concentrated on rare entity disambiguation. I ran a 200-sample focused eval and saw the drop mostly where the prompt uses long context spans (>700 tokens).
+- Suggested guardrail: enable Q8 only for short/summary endpoints; keep fp16 for the long-context QA flows. That keeps overall cost savings while protecting the critical calls.
+
+Action items (working doc attached):
+- marissa_cole: prepare canary plan + rollback criteria for Q8 (due 2027-04-15)
+- ben_carter: implement and document prefix/KV cache config for MAP route (due 2027-04-16)
+- laura_bennett: post reserved capacity quote and timeline (due 2027-04-18)
+- karthik_iyer: sign off on canary go/no-go after results (meeting 2027-04-18)
+
+I'll seed the MAP workbook with these owners and link to the canary run.
+
+—Marissa
+Product Manager, Field Solutions
+Redwood Inference
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: marissa_cole@redwood.ai, karthik_iyer@redwood.ai, laura_bennett@redwood.ai
+Date: 2027-04-15T09:20:00-07:00
+Subject: Re: MAP weekly checkpoint — ops lab results & next-step owners
+
+Quick status: I pushed the KV cache config into the staging MAP route and executed 10k requests with a replay of your sample traffic. Results look consistent with the ops lab: p95 down ~42% on repeated prompts. I attached a short run log and the cache hit distribution.
+
+Notes / risks:
+- Cold-start traffic (totally new patient sessions) still shows baseline latencies — we'll keep a hybrid policy (cache-enabled for repeat/summary endpoints).
+- Memory footprint on the inference nodes increased ~12% with our default cache TTL; we can tune TTL per route if node memory is constrained.
+
+Next: roll KV config to small canary on Tues (2027-04-16) and monitor 1-hour window.
+
+Ben
+Solutions Engineer — Redwood Inference
+
+From: laura_bennett@redwood.ai
+To: karthik_iyer@redwood.ai, marissa_cole@redwood.ai, ben_carter@redwood.ai
+Date: 2027-04-17T14:02:00-07:00
+Subject: Re: MAP weekly checkpoint — ops lab results & next-step owners
+
+Procurement update: I have the reserved capacity pricing for the dedicated pool (regional us-east):
+- 8xA100 equivalent (fp16): $26,500/mo — expected p95 headroom ~180ms with caching; lead time 6 weeks
+- 8xA100 + Q8 option (quant optimized): $19,800/mo — estimated p95 ~220ms with caching; lead time 4 weeks
+
+I also uploaded the formal quote to the MAP workbook (link above). If Acme signs the reserved commitment, we can schedule the capacity change to align with your canary window.
+
+Laura
+Head of Growth Ops — Redwood Inference
+
+From: karthik_iyer@redwood.ai
+To: Alicia Gomez <agomez@acmehealth.com>, marissa_cole@redwood.ai, ben_carter@redwood.ai, laura_bennett@redwood.ai
+Date: 2027-04-18T16:07:00-07:00
+Subject: Final checkpoint before Thursday — canary plan & meeting agenda
+
+Alicia / team —
+
+Summary before our Thursday sync:
+- Canary plan: marissa will run Q8 canary on summary endpoints (5% traffic) and capture fidelity on the provided prompt set. Ben will enable KV caching for the MAP route for the canary. Laura's pricing options are attached for your procurement decision.
+- Success criteria: p95 <= 220ms OR fidelity regression <= 1% on the key prompt set. Rollback if either criterion fails.
+- Owners and deadlines: marissa_cole (canary run + report) due 2027-04-19 10:00 PDT; ben_carter (canary deploy) due 2027-04-16 12:00 PDT; laura_bennett (final quote) due 2027-04-18 EOD.
+
+Agenda for Thu 30-min: 1) Canary results review (10m), 2) Procurement decision & timeline (10m), 3) Rollout next steps and SLAs (10m).
+
+If the schedule looks good we'll proceed.
+
+Thanks,
+Karthik
+Director, Solutions — Redwood Inference

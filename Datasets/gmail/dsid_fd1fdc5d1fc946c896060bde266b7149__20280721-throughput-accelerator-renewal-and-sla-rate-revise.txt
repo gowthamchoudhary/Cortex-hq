@@ -1,0 +1,121 @@
+Renewal + throughput accelerator — contract & rate regrade
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Sophie Turner <sophie.turner@urbancart.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: 2028-07-15T09:12:00-07:00
+Subject: Renewal + throughput accelerator — contract & rate regrade
+
+Hi Sophie — great meeting this morning.
+
+Quick recap and proposal so we have something to review with Procurement:
+- Current hosted API: 2M tokens / month committed, standard rate band, soft throttle at 95%
+- UrbanCart goal: scale inference for checkout personalization and search ranking during Q4 spikes — estimate 6–8M tokens/month average with 30M peak months
+
+Proposal (high level):
+1) Increase committed monthly commit to 8M tokens (annual term)
+2) Add a 10M tokens burst pocket that can be used once per billing month
+3) Regrade to enterprise rate band 2 (per-token discount applied across committed + burst)
+4) Raise sustained QPS cap per account to 120 QPS, with route-scoped limits for search endpoints (40 QPS)
+
+Attachments: I’m sending a draft term sheet and an ops-level throughput plan for the ramp. See: UrbanCart-Termsheet-2028-07-20.pdf, urbancart-throughput-plan-2028-07-20.xlsx
+
+Next actions: if this looks directionally right, Procurement can share PO timing and we’ll route to Legal for a short addendum. Happy to jump on a quick call to walk through the rate math.
+
+Thanks,
+Jordan
+Senior Account Executive | Redwood Inference
+jordan.blake@redwood.com | +1 415-555-0192
+
+From: Sophie Turner <sophie.turner@urbancart.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: Procurement <procurement@urbancart.com>
+Date: 2028-07-16T10:05:00-07:00
+Subject: Re: Renewal + throughput accelerator — contract & rate regrade
+
+Jordan — thanks for the summary and for sending the term sheet. A few clarifying Qs from Procurement and Engineering: 
+
+1) Can you confirm the effective per-token price for committed vs burst? We need the blended and the overage rates.
+2) What does the QPS cap mean practically for our parallelized search pipelines? If route-scoped limits apply, will those throttle independently or count toward the account-level cap?
+3) We’ll likely need a 6-week ramp (pilot -> 50% -> full) — can you outline the rollback/fallback model if latency regresses during ramp?
+
+Procurement: what timelines do you need from our side for PO issuance? We can prioritize a July PO if terms are nailed down this week.
+
+— Sophie
+Head of Platform | UrbanCart Inc.
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Sophie Turner <sophie.turner@urbancart.com>, Procurement <procurement@urbancart.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Laura Bennett <laura.bennett@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2028-07-17T08:30:00-07:00
+Subject: Re: Renewal + throughput accelerator — contract & rate regrade
+
+Thanks Sophie — great questions. Looping in Marissa (Customer Success) and Laura (Finance) to address ops and billing details; Karthik is on escalation/technical terms.
+
+Answers at a glance: 
+- Pricing: committed 8M/month = $0.0032 per token (committed unit), burst tokens billed at $0.0045 per token when beyond the burst pocket, overage beyond committed+burst billed at $0.0060 per token. Blended example for a 12M month: (8M * 0.0032 + 4M * 0.0045) / 12M = ~$0.0036 per token. Full table in the term sheet.
+- Rate limits: account-level sustained cap = 120 QPS. Route-scoped caps are enforced independently — search endpoints have their own 40 QPS guardrail that will not be merged into the global cap (we’ll allow independent parallelism up to each limit).
+- Ramp & fallback: Marissa — proposed plan: 3-stage ramp (pilot 30 days at 25% commit, 3-week 50% stage, full go). During ramp we enable prefix KV caching and a canary model variant with lower-cost quantized weights; automatic fallback to the smaller variant if p99 latency degrades beyond 1.5x. Ops playbook attached in throughput-plan.
+
+I attached the updated term sheet (adds blended example and ramp cadence). Sophie — if Procurement can confirm PO cadence, Laura can confirm invoicing cadence (monthly vs net-30 invoice) and we’ll prep an addendum to the master services agreement.
+
+Jordan
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Sophie Turner <sophie.turner@urbancart.com>, Jordan Blake <jordan.blake@redwood.com>
+Cc: Laura Bennett <laura.bennett@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2028-07-20T11:47:00-07:00
+Subject: Re: Renewal + throughput accelerator — contract & rate regrade
+
+Hi Sophie — quick ops notes from the ramp perspective (copied from the throughput plan):
+
+- Stage 0 (prep): 7 days before pilot we’ll provision a dedicated capacity slice for UrbanCart in the us-west region, pre-warm KV caches, and set observability hooks (token-level breakouts, per-route p50/p95/p99).
+- Pilot (30d, 25% commit): we’ll enable continuous batching and 2ms extra headroom for network retries; collect prompt-set quality metrics.
+- Stage 1 (3 weeks, 50%): add automatic prefix caching for the top 10 most common prompts, enable conservative quantization for model v2q.
+- Stage 2 (full commit): remove conservative throttles, enable burst pocket.
+
+Throttling and fallback behavior:
+- Route-scoped limits will return 429s with a Retry-After header; we recommend client retry with jitter and an exponential backoff.
+- If p99 latency increases >1.5x baseline for more than 10 minutes, our control plane will shift traffic to the quantized fallback variant automatically; we will notify both Slack and email.
+
+Attachments: urbancart-throughput-plan-2028-07-20.xlsx (ops checklist + monitoring thresholds).
+
+Let me know if you need us to schedule the prep window this week. We can provision infra within 48 hours once PO is received.
+
+— Marissa
+Customer Success Manager | Redwood Inference
+
+From: Sophie Turner <sophie.turner@urbancart.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Procurement <procurement@urbancart.com>
+Date: 2028-07-21T16:03:00-07:00
+Subject: Re: Renewal + throughput accelerator — contract & rate regrade
+
+Jordan / Marissa — this all looks good. Procurement confirmed they’ll issue a PO by Friday 2028-07-27 if Legal signs the simple addendum. Please proceed to send DocuSign and we’ll aim for a July PO.
+
+Two small asks before signature:
+- Please add a 45-day SLA credit clause tied to monthly uptime % (same language as our current MSA but scaled to the higher commit).
+- Can you confirm whether the burst pocket can be used across regions (we operate in us-west + eu-west)? If not, we’ll keep a regional burst strategy.
+
+If you can add the SLA clause to the addendum draft and confirm cross-region burst behavior in the DocuSign packet, Procurement will greenlight the PO.
+
+Thanks — Sophie
+
+On Fri, Jul 20, 2028 at 11:47 AM Marissa Cole <marissa.cole@redwood.com> wrote:
+> Hi Sophie — quick ops notes from the ramp perspective (copied from the throughput plan):
+> 
+> - Stage 0 (prep): 7 days before pilot we’ll provision a dedicated capacity slice for UrbanCart in the us-west region, pre-warm KV caches, and set observability hooks (token-level breakouts, per-route p50/p95/p99).
+> - Pilot (30d, 25% commit): we’ll enable continuous batching and 2ms extra headroom for network retries; collect prompt-set quality metrics.
+> - Stage 1 (3 weeks, 50%): add automatic prefix caching for the top 10 most common prompts, enable conservative quantization for model v2q.
+> - Stage 2 (full commit): remove conservative throttles, enable burst pocket.
+> 
+> Throttling and fallback behavior:
+> - Route-scoped limits will return 429s with a Retry-After header; we recommend client retry with jitter and an exponential backoff.
+> - If p99 latency increases >1.5x baseline for more than 10 minutes, our control plane will shift traffic to the quantized fallback variant automatically; we will notify both Slack and email.
+> 
+> Attachments: urbancart-throughput-plan-2028-07-20.xlsx (ops checklist + monitoring thresholds).
+> 
+> Let me know if you need us to schedule the prep window this week. We can provision infra within 48 hours once PO is received.
+> 
+> — Marissa
+> Customer Success Manager | Redwood Inference

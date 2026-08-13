@@ -1,0 +1,109 @@
+Model-mix driven capacity request — reslice recommendation & amendment
+
+From: Daniel Park <daniel@solarahealth.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Solara Health Procurement <procurement@solarahealth.com>
+Date: Wed, 24 Nov 2027 09:14:00 -0800
+Subject: Capacity request: model-mix changes causing daily spikes
+
+Hi Vanessa / Ben,
+
+Quick context: over the last three weeks we've rolled a new family of retrieval-augmented instruction models into production and started seeing a new daily spike pattern around 14:00–18:00 PST. Peak concurrent sessions have jumped ~45% while steady-state token load midday hasn't changed much. Attached is our anonymized usage export for November (solara_usage_nov.csv).
+
+We need your help to:
+- Recommend a near-term capacity change so we don't breach our latency SLOs during peak windows.
+- Understand what a short-term hot-standby or tranche would cost vs. a resized committed slab.
+- Get an estimate/ETA for making the change and any required validation windows.
+
+We're in renewal conversations for the Dedicated contract (DEAL-8742) and want to fold whatever makes sense for stability into that amendment if possible. Can we schedule a technical call tomorrow?
+
+Thanks,
+Daniel
+Daniel Park
+Head of ML Platform, Solara Health
+Attachments: solara_usage_nov.csv
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Daniel Park <daniel@solarahealth.com>
+Cc: Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Wed, 24 Nov 2027 10:03:00 -08:00
+Subject: Re: Capacity request: model-mix changes causing daily spikes
+
+Thanks for the data, Daniel — this is helpful. Quick notes before we talk:
+
+1) We'll need the following telemetry slices to size precisely for the reslice: p95 latency during peak, average concurrency by 5‑minute bucket across peak window, and the top three model variants by token/sec and KV cache hits. I can pull what we have from observability if you prefer.
+2) There are two pragmatic levers to consider: an interim hot-standby tranche (fast to provision, preserves current committed footprint) or a longer-term reslice of the committed fleet (reduces unit cost for consistent load).
+3) From a delivery perspective, hot-standby is fastest (24–48h validation), reslice takes 5–10 business days including compatibility smoke tests and canary traffic routing.
+
+I've proposed a 30-minute slot at 11:30 PT tomorrow for a quick technical alignment. Ben/Karthik — can you join to give pricing and kernel/quantization constraints?
+
+—Vanessa
+Vanessa Ortiz
+Enterprise Sales, Redwood Inference
+Redwood Inference | vanessa.ortiz@redwood.ai
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Daniel Park <daniel@solarahealth.com>, Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: Wed, 24 Nov 2027 11:02:00 -08:00
+Subject: Re: Capacity request: model-mix changes causing daily spikes
+
+Looping in Laura for contract alignment and Karthik for the technical reslice plan. Short commercial note for context: DEAL-8742 currently has a 6-month commit that allows us to add temporary burst tranches without changing the committed quantity. If Solara wants a predictable unit price for the new baseline, we can propose a committed slab increase in the renewal amendment — I'm prepared to offer a 12% committed discount on any newly added committed GPUs if amendment is executed by Dec 10. The hot-standby tranche option would be billed as burst at list but can be turned on within 48 hours.
+
+Happy to review numbers live — Vanessa, please put the call on the calendar and share the usage slices Daniel mentioned.
+
+Ben Carter
+Account Executive, Redwood Inference
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Daniel Park <daniel@solarahealth.com>, Laura Bennett <laura.bennett@redwood.ai>
+Date: Thu, 25 Nov 2027 08:45:00 -08:00
+Subject: Re: Capacity request: model-mix changes causing daily spikes
+
+Thanks for the sample, Daniel — reviewed offline with infra team. High level recommendation (model-mix-led reslice):
+
+- Observed pattern: frequent short peaks with high KV-cache churn for the new family; throughput per GPU for that family is lower due to longer context and retrieval overhead.
+- Near-term (fast): provision a 10–slot hot-standby tranche sized to ~20% of observed peak concurrency. This is non-disruptive and can be validated in 24–48h.
+- Medium-term (preferred): reslice committed fleet to adjust model mix. Specifically: convert ~4 H100 equiv (current reserved) into denser mixed-instance slots optimized for the new family (quantization-friendly kernels + larger KV-cache per slot) and add an incremental 8 H100 equiv to raise peak headroom. That maps to the attached reslice_plan.xlsx with node-level layout and expected p95 improvements.
+- SLA impact: with the reslice + added headroom we project p95 latency reductions of ~18–28% during peak and eliminate most breach risk. We recommend a 72-hour canary route with 5–10% traffic before full cutover.
+- Risks / ops notes: workloads with long context windows will still see increased token cost; recommend enabling prefix/KV caching where safe. We'll need a short validation run during your next low-traffic window to tune batching parameters.
+
+I've attached the node mapping and a step-by-step change window (reslice_plan.xlsx). Laura — once Daniel confirms, please prepare the amendment redline and a DocuSign wrapper we can present.
+
+On Thu, Nov 24, 2027 at 11:02 AM Ben Carter <ben.carter@redwood.ai> wrote:
+> Looping in Laura for contract alignment and Karthik for the technical reslice plan.
+> 
+> Ben Carter
+
+—Karthik
+Karthik Iyer
+Principal Solutions Architect, Redwood Inference
+
+From: Daniel Park <daniel@solarahealth.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>, Solara Health Procurement <procurement@solarahealth.com>
+Date: Wed, 01 Dec 2027 16:02:00 -08:00
+Subject: Re: Capacity request: model-mix changes causing daily spikes
+
+Appreciate the quick turnaround and clear plan — the reslice + incremental headroom sounds like the clean long-term fix we want. Next steps for us:
+
+1) Please send the amendment redline and the DocuSign link for sign-off (we'll need procurement OK).
+2) We'll accept the hot-standby tranche for immediate relief while the reslice is scheduled. Can you confirm provisioning ETA for the hot-standby and the target date range for the reslice cutover?
+3) We'll share the p95 and concurrency buckets you asked for if you need more granularity before the canary.
+
+Ben/Laura — we want the committed discount floor included in the amendment if possible (thanks for the Dec 10 target). Procurement will prioritize once they have the DocuSign.
+
+Daniel
+Daniel Park
+Head of ML Platform, Solara Health
+
+On Thu, Nov 25, 2027 at 08:45 AM Karthik Iyer <karthik.iyer@redwood.ai> wrote:
+> Thanks for the sample, Daniel — reviewed offline with infra team. High level recommendation (model-mix-led reslice):
+> 
+> - Observed pattern: frequent short peaks with high KV-cache churn for the new family; throughput per GPU for that family is lower due to longer context and retrieval overhead.
+> - Near-term (fast): provision a 10–slot hot-standby tranche sized to ~20% of observed peak concurrency. This is non-disruptive and can be validated in 24–48h.
+> 
+> —Karthik
+
+Attachments: amendment_redline.docx, reslice_plan.xlsx, solara_usage_nov.csv

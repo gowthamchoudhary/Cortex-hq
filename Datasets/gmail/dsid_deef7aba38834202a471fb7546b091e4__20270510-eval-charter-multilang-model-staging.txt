@@ -1,0 +1,161 @@
+POC charter & kickoff — multilingual eval + model fallback plan
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Ana Gomez <ana@lingoretail.com>
+Cc: rohan_mehta@redwood.com, marissa_cole@redwood.com
+Date: Mon, 10 May 2027 15:12:00 -0700
+Subject: Recap + proposed POC charter (multilang support)
+
+Hi Ana — great call earlier today, thanks for the time. Quick recap and concrete next steps so we can lock the trial scope.
+
+Summary of needs (from our discovery)
+- Primary use case: multilingual customer support triage + intent extraction for chat and email.
+- Target languages: English (en), Spanish (es), French (fr); lower-volume Portuguese (pt) as a stretch case.
+- Success is both quality (intent accuracy, entity extraction) and runtime SLOs (p95 latency, throughput).
+- Security: SOC2 + redaction for PII/PII-adjacent data, access controls.
+
+Proposed POC charter (attached PO C-charter-LingoRetail.pdf) — high level
+1) Duration: 10 business days of active test runs (2 calendar weeks) + 3 days for analysis.
+2) Objectives / success criteria:
+   - Intent classification accuracy >= 85% on your eval set
+   - Named-entity extraction F1 >= 78% on support tickets
+   - Multilingual coverage: parity delta <= 8 points between EN and ES/FR on key intents
+   - Runtime: p95 latency < 250 ms on our dedicated staging pool, and < 350 ms in a conservative hosted config
+   - No critical security gaps from your checklist (we can run the security workbook in parallel)
+3) Evaluation plan:
+   - You share a redacted 2k example prompt set (mix of chat/email) + 300 labeled intents/entities for holdout testing
+   - Redwood provides baseline runs with two model configs, plus an a/b harness for scoring
+   - Metrics: intent accuracy, entity F1, response hallucination rate (manual sampling), and latency/cost per 1k tokens
+4) Model plan / selection (details below)
+5) Ownership & roles:
+   - Ben Carter (AE) — commercial owner, logistics, contracting
+   - Marissa Cole (SE) — technical lead, eval harness, baseline configs
+   - Rohan Mehta (CS/Eng partner) — rollout constraints, SLA discussions, post-trial ops
+6) Timeline
+   - Confirm charter + NDA: by EOD Wed (May 12)
+   - Kickoff & data handoff: Tue May 18 (preferred)
+   - Active evaluation window: May 18–May 31
+   - Final readout: Jun 2–4
+
+Model selection (initial recommendation)
+- Primary: Llama-3 13B quantized (good balance of multilingual capability + throughput).
+- Fallback: Mistral 7B quantized variant for low-latency fallbacks and cost-capped routing.
+- For Portuguese edge cases: add a small PT-tuned 7B variant in the A/B pool if we see early failure modes.
+- We'll run the same prompt templates across all models and compare behavior under identical decoding seeds.
+
+Next steps for you:
+- Confirm stakeholders who will own redacted dataset share and security review (names + emails).
+- Confirm NDA acceptance or sign DocuSign link (I attached the quick NDA).
+- Preferred kickoff date (we proposed May 18).
+
+Thanks — attaching the charter and the security workbook. Happy to jump on a 15-min sync if you'd like to walk through the scope.
+
+Best,
+Ben Carter
+Account Executive | Redwood Inference
+ben_carter@redwood.com | +1 (415) 555-0189
+
+Attachments: POC-charter-LingoRetail.pdf (doc), security-answers-LingoRetail.xlsx (sheet)
+From: Ana Gomez <ana@lingoretail.com>
+To: Ben Carter <ben_carter@redwood.com>
+Cc: rohan_mehta@redwood.com, marissa_cole@redwood.com, Sasha Ivanov <sasha@lingoretail.com>
+Date: Mon, 10 May 2027 17:04:00 -0700
+Subject: Re: Recap + proposed POC charter (multilang support)
+
+Thanks Ben — this looks comprehensive and aligned with what we discussed. A few clarifications from our side before we lock dates: 
+
+1) Data & redaction: we can share a redacted sample (2k) but need to ensure any PHI/PCI is masked. Will our security contacts need to be looped before data transfer? We have a tech security reviewer (Marta Lopez) — OK to add?
+
+2) Portuguese support: Portuguese is low volume but important for two marketplace regions. If the Llama-3 13B shows degradation on PT, we need an automated fallback or deterministic routing so agents don’t see inconsistent behavior. Can you outline a fallback flow (model routing + thresholds)?
+
+3) Cost sensitivity: we have a strict per-ticket cost guideline for trials. Can you include an estimated cost range for the proposed configs (baseline vs fallback) so procurement can sign off?
+
+4) Kickoff date: May 18 is tight for security review. Would May 20 work for us instead?
+
+Happy to sign NDA once you send the DocuSign link. Also please include the security workbook responses in one consolidated sheet if possible.
+
+Best,
+Ana Gomez
+Head of Product, LingoRetail
+ana.gomez@lingoretail.com
+
+On Mon, May 10, 2027 at 3:12 PM Ben Carter <ben_carter@redwood.com> wrote:
+> Hi Ana — great call earlier today, thanks for the time. Quick recap and concrete next steps so we can lock the trial scope.
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Ana Gomez <ana@lingoretail.com>, Ben Carter <ben_carter@redwood.com>
+Cc: rohan_mehta@redwood.com
+Date: Tue, 11 May 2027 08:02:00 -0700
+Subject: Re: Recap + proposed POC charter (multilang support)
+
+Hi Ana — thanks for the quick questions. I pulled together a concise plan to address the items you raised (model routing, fallback, and cost-estimates) so we have concrete knobs during the trial.
+
+1) Data & security loop-in
+- Please add Marta Lopez to the thread (or share her preferred contact). We can run the security workbook in parallel; I'll attach a one-page summary of the SOC2 evidence we typically provide.
+
+2) Model routing & fallback (technical proposal)
+- Primary inference config: Llama-3 13B q4f32 (quantized) deployed in our dedicated staging pool. Good multilingual baseline for EN/ES/FR.
+- Fallback model: Mistral 7B q4f16 — used when confidence < threshold or when observed token-level perplexity spikes. Mistral tends to be cheaper and lower-latency for short-turn responses.
+- Portuguese (pt) handling: we'll add a small PT-tuned 7B variant into the A/B candidate pool. Routing rules:
+   * If primary intent confidence < 0.70 OR entity extraction F1 drops below 0.65, route to fallback automatically for that request.
+   * Persist routing at session-level for an agent session to avoid flip-flopping.
+   * Log both outputs for post-hoc comparison.
+- We'll implement a conservative 5% sample shadowing to quantify mismatch before routing is fully live.
+
+3) Cost estimate (very rough for trial window)
+- Baseline (Llama-3 13B, dedicated staging, 2k prompts): ~$1.2k–1.8k total tokens + infra (estimate).
+- With fallback routing active: add ~20% to cost (Mistral runs on 5–10% of requests initially).
+- We'll provide a daily cost dashboard so procurement sees burn in near real-time.
+
+4) Evaluation harness & metrics
+- We'll ship a lightweight eval harness (script + scoring CSV) that runs your holdout test and outputs: intent accuracy, entity F1, latency p50/p95, and a small hallucination sample with human labels.
+- Thresholds (as proposed): intent >=85%, entity F1 >=78%, p95 <250ms on staging. We'll flag regressions and run a quick follow-up if metrics miss targets.
+
+5) Timeline & kickoff
+- May 20 kickoff works for us. Proposed schedule:
+  * May 20: Kickoff + data handoff + tech alignment (60 min)
+  * May 21–28: Active runs + daily sync (15 min) as needed
+  * May 31–Jun 1: Readout prep
+  * Jun 2: Final readout
+
+6) Action items (owners)
+- Ana / LingoRetail: confirm Marta for security, share redacted sample by May 18 (or at kickoff)
+- Ben: send DocuSign NDA and procurement contact
+- Marissa: provide initial eval harness, baseline configs, and cost dashboard access
+- Rohan: I'll hand off post-trial ops notes and SLA questions to you during readout
+
+If this looks good I'll update the charter PDF with the fallback flow and cost ranges and re-upload. 
+
+Best,
+Marissa Cole
+Senior Solutions Engineer | Redwood Inference
+marissa_cole@redwood.com
+
+On Mon, May 10, 2027 at 5:04 PM Ana Gomez <ana@lingoretail.com> wrote:
+> Thanks Ben — this looks comprehensive and aligned with what we discussed. A few clarifications from our side before we lock dates:
+
+From: Rohan Mehta <rohan_mehta@redwood.com>
+To: Ana Gomez <ana@lingoretail.com>, Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Tue, 11 May 2027 09:20:00 -0700
+Subject: Re: Recap + proposed POC charter (multilang support)
+
+Thanks everyone — quick confirmation from ops side and a couple of admin notes.
+
+1) Confirmed: May 20 kickoff OK. Marissa — please reserve the dedicated staging pool for May 20–31 and set up the daily cost dashboard access for Ana's procurement contact (send link once ready).
+
+2) Security contact: Ana, please leave Marta's email and we'll loop in our security reviewer (security@redwood.com). We'll share the SOC2 summary and the security-answers-LingoRetail.xlsx on the drive folder.
+
+3) Contracting & procurement: Ben — can you push the NDA DocuSign by EOD today and include a simple line item with the estimated trial spend so procurement can pre-approve? If they prefer a cap, we can gate the fallback to a 10% sampling throttle.
+
+4) Final decision on models for the trial: approved as-written (Llama-3 13B primary, Mistral 7B fallback, PT-tuned 7B in pool) — we will run the A/B harness and produce a model-by-model metrics table in the first readout. If PT failure mode is significant, we'll switch the PT-tuned candidate to primary for PT traffic.
+
+5) Next steps: Ben to send DocuSign + procurement contact; Ana to confirm Marta + redacted sample delivery plan; Marissa to upload harness + initial configs to the Drive link. I'll host the kickoff invite once Ben confirms attendees.
+
+See you May 20.
+
+Rohan Mehta
+Customer Success | Redwood Inference
+rohan_mehta@redwood.com
+
+On Tue, May 11, 2027 at 8:02 AM Marissa Cole <marissa_cole@redwood.com> wrote:
+> Hi Ana — thanks for the quick questions. I pulled together a concise plan to address the items you raised (model routing, fallback, and cost-estimates) so we have concrete knobs during the trial.

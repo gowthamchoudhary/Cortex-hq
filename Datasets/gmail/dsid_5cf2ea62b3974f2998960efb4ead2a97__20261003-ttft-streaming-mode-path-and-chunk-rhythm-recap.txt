@@ -1,0 +1,105 @@
+TTFT targets and streaming-mode decision path (SSE vs WS) — post-demo recap
+
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Sophie Turner <sophie.turner@brightcart.com>, Arjun Mehta <arjun.mehta@edgepay.io>
+Cc: Ben Carter <ben.carter@redwood.com>, Aditya Rao <aditya.rao@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Sat, 03 Oct 2026 15:12:00 -0700
+Subject: TTFT targets and streaming-mode decision path (SSE vs WS) — post-demo recap
+
+Hi Sophie / Arjun —
+
+Thanks again for the demo time today. Quick recap from our side and proposals for the performance path we discussed. I added Ben and Aditya to call out ops/implementation impacts and Monica for contract/next-step coordination.
+
+Key takeaways from the call:
+- BrightCart goal: consistent Time-to-First-Token (TTFT) for human-facing chat snippets and realtime product recommendations. Target callouts from Sophie: p50 <= 200ms, p95 <= 400ms for first token.
+- Throughput expectation: initial pilot ~150 concurrent sessions (chat streams), ramping to ~1.2k concurrent sessions in 3 months.
+- Streaming mode: you prefer SSE for browser-first integrations, but want WebSocket fallback to reduce cold-start overheads for mobile SDKs.
+- Chunk cadence: preferences are low-latency small chunks for UI snappiness (200–400ms cadence) vs larger token-delimited chunks for throughput efficiency.
+
+Our proposal (short):
+1) TTFT target and fallback tiers: aim for p50 <= 180ms, p95 <= 400ms on our hosted runtime for the pilot using prefix caching + priming. If we see p95 violations, automatic fallback to a lower-latency model variant (smaller context/quantized) will be configured.
+2) Streaming mode decision path: default to SSE for the browser widgets (simpler retries & auto-reconnect). For mobile SDKs and server-side integrations, recommend WebSocket to allow multiplexing and lower per-connection overhead. We can route by client-type automatically.
+3) Chunk cadence policy (pilot): emit first partial token as soon as available (to satisfy TTFT), then stream subsequent chunks on whichever comes first: 250ms elapsed OR 64 tokens emitted. That balance gives snappy UX while keeping throughput-efficient batching.
+4) Ops guardrails: initial capacity reservation for the pilot (reserved pool for BrightCart), 5% headroom, and health checks to trigger graceful fallback to a cached, shorter-response mode if concurrency spikes.
+
+Action items (owners):
+- Sophie: confirm the 150 concurrent pilot target and which SDKs you plan to test (browser + Android/iOS?) — due Tue 10/06.
+- Ben: prepare a pilot capacity proposal and expected cost delta for reserved pool + fallback config — due Mon 10/05.
+- Aditya: draft an implementation note for SSE<>WS routing and chunk cadence logic, including reconnection behavior — due Mon 10/05.
+- Monica: send the pilot SOW and simple NDA addendum (if needed).
+
+Attachments: chunking_profile_v1.pdf (proposed cadence diagrams), slo_matrix_brightcart.csv (initial TTFT/throughput matrix).
+
+Open questions we flagged on call:
+- If BrightCart prefers strict p95 for TTFT under heavy burst (500+ concurrent), do you accept routing some traffic to a lighter-weight model variant that trades completion length for faster startup?
+- For SSE, do you have existing CDN/proxy rules that would strip or buffer streaming chunks? If yes, we’ll need a short compatibility pass.
+
+Happy to iterate — if you’re good with the path above, we’ll produce a 2-week pilot checklist and provision the reserved pool.
+
+Thanks,
+Naomi Feldman
+Head of Solutions — Redwood Inference
+naomi.feldman@redwood.com
++1 (415) 555-0127
+
+[attachment: chunking_profile_v1.pdf (pdf)] [attachment: slo_matrix_brightcart.csv (csv)]
+From: Sophie Turner <sophie.turner@brightcart.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Aditya Rao <aditya.rao@redwood.com>
+Date: Sat, 03 Oct 2026 17:05:00 -0700
+Subject: Re: TTFT targets and streaming-mode decision path (SSE vs WS) — post-demo recap
+
+Thanks Naomi — this is exactly what I wanted to capture. Quick clarifications from our side: 
+
+- Pilot concurrency: confirm 150 concurrent sessions (browser widgets + server-side routing for high-traffic pages). We’ll also try a small mobile cohort (Android only) for the first pilot.
+- p50/p95 TTFTs: we’re comfortable with your proposed p50 <= 180ms and p95 <= 400ms for the pilot. If you need a stricter p95 for checkout flows, we can scope that as a follow-up after pilot results.
+- Chunk cadence: 250ms or ~64 tokens sounds sensible. Important: the UI expects the first character to render within ~250ms on average; anything beyond 500ms becomes noticeable to users.
+
+On the CDN question: we use FastEdge and don’t currently strip streaming chunks, but our caching layer sometimes buffers responses if chunk size is very small. We’ll have infra folks verify — I’ll loop in Arjun.
+
+Thanks — Sophie
+Sophie Turner
+Head of Product — BrightCart
+Sophie.Turner@brightcart.com
+From: Ben Carter <ben.carter@redwood.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Aditya Rao <aditya.rao@redwood.com>
+Cc: Sophie Turner <sophie.turner@brightcart.com>, Monica Patel <monica.patel@redwood.com>
+Date: Sun, 04 Oct 2026 09:22:00 -0700
+Subject: Re: TTFT targets and streaming-mode decision path (SSE vs WS) — pilot capacity note
+
+Quick capacity note from my side after reviewing their ramp targets:
+- Pilot (150 concurrent): recommend reserving a pool sized to sustain 200 concurrent sessions (20% buffer) to absorb spikes during integration testing.
+- Ramp to 1.2k: we should plan a staged ramp (150 -> 400 -> 800 -> 1200) with performance gates at each step.
+- Cost delta: rough estimate for the reserved pilot pool is +12% on monthly inference costs for the demo month due to the headroom and prefix-caching memory. I’ll formalize numbers for Monica.
+
+Implementation considerations:
+- Priming/prefix cache will reduce TTFT significantly for session types that hit the cache. Need sample prompt sets from BrightCart (common product-recommendation prompts + moderation checks).
+- SSE vs WS routing: we can implement automatic client detection in the CDN/router layer and tag requests. Aditya, please include reconnect jitter and resume-id logic in your note.
+
+I’ll add a short risk register: p95 regressions on cold-starts, CDN buffering of tiny chunks, and model-variant fallback correctness.
+
+Ben
+Senior Solutions Engineer — Redwood Inference
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Sophie Turner <sophie.turner@brightcart.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Aditya Rao <aditya.rao@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Mon, 05 Oct 2026 09:03:00 -0700
+Subject: Re: TTFT targets and streaming-mode decision path (SSE vs WS) — final pilot checklist and next steps
+
+Thanks all — quick status and next steps: 
+
+Sophie: confirmed pilot cohorts: browser widget + Android mobile small cohort. Please send the list of sample prompts and expected daily traffic profile (CSV or Google Sheet).
+Ben / Aditya: please finalize the pilot capacity proposal and the technical note by end of day Mon 10/05. Aditya: include the resume-id reconnect approach and a simple state-machine for fallback decisions (when to route to lighter variant).
+Monica: draft the SOW for a 4-week pilot (provision + monitoring + one on-call support hour/day during ramp) and include pricing delta Ben estimated.
+
+I attached a tightened SLO matrix (slo_matrix_brightcart.csv) — it maps TTFT targets, allowed fallback windows, and chunk-cadence thresholds. If everyone is aligned I’ll submit the pilot SOW and provision the reserved pool Tuesday morning.
+
+On the CDN compatibility note — Sophie, if your infra team confirms any buffering for <128-byte chunks we’ll change cadence thresholds to favor token-count-based emits (e.g., 64 tokens) instead of strict timeouts.
+
+Next meeting: propose Wed 10/07 10:00am PT for pilot kickoff (30 min). Sophie, can you confirm?
+
+Best,
+Naomi Feldman
+Head of Solutions — Redwood Inference
+naomi.feldman@redwood.com
+[attachment: slo_matrix_brightcart.csv (csv)]

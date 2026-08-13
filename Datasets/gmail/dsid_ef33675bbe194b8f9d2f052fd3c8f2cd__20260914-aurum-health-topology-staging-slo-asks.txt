@@ -1,0 +1,127 @@
+Post-call: Aurora Health throughput commitments & deployment topology sketch
+
+From: Irene Choi <irene.choi@redwood.ai>
+To: Elena Hughes <elena.hughes@aurumhealth.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Monica Patel <monica.patel@redwood.ai>
+Date: Mon, 14 Sep 2026 09:12:00 -0700
+Subject: Aurora Health deep-dive — quick recap + asks
+
+Thanks for the time this morning, Elena — appreciated the walkthrough of the triage flow and the production constraints. Below is a short recap so we’re aligned and to make next steps explicit.
+
+Key pain points you reiterated:
+- Peak-hour latency spikes on the triage endpoint (especially 99th percentile) that cause clinician UI timeouts.
+- Tokenization and model size concerns: current internal model (v2) is ~11B and memory spikes during concurrent scoring.
+- Data residency & audit logs: must be able to show per-request audit trail for PHI-related operations.
+
+Goals we heard:
+- 99th percentile response time <= 800ms for single-request triage scoring (seq len ~256).
+- Sustained throughput target ~120 requests/sec for burst windows (~15 minutes).
+- Isolation of PII/PHI data and SOC2 evidence for procurement.
+
+Technical notes / early recommendations from our side:
+- Propose a two-tier routing policy: low-latency pool (quantized 4-bit for trimmed context) + fallback high-precision pool for long-context or rare high-quality responses.
+- KV prefix caching for common triage prompts to reduce token generation for repeated templates.
+- Burst plan: reserve Dedicated nodes for predictable throughput (we sketched GPU sizing attached).
+- Audit logs: Redwood Private can stream per-request audit events to your Kinesis (or S3) endpoint; we’ll include the schema.
+
+Attachments included: deployment topology sketch and preliminary MIP (mutual implementation plan) cost/throughput estimates.
+
+Immediate asks / next steps:
+1) Elena: confirm whether the 120 req/s is sustained across all regions or US-only.
+2) Aurum: share a sanitized sample of typical triage request sizes (max tokens, median tokens) and expected concurrency distribution so we can finalize GPU sizing.
+3) Redwood: we will provide a latency tail runbook (preliminary) and a proposed Dedicated sizing by EOD Wednesday.
+
+Proposed follow-up: 30-minute tech sync on Thursday 10:00 AM PT to walk the topology and agree on the MIP. If that works, I’ll send a calendar invite.
+
+Thanks,
+Irene
+Irene Choi
+Principal Solutions Engineer | Redwood Inference
+irene.choi@redwood.ai | +1 (415) 555-0172
+
+--
+Attachment stubs:
+- aurum-deploy-topology.png (diagram, 1.2 MB)
+- aurum-mip-estimates.xlsx (spreadsheet)
+- aurum-soc2-questions.pdf (PDF, 6 pages)
+From: Elena Hughes <elena.hughes@aurumhealth.com>
+To: Irene Choi <irene.choi@redwood.ai>
+Cc: Platform Team <platform@aurumhealth.com>
+Date: Mon, 14 Sep 2026 10:03:00 -07:00
+Subject: Re: Aurora Health deep-dive — quick recap + asks
+
+Thanks for the clear summary, Irene — this aligns with our notes. A few clarifications: 
+
+- The 120 req/s target is US-only for now; we have separate EU traffic routed later this year.
+- We can provide a sanitized sample set by EOD Tuesday; I’ll have engineering redact PHI and drop PII fields. Expect token sizes between 60–320 tokens (median ~140) for triage prompts.
+- SOC2: procurement flagged the need for our vendor to provide SOC2 Type II evidence and a sample of per-request audit schema. If Redwood can point to the relevant report and sample event JSON, that speeds review.
+
+We can do Thursday 10:00 AM PT for the topology walk — I’ve tentatively blocked time. Please include a short agenda (30-min): 1) topology and routing behavior, 2) burst sizing, 3) audit/logging schema & SOC2 evidence path.
+
+—Elena
+Elena Hughes
+Director, Platform Engineering | Aurum Health
+elena.hughes@aurumhealth.com | (617) 555-8822
+
+On Mon, Sep 14, 2026 at 09:12 AM Irene Choi <irene.choi@redwood.ai> wrote:
+> Thanks for the time this morning, Elena — appreciated the walkthrough...
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Irene Choi <irene.choi@redwood.ai>
+Cc: Monica Patel <monica.patel@redwood.ai>
+Date: Mon, 14 Sep 2026 11:20:00 -07:00
+Subject: Re: Aurora Health deep-dive — quick recap + asks
+
+Quick internal note — putting owners on the immediate asks: 
+- Data sample & token distribution: Monica (ask for sanitized set, coordinate with Elena).
+- Dedicated sizing & latency tail run: Marcus (I’ll run a focused benchmark matrix: 11B fp16 vs 11B/q4a and a 7B q4a baseline).
+- SOC2 + audit schema: Security ops (Irene to request sample event JSON and pointer to SOC2 PDF).
+
+Irene — I’ll start the bench runs today and attach the first 95/99/Max response times by 3:00 PM PT. Monica — can you confirm you can pick up the data sample ask?
+
+Thanks,
+Marcus
+Marcus Lin
+Sr. Performance Engineer | Redwood Inference
+marcus.lin@redwood.ai
+
+On Mon, Sep 14, 2026 at 09:12 AM Irene Choi <irene.choi@redwood.ai> wrote:
+> Thanks for the time this morning, Elena — appreciated the walkthrough...
+From: Irene Choi <irene.choi@redwood.ai>
+To: Elena Hughes <elena.hughes@aurumhealth.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Monica Patel <monica.patel@redwood.ai>
+Date: Mon, 14 Sep 2026 14:02:00 -07:00
+Subject: Aurora Health — topology + next steps (invite & deliverables)
+
+Elena — thanks again for confirming the Thursday slot. Per Marcus’s note and our bench kickoff, attached is the updated topology sketch with the routing buckets we discussed ("low-latency pool" and "high-precision pool"). I also uploaded the sanitized runbook and a placeholder MIP to the shared Drive (links below).
+
+Deliverables & owners (deliver-by dates):
+- Sanitized token sample from Aurum (Elena) — Tue Sep 15 EOD
+- Initial bench (Marcus) — Mon Sep 14 15:00 PT (first pass 95/99 latency numbers & per-GPU throughput)
+- SOC2 summary + sample event JSON (Irene) — Wed Sep 16 EOD
+- Draft MIP & pricing (Irene + Marcus) — Wed Sep 16 EOD
+
+Calendar: I’ve sent a 30-minute invite for Thu Sep 16 10:00 AM PT titled "Aurum — topology walk & MIP review". Please accept if that works.
+
+Notes for the Thursday call agenda:
+1) Run Marcus’s first-pass numbers live (5–7 minutes)
+2) Walk topology image and routing fallback behavior (10 minutes)
+3) Audit/event schema and SOC2 path (10 minutes)
+4) Confirm next deliverables and sign-off criteria (5 minutes)
+
+If anything changes on your side (owners or timelines), flag me and I’ll update the MIP.
+
+Best,
+Irene
+Irene Choi
+Principal Solutions Engineer | Redwood Inference
+irene.choi@redwood.ai
+
+Links:
+- Drive: https://drive.google.com/drive/folders/1AurUM-Shared/Proposal
+- HubSpot deal: https://app.hubspot.com/contacts/12345/deal/DEAL-2026-AUR-0042
+
+--
+Attachment stubs:
+- aurum-deploy-topology.png (updated diagram)
+- aurum-mip-estimates.xlsx (placeholder cost sheet)
+- aurum-soc2-questions.pdf (procurement questionnaire)

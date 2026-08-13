@@ -1,0 +1,106 @@
+BrightLeaf: post-discovery performance & SLA wording
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Maya Brooks <maya.brooks@brightleafhealth.com>, Mike O'Connell <mike.oconnell@brightleafhealth.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Wed, 4 Nov 2026 15:20:00 -0800
+Subject: BrightLeaf discovery recap — perf targets + next steps
+
+Thanks for a great call today — appreciate the clarity on BrightLeaf's streaming use case. Quick recap and proposed next steps so we're aligned: 
+
+- Workload: user-facing clinical summarization with streaming token delivery to the UI. Typical requests: 600–1,200 tokens, 95th percentile response length ~900 tokens.
+- Targets you asked about: 95th percentile streaming tail latency under 400ms for per-token append, end-to-end completion latency under 1.2s for 900-token responses, and sustained throughput of ~1,200 requests/min during business hours (concurrency burst to 6k RPM acceptable).
+- Open questions we promised to clarify: how BrightLeaf prefers latency to be measured for streaming (per-token tail vs end-to-end), acceptable exclusions (e.g., scheduled maintenance, network outages outside Redwood's control), and reporting cadence for SLO compliance.
+
+Proposed next steps:
+1) I'm attaching a short SLO proposal (BrightLeaf_SLO_Proposals_v1.pdf) that shows measurement options side-by-side and two remedy models (service credits vs. monthly bill credits). Please scan and flag preferences.
+2) If you want, Karthik can kick off a draft SLA clause that matches your procurement team's template.
+3) Could you confirm the names + emails of anyone from procurement/security who should loop in for SOC2 evidence and legal redlines?
+
+I'll follow up with a more explicit measurement definition by Friday.
+
+—Ben
+Ben Carter | Account Executive, Redwood Inference
+ben.carter@redwood.ai | +1 415 555 0192
+Redwood Inference
+
+Attachments: BrightLeaf_SLO_Proposals_v1.pdf (pdf, 48KB), measurement-examples.csv (csv, 6KB)
+From: Maya Brooks <maya.brooks@brightleafhealth.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Mike O'Connell <mike.oconnell@brightleafhealth.com>
+Date: Thu, 5 Nov 2026 09:12:00 -0800
+Subject: Re: BrightLeaf discovery recap — perf targets + next steps
+
+Thanks Ben — that recap matches our notes. A few clarifying asks from our engineering side: 
+
+1) For streaming tail latency, we care most about the per-token append seen by the client during the stream. Practically, that means measuring the 95th percentile of per-token inter-arrival time once the stream starts (exclude initial handshake). Do you have a clear definition you recommend?
+
+2) For throughput, the 1,200 RPM is a sustained average during a business-hour window (Mon–Fri, 9am–5pm PT). Bursts up to 6k RPM over short windows are okay but shouldn't be counted against SLOs unless they last longer than 3 minutes.
+
+3) On remedies: procurement tends to prefer defined service credits with a clear attribution method rather than open-ended credits. Could you draft example clause language?
+
+Looping in our CTO, Mike, to confirm nothing else.
+
+—Maya
+Maya Brooks
+Director of Platform Engineering, BrightLeaf Health
+maya.brooks@brightleafhealth.com
+
+On Wed, Nov 4, 2026 at 3:20 PM Ben Carter <ben.carter@redwood.ai> wrote:
+> Thanks for a great call today — appreciate the clarity on BrightLeaf's streaming use case. Quick recap and proposed next steps so we're aligned: ...
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Maya Brooks <maya.brooks@brightleafhealth.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Mike O'Connell <mike.oconnell@brightleafhealth.com>
+Date: Fri, 6 Nov 2026 11:05:00 -0800
+Subject: Re: BrightLeaf discovery recap — perf targets + next steps
+
+Maya — thanks, good clarifications. Below is the measurement language we typically propose for streaming SLOs (keeps it narrow and auditable):
+
+PROPOSED STREAMING LATENCY MEASUREMENT (95th PCTL TOKEN APPEND):
+- Measurement unit: per-token append duration measured at Redwood's edge service (time between token send event and client-visible byte emission).
+- Window and aggregation: compute per-request 95th percentile of per-token append across the reporting window (daily), then report the 95th percentile across those per-request values for billing period.
+- Exclusions: scheduled maintenance windows >15m (with 72-hour prior notice), customer-origin network outages (verified via traceroutes), third-party dependency outages (CDN or customer proxy), and force majeure events.
+- Burst policy: sustained bursts >3 minutes will be counted against SLOs; short bursts (<=3 minutes) are excluded from SLO calculations but included in anecdotal reports.
+
+I've attached a short CSV (measurement-examples.csv) that shows a synthetic sample and how the aggregation works (per-request per-token p95 -> billing p95). For remedies, we can draft either: (A) graduated service credit tiers based on monthly p95 exceedance, or (B) defined monthly bill credits tying to impacted percentage of requests. My recommendation for BrightLeaf is (A) since you asked for deterministic credits.
+
+I'll put a candidate clause in a single page SLA draft and share early next week. Karthik — can you take point on the SLA clause and procurement-friendly wording?
+
+—Ben
+
+> On Thu, Nov 5, 2026 at 9:12 AM Maya Brooks <maya.brooks@brightleafhealth.com> wrote:
+> > Thanks Ben — that recap matches our notes. A few clarifying asks from our engineering side: ...
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Sat, 7 Nov 2026 08:22:00 -0800
+Subject: Re: BrightLeaf streaming SLO measurement & SLA clause (internal)
+
+Ben — saw this thread. I'll draft a procurement-friendly clause that:
+- Uses the measurement language you wrote but simplifies the aggregation description into a single sentence for the SLA body, with the detailed math in an appendix (legal likes that).
+- Proposes service credit tiers: 0.5% credit for monthly p95 exceedance up to 10%, 1.5% for 10–25%, and 4% for >25% of billing period out of compliance.
+- Adds an explicit reporting cadence: monthly automated report with CSV + anomaly note, and an option for a weekly ops report during onboarding.
+
+Marissa — can you review for any product constraints (fallback models / automatic degradation policies) before we send to Maya? I can turn this into a one-page PDF for their procurement team.
+
+—Karthik
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Karthik Iyer <karthik.iyer@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Maya Brooks <maya.brooks@brightleafhealth.com>
+Date: Sat, 7 Nov 2026 10:05:00 -0800
+Subject: Re: BrightLeaf streaming SLO measurement & SLA clause — product review + next steps
+
+Thanks Karthik — quick product notes before we finalize wording: 
+
+- Fallbacks: we'll propose an automatic model-fallback policy (to a lower-cost, lower-latency variant) as an optional feature that can be enabled for BrightLeaf; if enabled, incidents where fallback occurs are reported but excluded from credits if the fallback succeeded under documented conditions.
+- Monitoring & reporting: Redwood will include a monthly CSV export (matching the aggregation in the appendix) and an optional webhook push for BrightLeaf's observability pipeline during onboarding.
+- Onboarding measurement window: recommend a 30-day observation period for baseline measurement before the SLA goes live.
+
+Ben — I'll approve the one-pager once Karthik posts the draft. Maya — would you like the one-page SLA PDF or a short Confluence link to review first?
+
+—Marissa
+
+On Sat, Nov 7, 2026 at 8:22 AM Karthik Iyer <karthik.iyer@redwood.ai> wrote:
+> Ben — saw this thread. I'll draft a procurement-friendly clause that: ...

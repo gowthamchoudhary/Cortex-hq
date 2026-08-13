@@ -1,0 +1,70 @@
+Ironcrest weekly pulse: bench debrief & routing decisions
+
+Meeting header:
+Date: 2026-10-01
+Start: 15:00 UTC | Duration: 52m
+Attendees: Maya Chen (Redwood, AE); Liam O'Connor (Redwood, SE); Dr. Ana Valdez (Ironcrest, CTO); Samir Patel (Ironcrest, Lead ML Eng); Jordan Reyes (Ironcrest, Platform Eng)
+
+Summary: Quick sync on week-two POC bench results vs incumbent (NimbusAI). We reviewed latency deltas, throughput headroom, cache behavior, and options for routing + dedicated slots. Agreed next steps for a focused head-to-head and to exchange raw CSVs and configs.
+
+Topics: bench numbers, kv cache effects, quantization profile, routing fallback, dedicated slot request, SOC2/KMS Qs, scheduling of deep-dive.
+
+Action items (recap) at end.
+
+Transcript body:
+[00:00] Maya: Hey everyone, thanks for joining. quick agenda — we want to run through the numbers from last nights runs, talk about what changed since the midweek tune, and agree next steps. hi Ana, Samir, Jordan.
+[00:23] Ana: Hey Maya, thanks. yes we're tight on time today, got a leadership sync after this but wanted to get the numbers and anything that blocks our gating decisions.
+[00:37] Samir: hey all. We're primarily interested in the p95 delta vs Nimbus, and also the end-to-end throughput at peak traffic.
+[00:50] Liam: perfect. quick note — the runs we did were with Redwood hosted config: batching=auto, batch_size cap 64, kv cache on, quantize=8-bit dynamic, and routing rules set to prefer low-latency nodes in us-west. baseline run from Ironcrest used Nimbus default with their autoscaler and no kv caching.
+[01:13] Jordan: okay good to know, that difference might explain the throughput gap we saw. can you just run numbers?
+[01:20] Maya: yes. headline: median token latency improved, p95 for short-chat workload was 82ms on Redwood vs 128ms on Nimbus under the same concurrency profile. throughput — we measured sustained 720 requests/sec on Redwood nodes at 1024-token max with 8 workers, Nimbus sustained about 470 rps before they started shedding.
+[01:48] Ana: those are promising numbers. can you confirm tokenization/parsing was identical? we had a prior case where tokenization discrepancies made apples-to-oranges.
+[02:01] Liam: good call. we ran the exact same prompt corpus and tokenizer binary; small variance came from their pre-processing microservice which adds a 5-8ms overhead, so we stripped that out for the head-to-head numbers reported.
+[02:18] Samir: hmm, the p95 improvement looks great but the tail — did you capture p99? we care about the worst-case for user journeys.
+[02:27] Maya: p99 was 310ms on Redwood vs 660ms on Nimbus for that short-chat set under the 700rps sustained test. we think the difference is KV cache hit patterns and our routing — Redwood's warm KV cache avoided repeated KV loads on many sessions.
+[02:46] Jordan: what about larger context lengths? our internal tests use up to 2048 tokens for some flows.
+[02:53] Liam: we ran a 2k token pass too — throughput dropped (expected) but the relative latency delta shrank: p95 about 320ms Redwood vs 410ms Nimbus at 250rps. So Redwood still ahead but margin reduces as context grows.
+[03:15] Ana: were these runs on shared hosted capacity? we've been debating dedicated slots for stable tail SLOs.
+[03:23] Maya: yes these were hosted. we can provision dedicated slots — that gives you pinned GPU capacity, predictable throughput, and you'll likely see the p99 tighten up. we can estimate the committed capacity needed based on your peak qps.
+[03:36] Samir: any data on cost delta? throughput is great but we can't double our inference bill.
+[03:42] Maya: initial cost estimate: with batching and kv caching enabled Redwood lowered token-unit cost by ~28% vs Nimbus for this workload. exact numbers in the CSV I'll share. Dedicated price has commit options to reduce unit cost further.
+[03:56] Jordan: how much of the improvement is from quantization? we've observed accuracy regressions at 8-bit on our CCD model.
+[04:03] Liam: good catch — quantization contributed about 8-12% of the token cost savings and 5-10% latency improvement for the decoder-heavy pieces. but we tested eval prompts and didn't see accuracy drift beyond your tolerance on the sampled set; however we'll run more evals with your production samples.
+[04:22] Ana: please run the evals; accuracy is a hard requirement. also we need SOC2 evidence and KMS integration info for audit.
+[04:30] Maya: we'll share the security pack — SOC2 Type II attestation, SSO/SAML docs, and KMS/HSM options.
+[04:36] Samir: routing — you mentioned fallback policies. in a cross-region outage we need deterministic fallback to an equivalent model; can Redwood do model variant fallback automatically?
+[04:46] Liam: yes — our smart routing can define policy: prefer region A, fallback to quantized variant in region B, fallback to lower-latency smaller model, etc. we can make it per-route and tie it to SLA thresholds.
+[04:58] Jordan: curious — when fallback to smaller model happens, what's observability surface? we want to track per-request which variant served it.
+[05:06] Liam: tracing header on requests, route-level metrics, and token-level cost breakdown in the console. you can set alerts on regressions in quality or latency.
+[05:18] Maya: small aside — we also captured error rates. Redwood error rate during the sustained 720rps test was 0.14% vs Nimbus 0.9% (timed out and 5xx).
+[05:30] Samir: that's a meaningful operational delta. ok so next up for us is to run the disabled-KV cache head-to-head because our flow can't rely on cache for privacy reasons.
+[05:41] Liam: yep, that's on our side to execute. we'll run the 2-hour head-to-head with kv disabled and identical autoscale behavior.
+[05:48] Ana: can you also test with single-model pinned (no model variant fallback) to emulate our compliance constraints?
+[05:56] Maya: yes — we'll run one pass pinned to the same model family and same weights, then another pass with fallback enabled so you can compare.
+[06:05] Jordan: on the dedicated slot ask — what's the lead time if we want to trial a dedicated GPU pool? we might want to spin a small reserved pool for two weeks.
+[06:14] Maya: we can provision a short reserved pool (burstable) in about 48 hours for dev/demo. For enterprise private deployment (VPC) it's longer, typically 2-3 weeks for network setup and KMS integration.
+[06:26] Samir: network question — if we go dedicated in hosted but within our VPC peering, can we use our own KMS keys?
+[06:33] Liam: yes, we support customer-managed keys via supported KMS providers for dedicated and private deployments. audit logs support and HSM options available.
+[06:41] Ana: good. any red flags you saw in the runs?
+[06:45] Liam: nothing major, but one anomaly: around minute 37 of the long run we saw a spike in queuing time. digging in, small GC pause in the model worker and a routing rebalance during a node rotation. We have mitigations: pre-warm and stagger node rotations, and improved GC settings for the runtime.
+[07:07] Maya: we can also pin a small buffer of spare workers during your peak window to avoid rotations then.
+[07:13] Samir: about the dev test dataset we'll upload — should we anonymize or can Redwood handle PII?
+[07:20] Maya: Redwood will handle PII per enterprise terms, but for bench sharing it's simpler if you anonymize payloads. we'll sign the NDA addendum for raw traffic if needed.
+[07:31] Jordan: ok we'll prepare an anonymized slice first.
+[07:35] Ana: on the security pack — send it to our security inbox and I'll route.
+[07:40] Maya: will do.
+[07:43] [08:00] Liam: quick note about the CSV — columns included: timestamp, endpoint, model_variant, tokens_in, tokens_out, p50, p95, p99, node_id, cache_hit, error_code. we'll attach it.
+[08:13] Samir: perfect. can you also include the raw histograms for tail latency, not just percentiles?
+[08:18] Liam: yes, histograms and raw samples.
+[08:22] Maya: ok wrapping up, recap and owners: Maya share CSV & security pack; Liam run KV-disabled head-to-head; Samir/Jordan provide sample traffic and open VPC peering request; schedule deep-dive for routing.
+[08:38] Ana: sounds good. one last question — competitor mentions: Nimbus claimed they could hit 800rps at 512 tokens in their latest private config; why did they plateau at 470rps in your run?
+[08:51] Liam: likely because Nimbus runs heavier pre/post-processing and their default batch scheduler has a different latency-first policy which reduces throughput. Also their autoscaler cadence caused small hiccups under step-load. We did a small test enabling their throughput-optimized profile and they reached ~560rps but with increased tail latency.
+[09:12] Samir: that's helpful. ok we'll review and sync again after the head-to-head. thanks everyone.
+
+Recap & next steps (verbatim):
+- Redwood to share raw CSV and runbook (Maya) by 2026-10-02.
+- Redwood SE to run a 2-hour head-to-head with KV disabled (Liam) and report p50/p95/p99 + histograms by 2026-10-04.
+- Ironcrest to provide anonymized production traffic sample and SSO test user (Samir/Jordan) by 2026-10-05.
+- Schedule routing/fallback deep-dive 2026-10-06 17:00 UTC.
+
+Notes: transcription contains occasional mis-hearings; some technical terms might be transcribed imperfectly.

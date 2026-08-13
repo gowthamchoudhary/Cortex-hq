@@ -1,0 +1,114 @@
+Pilot performance readiness & acceptance checkpoints
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Samantha Lee <samantha.lee@novapulse.ai>, Tom Ruiz <tom.ruiz@novapulse.ai>
+Cc: Laura Bennett <laura.bennett@redwood.com>
+Date: Tue, 25 Jul 2028 15:12:00 -0700
+Subject: Pilot performance readiness & acceptance checkpoints
+
+Hi Samantha / Tom —
+
+Thanks again for walking through the pilot demo today. Quick recap and the minimal acceptance checklist so we can lock the pilot schedule and scope:
+
+Summary from call:
+- Target user flow: conversational summarization + streaming for multi-turn chat.
+- Primary latency target: 95th percentile end-to-end token latency <= 250ms for the assistant path (for 75% of requests we should be <= 150ms).
+- Throughput target: sustain 120 QPS peak (burst to 200 QPS for up to 2 minutes).
+- Concurrency: support safe concurrency of 300 simultaneous sessions with KV cache per-session.
+- Streaming: we need server-sent events (SSE) with first-byte streaming <= 200ms and steady per-token pacing.
+
+Minimal acceptance checklist (week-0):
+1) Baseline perf run on customer sample trace (we provided pilot-metrics-template.csv)
+2) Canary on dedicated pool: warm KV + payload patterns (3 hours)
+3) Failure/fallback validation: host fallback to lower-quant model at 99th p99 latency violation
+4) Instrumentation: logs, token-level latency breakdown, and tracing mapped to route IDs
+5) Sign-off from engineering + product on user-visible latency and quality regression tolerance
+
+Requested from your side:
+- Confirm the production-like load profile (I attached pilot-metrics-template.csv).
+- Share any per-session size limits and expected average token lengths (we’ll map batch sizes).
+- Any regulatory constraints for logs/retention (we can enable masked logging).
+
+Next steps / proposed schedule:
+- Wed: exchange load profile + Redwood runs baseline run (24–48h)
+- Fri: canary plan execution on Dedicated pool (2–3hr window)
+- Following Mon: review metrics and decide canary -> pilot flip
+
+I’ve attached the pilot-metrics-template.csv and will follow up with a canary plan PDF tomorrow after we receive your load profile. Can you confirm the SSE requirement and the 120 QPS target are still accurate?
+
+Best,
+Ben
+Ben Carter
+Account Executive, Redwood Inference
+ben.carter@redwood.com
++1 (415) 555-0132
+
+Attachment: pilot-metrics-template.csv (CSV)
+
+From: Samantha Lee <samantha.lee@novapulse.ai>
+To: Ben Carter <ben.carter@redwood.com>
+Cc: Tom Ruiz <tom.ruiz@novapulse.ai>
+Date: Tue, 25 Jul 2028 17:03:18 -0700
+Subject: Re: Pilot performance readiness & acceptance checkpoints
+
+On Tue, Jul 25, 2028 at 3:12 PM Ben Carter <ben.carter@redwood.com> wrote:
+> Hi Samantha / Tom —
+> 
+> Thanks again for walking through the pilot demo today. Quick recap and the minimal acceptance checklist so we can lock the pilot schedule and scope:
+> ...
+
+Thanks Ben — this aligns with what we discussed. A couple clarifications from our engineering side:
+
+- SSE is required for our web clients; we need first-byte streaming <= 200ms and per-token variance not to exceed 100ms for the first 10 tokens on average.
+- 120 QPS is our steady-state target; during business hours we could see short bursts up to ~180–200 QPS.
+- Average conversation length is ~130 tokens; peak session size with context is ~1,200 tokens (we can provide a sample trace).
+
+I attached our approximate load profile (novapulse-load-profile.json). Please include a note in the canary plan about validating cold-cache performance and token pacing under SSE.
+
+We’re good to proceed with the baseline run on Wed — please schedule and share results in Drive.
+
+Best,
+Samantha
+Samantha Lee
+Lead Product Engineer, NovaPulse
+samantha.lee@novapulse.ai
+
+Attachment: novapulse-load-profile.json (application/json)
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Samantha Lee <samantha.lee@novapulse.ai>, Tom Ruiz <tom.ruiz@novapulse.ai>
+Cc: Laura Bennett <laura.bennett@redwood.com>, Aditya Rao <aditya.rao@redwood.com>
+Date: Wed, 26 Jul 2028 09:10:00 -0700
+Subject: Re: Pilot performance readiness & acceptance checkpoints — canary plan and validation matrix
+
+Thanks for the quick turn, Samantha. Attached is our proposed canary plan (redwood-canary-plan.pdf) and a short validation matrix. Key notes inline: 
+
+- Baseline run (Wed 24h): Redwood will run customer trace with identical rate shaping and token lengths. Output and metrics will be in the Drive folder: https://drive.google.com/drive/folders/1a2b3cExampleDriveLink
+- Canary (Fri 10:00–13:00 PDT): Dedicated pool warm-up for 30m, 3 x 20min test windows: steady-state, burst, and cache-churn. We’ll stream results to the SSE endpoint and collect token timing.
+- Validation criteria: pass if p95 <= 300ms and p99 <= 450ms for end-to-end token latency, with first-byte SSE <= 200ms on average. Note: our internal target of 250ms p95 maps to your 200ms SSE requirement given network overheads.
+- Fallback plan: if p99 > 450ms during canary, auto-fallback to quantized variant and run quick sanity quality check on 100 prompts.
+
+Please review the attached PDF; if you confirm, we’ll schedule the baseline run for tonight and lock the canary slot for Fri. HubSpot deal link: https://app.hubspot.com/deals/678910
+
+Best,
+Ben
+
+Attachment: redwood-canary-plan.pdf (application/pdf)
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Laura Bennett <laura.bennett@redwood.com>, Aditya Rao <aditya.rao@redwood.com>
+Date: Wed, 26 Jul 2028 09:27:00 -0700
+Subject: INTERNAL: NovaPulse pilot — pricing / capacity heads-up
+
+Laura / Aditya — quick internal note following the NovaPulse confirmation. Highlights: 
+
+- They confirmed SSE and the 120 QPS steady / 180–200 burst pattern. Expect potential need for two Dedicated xLarge workers for the canary to keep latency headroom.
+- Customer is likely to request a short-term discounted pilot rate if we do a Dedicated canary; suggest we bake in a pilot credit of 10–15% to cover their initial validation window.
+- Ask: Aditya, can you draft the minimal MOP + acceptance gate language we’ll share post-canary? I’ve copied the Drive link and attached the canary PDF to the thread for context.
+
+I’ll coordinate scheduling once we hear back on the exact trace file and confirm the 3-hour window.
+
+Thanks,
+Ben
+
+(Internal only — do not forward)

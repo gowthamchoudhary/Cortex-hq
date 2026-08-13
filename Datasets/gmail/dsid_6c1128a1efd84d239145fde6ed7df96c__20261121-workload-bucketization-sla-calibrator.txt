@@ -1,0 +1,116 @@
+Request: split traffic into latency / throughput / long-gen buckets for dedicated sizing
+
+From: Elena Rossi <elena@luminotech.ai>
+To: marissa_cole <marissa_cole@redwood.ai>
+Date: 2026-11-21T09:12:00-08:00
+Subject: Sizing inputs: workload bucketization for reserved fleet
+
+Hi Marissa —
+
+Thanks again for the demo last week. We ran a quick export of our production traces and attached a small sample (luminotech_telemetry_sample.csv). We're trying to get a first-pass sizing for a Dedicated (reserved) GPU plan, but we'd like Redwood's guidance on how best to split our traffic into distinct workload buckets to make the fleet efficient.
+
+Quick background: Luminotech provides a real-time conversational agent embedded in our customer apps. Current profile (sample):
+- Steady-state: ~3,500 requests/day (mostly daytime).
+- Typical rate: 2–5 reqs/sec average, but we see short spikes up to ~3,000 reqs/min during marketing events (peaks ~50–60s).
+- Prompt sizes: median 120 tokens, 90th pct 380 tokens.
+- Response sizes: median 220 tokens, 95th pct 1,200 tokens (long-form summarization / multi-turn).
+- Session behavior: 70% single-turn quick Q&A (sub-second think time), 20% multi-turn sessions averaging 6 turns, 10% long-generation jobs (2–4s per token).
+- KV/cache usage: we have lightweight prefix caching for short queries; long generations don't hit cache.
+
+We want to propose three buckets for sizing: low-latency interactive, high-throughput batched inference, and long-generation heavy sequences. Can you:
+1) confirm whether the above breakdown makes sense operationally for a dedicated footprint,
+2) recommend reasonable throughput / concurrency targets per bucket for an initial reserved commit,
+3) list any missing telemetry we should export to make your sizing recommendation reliable.
+
+Attachments: luminotech_telemetry_sample.csv (csv, 120KB)
+
+Cheers,
+Elena Rossi
+CTO, Luminotech
+
+
+
+From: marissa_cole <marissa_cole@redwood.ai>
+To: Elena Rossi <elena@luminotech.ai>
+Cc: ben_carter <ben_carter@redwood.ai>, olga_petrov <olga_petrov@redwood.ai>
+Date: 2026-11-21T11:03:00-08:00
+Subject: Re: Sizing inputs: workload bucketization for reserved fleet
+
+Elena —
+
+Thanks for the sample and the clear breakdown. This is exactly the type of telemetry we need to get a good first-pass sizing. Quick clarifying questions before we build a bucketized hypothesis:
+
+- Can you confirm the 99th percentile response length for the long-generation bucket (you mentioned 1,200 tokens at 95th — what's p99?):
+- Do you use streaming for long generations today (partial tokens back to client) or non-streamed full response?
+- Typical concurrency per end-user session (i.e., do you expect many concurrent sessions from the same account)?
+- What are your target latency SLOs per bucket? Example: interactive p50 < 100ms, p95 < 250ms; batch p95 < 1s; long-gen p95 < 3s (adjustable).
+- Any regulatory constraints (data residency, SOC2 evidence) we should include in the sizing note?
+
+I've attached a short set of initial sizing questions (initial-sizing-questions.md) that will help us tune kernel selection / quantization recommendations. Ben and Olga — tagging you for an initial sizing hypothesis and to check GPU SKUs and oversubscription guardrails.
+
+Proposed next step: 30-minute call to walk the sample. Are you available Wed (Nov 25) or Fri (Nov 27) morning PST?
+
+Thanks —
+Marissa Cole
+Senior Solutions Architect, Redwood Inference
+
+Attachments: initial-sizing-questions.md (md, 6KB)
+
+On 2026-11-21 09:12, Elena Rossi wrote:
+> Thanks again for the demo last week. We ran a quick export of our production traces and attached a small sample ...
+
+
+From: ben_carter <ben_carter@redwood.ai>
+To: marissa_cole <marissa_cole@redwood.ai>, olga_petrov <olga_petrov@redwood.ai>
+Date: 2026-11-21T13:25:00-08:00
+Subject: Re: Sizing inputs: workload bucketization for reserved fleet
+
+Marissa / Olga —
+
+Quick internal note based on Elena's sample:
+- Interactive bucket (short Q&A): mostly short prompts, median 120 tokens, p95 latency target should be strict. For that bucket we should target low-latency instances (e.g., A10G or A5000-class) with modest parallelism and KV cache enabled. Estimate: 4–6 nodes (oversub ratio 1.5x) to cover typical daytime traffic + short spikes.
+- Throughput/batch bucket: for batched scoring (multi-turn summarization batched where possible) we can use larger GPU SKUs (A100-40GB or equivalent) with higher batch sizes. Estimate: 2–3 batch nodes (spot-burst enabled) for cost efficiency.
+- Long-generation bucket: these are long-sequence, high memory; recommend 2–3 high-memory quantized nodes (L4x or A100 depending on model) with lower oversubscription and isolated queues to avoid head-of-line blocking.
+
+Caveats: Our estimator needs exact p99 lengths, whether streaming is used (streaming reduces memory pressure but increases kernel-switch overhead), and the proportion of requests that can be served from prefix cache. If p99 response length > 2k tokens we likely need to bump memory SKU counts.
+
+I'll draft a compact sizing slide (workload_bucket_hypothesis.pdf) after we get answers and Elena's signal for a call.
+
+—Ben
+Director, Solutions Engineering (evangelism)
+
+
+From: marissa_cole <marissa_cole@redwood.ai>
+To: Elena Rossi <elena@luminotech.ai>
+Cc: ben_carter <ben_carter@redwood.ai>, olga_petrov <olga_petrov@redwood.ai>
+Date: 2026-11-23T15:42:00-08:00
+Subject: Re: Sizing inputs: workload bucketization for reserved fleet
+
+Elena —
+
+Appreciate the sample — Ben had a quick look and I've sketched an initial bucket hypothesis attached (workload_bucket_hypothesis.pdf). High level recommendations:
+
+1) Buckets and SLOs (proposal)
+- Interactive (low-latency): p50 < 80ms, p95 < 220ms. Target hardware: A10G/A5000-class; 5 nodes (reserve plan), 1.5x oversubscription.
+- Batched throughput (bulk scoring / multi-turn summarization): p95 < 1.2s. Target hardware: A100-40GB or equivalent, 2 spot-enabled nodes with higher batching.
+- Long-generation (multi-k token outputs): p95 < 3.5s. Target hardware: high-memory quantized nodes (L4x / A100) isolated queue; 3 nodes recommended to avoid queueing.
+
+2) Telemetry we still need to finalize estimate:
+- p99 prompt and response lengths per endpoint (long-gen endpoints are the priority)
+- percent of requests that are streamed vs non-streamed
+- per-endpoint concurrency distribution (histogram)
+- tokenization scheme (BPE/other) and model family used in prod
+
+3) Next steps
+- Could you export a 24-hour p99/p95 token-length histogram (CSV) for the main three endpoints? That will let us finalize GPU SKU counts.
+- Let's schedule a 30-minute sizing call — we have Wed Nov 25 10:30–11:00 PST or Fri Nov 27 09:00–09:30 PST. Please confirm.
+
+Attachments: workload_bucket_hypothesis.pdf (pdf, 220KB), telemetry_instructions.txt (txt, 2KB)
+
+On 2026-11-21 11:03, marissa_cole wrote:
+> Elena — Thanks for the sample and the clear breakdown. This is exactly the type of telemetry we need ...
+
+Best,
+Marissa Cole
+Senior Solutions Architect, Redwood Inference
+

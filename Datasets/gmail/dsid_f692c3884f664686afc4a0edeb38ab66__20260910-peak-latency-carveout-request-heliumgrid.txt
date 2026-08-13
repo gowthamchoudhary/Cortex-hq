@@ -1,0 +1,131 @@
+Peak-hour latency spikes — request for temporary throughput carveout / headroom
+
+From: Amelia Turner <amelia.turner@heliumgrid.com>
+To: jonas.weber@redwood.ai
+Cc: procurement@heliumgrid.com
+Date: 2026-09-10T08:12:00Z
+Subject: Observed 99th %-tile latency spikes during EU peak windows
+
+Hi Jonas,
+
+We saw recurring 99th-percentile latency spikes in our dedicated EU pool last Thursday/Friday during the 09:00–12:00 UTC window. The median is fine, but the tail is spiking to ~1.8s for chat completions (vs our target of <600ms). This is impacting several interactive flows.
+
+We attached a small sample export from our side (heliumgrid-latency-sample-20260909.csv). Can you confirm whether this looks like queueing/backpressure on your end or whether there was a model-side regression?
+
+Given HeliumGrid's peak is predictable (weekday mornings EU), we're interested in a short-term operational carveout: either guaranteed headroom (extra reserved GPUs during 09:00–18:00 UTC) or a priority lane for our tenant so the 99p stays within SLA. Please advise options, estimated costs, and lead time to enable.
+
+Thanks — we need to resolve before our scheduled product launch on 2026-10-05.
+
+— Amelia
+Amelia Turner
+Head of Ops, HeliumGrid
+amelia.turner@heliumgrid.com
++44 20 7946 0221
+
+Attachment: heliumgrid-latency-sample-20260909.csv (CSV, 120KB)
+From: jonas.weber@redwood.ai
+To: Amelia Turner <amelia.turner@heliumgrid.com>
+Cc: lauren.bishop@redwood.ai, ben.carter@redwood.ai
+Date: 2026-09-10T10:03:00Z
+Subject: Re: Observed 99th %-tile latency spikes during EU peak windows
+
+Hi Amelia — thanks for the sample and the heads-up. I've looped in Lauren (CS lead) and Ben (dedicated capacity engineering) so we can triage quickly.
+
+Initial thoughts: the pattern you describe (median ok, tail high during a fixed daily window) often indicates transient queueing under predictable traffic bursts rather than model regressions. That can be addressed in a few ways:
+
+- Temporary headroom (schedule extra reserved GPUs for peak hours)
+- Priority lanes / throttle carveouts — ensure in-flight requests from your tenant get higher queue priority
+- Short-term autoscale policy tweaks (lower scaling cooldowns during peak)
+
+Ben — can you look at the attached CSV and our internal tail metrics (I pointed to the HeliumGrid dashboard link in related_links)? Please advise on feasibility and lead time for a pilot.
+
+Amelia — we'll propose a 2–4 week pilot and a rollback plan. If it's needed as a contractual amendment, we'll push a temporary addendum.
+
+Jonas Weber
+Account Exec, Redwood Inference
+jonas.weber@redwood.ai
+
+On Thu, Sep 10, 2026 at 08:12 Amelia Turner <amelia.turner@heliumgrid.com> wrote:
+> (attached heliumgrid-latency-sample-20260909.csv)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: jonas.weber@redwood.ai, lauren.bishop@redwood.ai
+Date: 2026-09-10T13:47:00Z
+Subject: Re: Observed 99th %-tile latency spikes during EU peak windows
+
+Thanks for the ping — looked through the sample and correlated with our telemetry. Notes: 
+
+- The spike windows line up with two things: a) HeliumGrid's burst traffic, and b) background nightly batch compaction that sometimes overlaps morning restarts on a subset of EU hosts (rare but measurable).
+- The runtime is prioritizing fairness across tenants which can cause your tail to increase if you're hitting burst concurrency limits.
+
+Options and lead times:
+1) Quick pilot (recommended): Add 2x reserved GPUs to your EU pool for 09:00–18:00 UTC Mon–Fri. We can enable this as a scheduled override within 24–48 hours and monitor. No code change required.
+2) Priority lane: Configure tenant-level soft priority so your in-flight tokens get ahead of batch traffic. Requires a config push and a smoke test; estimate 3–5 business days.
+3) Time-sliced reservation: Create a time-sliced reservation window in the dedicated cluster (more formal contract change). Lead time ~2 weeks and legal/ops signoff.
+
+Trade-offs: scheduled extra GPUs are fastest but costlier; priority lane is lower-cost but requires careful fairness tuning to avoid impacting other customers. For a launch-sensitive customer, we usually recommend (1) pilot for immediate mitigation + (2) implement (2) if pilot shows positive results.
+
+Estimated cost for pilot (back-of-envelope): ~€5.5k/week for 2x a100e-equivalent during the 9-hour daily window (hourly commit prorated) — we can convert to credits if procurement prefers.
+
+I'm attaching a short request template (request-template-sla-carveout.docx) we use to capture windows and monitoring thresholds.
+
+— Ben
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+ben.carter@redwood.ai
+
+Attachment: request-template-sla-carveout.docx
+From: Amelia Turner <amelia.turner@heliumgrid.com>
+To: jonas.weber@redwood.ai
+Cc: procurement@heliumgrid.com
+Date: 2026-09-11T09:05:00Z
+Subject: Re: Observed 99th %-tile latency spikes during EU peak windows
+
+Thanks Ben — that aligns with what our ops sees. We're happy to go with option (1) as an immediate mitigation and test; if we can do a 4-week pilot that starts as soon as possible, that would be ideal. A couple of clarifications: 
+
+- Start date: earliest you can enable scheduled override (we can be flexible, prefer before 2026-09-20).
+- Measurement: we will validate with our internal APM and the Redwood dashboard; please confirm the precise alerting thresholds you will use for the pilot (we want 99p < 800ms).
+- Billing: we'd like the pilot to be billed as credits or a short addendum rather than a permanent rate change unless we agree after the pilot.
+
+I've attached the CSV and a note from our SRE team. Procurement will look at contract language once we have a concrete scope.
+
+— Amelia
+From: lauren.bishop@redwood.ai
+To: jonas.weber@redwood.ai, ben.carter@redwood.ai
+Cc: legal@redwood.ai
+Date: 2026-09-12T11:18:00Z
+Subject: Re: Observed 99th %-tile latency spikes during EU peak windows
+
+Folks — looping in Legal and Ops for a quick approval path. My suggested plan:
+
+1) Approve Ben's option (1) as a 4-week pilot, scheduled for 09:00–18:00 UTC Mon–Fri.
+2) Pilot governs: two extra reserved GPUs in EU pool for the window; Redwood to monitor 99p and send daily slice reports to HeliumGrid.
+3) Billing: pilot as credits (internal cost center), procurement will see a draft addendum but we should avoid a full contract amendment unless HeliumGrid requests permanence.
+4) Measurement & exit: if 99p remains >1s for more than 3 consecutive business days despite pilot, we'll automatically roll back and open an incident.
+
+Ben — please create the runtime override and the monitoring alert (99p < 800ms target). Jonas — confirm SOW language and send procurement the HubSpot deal link and a DocuSign addendum (if needed).
+
+Thanks — Lauren Bishop
+Director, Customer Success, Redwood Inference
+From: jonas.weber@redwood.ai
+To: Amelia Turner <amelia.turner@heliumgrid.com>, procurement@heliumgrid.com
+Cc: lauren.bishop@redwood.ai, ben.carter@redwood.ai, legal@redwood.ai
+Date: 2026-09-14T16:20:00Z
+Subject: Re: Peak-hour latency spikes — request for temporary throughput carveout / headroom
+
+Amelia — confirming plan and next steps formally:
+
+- Pilot scope: 4-week scheduled override, 2 additional reserved GPUs in the EU dedicated pool for HeliumGrid, active 09:00–18:00 UTC Mon–Fri.
+- Start date: 2026-09-20 (we will provision and enable the scheduled override by 09:00 UTC that day).
+- Targets & monitoring: Redwood to monitor 99p; target for pilot = 99p < 800ms. We'll push daily brief status notes to your SRE and a weekly summary to procurement. Dashboard link: https://redwood.example.com/ops/dashboards/heliumgrid-eu-99p
+- Billing: Pilot billed as credits applied against the deal (Deal HG-2026-089). Procurement — we'll send a short DocuSign addendum for signature; not a permanent SLA amendment. HubSpot deal: https://app.hubspot.com/contacts/123456/deal/HG-2026-089
+
+Ben — please schedule the override and create the alerting runbook. Legal — recommended addendum text attached to the draft DocuSign we will circulate.
+
+Amelia — once signed, we'll enable the override and start monitoring. Let us know if procurement needs a different billing arrangement.
+
+Thanks everyone — Jonas Weber
+Account Exec, Redwood Inference
+jonas.weber@redwood.ai
+
+Attachment: draft-sla-addendum-hg.docx (DocuSign link will be provided to procurement)

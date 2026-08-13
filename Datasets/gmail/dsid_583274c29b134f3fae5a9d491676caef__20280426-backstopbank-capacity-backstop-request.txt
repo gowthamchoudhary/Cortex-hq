@@ -1,0 +1,99 @@
+Backstop Bank — urgent: sustained request latency and 503s (reserved capacity)
+
+From: Sam Hart <sam.hart@backstopbank.com>
+To: ben.carter@redwood.ai
+Cc: ops@backstopbank.com
+Date: Thu, 26 Apr 2028 09:12:00 -0700
+Subject: Urgent — sudden spike in latency and 503s on reserved pool (region us-west)
+
+Ben —
+
+We started seeing a sustained spike in tail latency and intermittent 503s on our reserved throughput this morning (around 08:45 PDT). Impact: our fraud scoring path (synchronous requests) is getting p99s up to ~1.8s and ~2% 503s; our customers are seeing errors in the checkout flow. Attached two artifacts: aggregated service logs and a p99 graph slice for the last 3 hours.
+
+We are on reserved capacity (BSK-4521) and this is causing revenue-impacting failures. Can you escalate to operations and confirm an immediate mitigation path? If there are recommended traffic shaping or temporary model fallbacks we are happy to take direction.
+
+—Sam
+Sam Hart
+Infrastructure Lead, Backstop Bank
+
+From: ben.carter@redwood.ai <ben.carter@redwood.ai>
+To: Sam Hart <sam.hart@backstopbank.com>
+Cc: marissa.cole@redwood.ai, irene.choi@redwood.ai
+Date: Thu, 26 Apr 2028 09:34:00 -07:00
+Subject: Re: Urgent — sudden spike in latency and 503s on reserved pool (region us-west)
+
+Sam — thanks for the quick flag and the logs. I’m escalating immediately. Top-level plan for the next 45 minutes: 
+- Open ops bridge and pull live traces (Irene)
+- Apply per-tenant priority routing to drain noisy neighbors if present (Irene)
+- Temporarily enable burst authorization to add backstop capacity for ~2 hours while we stabilize (requires approvals)
+- If necessary, route non-critical inference to a lower-cost model variant to reduce pressure on the reserved pool
+
+Irene — can you validate whether this looks like cross-tenant spillover or an application-level burst from Backstop? Also include expected time to scale and whether we can evict noisy activity without impacting other priority customers.
+
+Sam — I’ll keep you posted in this thread. If you can forward any internal traffic-shaping rules you’d accept (e.g., slower retries, short circuiting non-essential paths) that’ll help.
+
+Ben Carter
+Senior Account Executive, Redwood Inference
+
+From: marissa.cole@redwood.ai <marissa.cole@redwood.ai>
+To: ben.carter@redwood.ai, irene.choi@redwood.ai
+Date: Thu, 26 Apr 2028 10:05:00 -07:00
+Subject: Re: Urgent — sudden spike in latency and 503s on reserved pool (region us-west)
+
+Looping in ops and leadership for a rapid decision. Important context: Backstop is a priority account (BSK-4521), committed reserved throughput with SLA; revenue + renewal at risk if errors persist beyond the morning.
+
+I approve a short-duration burst (2 hours) from the central pool to buy time for root cause and remediation — please document the credits and create a follow-up ticket for procurement/finance for any overage billing. Ben — please get explicit sign-off from the customer for the temporary routing plan so finance can reconcile.
+
+Irene — please prioritize triage. Need ETA for mitigation (15/30/60) and a clear rollback plan.
+
+Marissa Cole
+Head of Sales Operations, Redwood Inference
+
+From: irene.choi@redwood.ai <irene.choi@redwood.ai>
+To: marissa.cole@redwood.ai, ben.carter@redwood.ai, Sam Hart <sam.hart@backstopbank.com>
+Date: Thu, 26 Apr 2028 11:12:00 -07:00
+Subject: Re: Urgent — sudden spike in latency and 503s on reserved pool (region us-west)
+
+On Thu, Apr 26, 2028 at 09:34 AM Ben Carter <ben.carter@redwood.ai> wrote:
+> Irene — can you validate whether this looks like cross-tenant spillover or an application-level burst from Backstop?
+
+Quick triage summary (initial):
+- Observed behavior: sustained queue depth on one of the us-west dedicated GPU racks; token-processing throughput per instance is within expected bounds but tail queueing increased due to a sudden high-concurrency pattern from two tenant IDs.
+- Probable cause: noisy neighbor produced high concurrency spikes; reservation enforcement delayed due to a bug in the per-tenant token-bucket reset logic (PR #3124 regress).
+
+Immediate mitigations executed (11:00 PDT):
+1) Applied per-tenant concurrency cap for Backstop to cap inflight requests at 60 while we stabilize (customer agreed).
+2) Redirected best-effort traffic for low-priority endpoints to a fallback variant (lightweight quantized model) — reducing load by ~28% on the affected rack.
+3) Issued emergency eviction of two suspected noisy containers — freed ~18% headroom.
+4) Opened an ops bridge and started long-tail trace collection.
+
+ETA and next steps:
+- Short-term (target 30–45m): p99 should drop below 800ms and 503s <0.3% once caps and fallbacks complete propagation.
+- Medium (2–4h): deploy a hotfix to token-bucket reset and roll to affected hosts; run 2h soak with burst authorization still active.
+- Post-incident: root-cause RCA and permanent rate-limits; ensure the regression test to catch token-bucket reset.
+
+Attachments: svc-logs-backstop-2028-04-26.tar.gz (scp to secure bucket), p99-latency-graphs-Apr26.png
+
+I’ll keep posting metrics to the bridge.
+
+—Irene
+Irene Choi
+SRE Lead, Redwood Inference
+
+From: ben.carter@redwood.ai <ben.carter@redwood.ai>
+To: Sam Hart <sam.hart@backstopbank.com>
+Cc: marissa.cole@redwood.ai, irene.choi@redwood.ai
+Date: Thu, 26 Apr 2028 16:03:00 -07:00
+Subject: Re: Urgent — sudden spike in latency and 503s on reserved pool (region us-west)
+
+Sam — thank you for staying on the call earlier. Short recap and asks: 
+- What we changed: per-tenant cap (inflight <=60), fallback routing for non-critical endpoints (light quantized model), eviction of noisy containers. Early telemetry shows p99 down to ~620ms and 503s at 0.2% across your reserved pool.
+- Short-term authorization: Marissa approved a 2-hour burst from our central capacity to buy time for the hotfix and soak (documented in SUP-6782). Those credits will be reconciled post-incident under BSK-4521.
+- Ask: please confirm acceptance of the temporary caps and fallbacks so we can keep the burst in place while we roll the hotfix. Also confirm if a brief customer-facing note is required from your ops team (we can provide suggested copy).
+
+Follow-ups I will drive: timeline for hotfix roll (Irene), formal RCA and credit reconciliation (Marissa + Finance), prevention tasks (SRE + QA).
+
+If this meets expectations, I’ll close the emergency bridge and convert the work into a tracked incident for permanent fixes.
+
+Ben
+Senior Account Executive, Redwood Inference

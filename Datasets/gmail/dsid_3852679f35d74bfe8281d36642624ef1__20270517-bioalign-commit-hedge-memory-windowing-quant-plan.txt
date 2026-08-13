@@ -1,0 +1,142 @@
+Sizing proposal and hedging approach for BioAlign dedicated pool (32k context + quantization)
+
+From: Alice Monroe <alice@bioalign.com>
+To: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Cc: procurement@bioalign.com
+Date: Mon, 10 May 2027 09:12:00 -0700
+Subject: Sizing ask: dedicated pool for BioAlign - 32k context & quantization options
+
+Hi Vivek,
+
+Thanks again for the demo last week. We're nearing an internal procurement decision and need a concrete sizing recommendation tied to the commitment we're preparing to sign. A few quick facts about our expected workload:
+
+- Model family: open-70b variant (we plan to test both FP16 and 4-bit quant).
+- Peak conc. users: ~120 concurrent inference sessions during processing windows (~200 qps sustained across the pool).
+- Typical request mix: 65% short-context (<=2k), 25% medium (2k-8k), ~10% long-context (up to 32k) with heavy KV cache usage.
+- Latency requirement: p95 <= 400ms for short/medium; p95 <= 1.8s for long-context is acceptable.
+- Billing/commit window: 12-month reserved capacity + need a burst plan for experiments and heavy days.
+
+Could you provide a sizing plan that ties model memory (weights + KV cache), quantization impact, and an operational hedge (reserved vs burst) so we can justify the commit to procurement? Procurement attached a high-level traffic spreadsheet (bioalign_traffic_estimates.csv).
+
+Also flag any quality risks you expect from aggressive quantization for our 32k usage.
+
+Best,
+Alice
+Alice Monroe
+Head of ML Platform, BioAlign
+alice@bioalign.com
+[attachment: bioalign_traffic_estimates.csv (csv)]
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: Alice Monroe <alice@bioalign.com>
+Cc: Marcus Lin <marcus_lin@redwood.com>, Soojin Lee <soojin_lee@redwood.com>
+Date: Tue, 11 May 2027 11:45:00 -07:00
+Subject: Re: Sizing ask: dedicated pool for BioAlign - 32k context & quantization options
+
+Hi Alice — thanks for the traffic file, that helps. Below is a concise, deal-tied sizing and hedging proposal that maps model footprint + KV cache to GPU needs and offer-level commitment options. I kept the math conservative so procurement has headroom for traffic growth.
+
+Summary recommendation (short):
+- Baseline reserved pool: 10 x 80GB GPUs (dedicated pods) sized for mixed request mix with q4 quantization as the default for throughput-critical routes.
+- Burst pool: +30 GPUs available as on-demand burst (shared across region) for experiments and infrequent heavy days.
+- Optional add-on: KV offload to attached host RAM for long-context sessions to reduce per-GPU KV footprint (trade: slightly higher latency on first token but large capacity savings).
+
+Sizing rationale (detailed):
+1) Model weight footprint (approx):
+   - FP16 (open-70b): ~140 GB raw weight. With 4-way tensor+pipeline sharding we hold ~35 GB of weights/GPU.
+   - q4 quant (4-bit): weights compress to ~28-40 GB equivalent across the model; with same sharding that is ~8-10 GB/GPU.
+   - Takeaway: quantization moves model weight pressure from a multi-GPU-only requirement to something we can host with fewer shards per replica or smaller pod sizes.
+
+2) KV cache sizing for 32k: conservative per-session KV memory is material. Using our internal profiling for the same architecture:
+   - KV per token (combined keys+values) ~= 48 bytes/token across sharded storage (after packing).
+   - For 32k tokens => ~1.5 GB per active session (32,000 * 48B ~= 1.5GB).
+   - If sessions are pinned to a replica, concurrent long-context sessions multiply the KV requirement; but we can shard KV across GPUs and optionally spill to host RAM/NVMe.
+
+3) Effective per-GPU working set (example configuration):
+   - Configuration A (conservative, FP16-heavy): 8 GPUs per replica to distribute weights + KV. Each GPU holds ~35GB weights portion + ~6GB average KV (assumes 3 long sessions pinned per replica and sharing of KV via sharding) + model activations/batching buffer => 80GB GPU needed.
+   - Configuration B (quant-first, q4 default): 2-4 GPUs per replica. Each GPU holds ~9GB weights portion + ~4GB KV (with KV offload option) + buffers => fits comfortably on 40-80GB class GPUs.
+
+Operational hedges & recommendations:
+- Default to q4 for short/medium routes to reduce reserved GPU needs and cost.
+- Enable a q8/fp16 variant for long-context golden-path jobs where quality is paramount. We can auto-route requests by route tags or a quality flag.
+- Reserve capacity for the expected steady-state mix (10 GPUs) and configure burst autoscaling to pull from a larger shared pool for spikes (up to +30 GPUs).
+- KV offload: for customers who accept a small p95 latency increase on long-context cold-starts, offloading the KV store to host RAM reduces GPU memory per replica by ~3-6GB which materially lowers reserved footprint.
+
+Cost/commit scenarios (illustrative):
+- 12-month reserve (conservative): 10 GPUs reserved -> covers 90% of predictable traffic; expected unit cost X (we'll include dollar math in spreadsheet).
+- Moderate commit + bigger burst: 6 reserved + 34 burst -> cheaper upfront but higher risk of throttling on sustained spikes.
+
+Quality tradeoffs (quantization risks):
+- q4 is generally reliable for generation distribution and throughput-focused workloads but can introduce subtle tokenization/formatting deviations on long-context retrieval tasks.
+- For BioAlign's use of long-document retrieval and high-fidelity summarization, we recommend:
+   * Keep FP16 / q8 variants for gold standard inference paths (A/B test on a holdout).
+   * Run a short eval on your prompt set (we can run Redwood Optimize eval using your test prompts) before rolling q4 to 100% of traffic.
+
+Next steps I propose:
+1) Redwood runs a brief validation (we'll use two weeks of your representative prompt traces) to produce an empirical quality & latency delta between q4 and fp16 for your top 50 prompt sets.
+2) We'll deliver a finalized capacity spreadsheet (dedicated_sizing_breakdown.xlsx) with exact GPU counts and cost options.
+3) Procurement path: if you want, we can produce a contract exhibit that specifies burst terms and a measured latency SLO for medium/short routes.
+
+I'm attaching a one-page profile describing the KV assumptions and a first-pass sizing workbook. Marcus and Soojin are looped for ops + engineering constraints.
+
+Best,
+Vivek Kulkarni
+Head of Infrastructure Sales, Redwood Inference
+vivek_kulkarni@redwood.com
+[attachment: redwood_kv_profile.pdf (pdf)]
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Vivek Kulkarni <vivek_kulkarni@redwood.com>, Alice Monroe <alice@bioalign.com>
+Cc: Soojin Lee <soojin_lee@redwood.com>
+Date: Thu, 13 May 2027 09:03:00 -07:00
+Subject: Re: Sizing ask: dedicated pool for BioAlign - follow-ups on KV offload and autoscaler knobs
+
+Adding operational detail from the infra side. Quick bullets and a short hedge playbook we use internally.
+
+- KV offload modes:
+  * in-GPU (lowest latency): KV stored entirely in GPU memory. Best p95 but highest reserved footprint.
+  * hybrid (recommended): hot prefix KV in GPU, cold suffix on host RAM. Good balance for 32k.
+  * full host spill: KV streams from host RAM/NVMe. Lowest reserved, higher cold-start latency.
+
+- Autoscaler policies we recommend for the deal:
+  * Steady-state target: maintain 10 dedicated replicas with target CPU/GPU utilization 55-65%.
+  * Rapid burst: scale to +30 GPUs with a warm-up policy that keeps a 20% pre-warmed headroom during known heavy windows (you indicated weekly batch runs).
+  * Canary routing: start q4 on 20% of short/medium traffic for two weeks, measure generation drift (we'll provide evaluation metrics).
+
+- Deployment topology suggestion:
+  * Dedicated pool labeled bioalign-prod: handles short/medium-critical routes (q4 default); enables SLO reporting per-route.
+  * Dedicated reserve labeled bioalign-gold: an fp16/q8 variant sized for long-context golden-paths. Keep at 2 replicas to start.
+
+- Risk mitigation and monitoring:
+  * Trace-level latency histograms per model variant.
+  * Prompt-level quality monitors tied to Redwood Optimize (we'll hook your test set).
+  * Auto-fallback policy: if q4 p95 generation KL-divergence > threshold, automatically route to q8/fp16 for that route for 30 minutes.
+
+I'll prepare an ops runbook and a short cost sensitivity table (variance with % long-context growth). If you want, we can also simulate worst-case concurrency scenarios for your traffic file and provide the math behind the 10 vs 6+burst commit.
+
+-Marcus
+Marcus Lin
+Senior Solutions Architect, Redwood Inference
+marcus_lin@redwood.com
+[attachment: dedicated_sizing_breakdown.xlsx (xlsx)]
+From: Alice Monroe <alice@bioalign.com>
+To: Vivek Kulkarni <vivek_kulkarni@redwood.com>, Marcus Lin <marcus_lin@redwood.com>
+Cc: procurement@bioalign.com
+Date: Fri, 14 May 2027 16:23:00 -07:00
+Subject: Re: Sizing ask: dedicated pool for BioAlign - 32k context & quantization options
+
+Thanks Vivek and Marcus — this is exactly what procurement needed. A few quick items:
+
+- Procurement wants the 12-month exhibit with the 10 GPU reserve option and the burst terms documented (please escalate pricing to legal/finance and we'll review).
+- I'll authorize Redwood to run the two-week eval against our 50 prompt holdout. Please confirm you have access and I'll share credentials.
+- Can you include SOC2 evidence and the audit contact for our compliance team in the sizing exhibit?
+
+If you can get the exhibit + eval plan by EOD next Tuesday (2027-05-18) we'll slot the procurement review for the following week.
+
+Appreciate the quick turnaround.
+
+Alice
+Alice Monroe
+Head of ML Platform, BioAlign
+alice@bioalign.com
+On Fri, May 14, 2027 at 16:23, Vivek Kulkarni <vivek_kulkarni@redwood.com> wrote:
+> Thanks Alice — we'll get the exhibit and SOC2 packet over. Marcus / Soojin: assigning the P0 to produce the exhibit + cost tables and to confirm our access method for the eval traces.
+>
+> -V

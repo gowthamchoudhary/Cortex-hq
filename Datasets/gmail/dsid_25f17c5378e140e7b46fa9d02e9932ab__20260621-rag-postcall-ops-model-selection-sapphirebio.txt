@@ -1,0 +1,100 @@
+Post-call: RAG fit & ops recommendations for Sapphire Bio
+
+From: Soojin Lee <soojin.lee@redwood.ai>
+To: Riley Chen <riley.chen@sapphirebio.com>, Devon Markham <devon.markham@sapphirebio.com>
+Cc: aditya_rao@redwood.ai, marcus_lin@redwood.ai
+Date: Wed, 10 Jun 2026 15:12:00 -0700
+Subject: Post-call: RAG fit & ops recommendations for Sapphire Bio
+
+Hi Riley / Devon —
+
+Thanks again for a productive call today. Quick recap and recommended next steps so we keep momentum: 
+
+1) Model family recommendations (for pilot)
+   - Primary: LLaMA-2 70B (int8) variant for balanced quality/latency. Good on short-answer accuracy in our benchmarks.
+   - Alternate: Mistral-XXL q4_2 for higher throughput if we need a cheaper token cost at slightly shifted hallucination profile.
+
+2) Retrieval & grounding settings we recommend for your content (clinical protocols + FAQs)
+   - Chunking: 800–1,200 chars (avg ~1k) with overlapping 128 chars.
+   - Vector index: dense embeddings (open-source +- in-house) with approximate NN (HNSW) — k=3 for retrieval.
+   - Reranker plan: A/B test two reranker strategies: (A) lightweight cross-encoder fine-tuned on 1k paired relevance examples; (B) dense-similarity + conservative scoring threshold. We saw A reduce unsafe/hallucinated spans by ~18% in similar pilots.
+
+3) Quality metrics to watch during pilot
+   - Grounding precision @1 and @3, factuality regression vs baseline, average response latency (p95), and false-positive sensitive passages flagged by your SME review.
+
+4) Deliverables we will share by EOD Friday
+   - benchmark CSV (initial precision/recall + latency by prompt set) — attached as sapphire_rag_benchmark_v1.csv
+   - prompt set bundle for your team to review (prompt-suite-sapphire-v1.zip)
+   - mutual action plan with milestones (MVP pilot: 2 weeks of controlled traffic) — attached spreadsheet
+
+5) Action items (owners)
+   - Soojin: Send pilot config and benchmark artifacts (this thread).
+   - Aditya: Outline infra & cost estimates for Dedicated vs Hosted for pilot.
+   - Marcus: Draft reranker fine-tune plan and small annotation guide for your SMEs.
+
+Doable to start pilot the week of Jun 22? If so we’ll schedule a kickoff with infra and CS on the invite.
+
+Thanks —
+SoojIN Lee
+Senior Solutions Engineer, Redwood Inference
+(she/her)
+
+Attachments: sapphire_rag_benchmark_v1.csv; prompt-suite-sapphire-v1.zip; mutual-action-plan-SAPP-2026-319.xlsx
+
+From: Riley Chen <riley.chen@sapphirebio.com>
+To: Soojin Lee <soojin.lee@redwood.ai>
+Cc: Devon Markham <devon.markham@sapphirebio.com>
+Date: Thu, 11 Jun 2026 09:04:00 -0700
+Subject: Re: Post-call: RAG fit & ops recommendations for Sapphire Bio
+
+Thanks Soojin — this is very helpful. A few clarifying Qs from our side: 
+
+- On chunk size: our docs include tables and boxed notes; will 1k chunks break table context? We can accept some tradeoffs if grounding improves.
+- For the reranker A/B: do you have a rough ETA on how many labeled pairs Marcus will need for the cross-encoder?
+- Pilot traffic: we can route ~1.5k queries/day initially — is that enough to get meaningful grounding precision numbers in two weeks?
+
+We can do Jun 22 kickoff, pending internal security sign-off (they asked for a SOC2 and network diagram). Can you route those to Devon and I?
+
+Best,
+Riley
+Product Lead, Knowledge Systems
+Sapphire Bio
+
+From: Soojin Lee <soojin.lee@redwood.ai>
+To: aditya_rao@redwood.ai, marcus_lin@redwood.ai
+Cc: Riley Chen <riley.chen@sapphirebio.com>, Devon Markham <devon.markham@sapphirebio.com>
+Date: Thu, 11 Jun 2026 11:18:00 -0700
+Subject: FW: Post-call: RAG fit & ops recommendations for Sapphire Bio
+
+Aditya / Marcus — forwarding Riley's clarifying questions and the attachments we sent. Quick notes: 
+
+- Table handling: recommend we include a small extraction preprocessor that detects simple HTML/markdown tables and keeps them as one chunk where possible; I can prototype a regex-based step in the pilot. That should reduce table context fragmentation.
+- Labeled pairs for cross-encoder: Marcus, recommend aiming for 800–1,200 labeled relevance pairs to get stable fine-tune gains; can start with 400 seed pairs and expand via active sampling during pilot.
+- Pilot volume: 1.5k q/day should be sufficient to produce baseline grounding precision numbers (p@1/3) across most prompt sets in two weeks — we typically instrument sampling to prioritize lower-confidence examples for SME review.
+
+Action items: Aditya to produce Hosted vs Dedicated cost/throughput estimates by EOD Fri; Marcus to draft the annotation guideline and initial seed pair sampling plan. Riley/Devon: we'll add security pack next message.
+
+— Soojin
+
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Soojin Lee <soojin.lee@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Cc: Riley Chen <riley.chen@sapphirebio.com>, Devon Markham <devon.markham@sapphirebio.com>
+Date: Fri, 12 Jun 2026 09:03:00 -0700
+Subject: Re: Post-call: RAG fit & ops recommendations for Sapphire Bio
+
+Quick cost/infra note for the pilot (high level):
+
+- Hosted pilot (Redwood-managed): approx $1,800–2,200/week depending on burst profile. Assumes LLaMA-2 70B int8 on shared capacity with autoscaling and 3x caching (prefix + KV). Includes logging retention for pilot period.
+- Dedicated short-term pool (reserved for pilot): ~ $3,800/week (includes one reserved RTX A5000-equivalent node set, with headroom for 3 concurrent replicas). Lower variance in p95 latency.
+
+Suggested pilot config (what we'll provision)
+   - Model: LLaMA-2 70B int8 (primary) + Mistral-XXL q4_2 (fallback)
+   - Retriever: dense embeddings (1k chunking), HNSW, k=3
+   - Reranker A/B: (A) cross-encoder fine-tune on 400 seed pairs (expand via active sampling), (B) scoring threshold + length penalty.
+   - Metrics to publish daily: p@1, p@3, hallucination flags, p95 latency, tokens / request, cost per 1k responses.
+
+I'll attach a short infra diagram and SOC2 pointer in the kickoff.
+
+Aditya
+Director, Solutions Architecture
+Redwood Inference

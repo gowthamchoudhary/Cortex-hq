@@ -1,0 +1,102 @@
+URGENT: Westus2 service bleed affecting LynxHealth - priority fallback & exec ask
+
+From: Alicia Turner <alicia@lynxhealth.com>
+To: connor_obrien@redwood.ai
+Cc: ops@lynxhealth.com
+Date: Fri, 18 Jun 2027 09:12:00 -0700
+Subject: Re: API errors and latency spike - immediate help needed
+
+Connor —
+
+We started seeing a steady increase in 5xx rates from westus2 around 09:00 PDT. Users are experiencing timeouts and our ingestion pipeline is falling behind; p95 latency spiked from ~180ms to 2.4s and error-rate climbed to ~8%. We briefly saw a failover to your fallback region but response times were inconsistent.
+
+Can you confirm whether there was capacity churn in westus2 AZ or any routing changes on your side? We need ETA for stabilization and whether we should enact our app-level backoff. We are on a live release today and this is impacting critical ingestion.
+
+— Alicia (LynxHealth Ops)
+
+Attachments: lynx_p95-logs-20270618.zip
+From: connor_obrien@redwood.ai
+To: Alicia Turner <alicia@lynxhealth.com>; ops@lynxhealth.com
+Cc: hannah_schmitt@redwood.ai, marissa_cole@redwood.ai
+Date: Fri, 18 Jun 2027 09:26:15 -0700
+Subject: Re: API errors and latency spike - immediate help needed
+
+Alicia — thanks for the heads-up and the logs. We’re seeing elevated queue depth and a KV cache thrash signature for a subset of model shards in westus2-az3 that started ~08:52 PDT. Initial mitigation: we pushed a temporary routing policy to steer 30% of traffic to westus1 and us-east-1 and opened an emergency drain of affected hosts.
+
+Immediate asks:
+- Please hold new deploys and throttle ingestion if possible for the next 20 minutes.
+- I’ve looped in Hannah (ops lead) and Marissa (customer success) to coordinate.
+
+I’ll update in 10 mins with stabilization numbers and, if needed, request exec authorization for cross-region priority failover and a customer comms draft.
+
+— Connor
+
+Attachment referenced: trace link: https://redwood-console.internal/trace/req-9b7c2a
+From: hannah_schmitt@redwood.ai
+To: connor_obrien@redwood.ai, marissa_cole@redwood.ai, lauren_bishop@redwood.ai
+Cc: stephanie_nguyen@redwood.ai
+Date: Fri, 18 Jun 2027 09:35:02 -0700
+Subject: RE: URGENT: Westus2 service bleed affecting LynxHealth - priority fallback & exec ask
+
+Quick status from infra: westus2-az3 shows a GPU host churn pattern (OOM + transient NVLink flaps) coincident with a sudden shift in request-size distribution from the customer (large batch embedding job). We have 12 hosts draining; autoscaler unable to replace capacity due to a provisioning rate limit in the pool.
+
+Proposed actions (short):
+1) Approve immediate priority rehome for LynxHealth traffic to westus1 until capacity replaced (estimated 45–60m). This requires exec sign-off for priority routing token.
+2) Offer 25% service credit for the hour of elevated errors as a gesture while we stabilize (CS ask).
+3) Technical: patch autoscaler to allow fast provisioning in the affected pool and increase standby hosts.
+
+If Connor + Marissa concur I will prepare a one-line exec brief for Lauren and Steph to greenlight the failover token and credit approval.
+
+— Hannah
+From: marissa_cole@redwood.ai
+To: connor_obrien@redwood.ai, hannah_schmitt@redwood.ai, lauren_bishop@redwood.ai
+Cc: stephanie_nguyen@redwood.ai
+Date: Fri, 18 Jun 2027 10:02:49 -0700
+Subject: RE: URGENT: Westus2 service bleed affecting LynxHealth - priority fallback & exec ask
+
+I’ve spoken with Alicia briefly — they are seeing customer-facing timeouts for their login and ingestion pipelines. They asked whether a hard geo-failover (all traffic to east) is an option; they want to minimize data loss for the active release.
+
+My recommendation to leadership: Approve targeted priority rehome (50% traffic) now, commit to a 25% credit for the 1.0 hour window, and prepare an incident comms template for Alicia to send to internal stakeholders. If we cannot show stabilization within 30–45m, escalate to full geo-failover.
+
+I will draft the mutual action plan and the comms and share the DocuSign link for the credit approval if needed.
+
+— Marissa (Customer Success)
+From: lauren_bishop@redwood.ai
+To: connor_obrien@redwood.ai, marissa_cole@redwood.ai, hannah_schmitt@redwood.ai
+Cc: stephanie_nguyen@redwood.ai
+Date: Fri, 18 Jun 2027 11:08:01 -0700
+Subject: Fwd: URGENT: westus2 - exec approvers needed (priority token + credits)
+
+On Fri, 18 Jun 2027 at 11:07 AM Lauren Bishop <lauren_bishop@redwood.ai> wrote:
+
+Team —
+
+I’m escalating to the Execs (VP Eng + COO) for sign-off. Proposed brief (one-liner):
+- Incident: Westus2 AZ3 GPU host churn causing p95 latency and 5xx increase for LynxHealth.
+- Ask: Immediate priority routing token to steer 50% of LynxHealth traffic to westus1; approve 25% credit for the first impacted hour.
+- Risk: Slightly higher latency for some workloads due to cross-region hops; customer prefers availability over local latency.
+
+Please confirm: I’ll mark this P0 and trigger the Exec SMS bridge.
+
+— Lauren
+
+Attachment: mutual-action-plan-draft.pdf
+From: connor_obrien@redwood.ai
+To: Alicia Turner <alicia@lynxhealth.com>, Michael Kline <michael.k@lynxhealth.com>
+Cc: marissa_cole@redwood.ai, hannah_schmitt@redwood.ai, lauren_bishop@redwood.ai, stephanie_nguyen@redwood.ai
+Date: Fri, 18 Jun 2027 15:03:00 -0700
+Subject: Re: URGENT: Westus2 service bleed affecting LynxHealth - priority fallback & exec ask
+
+Alicia/Michael —
+
+Short update: We implemented the targeted priority rehome at 10:05 PDT (50% traffic to westus1, 20% to east) and increased standby hosts. By 10:40 PDT p95 fell back under 300ms for most endpoints and error-rate declined to ~0.9%. We will keep the rehome active for the next 60 minutes while autoscaler completes replacements.
+
+Commitments:
+- 25% service credit for the impacted hour — we will send the credit letter and DocuSign today.
+- Post-incident: a short RCA and a joint runbook update to avoid batch-jam patterns that trip the pool.
+
+Thanks for patience — Marissa will share the comms and the credit paperwork. I’ll leave Hannah as the incident lead for replacement and long-tail remediation.
+
+— Connor
+
+Quoted attachment: mutual-action-plan-draft.pdf

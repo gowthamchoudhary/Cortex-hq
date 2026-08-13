@@ -1,0 +1,135 @@
+[Hightail] Surge of 5xx and tail latency on inference -> urgent escalation
+
+From: Anjali Patel <anjali@hightail.com>
+To: vanessa_ortiz <vanessa@redwood.ai>
+Cc: ops@hightail.com
+Date: Tue, 27 Jul 2027 08:15:00 -0700
+Subject: Increased 5xx & tail latency on inference calls - urgent
+
+Hi Vanessa,
+
+We're seeing a large uptick in 5xx responses and 300-800ms tail latencies on our inference calls to the Redwood API starting ~2027-07-27T14:45Z. Traffic profile: steady traffic from our checkout service (region us-west-2). Sample request IDs: req_7f3e2a, req_7f3e2b (attached).
+
+Symptoms:
+- ~12% 5xx rate for POST /v1/generate over the last 30 minutes
+- median latency normal (~40ms) but P95/P99 spiking to 300ms/800ms
+- errors are largely 504 / connection reset / downstream 502
+
+We suspect a network problem between our VPC and Redwood's peering edge (saw sudden increase in SYN retries and some stalled DNS resolution). We've attached a short error sample and our local tcpdump snippet. Can you confirm if there are any ongoing infra changes or peering issues? This is impacting our checkout flow — we may need an SLA credit or a mitigation plan ASAP.
+
+Thanks,
+Anjali
+Anjali Patel
+Head of Platform Ops, Hightail Inc.
+anjali@hightail.com
+
+Attachments: hightail_error_sample.txt (excerpt)
+From: vanessa_ortiz <vanessa@redwood.ai>
+To: Anjali Patel <anjali@hightail.com>
+Cc: rishi_malhotra <rishi@redwood.ai>, marissa_cole <marissa@redwood.ai>
+Date: Tue, 27 Jul 2027 08:28:00 -0700
+Subject: Re: Increased 5xx & tail latency on inference calls - urgent
+
+Hi Anjali — thank you for the heads up and the logs. We're escalating this to SRE and the network team now. Immediate next steps from our side:
+
+1) Rishi/Marissa to gather edge traces and route metrics (DNS timing, conntrack, NAT)
+2) We'll check peering telemetry (bgp/peering flaps) and any recent firewall/proxy rule changes
+3) If needed we can flip Hightail to your reserved Dedicated pool as a temporary mitigation (needs confirmation)
+
+Can you confirm whether you see the same across multiple AZs and whether you can temporarily route to our dedicated endpoint (if we provide one)? Also please share the full pcap if available.
+
+I'll keep you updated every 30 minutes until we have a stable mitigation.
+
+- Vanessa Ortiz
+Account Executive, Redwood Inference
+vanessa@redwood.ai
+Redwood Inference
+
+On Tue, Jul 27, 2027 at 8:15 AM Anjali Patel <anjali@hightail.com> wrote:
+> We're seeing a large uptick in 5xx responses and 300-800ms tail latencies... (see above)
+
+Attachment: hightail_error_sample.txt
+From: marissa_cole <marissa@redwood.ai>
+To: vanessa_ortiz <vanessa@redwood.ai>, rishi_malhotra <rishi@redwood.ai>, lauren_bishop <lauren@redwood.ai>
+Cc: vivek_kulkarni <vivek@redwood.ai>
+Date: Tue, 27 Jul 2027 09:03:00 -07:00
+Subject: RE: Increased 5xx & tail latency on inference calls - internal triage notes
+
+Folks — quick triage update from SRE/network:
+
+What we see so far (summary):
+- Correlated spike across our ingress for requests from Hightail's announced prefixes (AS64570).
+- DNS lookups from our edge to resolver pool show intermittent timeouts (100-300ms spikes on resolver latency) — some sessions fall back to TCP which adds latency.
+- NAT/conntrack counters on the peering edge show a sharp increase in ephemeral port churn; one of the NAT nodes briefly hit conntrack ~85% of its capacity around 14:46Z.
+- A small subset of requests were dropped behind the proxy due to transient firewall rule evaluation taking longer (policy engine CPU spike on proxy-3).
+
+Attached: edge-trace-20270727.log (edge timings, DNS latencies, conntrack counters).
+
+Immediate mitigations applied (15:00Z):
+- Increased conntrack table size by 30% on the impacted NAT host (risk: temporary additional memory).
+- Rolled a proxy process restart on proxy-3 to clear the policy-engine CPU spike.
+- Pushed a temporary DNS resolver fallback rule (prioritize stable resolver pair) — monitoring.
+
+Proposed next steps (owners):
+- Marissa: continue increased telemetry, correlate with BGP/peering metrics, confirm whether packet retransmits match Hightail tcpdump.
+- Rishi: prepare a temporary routing change (poc-routing-change.diff) to steer Hightail traffic across a less-utilized peering pair; requires ops coordination.
+- Vanessa / Lauren: coordinate a short canary cutover with Hightail and get approval for Dedicated pool flip if cutover isn't successful within 2 hours.
+
+Impact notes: median latencies unchanged; P95 had large improvements after the conntrack bump but P99 still elevated for a portion of clients. We should avoid a full-scale cutover unless the canary shows benefit.
+
+On Tue, Jul 27, 2027 at 8:28 AM vanessa_ortiz <vanessa@redwood.ai> wrote:
+> Hi Anjali — thank you for the heads up and the logs...
+
+Attachment: edge-trace-20270727.log
+
+-Marissa
+Sr SRE, Redwood Inference
+marissa@redwood.ai
+From: vivek_kulkarni <vivek@redwood.ai>
+To: vanessa_ortiz <vanessa@redwood.ai>, marissa_cole <marissa@redwood.ai>, rishi_malhotra <rishi@redwood.ai>, lauren_bishop <lauren@redwood.ai>
+Date: Tue, 27 Jul 2027 09:40:00 -07:00
+Subject: Re: Increased 5xx & tail latency on inference calls - executive sync
+
+Thanks for the quick triage. Two asks:
+1) Vanessa — I need a concise executive one-pager (1 page) summarizing impact, root cause hypothesis (network path: peering + DNS + conntrack throttle), mitigation steps taken, and ETA for full resolution. Please include suggested credit amount and customer-facing language.
+2) Finance/RevOps — be prepared to surface a temporary credit if this becomes a multi-hour customer outage.
+
+Keep me posted — if the canary routing change is low risk, approve it and update me when executed.
+
+-Vivek
+VP, Customer Reliability, Redwood Inference
+vivek@redwood.ai
+From: vanessa_ortiz <vanessa@redwood.ai>
+To: Anjali Patel <anjali@hightail.com>
+Cc: marissa_cole <marissa@redwood.ai>, rishi_malhotra <rishi@redwood.ai>, lauren_bishop <lauren@redwood.ai>
+Bcc: vivek_kulkarni <vivek@redwood.ai>
+Date: Thu, 29 Jul 2027 13:02:00 -07:00
+Subject: Hightail - mitigation update and next steps
+
+Hi Anjali — quick update following the mitigation window:
+
+What we did:
+- Increased conntrack capacity and restarted the affected proxy process (15:00Z on 2027-07-27).
+- Pushed a conservative DNS fallback rule and prioritized a stable resolver pair.
+- Executed a low-risk canary routing change across one peering pair for Hightail traffic (Rishi coordinated) which reduced error-rate from ~12% to ~1.8% for canary traffic.
+
+Current status:
+- Error-rate for Hightail's canary traffic stabilized to <2% and P99 reduced by ~60% for the canary. Full roll-out would require scheduling a short maintenance window with your ops team.
+
+Proposed next steps:
+1) If you approve, we can route all Hightail traffic to the less utilized peering pair for 24 hours and monitor. This is reversible within 30 minutes.
+2) As an additional safety, we can onboard you to the Dedicated pool for the remainder of the month at a discounted rate while we perform a detailed postmortem.
+3) We'll prepare the 1-page exec brief and a proposed credit (we recommend 5% of July usage for the affected window) and share it by EOD today.
+
+Please reply with your preferred mitigation (peering switch vs Dedicated flip) and whether you want us to proceed with the 24-hour peering switch.
+
+Appreciate your patience — we'll get this fully stabilized.
+
+Thanks,
+Vanessa Ortiz
+Account Executive, Redwood Inference
+vanessa@redwood.ai
+Redwood Inference
+
+Attachment: poc-routing-change.diff
+Related: https://redwood.atlassian.net/browse/RED-1234

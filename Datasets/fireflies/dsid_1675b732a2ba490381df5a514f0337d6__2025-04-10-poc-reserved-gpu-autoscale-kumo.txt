@@ -1,0 +1,112 @@
+2025-04-10 POC scoping — reserved GPUs, autoscale & fallback (Kumo Analytics)
+
+Meeting header:
+Date: 2025-04-10
+Start: 16:00 PT
+Duration: ~62 minutes
+Attendees: Jordan Lee (Redwood AE), Samir Patel (Redwood SE), Rina Gomez (Redwood CSM); Mike Chen (Kumo ML Lead), Aisha Rahman (Kumo Platform), Carlos Vega (CTO), Lena Ortiz (Product)
+
+Summary: Quick POC scoping to align success criteria, capacity sizing, reserved GPU requirements, burst strategy, and fallback policies. Kumo wants a 4-week pilot to validate 99th percentile latency under load and cost/throughput tradeoffs. Discussed benchmarks, trace capture, autoscale boundaries, and governance (KMS, VPC, SOC2).
+
+Topics: capacity sizing, reserved capacity vs burst, canary/fallback policies, metrics to capture for success, timeline and benchmark window, security requirements
+
+[00:00] Jordan (AE): Hey everyone, thanks for joining. Quick roll call, then goal — scope a POC for your inference workload, focused on capacity sizing and autoscale behaviors. Mike, do you want to kick off with current stack?
+[00:12] Mike (Kumo): Sure — uh, we run a mixture of single-turn generation and a smaller percentage of multi-turn chat, mostly using an open 7B variant on our own infra. Latency targets are, like, 95th under 180ms for the chat stuff, and avg generation for single-turn around 90ms. We're seeing spikes during product launches, sometimes 3x baseline QPS.
+[00:34] Aisha (Platform): Our current infra is kubernetes in GCP, we have a GPU pool but frankly we don't have great burst capacity, that's why we're exploring Redwood dedicated + burst. We need to understand how reserved GPUs work and what the fallback behavior is if the burst capacity is exhausted.
+[00:48] Samir (SE): Great context. Two quick clarifications — when you say spikes 3x, is that sustained for minutes or seconds? And do you have p99 SLOs or p95?
+[00:59] Mike (Kumo): Usually minutes, 5–15 minutes during a campaign. For this POC we want to validate p99 under load and cost per 1k requests.
+[01:12] Jordan (AE): Good. We'll propose reserved capacity for steady-state plus a burst pool for transient spikes. For safety we can set a fallback policy to a cheaper model variant or route to a queued mode — we'll lay options out.
+[01:26] Carlos (CTO): I want to be explicit: if burst is used and costs spike, we need a budget cap and alerting. Also, fallback must preserve user experience — immediate degrade to a smaller model is OK but must be labeled.
+[01:41] Samir (SE): Noted. For the POC we'll test three modes: 1) reserved-only, 2) reserved + burst with auto-provisioned GPUs, 3) reserved + burst with fallback to a quantized 4-bit variant. We'll capture latency distribution, throughput, and token cost.
+
+[01:58] (Speaker 1): mhmm, and how do you measure tokens?
+[02:03] Jordan (AE): We'll align on token accounting in the POC doc. Also we'll need sample prompts and traces. Aisha, you said you could export traces?
+[02:11] Aisha (Platform): Yeah I can export, we have Nyx logging, I'll scrub PII, but note some tokens include user metadata.
+[02:22] Lena (Product): From product side, success = 99th percentile latency < 250ms for chat flows and cost per 1k under $X (we'll fill). We also want no more than 2% degraded outputs during spikes.
+
+[02:40] Samir (SE): Perfect — that gives us measurable criteria. For capacity sizing we usually take steady-state peak QPS and multiply by concurrency factor and average model latency to back into GPU seconds. We'll run initial guesses today but need traces to do real sizing.
+[03:01] Mike (Kumo): Example — baseline 200 RPS, spikes to 600 for 10 minutes, average sequence length ~120 tokens, model latency on our 7B is ~80ms per token? sorry per request? (laugh) It's a bit fuzzy.
+[03:18] Samir (SE): No worries; we'll parse traces. Two approaches for the POC: reserve N GPUs to cover baseline headroom and configure burst capacity for the 3x spike. Burst can be instant if we pre-warm containers or slower if we need to spin up. Pre-warm reduces cold-start but costs more.
+[03:36] Jordan (AE): Operationally, Redwood Dedicated offers reserved pools (monthly commit) and an optional burst pool billed per-use. For POC we can allocate small reserved capacity and enable a controlled burst budget. If burst budget hits cap, policy options: a) throttle traffic b) route to smaller model variant c) queue requests with a best-effort TTL.
+[03:57] Carlos (CTO): Option b seems attractive but we need safeguards around hallucination / quality regression. Is there an automated A/B or canary path?
+[04:10] Samir (SE): We support canary rollouts and automatic fallback. For the POC we'll configure canary with a 10% traffic test and look at hallucination metrics via our evals. We'll also set rollback triggers on quality regressions.
+[04:25] Mike (Kumo): On monitoring, what telemetry will we get? Token cost, GPU utilization, queue depth?
+[04:32] Rina (CSM): Redwood Console will show per-route cost, token breakdown, latency percentiles, GPU utilization, and tracing hooks. We can also forward logs to your Splunk/Datadog.
+[04:45] (Speaker 2): Are there limits on burst GPUs per region?
+[04:48] Samir (SE): There are practical limits based on our capacity pool and region. For POC we can reserve a guaranteed buffer in the target region to simulate production. If you need multi-region we can test failover too.
+
+[05:05] Mike (Kumo): Let's talk benchmarks — we want to run two windows: a functional run (low QPS) and a sustained stress window with synthetic spikes. Ideally the stress window mirrors real trace shapes.
+[05:17] Samir (SE): Agreed. We'll provide a benchmark harness that can replay traces and also a synthetic driver to hit target RPS. We'll also capture p50/p95/p99 and tail latencies during cold starts.
+[05:29] Aisha (Platform): Cold start numbers matter; our concern is spin-up time if burst creates new nodes. How long are cold starts?
+[05:36] Samir (SE): With pre-warmed containers and warm KV cache, cold starts are sub-10s in many cases; cold starts to fully initialize a model can be 30–90s unless we use snapshot resume or cache warmers. There's also a tradeoff with quantization: smaller models load faster.
+[05:55] Jordan (AE): We'll include a warm policy for the POC: keep X pre-warmed replicas to cover base bursts and then scale additional nodes with a target spin-up target. We'll show cost math so Kumo can choose pre-warm vs risk of cold starts.
+
+[06:12] (Speaker 3): What's KV cash?
+[06:15] Samir (SE): kv cash — KV cache, sorry — the key-value cache for autoregressive decoding. If KV is warmed the p99 is much better. Our runtime can persist KV cache across requests when it's safe.
+[06:28] Mike (Kumo): Any integration work for VPC / private deployment for the POC? We prefer VPC peering for data control.
+[06:35] Jordan (AE): For the POC we can do Redwood Dedicated in your VPC with private endpoints. That requires some network setup: peering, firewall rules, and if you want on-prem there is extra packaging. For the short pilot VPC peering is usually sufficient.
+
+[06:49] Carlos (CTO): Security — KMS, audit logs, SOC2 — we need to see proof.
+[06:54] Rina (CSM): I'll share SOC2 report, the security whitepaper, and KMS integration notes after the call. We'll also note SAML/SSO support for RBAC.
+[07:05] Lena (Product): For success criteria, product also wants an AB test where 10% of live traffic goes through Redwood during the pilot. Can Redwood handle a hybrid routing with split traffic?
+[07:15] Samir (SE): Yes — split routing and percent rollouts are supported. We recommend starting with synthetic bench then a canary with real traffic.
+
+[07:23] Jordan (AE): Ok let's walk through an initial sizing example — Samir?
+[07:28] Samir (SE): Sure. If baseline is 200 RPS, and average request requires 50ms GPU time, that's 10 GPU-seconds per second, so a single A100 (or equivalent) can handle X concurrently depending on batch efficiency. But the real number depends on sequence length, batching and kv cache hit rate. I'm simplifying.
+[07:50] Mike (Kumo): Sorry can you restate GPU-seconds?
+[07:53] Samir (SE): GPU-seconds is the cumulative GPU compute per second. If each request occupies the GPU for 50ms, then 20 requests/sec == 1 GPU second per second. So we translate that to number of GPUs needed.
+[08:05] Aisha (Platform): Do you recommend fixed concurrency limits per model?
+[08:08] Samir (SE): Yes — set a max concurrency per replica to avoid OOM and to keep predictability. We will propose defaults for your model architecture.
+
+[08:20] (Speaker 1): And what about cost accounting for burst — per-minute billing?
+[08:24] Jordan (AE): Burst is billed based on GPU-minutes consumed above reserved baseline; we'll provide an estimated cost curve in the proposal. For POC we'll also provide a not-to-exceed budget envelope to keep surprises small.
+[08:36] Carlos (CTO): Important: fallback decision tree should be explicit: prefer smaller model variant first, then queue, then degrade. Also need a kill-switch for ops.
+[08:47] Samir (SE): We'll include a policy matrix: thresholds on GPU utilization, queue depth, and burst spend — each mapped to an action. For example: if burst spend > $Y or GPU util > 90% for 2 minutes -> route 25% to smaller model, if persists route 50%, eventually queue with 10s TTL.
+
+[09:10] Mike (Kumo): How do we detect quality regression fast enough to rollback?
+[09:14] Samir (SE): We'll run lightweight evals on sampled responses — metrics like hallucination score, BLEU-ish similarity to reference, or embedding-distance to golden responses. If metric drift crosses threshold, canary rollback triggers. We'll instrument those in the POC harness.
+[09:31] Lena (Product): Are there tooling limits for offline evals?
+[09:34] Samir (SE): We can integrate your existing evals or run Redwood's quick eval suite. For POC we recommend a small set of golden prompts.
+
+[09:45] Jordan (AE): Let's capture the POC timeline: week 0 (this week) align on traces & success criteria; week 1 deploy reserved baseline & run small functional tests; week 2 run stress benchmarks and tune pre-warm; week 3 run live canary with 10% of traffic; week 4 collect results and decision (go/no-go). Does that map to your expectations?
+[10:08] Carlos (CTO): That seems fine. We have a product launch at the end of May so tight but doable.
+[10:15] Aisha (Platform): For the benchmark run we'll need credentials & sandbox. What access do you need?
+[10:20] Samir (SE): We'll need API keys for a sandbox project, sample prompts, and traces. For VPC peering we'll need IP ranges and firewall contact.
+
+[10:32] (Speaker 2): On quantization — you mentioned 4-bit. Does Redwood support int4 runtime?
+[10:36] Samir (SE): Yes, we support several quantized runtimes including 4-bit and 8-bit paths. For some models int4 reduces quality slightly but speeds and memory usage improve dramatically. We'll include a quantization recommendation per model in the POC.
+[10:49] Mike (Kumo): Any sample numbers on throughput improvements?
+[10:52] Samir (SE): Typically 1.5–3x throughput improvement depending on the model and ops. We'll quantify for your exact model in the benchmark.
+
+[11:03] Jordan (AE): Ok logistical items — Jordan will share POC doc and pricing, Samir will share benchmark harness and scripts, Rina will share security artifacts. Kumo will send traces. We'll schedule the benchmark window for week of Apr 21.
+[11:18] Mike (Kumo): Sounds good. A couple of smaller Qs — 1) if we exceed reserved commit in production, can Redwood auto-provision more reserved capacity or is that manual? 2) Are long-running LLM caches charged differently?
+[11:31] Jordan (AE): 1) Reserved capacity changes are contractual; you can add reserved pool (monthly/annual) but autoscaling uses burst pools. For production we can architect autoscaling + gradual reserved increases. 2) Cache persistence is included in runtime; there may be small storage charges for snapshotting large KV caches but it's modest — we'll specify.
+
+[11:51] (Speaker 3): What about multi-model routing? We want to route certain flows to a higher-quality 13B overnight and 7B for daytime cheap ops.
+[11:58] Samir (SE): Supported. Routing policy can be time-of-day, route-based, or SLO-based. We'll include sample routing configs.
+
+[12:09] Aisha (Platform): For private deployment, we'll need to test KMS integration. Will Redwood use our KMS or yours?
+[12:16] Rina (CSM): We support customer-managed KMS/HSM. For the POC we'll validate key exchange and encryption in transit at a high level; full key provisioning is typically done at onboarding stage.
+
+[12:28] Lena (Product): One more product ask: provide a simple dashboard card we can embed to show current degrade %, cost burn rate, and p99 latency for stakeholders.
+[12:37] Rina (CSM): We can create a custom dashboard snippet or provide APIs for you to pull the metrics.
+
+[12:45] (Speaker 1): Ok are we missing anything?
+[12:48] Jordan (AE): Quick risk list: 1) cold-start tail latency, 2) budget surprises on burst, 3) quality regressions on fallback. We'll address each with pre-warm policy, not-to-exceed budget, and canary/rollback triggers.
+
+[13:05] Mike (Kumo): Good. If POC goes well we want a 12-month reserved commit for production with multi-region failover.
+[13:11] Carlos (CTO): Agreed. Also we need enterprise contract language around data residency.
+[13:16] Jordan (AE): We'll include contractual notes in the follow-up.
+
+[13:25] Samir (SE): Technical note on metrics: we recommend capturing GPU utilization, model load time, cold-start duration, request queue depth, per-token cost, p50/p95/p99 latencies, and quality eval metrics sampled at 1% of traffic.
+[13:43] Aisha (Platform): We'll aim to provide traces by Apr 15 and confirm the benchmark window by Apr 17.
+
+[13:50] Jordan (AE): Great. Wrap up — next steps recap?
+[13:54] Rina (CSM): I'll follow up with SOC2 and security docs, Jordan will send POC plan and pricing, Samir with benchmark harness. Kumo to send traces and confirm schedule.
+
+[14:05] Mike (Kumo): Thanks everyone — excited to see results.
+[14:08] (crosstalk)
+
+End transcript.
+
+Notes on imperfections: transcript contains a few mis-hearings ("KV cash", "kv cash") and occasional shorthand. References to amounts (like $X) left for proposal.

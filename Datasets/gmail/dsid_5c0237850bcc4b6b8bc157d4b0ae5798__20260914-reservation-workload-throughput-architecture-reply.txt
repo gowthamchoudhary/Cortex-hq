@@ -1,0 +1,160 @@
+RFP: Dedicated Reservation & Throughput Architecture — WinTech response
+
+From: Anika Rao <anika@wintech.ai>
+To: hannah_schmitt <hannah_schmitt@redwood.ai>
+Cc: procurement@wintech.ai
+Date: 2026-09-12T09:14:00-07:00
+Subject: RFP: Dedicated GPU reservation — detailed questionnaire
+
+Hi Hannah,
+
+Thanks for taking our call yesterday. As part of WinTech's procurement process we've circulated a detailed questionnaire to shortlisted vendors. We're particularly focused on: recommended GPU types for mixed workloads, expected sustained tokens/sec by model class, cold-start and concurrency behavior, reservation sizing guidance for 99th percentile latency targets, and recommended fallback/multi-tier routing for busy hours.
+
+I've attached the RFP spreadsheet (rft_for_vendors_v3.xlsx) — please answer the Qs inline where possible. Our timelines are tight: vendor responses required by EOD Sep 15; procurement will schedule a follow-up technical deep-dive the week of Sep 22.
+
+Key constraints:
+- Target 95th pctl latency <= 300ms for text generation requests (typical seq length 256 tokens)
+- Peak concurrent request rate expected 220 req/s, average 90 req/s
+- Mix: 70% short prompts (<128 tokens), 30% long prompts (128–1024 tokens)
+- Data residency: US only; SOC 2 compliance required
+
+Please route any sensitive attachments to our procurement mailbox.
+
+Regards,
+Anika Rao
+Senior Procurement Manager
+WinTech Inc.
+
+Attachment: rfp_for_vendors_v3.xlsx (spreadsheet)
+From: hannah_schmitt <hannah_schmitt@redwood.ai>
+To: marcus_lin <marcus_lin@redwood.ai>, vivek_kulkarni <vivek_kulkarni@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>
+Date: 2026-09-12T11:02:00-07:00
+Subject: Fwd: RFP: Dedicated GPU reservation — detailed questionnaire
+
+Team — forwarding WinTech's questionnaire. They want a vendor response by EOD 9/15. Can Marcus and Vivek take primary on the GPU mix and throughput targets, and Laura can validate SOC2/compliance notes and help with the security addendum. Please draft inline answers for the spreadsheet and a one-page reservation recommendation we can send as a summary.
+
+Quick asks:
+- Marcus: give guidance for 95p latency <=300ms at 220 peak concurrent reqs (70/30 short/long). Include expected tok/sec per GPU for the model families we typically propose (Redwood-7B-opt, Redwood-34B, and open 70B variants).
+- Vivek: propose a practical GPU mix (H100 / L40S / A10G equivalents), include burst capacity plan and autoscale/buffer sizing for canary/fallback.
+- Laura: confirm SOC2 evidence we can attach and note any data-residency caveats for private deployments.
+
+I'll synthesize and send to Anika. Keep it factual and avoid contractual language — sales will handle pricing.
+
+—Hannah
+Hannah Schmitt
+Head of Sales Engineering
+Redwood Inference
+
+On 2026-09-12 09:14, Anika Rao wrote:
+> Hi Hannah,
+> 
+> Thanks for taking our call yesterday.... (see original message)
+From: marcus_lin <marcus_lin@redwood.ai>
+To: hannah_schmitt <hannah_schmitt@redwood.ai>, vivek_kulkarni <vivek_kulkarni@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>
+Date: 2026-09-13T08:46:00-07:00
+Subject: Re: Fwd: RFP: Dedicated GPU reservation — detailed questionnaire
+
+Hannah/Vivek/Laura — draft answers below (technical). I focused on throughput & reservation math; Vivek can comment on ops/runbook details.
+
+1) Recommended GPU types (short summary):
+- H100 (80GB) — primary for latency-sensitive large-model workloads (>=34B). Best single-GPU latency for batched and KV-cache heavy inference.
+- L40S / A800-class — cost-efficient for medium-sized models (7B–34B) and mixed batch workloads; good for higher sustained throughput when batched.
+- A10G / T4-class — economical for embedding workloads and low-cost RLHF/lightweight generation where latency constraints are looser.
+
+2) Tokens/sec guidance (sustained, 95% util, mixed batching):
+- Redwood-7B-opt (seqlen 256, optimized kernels, 32-token batches): ~4,500–6,500 tokens/sec on L40S; ~6,000–8,500 on H100 when latency SLO permits batching.
+- Redwood-34B (seqlen 256, 16-token batches): ~800–1,200 tokens/sec on H100; ~450–700 on L40S in optimized config.
+- Open 70B variants (seqlen 256, 8-token batches, quantized): ~220–380 tokens/sec on H100 (with kernel tuning); ~120–220 on L40S with heavy quantization.
+
+Notes: numbers above are conservative sustained rates assuming continuous requests with workload mixing; burst rates with aggressive batching can be 1.5–2x but will impact p99 latency. We assume KV-cache hit rates for multi-turn chat at ~60% for workloads with repeated context which improves effective throughput.
+
+3) Reservation sizing (target: 95p latency <=300ms, peak 220 req/s):
+- Workload split: 70% short prompts => focus on high concurrency small-latency optimization.
+- Proposal A (low-latency-priority):
+  - 8 x H100 (80GB) serving Redwood-34B/70B variants for latency-sensitive long/complex requests.
+  - 12 x L40S for Redwood-7B and medium throughput burst capacity.
+  - 4 x A10G for embeddings and background batch jobs.
+  - This config provides headroom for 220 peak req/s with autoscale buffer of ~20% and expected p95 <=300ms for short prompts when fronted by batching/queueing and prefix caching.
+
+- Proposal B (cost-balanced):
+  - 4 x H100, 18 x L40S, 6 x A10G. Uses more L40S to lower $/token while keeping 95p latency for short prompts via aggressive batching and local caching; long-tail >34B requests less frequent so fewer H100s.
+
+Sizing math example (Proposal A, short prompt case):
+- Assume average short prompt cost = 64 tokens, generation 64 tokens => ~128 tokens total. If L40S sustains 5,500 tok/s for 7B flows, a single L40S can serve ~43 short requests/sec (128 tok per request -> 5500/128 = 42.9). 12 L40S -> ~515 short req/s capacity (theoretical); after overhead and headroom we expect comfortable handling of WinTech's 220 peak with redundancy.
+
+4) Autoscale / burst recommendations:
+- Maintain a 20–30% reserved buffer to avoid cold-starts; use shorter cold-start windows for H100-backed services via warm replicas.
+- Offer pre-warm policy for predictable windows (cron-like batch) and ephemeral burst pool for up to additional 30% capacity billed as burst.
+
+5) Fallback and routing policy:
+- Primary route: latency-priority models on H100s.
+- Fallback layer: L40S pool with model-quantized variants and slightly higher latency but lower cost.
+- If both pools saturated, route to third-tier run-on-demand (A10G) with request-level degradation message.
+
+6) Canary and rollout notes:
+- Recommend canary set of 2 GPUs per pool for new model versions; monitor p95/p99 and token-level cost.
+
+I'll drop numbers into the spreadsheet and produce the one-page summary. Vivek: can you add notes on networking (NCCL, PCIe), and cold-start times for model variants so we can include realistic SLOs?
+
+—Marcus
+Principal Inference Engineer, Redwood Inference
+
+Attachment references: none (will include redwood-reservation-plan.pdf in outbound).
+From: vivek_kulkarni <vivek_kulkarni@redwood.ai>
+To: hannah_schmitt <hannah_schmitt@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>
+Date: 2026-09-13T14:33:00-07:00
+Subject: Re: Fwd: RFP: Dedicated GPU reservation — detailed questionnaire
+
+Adding ops/runbook and networking/cold-start data:
+
+Networking and cluster notes:
+- Use PCIe v4 / NVLink topology when deploying H100 clusters to avoid cross-host KV-cache penalties; recommend colocated NVMe cache for frequent model weights to speed rehydrate.
+- For private deployments, we advise a 25Gbps interconnect minimum per GPU node to preserve KV-cache throughput and reduce tail latency under load.
+
+Cold-start and warmup times (typical):
+- H100 (serving 34B quantized): warm start (model init + weight load into GPU mem) ~18–45s depending on storage (local NVMe vs. remote); warm replica reuse reduces to <5s for inference-ready startup.
+- L40S (7B): warm start ~6–12s; with persistent prefix cache cold-starts can be sub-3s for smaller models.
+
+Operational recommendations:
+- Maintain a small pool of warm standbys (2–3 GPUs per pool) for sub-5s cold-start behavior.
+- Autoscaling grace period: 30–60s to allow node attach and JIT kernel warmup; use burst pool to cover immediate spikes.
+- KV-cache retention: store per-customer prefix cache for 6–12 minutes depending on typical session length; this materially improves effective throughput for chat-like workloads.
+
+Security/compliance (Laura to confirm attachments): ship SOC2 evidence and updated security-addendum.pdf; for VPC/private installs we'll require a joint runbook to validate network egress controls.
+
+I'll include these notes in the summary PDF.
+
+—Vivek
+Senior Solutions Architect, Redwood Inference
+
+From: hannah_schmitt <hannah_schmitt@redwood.ai>
+To: Anika Rao <anika@wintech.ai>
+Cc: procurement@wintech.ai, marcus_lin <marcus_lin@redwood.ai>, vivek_kulkarni <vivek_kulkarni@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>
+Date: 2026-09-14T17:42:00-07:00
+Subject: RE: RFP: Dedicated GPU reservation — detailed questionnaire (Redwood response)
+
+Anika — thanks for the opportunity and the spreadsheet. Attached are: 1) a concise reservation recommendation (redwood-reservation-plan.pdf), 2) throughput benchmark extracts (wintech-throughput-benchmarks.csv) and 3) our security addendum (security-addendum.pdf). Below is a short summary of our recommendations to address the questionnaire highlights you called out.
+
+Executive summary:
+- Recommended initial reservation (cost/latency balanced): 4 x H100 + 18 x L40S + 6 x A10G. This aligns with your peak 220 req/s expectation and your 95p latency <=300ms target for short prompts when using prefix caching and controlled batching.
+- Low-latency variant (if WinTech prioritizes p95 for long-form 34B/70B traffic): increase H100s to 8 and reduce L40S accordingly (see attached plan for trade-offs).
+- Autoscale & burst policy: 20–30% warm buffer plus an on-demand burst pool for immediate spikes; typical scale-up completes in 30–60s, warm standby policy reduces visible cold-starts to <5s.
+- Fallbacks: we propose primary H100 pool, secondary L40S quantized variants, tertiary on-demand A10G pool. Routing policy and degradation messages are included in the attached runbook pages.
+
+Compliance and next steps:
+- SOC2 evidence and a signed security addendum are attached. For private deployments we will require an initial security architecture call to validate VPC egress rules and key management (recommended KMS/HSM integrations noted).
+- Proposed next milestone: technical deep-dive (30–45m) with our infra + security team during week of Sep 22. Please share 2–3 time slots.
+
+If helpful I can also provide a short cost-estimate (monthly commitment vs. burst pricing) for the two reservation profiles. Marcus/Vivek/Laura are cc'd for technical questions.
+
+Best,
+Hannah Schmitt
+Head of Sales Engineering
+Redwood Inference
+
+Attachments: redwood-reservation-plan.pdf (application/pdf), wintech-throughput-benchmarks.csv (text/csv), security-addendum.pdf (application/pdf)
+
+On Mon, Sep 13, 2026 at 08:46 Marcus Lin <marcus_lin@redwood.ai> wrote:
+> Hannah/Vivek/Laura — draft answers below (technical)...
+> 
+> [internal thread quoted for context]

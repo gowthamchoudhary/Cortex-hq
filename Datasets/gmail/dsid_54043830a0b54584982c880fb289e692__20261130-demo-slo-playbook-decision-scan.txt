@@ -1,0 +1,128 @@
+Post-demo: SLO playbook & decision scan for HorizonHealth
+
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Tom Reyes <tom@horizonhealth.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: 2026-11-30T09:15:00-08:00
+Subject: Post-demo: SLO playbook & decision scan for HorizonHealth
+
+Hi Tom / Anita —
+
+Thanks again for your time this morning. Short recap from our demo and the SLO-focused items we agreed to validate:
+
+Summary of what we observed / agreed on during the session:
+- Target user flow: clinician note generation + live dictation for triage notes.
+- Typical prompt lengths: 120–250 tokens; average response sizes ~350 tokens.
+- Peak concurrency expectation: ~6–10 concurrent clinicians during peak hour.
+
+Key SLO candidates we should validate in the perf run (proposal):
+1) Latency (user-facing): p95 end-to-end generation <= 300 ms for short responses (~<200 tokens); p95 <= 500 ms for longer responses (350–500 tokens).
+2) Throughput: sustain 220–300 req/s across a single region during peak window.
+3) Concurrency: maintain p95 latency targets with 8 concurrent streams per model instance.
+4) Streaming: first-byte latency for streaming responses <= 150 ms; subsequent token latency steady and low variance (important for live dictation).
+5) Error budget & stability: <1% server errors, no repeatable degradation during 30-minute sustained load.
+
+Attached: hzn-slo-checklist.xlsx (bones of the test matrix) and the demo recording.
+
+Next steps / ask from HorizonHealth:
+- Can you confirm the latency targets above (p95 thresholds) are acceptable as decision criteria? If not, call out the hard stop numbers.
+- Provide a preferred 2-hour window for a staged perf run (staging credentials + allowlist IPs) — we suggested Dec 8 or Dec 10.
+- Share your security contact for a short SOC/SIEM checklist handover (cc Anita if she’s the right person).
+
+Internal note: I’m proposing we run the test against a dedicated sandbox cluster with KV cache enabled and streaming mode on; will prepare perf script and metrics dashboard.
+
+Thanks — I’ll wait for Tom/Anita confirmation and will schedule once we have a time.
+
+—Naomi
+Naomi Feldman
+Enterprise Sales, Redwood Inference
+naomi_feldman@redwood.ai
+
+---
+Attachments: hzn-slo-checklist.xlsx (spreadsheet), demo-recording.mp4 (video-45MB)
+From: Tom Reyes <tom@horizonhealth.com>
+To: Naomi Feldman <naomi_feldman@redwood.ai>
+Cc: Anita Solis <anita.solis@horizonhealth.com>
+Date: 2026-11-30T09:42:00-08:00
+Subject: Re: Post-demo: SLO playbook & decision scan for HorizonHealth
+
+Naomi — thanks for the clear recap. A few quick confirmations from our side: 
+
+- Latency: the team is comfortable targeting p95 <= 300 ms for the shorter responses. For longer outputs we can be flexible up to 450 ms, but <500 ms is a hard ceiling.
+- Throughput: please size for 200–250 req/s initially (we may ramp to 300 in a future phase).
+- Concurrency: 8 concurrent streams is what our infra team expects as the practical peak.
+- Streaming: live dictation is high priority — first-byte <= 150 ms is a must.
+- Data residency: all PHI must remain in the us-east-1 region; provide confirmation of region routing and any fallback behavior.
+
+We can do Dec 8, 10:00–12:00 EST for the perf window. Anita will be our security point of contact (cc’d). She’s requested the short SOC checklist PDF — I attached our security contact form in case you need more info.
+
+Also: procurement timeline looks like Q1 2027 for signature, but we need a clear perf pass and a short SLO appendix tied to the SOW before Legal will approve.
+
+Tom
+Tom Reyes
+Director of Product, HorizonHealth
+
+---
+> On Mon, Nov 30, 2026 at 9:15 AM Naomi Feldman <naomi_feldman@redwood.ai> wrote:
+> > [recap and checklist]
+
+Attachments: security-contact-v1.pdf (pdf)
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Naomi Feldman <naomi_feldman@redwood.ai>, Tom Reyes <tom@horizonhealth.com>
+Cc: Neha Kapoor <neha_kapoor@redwood.ai>
+Date: 2026-11-30T10:05:00-08:00
+Subject: Re: Post-demo: SLO playbook & decision scan for HorizonHealth
+
+Thanks — jumping in with technical next steps and a suggested test plan tweak.
+
+Notes / suggestions:
+- Test config: run two phases: (A) read-heavy batch of short prompts to validate p95 < 300ms with concurrency sweep 2/4/6/8; (B) streaming-heavy pass with 10-minute sustained sessions to validate first-byte <150ms and per-token jitter.
+- Instance type: recommend Dedicated medium (A100-equivalent) with quantized model weights for initial run to match hosted economics.
+- KV cache: enable prefix caching for templated prompts (we saw consistent prefix reuse in the demo); this will materially reduce p50 but also steadies p95 under concurrency.
+- Canary thresholds: auto-fail the run if >1% 5xx or if p95 > 350ms for short responses in two back-to-back windows.
+
+I’ve attached the perf-run-script.py for the profile we’ll execute and a minimal Grafana dashboard link (internal) to monitor latency histograms and error rates.
+
+Operational ask for HorizonHealth: please open a staging allowlist ticket for these IP ranges (provided privately) and confirm the test account has access to sample data (de-identified) or synthetic prompts that match your distribution.
+
+If Dec 8 works, I’ll book the cluster and send the invite with run play-by-play.
+
+—Rishi
+Rishi Malhotra
+Solutions Architect, Redwood Inference
+
+---
+Attachments: perf-run-script.py (script)
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Tom Reyes <tom@horizonhealth.com>, Anita Solis <anita.solis@horizonhealth.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: 2026-11-30T11:03:00-08:00
+Subject: Re: Post-demo: SLO playbook & decision scan for HorizonHealth
+
+Appreciate the quick turn, Tom. Dec 8 10:00–12:00 EST is reserved on our side — I’ve created the invite and Rishi will send the run play-by-play and dashboard link by EOD Dec 4.
+
+Confirmed decision criteria (to be added as SLO appendix for the SOW):
+- Perf pass definition: two 30-minute steady-state windows where short-response p95 <= 300 ms and error rate <1%.
+- Throughput check: sustain 200 req/s for 30 minutes during the same windows without p95 regression.
+- Streaming check: first-byte <= 150 ms for >90% of streaming sessions; no repeated reconnects or token stalls.
+- Regional compliance: traffic must remain in us-east-1 for all PHI; fallback routing will use queuing and notify the HorizonSecurity contact before shifting region.
+
+Action items / owners:
+- HorizonHealth: confirm any additional hard stop thresholds and provide staging access (Tom / Anita) — due Dec 3.
+- Redwood infra: prep dedicated sandbox cluster, enable KV cache, upload perf script (Rishi) — will confirm by Dec 4.
+- Legal/Procurement: include SLO appendix in draft SOW (Naomi) — target draft by Dec 15.
+
+Links: HubSpot deal record (https://hubspot.company.com/deals/HZN-2026-081), perf recording + docs shared (https://redwood-share.company.com/recordings/hzn-demo-20261130), DocuSign placeholder (https://app.docusign.com/some-doc-link).
+
+If those criteria look right I’ll mark this thread as the canonical perf acceptance plan and circulate the SLO appendix for signature.
+
+Best —
+Naomi
+Naomi Feldman
+Enterprise Sales, Redwood Inference
+naomi_feldman@redwood.ai
+
+---
+Quoted: Rishi’s perf script and Tom’s security confirmation above.
+
+Attachments: none inline (perf-run-script.py already uploaded), hzn-slo-checklist.xlsx referenced earlier.

@@ -1,0 +1,117 @@
+Conversation pacing regression, customer workaround + post-incident ask
+
+From: Anita Solomon <anita@brightcart.com>
+To: Ben Carter <ben_carter@redwood.ai>
+Date: Tue, 17 Nov 2026 21:08:12 +0000
+Subject: Re: odd spikes — streaming responses stuttering since last night
+
+Hi Ben,
+
+We started seeing our live chat surface stutter and drop chunks around ~2026-11-17 02:45 UTC and it persisted through the morning in US regions. Users report long pauses (3–8s) between streaming chunks; sometimes the stream finishes but missing intermediate tokens. Our SRE collected traces attached (streaming-trace-20261117.gz).
+
+Steps we've tried on our side: reconnect, fallback to polling, and lowering client-chunk-size — none fully resolved it. It looks like the token cadence is being delayed server-side rather than connection-level throttling. Can you confirm if anything changed on your side, and advise any short-term mitigations? This is impacting our checkout-assist widget during peak traffic.
+
+Thanks,
+Anita Solomon
+VP Product, BrightCart
+
+---
+Attachment: streaming-trace-20261117.gz (text/zip, 2.3MB)
+From: Ben Carter <ben_carter@redwood.ai>
+To: marissa_cole@redwood.ai, hannah_schmitt@redwood.ai
+Cc: Anita Solomon <anita@brightcart.com>
+Date: Tue, 17 Nov 2026 21:35:47 +0000
+Subject: Fwd: odd spikes — streaming responses stuttering since last night
+
+Folks — tagging Marissa and Hannah for immediate triage. Initial read of the trace looks like token emission pauses that align with a high variance in sequence lengths across concurrent sessions; this can cause KV cache churn in the runtime and fall-back to slower execution paths.
+
+Short playbook I recommend while infra investigates:
+- Route BrightCart traffic to a dedicated serving pool (temp) with relaxed batching thresholds to isolate behavior.
+- Enable aggressive prefix/KV caching for their session keys (config flag: cache_mode=aggressive).
+- Advise customer to set client-side reconnect/backoff and reduce per-chunk tokens to 16 from their current 64.
+- If we need to push an emergency runtime rollback, coordinate with infra to schedule within the next 4 hours.
+
+I attached a quick diagnostic claim file (diagnostic-claim.txt) with the request payloads we should use for repro. Hannah — can you draft a short mitigation email to Anita with concrete client steps? Marissa — can you open an incident and assign INF-2247?
+
+Ben
+Account Executive, Redwood Inference
+Phone: +1-415-555-0182
+
+---
+Attachment: diagnostic-claim.txt (text/plain, 4KB)
+From: Hannah Schmitt <hannah_schmitt@redwood.ai>
+To: Anita Solomon <anita@brightcart.com>, Ben Carter <ben_carter@redwood.ai>, marissa_cole@redwood.ai
+Date: Tue, 17 Nov 2026 22:02:09 +0000
+Subject: RE: odd spikes — streaming responses stuttering since last night
+
+Hi Anita — thanks for the trace and quick signal. We have a short mitigation playbook you can apply immediately; these are client-side and server-side options.
+
+Customer mitigation (immediate, non-disruptive):
+1) Reduce per-chunk token target to 12–20 tokens (client-side) — this reduces the runtime's need to re-batch at high variance.
+2) Use exponential reconnect/backoff for streaming endpoints (initial 200ms, multiplier 1.5, max 5s).
+3) If using SSE (text/event-stream), set a keepalive event every 8–10s as a heartbeat to avoid intermediate proxies closing connections.
+4) As a temporary fallback, switch heavy user sessions to the poll endpoint (/v1/responses/poll) for 60–90s during peak bursts — poll has slightly higher latency but avoids token pacing anomalies.
+
+Server-side actions we're taking:
+- Routing your production API key to a dedicated pool (pool-id: dp-brightcart-11) now.
+- Increasing prefix cache retention for your session keys.
+- Infra is running a diagnostic job to repro KV cache thrash; if repro is confirmed we'll push a targeted runtime fix.
+
+ETA: we expect routing to reduce incidents within ~30 minutes. I'll follow up with a timeline for the full remediation once INF-2247 has more data. Apologies for the disruption — we know this impacts conversion-critical flows.
+
+If you want an ops channel, I'll open a short-lived Zoom and invite SREs.
+
+Hannah Schmitt
+Customer Reliability Engineer, Redwood Inference
+Ops Slack: #cust-brightcart
+
+> On Tue, Nov 17, 2026 at 21:08 Anita Solomon <anita@brightcart.com> wrote:
+> > We started seeing our live chat surface stutter and drop chunks around ~2026-11-17 02:45 UTC and it persisted through the morning in US regions.
+> > ...
+
+---
+Note: no code changes required on your side for the routing change; if you opt into the poll fallback we'll coordinate feature flags on our end.
+From: Ben Carter <ben_carter@redwood.ai>
+To: Anita Solomon <anita@brightcart.com>
+Cc: marissa_cole@redwood.ai, hannah_schmitt@redwood.ai
+Date: Wed, 18 Nov 2026 15:42:03 +0000
+Subject: Post-incident summary and next steps — BrightCart streaming delay (INF-2247)
+
+Hi Anita,
+
+Thanks again for your patience and the fast repro traces. Quick summary / timeline and what we did to remediate.
+
+Timeline:
+- 2026-11-17 02:45 UTC — BrightCart reported sustained streaming token pauses.
+- 2026-11-17 22:15 UTC — Routed BrightCart keys to dedicated pool dp-brightcart-11; saw immediate reduction in observed pauses for 92% of sessions.
+- 2026-11-18 03:15 UTC — Root-cause identified: a scheduler interaction in the runtime that (under high variance of sequence length) caused repeated KV cache eviction and fallback to slower attention kernels.
+- 2026-11-18 04:05 UTC — We deployed a targeted runtime patch that stabilizes KV cache retention and increases threshold for kernel fallbacks.
+- 2026-11-18 04:30 UTC — Telemetry shows token cadence back within expected SLOs; we started rolling traffic back to the standard pool with additional rate-limiting guards.
+
+Impact and customer-facing mitigations we recommend (summary):
+- Short-term: keep the dedicated pool active for the remainder of your week of high loads; this isolates your traffic and avoids shared contention.
+- Client-side best-practices: keep chunk sizes small (12–20 tokens), implement a heartbeat for SSE, and use exponential reconnect/backoff.
+- We're offering a one-time service credit for hours of impacted throughput — details below.
+
+Remediation and follow-ups:
+- INF-2247 (link below) contains the full postmortem; we've included telemetry plots and the patch diff. We will run an additional canary in EU and APAC to ensure the change doesn't regress anything else.
+- Action: we'll keep your key routed to dp-brightcart-11 until EOD Friday 2026-11-20 unless you request otherwise.
+
+Offer: a one-time usage credit equal to the estimated lost throughput for the 18-hour window (account team will follow up with a precise credit line). If you'd like a contract addendum for reserved capacity while you scale, Marissa can schedule a quick pricing call.
+
+Links and attachments:
+- Postmortem (short): https://redwood.atlassian.net/browse/INF-2247
+- HubSpot ticket: HBSPOT-987654
+
+Attachments: postmortem-summary-brief.pdf
+
+If you want a quick review over Zoom — happy to set up a 30-minute walkthrough. Apologies again for the impact and thank you for working with us through the triage.
+
+Best,
+Ben Carter
+Account Executive, Redwood Inference
+ben_carter@redwood.ai
+Phone: +1-415-555-0182
+
+---
+Attachment: postmortem-summary-brief.pdf (application/pdf, 120KB)

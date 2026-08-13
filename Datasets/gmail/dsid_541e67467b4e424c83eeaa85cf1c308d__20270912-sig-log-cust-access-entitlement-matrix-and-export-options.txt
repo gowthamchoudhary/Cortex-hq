@@ -1,0 +1,130 @@
+SIG: customer audit log access — entitlement matrix & export options
+
+From: Liam Hughes <liam.hughes@finbank.com>
+To: irene_choi@redwood.ai
+Cc: audits@finbank.com
+Date: Sun, 12 Sep 2027 09:12:00 -0700
+Subject: SIG follow-up: audit log access & samples
+
+Hi Irene,
+
+Thanks again for the demo last week. As part of our SIG submission we need a concrete description of how Redwood surfaces tenant-level audit logs, what the retention windows are, and the mechanisms by which we (or our third-party auditors) can obtain log evidence. Specifically: 
+
+- Can you provide a 30-day sample export (anonymized) and an explanation of export formats? CSV/NDJSON/Parquet?
+- Do you support presigned S3 URLs for ad-hoc export delivery or do you prefer a streamed delivery into our SIEM?
+- What role-based entitlements exist for customer users vs. Redwood support vs. auditors (read-only, temporary access, playback-only)?
+- Any redaction/PII controls that modify exported artifacts?
+
+We need this content for the SIG matrix and a short timeline for providing sample evidence (our auditor is targeting Sept 22).
+
+Appreciate a concise plan and anything you can attach.
+
+Thanks,
+Liam
+Liam Hughes
+Head of Information Security
+FinBank
+
+--
+This message may contain confidential information.
+
+From: irene_choi@redwood.ai <irene_choi@redwood.ai>
+To: Liam Hughes <liam.hughes@finbank.com>
+Cc: audits@finbank.com, marissa_cole@redwood.ai
+Date: Mon, 13 Sep 2027 10:05:00 -07:00
+Subject: Re: SIG follow-up: audit log access & samples
+
+Hi Liam — thanks for the clear ask. Putting a short plan below and attaching a 30-day anonymized sample (audit_log_sample.csv) plus our export playbook (log_export_playbook.pdf). High-level summary: 
+
+1) Exports & formats
+- We can produce exports in NDJSON, CSV, or Parquet; sample attached is CSV for easiest inspection.
+- Standard fields: event_ts, tenant_id, request_id, principal, route, model_id, input_len, output_len, status, additional_meta (JSON blob).
+
+2) Delivery options
+- Presigned S3 URL: we can upload an export to a per-tenant S3 bucket and share a time-limited presigned URL (configurable expiry 15m–7d).
+- SIEM push: we can stream events to customer-managed Kinesis/CloudPub/Sub or deliver daily batches to your SIEM via secure push.
+- Temporary playback console: for scoped playback sessions we can grant read-only viewer sessions for a defined window (auditor IP restricted).
+
+3) Entitlement matrix (proposed)
+- Tenant Admin: can request exports, define retention, review events.
+- Security/Audit role (customer): read-only export creation and download.
+- Redwood Support (on-ticket): temporary, auditable access (timeboxed) scoped to ticket; must be accepted by tenant admin.
+- External auditors: temporary token-based access; access granted by tenant admin or by e-signing an NDA; sessions are flagged in audit logs.
+
+4) Redaction & PII
+- Exports support configurable redaction profiles (strip raw inputs, mask tokens, or remove prompt fields). Note: redaction is applied at export time and documented in the manifest.
+
+5) SLA & timeline
+- We can deliver the 30-day anonymized CSV sample by EOD 2027-09-15 (attached).
+- For auditor-scoped temporary access we propose a 3-workday onboarding window (identity check + ticket + audit NDA).
+
+Next steps: confirm preferred delivery method (presigned S3 vs SIEM push) and whether the auditor requires raw (unredacted) events or masked datasets. If raw required, we'll need a signed data handling addendum and a brief compliance task.
+
+I attached the export playbook describing expiration, encryption (KMS), and access revocation steps. Happy to jump on a quick call.
+
+Best,
+Irene Choi
+Senior Security Programs Manager
+Redwood Inference
+
+Attachments: audit_log_sample.csv (anonymized), log_export_playbook.pdf
+
+From: marissa_cole@redwood.ai <marissa_cole@redwood.ai>
+To: irene_choi@redwood.ai, karthik_iyer@redwood.ai
+Cc: liam.hughes@finbank.com
+Date: Tue, 14 Sep 2027 08:44:00 -07:00
+Subject: Re: SIG follow-up: audit log access & samples
+
+Quick clarifications from the playbook side — copying Liam so he sees these constraints: 
+
+- Export manifest always includes a redaction_profile field that lists what was masked; auditors should receive the manifest alongside the payload.
+- For time-limited presigned URLs we do server-side encryption using tenant KMS keys (if customer configured) or Redwood-managed KMS otherwise.
+- When auditors request ad-hoc exploratory access (search/playback) we prefer to create a transient auditor role tied to a single session; logs capture every query, and transcripts are retained for 90 days.
+
+If FinBank needs unlimited raw access for remote auditors, that triggers our formal SOC escalation and a data handling addendum — it can be done but requires legal + security signoff.
+
+Marissa
+Director, Customer Security
+Redwood Inference
+
+From: ben_carter@redwood.ai <ben_carter@redwood.ai>
+To: irene_choi@redwood.ai, marissa_cole@redwood.ai, karthik_iyer@redwood.ai
+Date: Tue, 14 Sep 2027 11:22:00 -07:00
+Subject: Re: SIG follow-up: audit log access & samples
+
+Technical notes to include in the SIG matrix: 
+
+- Export cadence: ad-hoc, daily, or hourly. Exports are produced as gzipped NDJSON by default for efficient streaming; Parquet available for analytics pipelines.
+- Presigned URL behavior: we limit concurrent downloads and issue URLs per-export artifact; expiry default is 24h, max 7d, min 15m. We rotate the object key per export run to prevent replay.
+- Access controls: pre-signed URLs only grant GET; to allow auditor search/playback we create a temporary IAM role (timebound) with no write permissions.
+- Integrity: every export includes a SHA256 checksum and a signed manifest; manifests are stored in immutable object store (WORM) for 1 year by default.
+- Redaction: masking is deterministic and versioned; we include a redaction_version field in the manifest so auditors can verify what algorithm was applied.
+
+I'll add these bullets into the playbook PDF and push an updated copy to the Drive link.
+
+—Ben
+Sr. Infra Engineer, Redwood Inference
+
+From: irene_choi@redwood.ai <irene_choi@redwood.ai>
+To: Liam Hughes <liam.hughes@finbank.com>, audits@finbank.com
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai, karthik_iyer@redwood.ai
+Date: Wed, 15 Sep 2027 14:03:00 -07:00
+Subject: Final: SIG deliverables & next steps (export options confirmed)
+
+Hi Liam — thanks for the questions and for reviewing the sample. Short confirmation of next steps so your auditor has clear expectations: 
+
+- Delivery: We'll upload the 30-day anonymized CSV and a gzipped NDJSON export to a per-tenant S3 path and share a presigned URL with 48-hour expiry. (Attachment: audit_log_sample.csv delivered 2027-09-15)
+- Auditors: For interactive playback, we'll provision a temporary auditor role for a 7-day window (IP restrict and audit all queries).
+- Redaction: Sample is masked; if your auditor requires unmasked data, please provide the signed DAA and we will run the raw export under the legal workflow.
+- Timeline: sample delivered (today). Temporary access onboarding: target by 2027-09-20 if we receive confirmation and NDA.
+
+Please confirm preferred delivery method (we will proceed with presigned URL by default). If you'd like us to push into your SIEM instead, provide the destination endpoint and IAM role.
+
+I'll keep a single thread for tracking; copying Marissa and Ben for any implementation updates.
+
+Best regards,
+Irene Choi
+Senior Security Programs Manager
+Redwood Inference
+
+Attachments: audit_log_sample.csv, log_export_playbook.pdf

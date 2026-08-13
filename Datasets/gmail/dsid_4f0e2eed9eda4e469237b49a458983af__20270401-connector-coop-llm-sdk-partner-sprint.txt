@@ -1,0 +1,138 @@
+LangBridge SDK connector: pilot plan & tracing scope
+
+From: Anika Shah <anika@promptworks.co>
+To: Logan Wright <logan.wright@redwood.ai>
+Cc: Jared Kim <jared@tracewise.ai>
+Date: Thu, 1 Apr 2027 10:15:00 -0700
+Subject: LangBridge SDK connector: pilot plan & tracing scope
+
+Hi Logan,
+
+Thanks for taking a call with us yesterday — excited about the potential for PromptWorks + Redwood. Attached is a short proposal outlining a two-week pilot for a LangBridge connector that uses Redwood hosted endpoints for inference and TraceWise for request-level tracing.
+
+High-level ask: can Redwood provide a sandboxed API key and short-lived dedicated capacity for the pilot? Key success criteria from our side: (1) stable <150ms p95 generation for 512-token prompts, (2) end-to-end trace ids surfaced to our error/telemetry pipeline, (3) a clear fallback when Dedicated capacity is saturated.
+
+We included a basic runbook and suggested milestones in connector-proposal.pdf. Can you confirm who on your side would own the integration checklist and whether you need any security paperwork up front?
+
+Thanks — looking forward to collaborating.
+
+Best,
+Anika
+Director, Partnerships
+PromptWorks
+
+Attachments: connector-proposal.pdf (PDF)
+From: Logan Wright <logan.wright@redwood.ai>
+To: Anika Shah <anika@promptworks.co>
+Cc: Jared Kim <jared@tracewise.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Thu, 1 Apr 2027 11:02:00 -0700
+Subject: Re: LangBridge SDK connector: pilot plan & tracing scope
+
+Hi Anika — thanks for the proposal and for outlining the success criteria. I'm happy to run point from partnerships on Redwood's side. Looping in Marissa (ISV integrations) for technical ownership and Karthik (cc'd on follow-up) for tracing/telemetry alignment.
+
+Quick answers:
+- Sandbox API key: yes, we can issue a scoped sandbox key and a short-lived Dedicated slot for the pilot (48 hours per day over the 2-week window) — Marissa will confirm capacity sizing.
+- Tracing: we support propagating trace IDs via X-Redwood-Trace and can ingest TraceWise-compatible spans; need to confirm sampling and header formats.
+- Security paperwork: standard NDA + Data Processing Addendum (DPA). If PromptWorks signs our template we can expedite.
+
+Next steps: can Marissa and Jared sync on the technical checklist and then we schedule a kickoff for next Tue?
+
+Cheers,
+Logan Wright
+Head of Partnerships
+Redwood Inference
+
+On Thu, Apr 1, 2027 at 10:15 AM Anika Shah <anika@promptworks.co> wrote:
+> Thanks for taking a call with us yesterday — excited about the potential for PromptWorks + Redwood. Attached is a short proposal outlining a two-week pilot for a LangBridge connector that uses Redwood hosted endpoints for inference and TraceWise for request-level tracing.
+>
+> High-level ask: can Redwood provide a sandboxed API key and short-lived dedicated capacity for the pilot? Key success criteria from our side: (1) stable <150ms p95 generation for 512-token prompts, (2) end-to-end trace ids surfaced to our error/telemetry pipeline, (3) a clear fallback when Dedicated capacity is saturated.
+>
+> We included a basic runbook and suggested milestones in connector-proposal.pdf. Can you confirm who on your side would own the integration checklist and whether you need any security paperwork up front?
+>
+> Best,
+> Anika
+> Director, Partnerships
+> PromptWorks
+>
+> Attachments: connector-proposal.pdf (PDF)
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Anika Shah <anika@promptworks.co>, Logan Wright <logan.wright@redwood.ai>
+Cc: Jared Kim <jared@tracewise.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Fri, 2 Apr 2027 09:18:00 -0700
+Subject: Re: LangBridge SDK connector: pilot plan & tracing scope
+
+Hi Anika — glad to be onboard. I reviewed the proposal and sketched a technical checklist (attached) that maps to a four-step pilot:
+
+1) Sandbox provisioning: scoped API key + network rules; smoke test generation at 256/512 tokens.
+2) SDK connector dev: LangBridge adapter that calls Redwood's /v1/generate endpoint with token-level streaming off for determinism.
+3) Tracing integration: propagate X-Redwood-Trace, support TraceWise span export; add test harness for synthetic trace correlation.
+4) Failover plan: configure routing policy to fall back to a smaller quantized model and surface a 429/503 policy to the SDK.
+
+I've attached llm-sdk-trace-checklist.xlsx with tasks and owners. A few questions from an infra perspective: what baseline GPU flavor do you expect for the Dedicated window (g10x, a100g, etc.) and any IO/network constraints? Also, will the pilot use Hosted+Dedicated mix or Dedicated-only?
+
+Security: we'll accept a scanned NDA and will push our DPA template after kickoff. If PromptWorks needs SOC2 artifacts upfront, we can provide a redacted report and an evidence pack (redwood-dedicated-sla.pdf).
+
+Proposed kickoff: Tue Apr 5, 09:00 PT (30m). If that works, I'll create a calendar invite and include a short tech demo.
+
+Thanks,
+Marissa
+ISV Integrations Manager
+Redwood Inference
+
+Attachments: llm-sdk-trace-checklist.xlsx (Excel)
+
+From: Jared Kim <jared@tracewise.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Anika Shah <anika@promptworks.co>
+Cc: Logan Wright <logan.wright@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Mon, 4 Apr 2027 08:06:00 -0700
+Subject: Re: LangBridge SDK connector: pilot plan & tracing scope
+
+Marissa / Team — quick technical clarifications from TraceWise:
+
+- Header format: we'll accept X-Redwood-Trace and also support w3c tracestate/w3c traceparent. Can you confirm Redwood will echo traceparent in responses so we can correlate latencies?
+- Sampling: for the pilot we plan to sample 100% of Connector requests; please confirm rate limits for ingesting spans.
+- Latency tagging: we need token-level timestamps surfaced in the span for accurate per-token latency heatmaps. Is that possible or can we get batch-level timing and per-chunk markers?
+
+If we can get affirmative answers to these, we'll prepare a small tracing SDK snippet for LangBridge and share it before the kickoff.
+
+Cheers,
+Jared
+Senior Engineer, TraceWise
+
+On Fri, Apr 2, 2027 at 09:18 AM Marissa Cole <marissa.cole@redwood.ai> wrote:
+> Hi Anika — glad to be onboard. I reviewed the proposal and sketched a technical checklist (attached) that maps to a four-step pilot:
+>
+> 1) Sandbox provisioning: scoped API key + network rules; smoke test generation at 256/512 tokens.
+> 2) SDK connector dev: LangBridge adapter that calls Redwood's /v1/generate endpoint with token-level streaming off for determinism.
+> 3) Tracing integration: propagate X-Redwood-Trace, support TraceWise span export; add test harness for synthetic trace correlation.
+> 4) Failover plan: configure routing policy to fall back to a smaller quantized model and surface a 429/503 policy to the SDK.
+>
+> Attached: llm-sdk-trace-checklist.xlsx (Excel)
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Jared Kim <jared@tracewise.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Logan Wright <logan.wright@redwood.ai>, Anika Shah <anika@promptworks.co>
+Date: Tue, 5 Apr 2027 16:42:00 -0700
+Subject: Re: LangBridge SDK connector: pilot plan & tracing scope
+
+Thanks everyone — a few concrete commitments from Redwood infra/telemetry: 
+
+- We will echo w3c traceparent in the response headers and emit X-Redwood-Trace for internal correlation.
+- For the pilot we can enable token-chunk markers in the span (not full per-token timings) — will provide start/finish timestamps for each decode chunk. That should be sufficient for Request-level heatmaps.
+- Sampling: we'll set tracing sampling to 100% for the sandbox window and provide a temporary elevated ingest quota to TraceWise.
+- Dedicated flavor: we'll reserve one g10x-equivalent instance for the 2-week pilot; Marissa will confirm exact GPU model in the invite.
+
+Logan — we should surface the fallback behavior in the SDK README and ensure the LangBridge adapter exposes a simple retry/backoff that prefers the smaller quantized model when the routing policy returns a 429. Also recommend adding a telemetry tag `pilot:promptworks` to all pilot spans.
+
+I'll join the kickoff on Tue Apr 5. Marissa — thanks for owning the invite.
+
+— Karthik
+Senior Applied Engineer, Redwood Inference
+
+On Mon, Apr 4, 2027 at 08:06 AM Jared Kim <jared@tracewise.ai> wrote:
+> Marissa / Team — quick technical clarifications from TraceWise:
+>
+> - Header format: we'll accept X-Redwood-Trace and also support w3c tracestate/w3c traceparent. Can you confirm Redwood will echo traceparent in responses so we can correlate latencies?
+> - Sampling: for the pilot we plan to sample 100% of Connector requests; please confirm rate limits for ingesting spans.
+> - Latency tagging: we need token-level timestamps surfaced in the span for accurate per-token latency heatmaps. Is that possible or can we get batch-level timing and per-chunk markers?
+>
+> If we can get affirmative answers to these, we'll prepare a small tracing SDK snippet for LangBridge and share it before the kickoff.

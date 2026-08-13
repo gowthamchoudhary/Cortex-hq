@@ -1,0 +1,87 @@
+Latency spike during canary - request for temporary version pin and extended auto-revert window
+
+From: Janelle Thompson <janelle@acme-retail.com>
+To: priyom_das@redwood.com
+Date: Fri, 18 Jun 2027 15:22:00 -0400
+Subject: High latency and 5xxs during today's canary - asking for pin/longer auto-revert
+
+Hi Priyom,
+
+We started the canary for the checkout-llm route this morning (10% traffic) and began seeing elevated tail latency and occasional 502/504 errors from 15:05 onwards. Our monitors show p95 jumping from ~180ms to ~1.2s and a spike in request queueing. We rolled traffic back manually after 20 minutes, but this impacted a live campaign.
+
+We captured traces and a short sampling of payloads and logs (attached: sample-traces.log). Per our SLA we need stability and predictable recovery — can you advise whether Redwood can pin the route to prior model version and extend the auto-revert window while you investigate? If possible, we'll need an authorization/exception so our procurement/SRE team can accept the temporary behavior.
+
+Ticket for visibility: SUP-12345.
+
+Thanks,
+Janelle Thompson
+SRE Lead, Acme Retail
+
+From: Priyom Das <priyom_das@redwood.com>
+To: karthik_iyer@redwood.com, laura_bennett@redwood.com, grace_oconnor@redwood.com
+Cc: Janelle Thompson <janelle@acme-retail.com>
+Date: Fri, 18 Jun 2027 16:10:42 -0400
+Subject: Re: High latency and 5xxs during today's canary - request for pin/longer auto-revert
+
+Team — forwarding Acme's note and traces. TL;DR: canary introduced a latency regression at 10% traffic; customer requests an immediate temporary pin back to v1.7 and an extended auto-revert window while we root-cause.
+
+Ask: can we approve a temporary pin (route: checkout-llm -> v1.7) and extend automatic revert from the default 10 minutes to 45 minutes (or until we confirm the perf patch)? I'll need: 1) engineering quick assessment, 2) product/ops sign-off for SLA carveout, and 3) a short runbook placed in Console and the shared Drive. I've attached a draft pin request form (pin-request-form.pdf).
+
+Notes: customer is sensitive because this is tied to a holiday checkout campaign. Grace, can you coordinate customer comms if we approve? Karthik, any immediate mitigation suggestions? Laura, is there any precedent for an SLA exception like this?
+
+Thanks,
+Priyom Das
+Account Exec — Strategic Accounts
+Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: priyom_das@redwood.com, laura_bennett@redwood.com, grace_oconnor@redwood.com
+Cc: Janelle Thompson <janelle@acme-retail.com>
+Date: Sat, 19 Jun 2027 09:05:15 -0700
+Subject: Re: High latency and 5xxs during today's canary - request for pin/longer auto-revert
+
+On Fri, Jun 18, 2027 at 4:10 PM Priyom Das <priyom_das@redwood.com> wrote:
+> Team — forwarding Acme's note and traces.
+
+Thanks for the traces — I ran a quick pass. Preliminary findings: the canary variant activates a quantization path that increases memory pressure on the KV cache under certain request size distributions. That triggers slightly longer GC cycles on the serving nodes, causing the observed tail latency and transient 502s during peak concurrent requests.
+
+Mitigation options (short term):
+- Automatic fallback to the previous quantized variant (v1.7-quant) for this route — preserves latest model improvements but uses a safer runtime path.
+- Hard pin the route to v1.7 (non-quantized) until we deploy a perf fix.
+
+I support a temporary pin while we debug, with these guardrails:
+1) Pin allowed for up to 48 hours or until we ship a targeted perf patch (whichever is sooner).
+2) Disable traffic bursts above current baseline for the affected route (traffic cap).
+3) Enable extended telemetry retention for this route for the next 72 hours and a dashboard snapshot (link below) so SREs can validate.
+
+I'll prepare a rollback patch for the quant path and request a hotfix window tomorrow. Approving pin now reduces blast radius.
+
+— Karthik
+Principal Engineer, Serving Runtime
+
+Related: https://redwood-console.company/ops/canary/ACME-6789
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: priyom_das@redwood.com, karthik_iyer@redwood.com, grace_oconnor@redwood.com
+Cc: Janelle Thompson <janelle@acme-retail.com>, ops@acme-retail.com
+Date: Sun, 20 Jun 2027 18:45:00 -0400
+Subject: Re: High latency and 5xxs during today's canary - request for pin/longer auto-revert
+
+Priyom / team / Janelle — after reviewing Karthik's assessment and the attached traces, I approve a temporary exception to our standard auto-revert policy for this customer. Authorization details below.
+
+Decision: Approved — temporary pin of checkout-llm to v1.7 (non-quantized) and extension of auto-revert window to 24 hours from the time of pin.
+
+Conditions and next steps (must be completed within 2 hours of pin):
+- Engineering to set traffic cap and enable the suggested automatic fallback path if queueing exceeds threshold.
+- Priyom to upload approved_pin_authorization.pdf to the customer's contract folder and add the pin entry to the rollout audit log in Console.
+- Grace to send an external customer-facing note confirming the action and expected timeline.
+- Karthik to schedule the hotfix deploy and provide the telemetry snapshot once available (telemetry_snapshot.csv).
+- Create a concise runbook (attached: canary_runbook.md) and link to Jira SUP-12345.
+
+Attachments: approved_pin_authorization.pdf (signed), canary_runbook.md, telemetry_snapshot.csv
+
+Priyom — please close the loop here and add the official record to the deal (ACME-ENT-2026-0042).
+
+Laura Bennett
+Director, Sales Operations
+Redwood Inference

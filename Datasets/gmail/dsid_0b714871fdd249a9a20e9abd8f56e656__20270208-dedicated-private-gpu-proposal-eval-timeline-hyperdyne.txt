@@ -1,0 +1,118 @@
+MAP: Dedicated & Private GPU proposal + evaluation timeline — HyperDyne Health
+
+From: Evelyn Hart <evelyn.hart@redwoodinference.com>
+To: Susan Lowe <susan@hyperdyne.com>
+Cc: Marcus Lin <marcus.lin@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: Mon, 1 Feb 2027 15:20:00 -0800
+Subject: MAP kickoff — sizing proposal for Dedicated/Private evaluation
+
+Hi Susan,
+
+Following our call last week, attaching an initial MAP proposal focused on Dedicated and Private deployment sizing for the evaluation phase (attached: redwood_map_proposal_v3.pdf). High level ask from HyperDyne that I captured: a private VPC deployment for sensitive PHI workflows, stable latency under 350ms p50 on chat endpoints, and an evaluation window before end-of-quarter.
+
+Suggested starting configuration (very conservative):
+- Primary region: us-east-1 (pilot + evaluation)
+- Dedicated pool: 3 x NVIDIA A100 80GB (inference-optimized) + 1 x NVIDIA H100 as burst/fallback
+- Estimated steady-state throughput: ~400–500 requests/sec for standard chat model (avg 1k tokens), peak bursts up to ~800 req/sec with autoscale/burst policy
+- Private deployment: VPC peering + KMS integration for keys; audit logs enabled for evaluation.
+
+Can you confirm the throughput window HyperDyne expects during the eval and your decision timeline? If that aligns, we'll lock the MAP (timeline, success criteria, test prompts) and spin up a pilot cluster for Feb 15 start.
+
+I'll loop Marcus and Karthik for technical sizing and procurement coordination.
+
+Thanks,
+Evelyn Hart
+Head of Solutions — Redwood Inference
+E: evelyn.hart@redwoodinference.com | M: (415) 555-0123
+
+Attachments: redwood_map_proposal_v3.pdf
+
+From: Susan Lowe <susan@hyperdyne.com>
+To: Evelyn Hart <evelyn.hart@redwoodinference.com>
+Cc: Tom Benson <tom.benson@hyperdyne.com>, HyperDyne Procurement <procurement@hyperdyne.com>
+Date: Tue, 2 Feb 2027 09:03:00 -0800
+Subject: Re: MAP kickoff — sizing proposal for Dedicated/Private evaluation
+
+Thanks, Evelyn — this looks like a good starting point. A few clarifications from our side:
+
+- Throughput targets: sustained 300 req/sec for our nightly batch embeddings flow, and spikes up to 700 req/sec for interactive chat during peak hours.
+- Latency targets: p50 < 250ms, p95 < 700ms (we understand p95 will be higher during spikes).
+- Security: private VPC deployment is required for the evaluation (we need KMS + private audit log access).
+- Timeline: we can start the eval week of Feb 15. Evaluation window is 3 weeks, decision to proceed by Mar 8.
+
+I attached our internal throughput matrix for the evaluation (hyperdyne_throughput_requirements.xlsx). Please confirm whether the A100/H100 mix above will meet the latency targets for both embeddings and chat. Also include any suggested canary policy and rollbacks in the MAP.
+
+Best,
+Susan
+Director, AI Platform — HyperDyne Health
+susan@hyperdyne.com
+
+On Mon, Feb 1, 2027 at 15:20, Evelyn Hart <evelyn.hart@redwoodinference.com> wrote:
+> Following our call last week, attaching an initial MAP proposal focused on Dedicated and Private deployment sizing for the evaluation phase (attached: redwood_map_proposal_v3.pdf).
+> ...
+
+From: Marcus Lin <marcus.lin@redwoodinference.com>
+To: Susan Lowe <susan@hyperdyne.com>, Evelyn Hart <evelyn.hart@redwoodinference.com>
+Cc: Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: Wed, 3 Feb 2027 11:45:00 -0800
+Subject: Re: MAP kickoff — sizing proposal for Dedicated/Private evaluation
+
+Hi all — quick technical read on the proposed config and the targets Susan shared. Short answer: yes, the mix will work with a few tuning knobs. Longer details below.
+
+Recommendation (adjusted):
+- Pilot pool (us-east-1): 2 x A100-80GB (primary inference), 1 x H100 (for heavy-batch and model variants), 1 x A10G for lower-cost embedding runs.
+- Autoscale policy: target 70% utilization on A100s for p50 latency headroom, allow burst to H100 when 95th percentile queue depth exceeds threshold.
+- Throughput estimates (approx):
+  - Chat (avg 1k token request): A100-80GB ~= 140–180 req/sec each (with our optimized kernel path and quantized weights) -> 2x A100 ~ 280–360 req/sec steady. H100 (burst) adds ~220 req/sec.
+  - Embeddings (batching): A10G can handle ~600–800 embeddings/sec when batched (depends on batch size).
+
+Notes: these are conservative numbers assuming single-model replicas and some model-specific memory overhead. If HyperDyne brings a heavier model (2k+ context), we should add one more A100 or increase H100 fraction. For private VPC, we also need to confirm outbound IP allowances for telemetry (or opt-in to pushing logs via customer-managed forwarder).
+
+I'll prepare a short runbook (expected start-of-eval checklist, perf tests, and canary policy) and post it to the MAP doc. Karthik — can you confirm procurement lead times for H100 capacity in us-east-1 (we may need to request reserved capacity)?
+
+Thanks,
+Marcus Lin
+Principal Infra Engineer — Redwood Inference
+marcus.lin@redwoodinference.com
+
+On Tue, Feb 2, 2027 at 09:03, Susan Lowe <susan@hyperdyne.com> wrote:
+> Thanks, Evelyn — this looks like a good starting point. A few clarifications from our side:
+> ...
+
+From: Evelyn Hart <evelyn.hart@redwoodinference.com>
+To: Susan Lowe <susan@hyperdyne.com>
+Cc: Marcus Lin <marcus.lin@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: Mon, 8 Feb 2027 09:12:00 -0800
+Subject: Weekly MAP checkpoint — action items and next steps (pilot start week of Feb 15)
+
+Hi team,
+
+Quick checkpoint ahead of the pilot kickoff week (Feb 15). Below are meeting notes and agreed action items from the last three threads/hand-offs. Please review and flag anything missing.
+
+Meeting notes / MAP summary:
+- Account: HyperDyne Health (deal RDW-2389) — Private deployment inside HyperDyne VPC, pilot region us-east-1.
+- Evaluation window: Feb 15 — Mar 7 (3 weeks). Decision target: Mar 8.
+- Success criteria (to be captured in MAP doc): p50 chat latency < 250ms, embeddings batch throughput >= 500/sec, no data plane egress from VPC, KMS-managed keys.
+- Pilot sizing (agreed): 2x A100-80GB (primary), 1x H100 (burst), 1x A10G (batch embeddings).
+
+Action items (owners + due dates):
+1) Finalize MAP doc and success criteria — Owner: evelyn_hart — Due: 2027-02-10
+2) Procurement request for H100 reserved slot (us-east-1) — Owner: karthik_iyer — Due: 2027-02-11
+3) Build pilot infra + VPC peering runbook — Owner: marcus_lin — Due: 2027-02-12
+4) Perf test plan + baseline scripts (including sample prompts) — Owner: marcus_lin & karthik_iyer — Due: 2027-02-13
+5) HyperDyne: confirm access window and provide test account + telemetry bucket — Owner: Susan Lowe / HyperDyne Procurement — Due: 2027-02-12
+
+Attachments referenced: redwood_map_proposal_v3.pdf (MAP draft), hyperdyne_throughput_requirements.xlsx (customer matrix). HubSpot deal link and MAP doc: https://app.hubspot.com/deals/1234567, shared MAP draft: https://drive.google.com/open?id=1A2B3C4D.
+
+Next check-in: weekly cadence during evaluation; next sync Wed Feb 17 at 10:00 AM ET (invites to follow).
+
+If no objections, I will: finalize the MAP doc today, kick procurement, and schedule the infra build for Feb 12.
+
+Thanks — looking forward to a smooth pilot kickoff.
+
+Evelyn Hart
+Head of Solutions — Redwood Inference
+evelyn.hart@redwoodinference.com
+
+---
+Thread metadata: has_attachments: redwood_map_proposal_v3.pdf, hyperdyne_throughput_requirements.xlsx

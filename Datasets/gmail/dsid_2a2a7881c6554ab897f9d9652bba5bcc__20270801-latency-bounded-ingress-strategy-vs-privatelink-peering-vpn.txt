@@ -1,0 +1,130 @@
+Latency-bounded ingress: PrivateLink vs Peering vs S2S VPN (AegisBank)
+
+From: Emily Zhao <emily.zhao@aegisbank.com>
+To: Nikhil Sharma <nikhil.sharma@redwood.com>
+Cc: Rajiv Menon <rajiv.menon@aegisbank.com>, Aegis Network Ops <netops@aegisbank.com>
+Date: Sun, 1 Aug 2027 14:12:00 -0400
+Subject: Redwood Private deployment — connectivity constraints and SLAs
+
+Hi Nikhil,
+
+Thanks for the demo last week. A few follow-ups from our infra and security teams:
+
+- We have a firm p99 latency target of <= 80ms for inference traffic originating from our US-East VPCs to the model endpoint. This includes network transit time.
+- No transitive routing through third-party VPCs is allowed for compliance; we need control over route tables and auditing.
+- Egress to the public internet is strongly discouraged for inference requests — endpoints should be accessible over private links only.
+- We may require IP whitelisting and per-flow logging for audits.
+
+Can you provide an architecture recommendation (PrivateLink vs VPC Peering vs site-to-site VPN) and the operational tradeoffs? We plan to present to compliance on Wednesday.
+
+Appreciate a short, actionable breakdown + a preferred option.
+
+Emily
+Emily Zhao
+Head of Cloud Security, AegisBank
+[Attachment: aegis_network-requirements-20270801.pdf (PDF)]
+From: Nikhil Sharma <nikhil.sharma@redwood.com>
+To: Emily Zhao <emily.zhao@aegisbank.com>
+Cc: Monica Patel <monica.patel@redwood.com>, Priyom Das <priyom.das@redwood.com>
+Date: Sun, 1 Aug 2027 18:02:00 -04:00
+Subject: Re: Redwood Private deployment — connectivity constraints and SLAs
+
+Hi Emily — thanks for the clear constraints and the doc. I pulled the team together and sketched an initial recommendation. High level up front: PrivateLink as the primary connectivity pattern, with a controlled peering fall-back for intra-AZ low-latency workloads; S2S VPN only as a last-resort (DR/testing) due to jitter and throughput limitations.
+
+I attached a simple diagram and a latency/cost spreadsheet. Below is a concise tradeoff table and the recommended next steps so you can share with compliance.
+
+Short tradeoff summary (p99-sensitive, compliance-first):
+- PrivateLink (recommended primary): No transitive routing, endpoint-specific NLB + interface endpoints, supports private-only access, good auditability (flow logs + endpoint policies). Expected additional latency: ~6–12ms overhead (NLB + ENI hop) inside region; consistent and low jitter.
+- VPC Peering (recommended secondary when high-throughput intra-VPC traffic): Lowest network hop count and typically ~2–6ms extra latency intra-AZ, but requires cross-account route table entries and careful management to avoid accidental transitive routing. Harder to centralize per-endpoint access controls.
+- Site-to-Site VPN: Easiest to stand up for initial testing but not suitable for p99 SLAs — packetization, MTU fragmentation, and variable jitter can add 20–50ms and throughput caps. Use as temporary DR path or for non-latency-critical flows.
+
+Operational notes:
+- Audit & logging: PrivateLink offers fine-grained endpoint logs plus VPC Flow Logs at the ENI level; we can push logs to your SIEM.
+- Mutual TLS / mTLS: We can terminate TLS at the endpoint and require client certs for request auth.
+- Failover: We recommend a canary route policy: prefer PrivateLink; if PrivateLink NLB health checks fail, route to a peered path in the same AZ (A/B fallback) — avoids routing across third-party VPCs.
+
+Attachments: network-diagram-v2.pdf, sla-latency-comparison.xlsx
+
+Next steps I propose:
+1) 30-min technical review with Aegis NetOps tomorrow to validate IP space and route constraints.
+2) Run a traceroute + p99 probe during a 10-min demo to validate observed latency.
+3) Draft a short compliance checklist for your audit team.
+
+If that sounds right, I can schedule the NetOps call and send a short runbook for the traceroute test.
+
+Thanks,
+Nikhil Sharma
+Senior Solutions Engineer — Redwood Inference
+[Attachment: network-diagram-v2.pdf (PDF)]
+From: Rajiv Menon <rajiv.menon@aegisbank.com>
+To: Nikhil Sharma <nikhil.sharma@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Emily Zhao <emily.zhao@aegisbank.com>, Aegis Network Ops <netops@aegisbank.com>
+Date: Mon, 2 Aug 2027 09:08:00 -04:00
+Subject: Re: Redwood Private deployment — connectivity constraints and SLAs
+
+Nikhil / Monica —
+
+Quick clarifying items from NetOps:
+- Our VPC CIDR is 10.12.0.0/16 (US-EAST-1). We cannot accept overlapping CIDRs with partner VPCs.
+- We need explicit subnet-level access; NAT is not acceptable for inference egress.
+- Can PrivateLink support our internal IP allowlists (we want to bind to source ENIs)?
+
+We can do a 30-min call Tue 11:00am ET. Please confirm.
+
+Rajiv
+Sr. Cloud Engineer, AegisBank
+From: Priyom Das <priyom.das@redwood.com>
+To: Rajiv Menon <rajiv.menon@aegisbank.com>, Nikhil Sharma <nikhil.sharma@redwood.com>
+Cc: Monica Patel <monica.patel@redwood.com>, Emily Zhao <emily.zhao@aegisbank.com>
+Date: Tue, 3 Aug 2027 10:45:00 -04:00
+Subject: Re: Redwood Private deployment — connectivity constraints and SLAs
+
+Rajiv — thanks for the details. Quick answers ahead of the call:
+
+- Overlapping CIDR: PrivateLink avoids VPC-level route table changes, so overlapping CIDRs are a non-issue for endpoint access. For peering, we would need non-overlapping CIDRs.
+- Source whitelisting: With PrivateLink we can combine endpoint policies and security-group-level controls on the endpoint ENIs; we can also publish a short-lived allowlist token for app-level binding. If you need per-source-ENI mapping, we can export flow logs and match ENI IDs to source IPs in your netops tooling.
+- Auditability: We'll push detailed flow logs and NLB access logs into your S3 bucket with object lifecycle and customer-managed KMS.
+
+Pre-call checklist we will cover on Tue:
+1) Validate IPs/subnets (10.12.0.0/16 allocation)
+2) Confirm required ports and protocols (we expect TCP 443 primarily)
+3) Health-check expectations and failover windows (target < 30s for failover to peering)
+4) Finalize runbook for traceroute/p99 probe
+
+See you on the call.
+
+— Priyom
+Solutions Architect, Redwood Inference
+[Attachment: sla-latency-comparison.xlsx (XLSX)]
+From: Nikhil Sharma <nikhil.sharma@redwood.com>
+To: Rajiv Menon <rajiv.menon@aegisbank.com>, Emily Zhao <emily.zhao@aegisbank.com>, Priyom Das <priyom.das@redwood.com>
+Cc: Monica Patel <monica.patel@redwood.com>
+Date: Wed, 4 Aug 2027 09:34:00 -04:00
+Subject: Re: Redwood Private deployment — connectivity constraints and SLAs
+
+Follow-up from the call and our recommendation for the compliance packet:
+
+1) Recommendation (final):
+   - Adopt PrivateLink as the primary ingress for Redwood Private endpoints. Rationale: no transitive routing, private-only access, endpoint-level policies, and easiest alignment with audit requirements. Measured expected p99: 60–75ms including our processing budget (we'll align model placement to subtract 15–20ms compute overhead).
+   - Reserve VPC Peering for low-latency, high-throughput intra-AZ workloads that can be isolated into a dedicated peered account with strict route controls (non-overlapping CIDR required).
+   - Use S2S VPN only for temporary test environments and DR; do not use for production inference paths.
+
+2) Compliance packet contents (we will produce):
+   - Architectural diagram showing PrivateLink + peering fallback (network-diagram-v2.pdf).
+   - Latency testing plan and historical probe data (sla-latency-comparison.xlsx).
+   - Runbook for traceroute/p99 probe + sample CloudWatch dashboards for p50/p95/p99.
+   - Log ingestion plan: flow logs, NLB access logs, and TLS audit events into your S3/KMS.
+
+3) Action items (owners and ETA):
+   - Nikhil: provide final runbook and traceroute script (EOD Wed).
+   - Priyom: prepare compliance checklist + sample IAM policy for endpoint access (Thu).
+   - Rajiv/Rajiv NetOps: confirm subnets for endpoint ENIs (10.12.8.0/24 suggested) and provide a test CIDR for peering sandbox (Tue).
+
+If you want, we'll produce a brief one-page exec summary for Emily's compliance meeting. I'll attach the runbook once Priyom finalizes the checklist.
+
+Thanks all — productive call.
+
+Nikhil Sharma
+Senior Solutions Engineer — Redwood Inference
+Office: +1 415 555 0132
+[Attachment: runbook-traceroute.txt (TXT)]

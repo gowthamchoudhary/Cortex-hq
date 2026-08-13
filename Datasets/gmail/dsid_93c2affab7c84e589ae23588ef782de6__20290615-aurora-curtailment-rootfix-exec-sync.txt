@@ -1,0 +1,117 @@
+URGENT: Aurora Health spike — rate-cap misalignment causing curtailment
+
+From: Cara Liu <cara.liu@aurorahealth.com>
+To: Naomi Feldman <naomi.feldman@redwood.ai>
+Cc: Aurora SRE <sre@aurorahealth.com>
+Date: Sat, 15 Jun 2029 09:12:00 -0700
+Subject: URGENT: Production 429 surge + latency — can you confirm this is rate-limiting?
+
+Naomi / Redwood team,
+
+We started seeing a large uptick in 429s and tail latency for our production calls to your text-generation endpoint around 08:45 PDT. Traffic pattern hasn't changed on our side (we rolled back a client-side change and the error persisted).
+
+Quick summary: 
+- 429 rate: jumped from ~0.1% to 12% over a 10-minute window
+- Median latency: 180ms -> 520ms
+- Error spikes correlate with sustained high per-minute request bursts from our background jobs (we can throttle on our side, but this breaks SLAs with downstream services)
+
+I attached a CSV with timestamps, sample request IDs, and a screenshot of the 429 response. Can you confirm whether this is a rate-cap/bucket enforcement issue on your side or something else in the path? We need an unblock ASAP — customers are seeing degraded experiences.
+
+Attachments: aurora_429_details_20290615.csv, 429_screenshot.png
+
+Thanks,
+Cara Liu
+Director of Platform
+Aurora Health
+cara.liu@aurorahealth.com
+
+From: Naomi Feldman <naomi.feldman@redwood.ai>
+To: Cara Liu <cara.liu@aurorahealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Jordan Blake <jordan_blake@redwood.ai>
+Date: Sat, 15 Jun 2029 10:02:00 -0700
+Subject: Re: URGENT: Production 429 surge + latency — can you confirm this is rate-limiting?
+
+Cara — thanks for the heads up and the CSV, that was helpful. We're seeing the same signal in our telemetry: a misaligned per-minute enforcement window combined with a conservative burst cap is causing sustained curtailment for sustained high brief bursts (your pattern matches that profile).
+
+Immediate mitigation (proposed, ready to execute):
+- Temporary override for Aurora Health: increase per-minute token allowance by 3x for two hours and relax the strict burst ceiling for the affected model in us-west region.
+- Route overflow traffic to a larger GPU pool (Dedicated-2) for the duration to avoid token queueing/backpressure.
+
+If you approve, we'll apply the change immediately and monitor. We'll also capture a mitigation log and a delta cost estimate. This is a short-lived mitigation — we should discuss a permanent fix to policy window alignment and an improved safety valve that de-rates non-essential traffic instead of full curtail.
+
+Attaching the patch I'll push if you give go-ahead: proposed_temporary_override.md
+
+On Sat, Jun 15, 2029 at 09:12 AM Cara Liu <cara.liu@aurorahealth.com> wrote:
+> Naomi / Redwood team,
+>
+> We started seeing a large uptick in 429s and tail latency for our production calls to your text-generation endpoint around 08:45 PDT...
+>
+> Attachments: aurora_429_details_20290615.csv, 429_screenshot.png
+
+—
+Naomi Feldman
+Account Lead, Enterprise
+Redwood Inference
+naomi.feldman@redwood.ai
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Naomi Feldman <naomi.feldman@redwood.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Jordan Blake <jordan_blake@redwood.ai>
+Date: Sat, 15 Jun 2029 11:25:00 -0700
+Subject: Re: URGENT: Production 429 surge + latency — can you confirm this is rate-limiting?
+
+Naomi — executing the immediate mitigation now. Summary of actions taken at 11:17 PDT: 
+- Bumped Aurora account per-minute allowance to 3x baseline for model rwd-gpt-large in us-west for 2 hours.
+- Disabled the strict burst_ceiling enforcement flag in the policy layer for the same account (safety valve remains enabled).
+- Offramped overflow to Dedicated-2 pool; cold-starts negligible.
+
+Observations (first 15 minutes):
+- 429s dropped to <1% within ~12 minutes
+- 99th pct latency improved from ~1.2s to ~420ms
+
+Notes / cautions: this raises our projected hourly spend for Aurora by an estimated $420/hour while the override is active. I'll capture the exact billing delta in mitigation_log_20290615.txt.
+
+If we need to extend beyond the 2-hour window, we should treat this as an exec-level tradeoff (cost vs customer availability). Recommend a 48-hour extension only if we have a permanent policy patch ready to deploy within that window. Karthik — can you validate rollback scripts and a controlled canary for the permanent fix?
+
+On Sat, Jun 15, 2029 at 10:02 AM Naomi Feldman <naomi.feldman@redwood.ai> wrote:
+> Cara — thanks for the heads up and the CSV, that was helpful. We're seeing the same signal in our telemetry: a misaligned per-minute enforcement window combined with a conservative burst cap is causing sustained curtailment for sustained high brief bursts (your pattern matches that profile).
+>
+> Immediate mitigation (proposed, ready to execute):
+> - Temporary override for Aurora Health: increase per-minute token allowance by 3x for two hours and relax the strict burst ceiling for the affected model in us-west region.
+> - Route overflow traffic to a larger GPU pool (Dedicated-2) for the duration to avoid token queueing/backpressure.
+>
+—
+Marissa Cole
+Head of Ops, Serving Platform
+marissa_cole@redwood.ai
+
+From: Naomi Feldman <naomi.feldman@redwood.ai>
+To: Jordan Blake <jordan_blake@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Sat, 15 Jun 2029 16:03:00 -0700
+Subject: Aurora Health — mitigation applied; request exec sign-off for extended window and permanent fix
+
+Jordan / Marissa / Karthik — short note to summarize and request an exec decision: 
+
+What we did: 
+- Applied a 2-hour override at 11:17 PDT for Aurora Health (per-minute allowance x3, burst_ceiling relaxed).
+- Offramped overflow to Dedicated-2. 429s and tail latency recovered to acceptable levels within 15 minutes.
+
+Why this happened: 
+- Root cause: policy misalignment between the per-minute enforcement window and the shorter burst safety ceiling. When Aurora's background jobs produce sustained brief spikes, the safety valve depleted the allowance and the request governor began curtailing requests rather than smoothing them.
+
+Options for exec decision: 
+1) Short extension + fast patch (recommended): Approve extending override to 48 hours so we can ship a targeted policy change that aligns the token-bucket window with observed traffic patterns and replaces the binary burst_ceiling with a proportional throttling safety valve. Estimated incremental cost: ~$4.2k/day while override active.
+2) Immediate rollback and client-side mitigation: Ask Aurora to add client jittering and additional smoothing. This will likely cause customer-visible degradation and slower recovery.
+3) Permanent conservative change: Increase baseline per-minute allowances for high-volume enterprise accounts and accept ongoing higher unit cost (requires pricing/contract follow-up).
+
+Request: please approve option 1 for now so we can finish the policy patch and run a controlled canary tomorrow morning. We need an exec-level sign-off because the cost delta is out of standard thresholds.
+
+Links: HubSpot account — https://app.hubspot.com/contacts/7421; runbook — https://drive.redwood.ai/Shared/Runbooks/rate-cap-adjustment.md
+
+Attachments: mitigation_log_20290615.txt (ops)
+
+—
+Naomi Feldman
+Account Lead, Enterprise
+Redwood Inference
+naomi.feldman@redwood.ai

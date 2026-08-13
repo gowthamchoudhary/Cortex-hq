@@ -1,0 +1,152 @@
+Service availability surge — liaison, customer update, and closure plan
+
+From: oncall+jonas_weber@redwood.com
+To: monica_patel@redwood.com, karthik_iyer@redwood.com, marissa_cole@redwood.com
+Date: 2027-05-09T09:12:00Z
+Subject: [SEV2] Increased 5xx rate affecting Radial Health traffic — standing up bridge
+
+Team —
+
+We’re seeing a sudden surge in 5xx errors for requests routed to the v2 text-generation model for the Radial Health production tenant (region: us-east-1). Error rate jumped ~4x at 09:06 UTC and user-reported failures started at 09:09. Initial signals look correlated with longer-than-usual KV cache misses and a small spike in GPU memory pressure on a subset of nodes.
+
+Immediate ask: can we stand up an incident bridge (meet.google.com/rdw-incident) and pull telemetry (logs, perf histograms, recent deploys)? I’ll owner the customer comms until handoff.
+
+- Jonas
+Senior Customer Reliability Manager
+Redwood Inference
+
+(attachment: bridge-logs-20270509.zip)
+From: jonas_weber@redwood.com
+To: Ellen Price <ellen.price@radialhealth.com>, Tom Nguyen <t.nguyen@radialhealth.com>, Radial Health Support <support@radialhealth.com>
+Cc: monica_patel@redwood.com, karthik_iyer@redwood.com
+Date: 2027-05-09T09:28:00Z
+Subject: Initial customer update — transient availability surge impacting some requests
+
+Ellen / Tom —
+
+Short update from Redwood: we detected an availability surge this morning affecting a subset of requests for your production workspace. Impact: intermittent 5xx responses and higher latency for a fraction of user traffic between ~09:06–ongoing UTC.
+
+What we’ve done so far:
+- Convened our incident bridge and prioritized Radial Health traffic for correlation analysis.
+- Rolled back a small config change that was introduced at 08:50 UTC to isolate the fault domain.
+- Throttled a noisy background batch job that increased request fanout to the v2 model tier.
+
+Immediate next steps:
+- We are actively tracing the error surface and will share an interim timeline within 60 minutes.
+- If you can, please confirm whether you are observing retries from your integration (helpful to estimate client-side retry volume).
+
+I’ll send an executive summary and actions in the next update. If you’d prefer a call, I can join your team now.
+
+— Jonas Weber
+Senior Customer Reliability Manager, Redwood Inference
+Phone: +1 (415) 555-0192
+
+(attachments: radial-impact-summary-20270509.csv)
+From: monica_patel@redwood.com
+To: jonas_weber@redwood.com, karthik_iyer@redwood.com
+Cc: marissa_cole@redwood.com
+Date: 2027-05-09T10:05:00Z
+Subject: Re: [SEV2] Increased 5xx rate — telemetry snapshot and suggested mitigation
+
+Jonas —
+
+Quick telemetry notes from the bridge:
+- GPUs: two nodes in pool-gamma reported transient OOMs at 09:04–09:08; processes recovered via restart but backlog spiked.
+- KV cache miss rate for common prefixes jumped by ~7x for Radial Health prefix space — likely due to a burst of longer prompt lengths triggering cold cache behavior.
+- We saw an uptick in p50/p90 latency on the v2 tier coincident with retries from a third-party worker queue (they had a scheduled backfill).
+
+Suggested immediate mitigations:
+1) Apply a temporary routing rule to move Radial Health traffic to the v1-stable pool for critical low-latency routes (expect ~30ms different latency but far lower error surface).
+2) Temporarily increase the worker concurrency limit for the v2 pool to reduce queuing (risk: higher GPU mem pressure).
+
+I can apply option (1) now and monitor if you approve.
+
+— Monica Patel
+Sr. Incident Engineer, Redwood Inference
+
+> On 2027-05-09 at 09:28 UTC, jonas_weber@redwood.com wrote:
+> Ellen / Tom —
+>
+> Short update from Redwood: we detected an availability surge this morning affecting a subset of requests for your production workspace...
+From: jonas_weber@redwood.com
+To: Ellen Price <ellen.price@radialhealth.com>, Tom Nguyen <t.nguyen@radialhealth.com>
+Cc: monica_patel@redwood.com, karthik_iyer@redwood.com, marissa_cole@redwood.com
+Date: 2027-05-09T11:10:00Z
+Subject: Executive update (11:10 UTC) — interim actions and expected customer impact
+
+Ellen / Tom —
+
+Interim executive update following our investigation and mitigation actions:
+
+Summary of impact:
+- Scope: ~4% of requests to Radial Health's workspace experienced 5xx errors; most requests succeeded with client retries.
+- User-visible: intermittent failures for a small cohort of end-users; most traffic experienced elevated latency but remained functional.
+
+Actions taken (complete):
+- Routed critical production routes to v1-stable pool (completed 10:30 UTC) to reduce error surface.
+- Disabled the scheduled backfill from the third-party worker queue and recommended a staggered retry window (still coordinating with your integrator).
+- Captured comprehensive logs and trace spans; archive attached for your review.
+
+Planned next steps:
+- Full root-cause analysis (RCA) investigation kickoff at 12:30 UTC — engineering and runtime teams. We’ll provide a high-level RCA within 72 hours and a detailed postmortem in ~7 business days with action items (config guardrails, improved autoscaling thresholding, and KV cache warming strategies).
+- If you need us to preserve extended logs or increase retention for regulatory review, tell us and we’ll keep a longer window.
+
+Estimated timeline for normal service: we expect error rates to return to baseline within 2–4 hours if routing remains in place and no additional load spikes occur. We’ll escalate if any regressions are observed.
+
+If useful, we can schedule a 30-minute exec sync at 14:00 UTC today — I can join with engineering leadership.
+
+Best regards,
+Jonas Weber
+Senior Customer Reliability Manager, Redwood Inference
+
+---
+Forwarded-attachment: radial-impact-summary-20270509.csv
+---
+From: Ellen Price <ellen.price@radialhealth.com>
+To: jonas_weber@redwood.com
+Cc: Tom Nguyen <t.nguyen@radialhealth.com>, support@radialhealth.com
+Date: 2027-05-09T12:04:00Z
+Subject: Re: Executive update (11:10 UTC) — thanks and one quick ask
+
+Jonas —
+
+Thanks for the quick work and the clear updates. Appreciate the routing change; we’ve observed a reduction in user-facing errors on our side. We do have one ask: can Redwood preserve the full trace spans for the window between 08:45–10:45 UTC and include them in the RCA? We need them for our internal audit and for a brief with our compliance team.
+
+Also please confirm whether there were any config changes to rate limits on our account — we want to ensure our retries weren’t throttled differently.
+
+If convenient, Tom and I will join the exec sync at 14:00 UTC.
+
+— Ellen
+VP Product, Radial Health
+
+On Mon, May 9, 2027 at 11:10 AM jonas_weber@redwood.com wrote:
+> Interim executive update following our investigation and mitigation actions...
+From: jonas_weber@redwood.com
+To: Ellen Price <ellen.price@radialhealth.com>, Tom Nguyen <t.nguyen@radialhealth.com>, Radial Health Support <support@radialhealth.com>
+Cc: monica_patel@redwood.com, karthik_iyer@redwood.com, marissa_cole@redwood.com
+Date: 2027-05-09T17:45:00Z
+Subject: Incident closure & follow-up plan — Radial Health availability surge (SEV2)
+
+Ellen / Tom —
+
+Final note for the day: we’ve observed sustained return to baseline for 48 minutes and are closing the active incident as of 17:40 UTC. Key points and follow-up plan below.
+
+What happened (summary):
+- A scheduled third-party backfill combined with an unintended prompt-length distribution change led to elevated KV cache churn and transient GPU memory pressure on a subset of nodes. The resulting queueing and retries increased 5xx responses for a small fraction of requests.
+
+Immediate remediation applied:
+- Traffic routing to v1-stable pool for critical routes (reverted back 17:05 UTC after stability verified).
+- Backfill was cancelled and recommended staggered retry windows implemented by your integrator.
+
+Follow-up commitments:
+1) RCA: High-level RCA within 72 hours, full postmortem in 7 business days with owner-assigned action items (we will include timelines and verification criteria).
+2) Configuration changes: We will propose a guardrail to prevent untested backfills from targeting production pools directly and a KV cache warmup policy for known large prompt distributions.
+3) Logs & retention: Per your request, we will preserve full trace spans and increase log retention for the 08:30–10:45 UTC window. Delivery link will be shared to the Drive folder by tomorrow EOB.
+
+If you’d like an in-person/recorded run-through of the postmortem when it’s ready, we’ll schedule a walk-through with engineering. Thank you for your partnership and patient coordination during the incident.
+
+— Jonas Weber
+Senior Customer Reliability Manager, Redwood Inference
+Phone: +1 (415) 555-0192
+
+Attachments: bridge-logs-20270509.zip, radial-impact-summary-20270509.csv

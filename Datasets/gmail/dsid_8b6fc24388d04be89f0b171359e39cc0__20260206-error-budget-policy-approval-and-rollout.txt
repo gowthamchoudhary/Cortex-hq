@@ -1,0 +1,149 @@
+Approval: Error budget policy v1.0 + enforcement phasing (Hosted + Dedicated)
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Neha Kapoor <neha.kapoor@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 9:12 AM PST
+Subject: Approval: Error budget policy v1.0 + enforcement phasing (Hosted + Dedicated)
+
+Neha —
+
+Requesting final approval on the v1.0 error budget policy and the enforcement rollout plan. This is the version we intend to socialize broadly (SRE + Platform + Infra + PM Hosted/Dedicated) and start implementing gating against.
+
+Confluence draft: confluence://eng-sre/slo-and-error-budgets/error-budget-policy-and-enforcement
+
+Key changes since last review:
+- Breach definitions are now purely SLI-driven (success rate + streaming reliability + latency SLOs), with explicit exclusions aligned to the SLI spec.
+- Multi-window burn-rate alerting wording is finalized (fast + slow windows, with severity mapping).
+- Enforcement phasing is explicit (dashboards → warn-only gate → soft gate → hard gate).
+
+Decisions I want to lock today:
+1) Enforcement phasing / timeline
+   - Phase 0 (now): dashboards + burn-rate paging only.
+   - Phase 1: warn-only deploy gate when a tier is in “red burn” (e.g., 2h burn-rate >= 2x). Gate posts to Slack + requires override reason.
+   - Phase 2: enforce “soft freeze” when remaining budget < 25% (block non-critical rollouts; allow config-only mitigations + rollbacks).
+   - Phase 3: enforce “hard freeze” when budget exhausted (block all non-emergency deploys into the affected tier/region).
+
+2) On-call expectations (who gets paged / who owns the mitigation)
+   - Hosted: SRE primary + Routing on-call paged for fast-burn; Infra on-call paged when mitigation requires capacity shift.
+   - Dedicated: Dedicated pool owner (Infra) + SRE primary paged for fast-burn; stricter comms expectations.
+
+3) Exception process language
+   - Proposed: emergency overrides must include incident ticket or “risk accepted” by a VP-level approver; override gets logged and reviewed weekly.
+
+If you can reply with “approve” (or edits) today, I’ll mark the policy as approved and ask Talia to schedule the training + rollout comms.
+
+Thanks,
+Sean
+
+—
+Sean Gallagher
+Director, Site Reliability Engineering
+Redwood Inference
+
+
+From: Neha Kapoor <neha.kapoor@redwoodinference.com>
+To: Sean Gallagher <sean.gallagher@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 10:03 AM PST
+Subject: Re: Approval: Error budget policy v1.0 + enforcement phasing (Hosted + Dedicated)
+
+Good progress. A few edits before I approve:
+
+1) Phase 2/3 gating: please make the “emergency” pathway unambiguous.
+   - Define what qualifies (customer-impacting incident, security hotfix, or mitigation-only change).
+   - Who is authorized to approve an emergency override? Don’t leave this as “VP-level” in general terms.
+
+2) Dedicated comms: add one sentence that Dedicated fast-burn requires immediate CS/Solutions Engineering awareness (even if we don’t publish a status page item yet). I’m trying to avoid a repeat of the “customer heard it from their own dashboard first” dynamic.
+
+3) Make sure we explicitly say that mitigation actions (routing/fallback changes, shedding) may improve customer experience but still count against the budget for the impacted tier/region during the window. Otherwise we’ll argue during incidents about “it was a graceful degradation so it shouldn’t count.”
+
+If you incorporate those, I’m comfortable approving.
+
+Neha
+
+—
+Neha Kapoor
+VP, Infrastructure & Reliability
+Redwood Inference
+
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Neha Kapoor <neha.kapoor@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 11:21 AM PST
+Subject: Re: Approval: Error budget policy v1.0 + enforcement phasing (Hosted + Dedicated)
+
+Updated the draft with your points.
+
+Changes made:
+- Emergency override pathway
+  - Qualifying changes:
+    (a) incident mitigation (rollback, routing/fallback change, overload shedding, capacity shift)
+    (b) security hotfix
+    (c) customer-impacting production incident fix with active paging
+  - Approvers:
+    - Primary: Neha (Infra/Reliability) or Sean (SRE) while on-call escalation is active.
+    - Backup: if neither reachable within 30 minutes and service impact is ongoing, IC can authorize with a written note; must be reviewed next business day.
+  - Added explicit requirement: override must reference an incident channel or incident ticket and must include a post-incident follow-up item if it was not a mitigation-only change.
+
+- Dedicated comms
+  - Added: “Dedicated fast-burn pages require CS/SE notification within 15 minutes via #support-escalations + account owner ping (even if status page not updated).”
+
+- Budget accounting vs graceful degradation
+  - Added a short paragraph: mitigation can reduce user-visible severity but does not change SLI accounting for the affected tier/region; only defined exclusions apply.
+
+Can you take one more look and approve?
+
+Sean
+
+On Fri, Feb 6, 2026 at 10:03 AM Neha Kapoor <neha.kapoor@redwoodinference.com> wrote:
+> Good progress. A few edits before I approve:
+> ...
+
+
+From: Neha Kapoor <neha.kapoor@redwoodinference.com>
+To: Sean Gallagher <sean.gallagher@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 1:09 PM PST
+Subject: Re: Approval: Error budget policy v1.0 + enforcement phasing (Hosted + Dedicated)
+
+I’m good with this direction.
+
+One more minor tweak: in the “soft freeze” section, explicitly call out that capacity-only changes (e.g., pool resize, shifting headroom) are allowed even if they require a deploy on the infra side. We don’t want the policy to unintentionally block the mitigation lever we’ll need most often.
+
+Also, please reference the incident process page (roles + comms cadence) in the “when burn triggers an incident” section. That keeps it consistent with the on-call expectations.
+
+After those, approved.
+
+Neha
+
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Neha Kapoor <neha.kapoor@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 3:37 PM PST
+Subject: Re: Approval: Error budget policy v1.0 + enforcement phasing (Hosted + Dedicated)
+
+Done.
+
+- Soft freeze now explicitly allows capacity-only mitigation changes (fleet/pool adjustments) and routing policy changes, even when feature rollouts are paused.
+- Added link + reference to the incident process doc and the required roles/cadence: confluence://oncall-and-incident-response/incident-process/error-budget-breach-incident-process
+
+Proposed rollout plan (so you’re not surprised when gates start showing up):
+- Tue 2/10: policy published + “what changed” note to Eng/Product leadership.
+- Thu 2/12: 45-min training for on-call (SRE/Routing/Infra) + CS/SE briefing for Dedicated comms expectations.
+- Mon 2/16: Phase 1 (warn-only) deploy gate enabled for Hosted tiers (all regions). Based on PR-28510 behavior + override logging.
+- Mon 3/02: Phase 2 soft freeze enforcement for Hosted (non-critical rollouts blocked when remaining budget <25%).
+- Mon 3/16: Dedicated enforcement follows (after dedicated dashboards are stable + RBAC is in place).
+
+If you reply “approved” I’ll treat this as final and ask Talia to kick the comms + training.
+
+Sean
+
+
+From: Neha Kapoor <neha.kapoor@redwoodinference.com>
+To: Sean Gallagher <sean.gallagher@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 4:44 PM PST
+Subject: Re: Approval: Error budget policy v1.0 + enforcement phasing (Hosted + Dedicated)
+
+Approved.
+
+Please keep the Dedicated enforcement date flexible by a week if we see any metric gaps or noisy paging once warn-only starts. Otherwise, proceed.
+
+Neha

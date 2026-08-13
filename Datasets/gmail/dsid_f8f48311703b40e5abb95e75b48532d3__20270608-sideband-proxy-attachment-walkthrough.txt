@@ -1,0 +1,145 @@
+Sideband proxy attachment walkthrough for private VPC
+
+From: Ethan Park <ethan@redwoodinference.com>
+To: Alex Turner <alex.turner@acmeedge.com>, Sanjay Rao <sanjay.rao@coloops.io>
+Cc: Irene Choi <irene_choi@redwoodinference.com>, Soojin Lee <soojin_lee@redwoodinference.com>
+Date: Tue, 08 Jun 2027 09:12:00 -0700
+Subject: Sideband proxy attachment walkthrough for private VPC
+
+Alex / Sanjay —
+
+Thanks again for the time yesterday. Per our follow-up I attached the current sideband proxy diagram and an ops checklist we plan to use during the attachment window. High level asks from our side: 
+
+- Can you confirm the uplink IP ranges available at the colo (pref /28 or /29) and whether you can advertise a /24 if required?
+- Do you require BGP MD5 or is simple EBGP with static routing acceptable for the first phase?
+- Any port/ACL restrictions on egress from AcmeEdge to our control plane (TCP 443, 8443, and UDP 33434 for health checks)?
+
+Proposed timeline: a 60-minute sync + runbook walkthrough tomorrow 06/09 at 10:00 PDT. If that works please confirm attendees and any pre-reads you want us to add to the Drive link.
+
+Attachments: sideband-proxy-diagram.png (PNG, 820 KB), sideband-operational-checklist.xlsx (Excel, 120 KB)
+
+Thanks —
+Ethan Park
+Senior Solutions Engineer
+Redwood Inference
+
+From: Alex Turner <alex.turner@acmeedge.com>
+To: Ethan Park <ethan@redwoodinference.com>
+Cc: Sanjay Rao <sanjay.rao@coloops.io>
+Date: Tue, 08 Jun 2027 10:03:00 -0400
+Subject: Re: Sideband proxy attachment walkthrough for private VPC
+
+Ethan —
+
+Appreciate the diagram and checklist. A few quick answers: 
+
+- Uplink IPs: we can provision a /28 contiguous block to start. For production advertising we prefer you to use a /24 from our transit partner; provisioning lead time ~5 business days.
+- BGP: we prefer eBGP with MD5 on session bring-up. We can allow plain eBGP for an initial proof-of-concept if you sign the temporary risk form (I can share).
+- Ports: TCP 443 and 8443 are fine. UDP 33434 is currently blocked on the edge; can you replace the health checks with TCP probes or use ICMP echo?
+
+We have two folks joining the call tomorrow: myself and Sanjay (network ops). Please share a quick run-of-show (15-min design, 30-min config, 15-min Q&A). Also, can you surface the expected ASNs and sample BGP neighbor configs?
+
+Thanks —
+Alex
+Network Architect, AcmeEdge
+
+On Tue, Jun 8, 2027 at 09:12 AM Ethan Park <ethan@redwoodinference.com> wrote:
+> Alex / Sanjay —
+> 
+> Thanks again for the time yesterday. Per our follow-up I attached the current sideband proxy diagram and an ops checklist we plan to use during the attachment window. High level asks from our side: 
+> 
+> - Can you confirm the uplink IP ranges available at the colo (pref /28 or /29) and whether you can advertise a /24 if required?
+> - Do you require BGP MD5 or is simple EBGP with static routing acceptable for the first phase?
+> - Any port/ACL restrictions on egress from AcmeEdge to our control plane (TCP 443, 8443, and UDP 33434 for health checks)?
+> 
+> Proposed timeline: a 60-minute sync + runbook walkthrough tomorrow 06/09 at 10:00 PDT. If that works please confirm attendees and any pre-reads you want us to add to the Drive link.
+> 
+> Attachments: sideband-proxy-diagram.png (PNG, 820 KB), sideband-operational-checklist.xlsx (Excel, 120 KB)
+> 
+> Thanks —
+> Ethan Park
+> Senior Solutions Engineer
+> Redwood Inference
+
+From: Irene Choi <irene_choi@redwoodinference.com>
+To: Alex Turner <alex.turner@acmeedge.com>, Ethan Park <ethan@redwoodinference.com>
+Cc: Soojin Lee <soojin_lee@redwoodinference.com>, Marissa Cole <marissa_cole@redwoodinference.com>
+Date: Tue, 08 Jun 2027 12:18:00 -0700
+Subject: Re: Sideband proxy attachment walkthrough for private VPC
+
+Alex / team —
+
+Quick technical notes ahead of the call: 
+
+1) ASN plan: our control plane currently uses ASN 64512 (private) for staging and 65010 for production announced space. For the attachment, we can peer with a temporary private ASN and then handover to 65010 when you confirm transit advertising. Sample neighbor config is attached (sideband-bgp-sample.txt).
+
+2) Health checks: we can change the probe to TCP 443/8443 and expose a lightweight /health endpoint on the proxy. I will add a flag to the runbook to toggle UDP probing if you open UDP 33434 later.
+
+3) Firewall matrix: we intend to limit inbound-only control-plane connections from your uplink CIDR; egress for the proxies will be TLS to the hosted telemetry endpoints. I included a short matrix in the diagram notes.
+
+4) Rollback: our playbook includes an immediate withdrawal path to static routes + BGP session flap if needed — documented in step 9 of the checklist.
+
+Please confirm if you need MTU adjustments on the control-plane VLANs (we typically use 1500, but can support jumbo frames if the colo requires 9000).
+
+Attachments: sideband-bgp-sample.txt (text, 3 KB)
+
+Irene
+Sr. Platform Network Engineer
+Redwood Inference
+
+On Tue, Jun 8, 2027 at 10:03 AM Alex Turner <alex.turner@acmeedge.com> wrote:
+> Ethan —
+> 
+> Appreciate the diagram and checklist. A few quick answers: 
+> 
+> - Uplink IPs: we can provision a /28 contiguous block to start. For production advertising we prefer you to use a /24 from our transit partner; provisioning lead time ~5 business days.
+> - BGP: we prefer eBGP with MD5 on session bring-up. We can allow plain eBGP for an initial proof-of-concept if you sign the temporary risk form (I can share).
+> - Ports: TCP 443 and 8443 are fine. UDP 33434 is currently blocked on the edge; can you replace the health checks with TCP probes or use ICMP echo?
+> 
+> We have two folks joining the call tomorrow: myself and Sanjay (network ops). Please share a quick run-of-show (15-min design, 30-min config, 15-min Q&A). Also, can you surface the expected ASNs and sample BGP neighbor configs?
+> 
+> Thanks —
+> Alex
+> Network Architect, AcmeEdge
+
+From: Ethan Park <ethan@redwoodinference.com>
+To: Alex Turner <alex.turner@acmeedge.com>, Sanjay Rao <sanjay.rao@coloops.io>
+Cc: Irene Choi <irene_choi@redwoodinference.com>, Soojin Lee <soojin_lee@redwoodinference.com>, Marissa Cole <marissa_cole@redwoodinference.com>
+Date: Tue, 08 Jun 2027 15:40:00 -0700
+Subject: Re: Sideband proxy attachment walkthrough for private VPC
+
+Thanks all — confirmed for 06/09 10:00 PDT (we'll send a calendar invite in a sec). Run-of-show attached to the Drive link; short summary of action items below: 
+
+- AcmeEdge (Alex): confirm /28 provisioning timeline and share temporary risk form if you require plain eBGP for POC.
+- AcmeEdge (Sanjay): confirm whether UDP 33434 can be opened; if not we'll use TCP-based health probes.
+- Redwood (Irene): publish neighbor sample and add jumbo-frame note in the runbook (if needed).
+- Redwood (Ethan): prep BGP ACL snippets and a minimal NAT/ACL matrix for the call.
+
+We'll also add a quick cutover checklist slide to the runbook so the network ops team has clear rollback steps. If anything changes please flag sooner rather than later.
+
+Thanks — see you on the call.
+
+Ethan Park
+Senior Solutions Engineer
+Redwood Inference
+
+On Tue, Jun 8, 2027 at 12:18 PM Irene Choi <irene_choi@redwoodinference.com> wrote:
+> Alex / team —
+> 
+> Quick technical notes ahead of the call: 
+> 
+> 1) ASN plan: our control plane currently uses ASN 64512 (private) for staging and 65010 for production announced space. For the attachment, we can peer with a temporary private ASN and then handover to 65010 when you confirm transit advertising. Sample neighbor config is attached (sideband-bgp-sample.txt).
+> 
+> 2) Health checks: we can change the probe to TCP 443/8443 and expose a lightweight /health endpoint on the proxy. I will add a flag to the runbook to toggle UDP probing if you open UDP 33434 later.
+> 
+> 3) Firewall matrix: we intend to limit inbound-only control-plane connections from your uplink CIDR; egress for the proxies will be TLS to the hosted telemetry endpoints. I included a short matrix in the diagram notes.
+> 
+> 4) Rollback: our playbook includes an immediate withdrawal path to static routes + BGP session flap if needed — documented in step 9 of the checklist.
+> 
+> Please confirm if you need MTU adjustments on the control-plane VLANs (we typically use 1500, but can support jumbo frames if the colo requires 9000).
+> 
+> Attachments: sideband-bgp-sample.txt (text, 3 KB)
+> 
+> Irene
+> Sr. Platform Network Engineer
+> Redwood Inference

@@ -1,0 +1,111 @@
+Request: Exception to Batch Job Completion SLA for Polaris nightly jobs
+
+From: Jane Sullivan <jane.sullivan@polarisretail.com>
+To: Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: procurements@polarisretail.com
+Date: Wed, 10 Sep 2025 15:22:00 -0700
+Subject: Request: batch job completion SLA exception for nightly jobs
+
+Hi Evelyn,
+
+Thanks again for the deep dive last week. As we reviewed, our nightly enrichment pipeline runs large asynchronous inference jobs against ~5M records and spikes intermittently during promotions. Our legal and ops teams are pushing for an explicit SLA that guarantees job completion within a fixed window.
+
+Current ask: we need an exception to Redwood’s standard batch completion SLA for this workload — specifically, a 12-hour completion window for the nightly job instead of the standard 2-hour window. Key constraints from our side:
+- Jobs can be restarted by our orchestrator (Airflow) if they fail mid-run; we need strong idempotency guarantees so re-ingested jobs do not double-bill or produce duplicated results.
+- We require clear retry semantics (max retries, backoff, and visibility for failed shards).
+- We want to limit operational exposure: if the run exceeds the agreed window, Polaris expects either credits or an automatic failover to a fallback processing mode we control.
+
+I've attached a redline of the SLA we use internally and a short sample log from a recent run. Can Redwood confirm whether you can accommodate a 12-hour window, what the retry/idempotency model would look like, and whether a carveout like this would require a contract amendment?
+
+Appreciate a prompt response — we are targeting the Oct renewal.
+
+Best,
+Jane Sullivan
+Director, Data Engineering
+Polaris Retail
+
+Attachments: SLA-Redline-v1.pdf (pdf), nightly-job-sample-logs.txt (text)
+
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Jane Sullivan <jane.sullivan@polarisretail.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Dev Patel <dev.patel@redwood.ai>
+Date: Thu, 11 Sep 2025 09:04:00 -0700
+Subject: Re: Request: batch job completion SLA exception for nightly jobs
+
+Hi Jane — thanks for the clear note and the attachments. I've looped in Marissa (account lead) and Karthik/Dev from runtime and support to scope the technical and commercial impact. A few quick clarifying questions while they review: 
+
+1) When you say "job", is the unit the full 5M-record run (single job id), or do you split into N shards by key/date? If you shard, what is the typical shard size distribution?
+2) Do you expect runs to be queued concurrently (e.g., multiple nightly jobs overlapping) or strictly single-run per account?
+3) For the fallback you mentioned — is that Polaris-controlled processing (you pull a copy of outputs) or do you want Redwood to switch execution to a lower-priority hardware pool?
+
+Operationally, here's how we'd think about an exception: we can propose an SLA carveout that sets a longer completion window for this workload and a corresponding reduced uptime credit threshold (since larger windows increase exposure). Karthik, can you advise on retry/idempotency primitives we should offer and what telemetry we can expose (per-shard progress, estimated completion)?
+
+Evelyn Hart
+Senior GTM Programs Manager
+Redwood Inference
+
+--
+On Wed, Sep 10, 2025 at 3:22 PM Jane Sullivan <jane.sullivan@polarisretail.com> wrote:
+> (original message attached)
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Evelyn Hart <evelyn.hart@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Dev Patel <dev.patel@redwood.ai>
+Date: Thu, 11 Sep 2025 11:37:00 -0700
+Subject: Re: Request: batch job completion SLA exception for nightly jobs
+
+Eve / team — technical summary and proposal below. I'm copying the suggested defaults we use for large async runs and where we can bend for Polaris.
+
+Context: Redwood's hosted batch pipeline treats a single job as the logical unit. For large workloads customers often submit a single job id with internal shards. Our standard completion SLA (customer tier dependent) is written around median completion time under expected load (typically 1–3 hours for tens of millions of tokens across small shards). This workload is atypical because of size and bursty concurrency.
+
+Proposal (technical):
+- Completion window: offer a dedicated SLA carveout of 8 hours for the nightly full-run (compromise from Polaris's 12h ask). We consider 8h achievable with reserved dedicated pools and burst capacity.
+- Idempotency: require a client-provided job_id and a per-shard idempotency token. Redwood will persist job_id->result mapping for 30 days (configurable) to prevent duplicate billing and duplicated outputs. On re-ingestion we will dedupe by job_id first, then by shard token.
+- Retries: server-side: exponential backoff with jitter; default max retries per shard = 5. Client-side: recommend a single orchestrator retry with incremental backoff to avoid thundering herd during recovery windows.
+- Failure visibility: per-shard status stream (started/processing/succeeded/failed) in the Console and via the Jobs API. We can emit progress percent and ETA estimates.
+- Fallback behavior: two options for Polaris to pick in the contract addendum: (A) automatic failover to Polaris pull-mode (Redwood persists partial outputs to an S3 export and notifies Polaris to ingest), or (B) switch execution to a lower-priority shared pool without strict completion guarantees. Option A minimizes duplicate compute on Redwood side; Option B keeps compute in-platform.
+- Credits/penalties: for an 8h carveout we would propose a lower credit multiplier than for standard SLA breaches; specifics require procurement sign-off (Marissa).
+
+Operational caveats: enabling the 8h carveout for sustained nightly runs requires Dedicated or Reserved capacity sizing; on Hosted we cannot guarantee predictable completion under high cross-customer contention without reserve. If Polaris wants to avoid reserved capacity, we'd need to document a best-effort mode (no strict SLA).
+
+Next steps:
+1) Marissa to confirm commercial appetite for a Reserved capacity commitment or a one-off carveout in the current contract.
+2) Dev to prepare a simple API contract change: job_id header requirement, shard_token field, and per-job export hook for fallback.
+3) Evelyn to coordinate timeline with Polaris procurement (Oct renewal).
+
+Karthik Iyer
+Principal Engineer, Runtime
+Redwood Inference
+
+
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Jane Sullivan <jane.sullivan@polarisretail.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, procurements@polarisretail.com
+Date: Fri, 12 Sep 2025 09:18:00 -0700
+Subject: Re: Request: batch job completion SLA exception for nightly jobs
+
+Hi Jane — thanks for the patience. Quick summary and concrete next steps so we can close this before your renewal: 
+
+Summary of Redwood proposal: 
+- Redwood can provide an SLA carveout with an 8-hour guaranteed completion window for the nightly full-run, provided Polaris signs a Reserved Capacity addendum (we will size to the job using historical logs).
+- Idempotency model: client-supplied job_id + per-shard shard_token; deduplication persisted for 30 days; no double-billing on deduped replays.
+- Retry model: server-side retries with exponential backoff (max 5), with recommended single orchestrator retry to avoid repeated mass requeues.
+- Visibility: per-shard real-time status in Console + Jobs API + export hook for fallback.
+- Fallback options: Polaris may choose (A) Polaris-pull exports (Redwood streams partial outputs to S3) or (B) lower-priority shared pool execution with no strict completion guarantee.
+- Credits: for the 8h carveout we'd propose reduced credit tiers; Marissa will send concrete numbers and an amendment draft if Polaris is amenable to Reserved Capacity.
+
+Action items:
+- Jane / Polaris: confirm whether you prefer fallback Option A (S3 export) or Option B (shared pool), and confirm willingness to sign Reserved Capacity.
+- Marissa (Redwood): prepare commercial amendment and draft language for SLA redline.
+- Dev (Redwood): prepare API change quickspec for job_id/shard_token and export hook.
+- Karthik: finalize operational runbook for replay/idempotency edge-cases.
+
+If Polaris confirms Option A + Reserved Capacity we can have a redline ready by next week and target Oct 1 for amendment signature.
+
+Best,
+Evelyn Hart
+Senior GTM Programs Manager
+Redwood Inference
+
+--
+On Thu, Sep 11, 2025 at 11:37 AM Karthik Iyer <karthik.iyer@redwood.ai> wrote:
+> (technical proposal attached)

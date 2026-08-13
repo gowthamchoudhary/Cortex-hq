@@ -1,0 +1,121 @@
+Integration next steps: SDK/auth routing + 429/retry/idempotency policy
+
+From: Alyssa Chen <alyssa.chen@databeacon.com>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Ethan Miles <ethan.miles@databeacon.com>
+Date: Tue, 14 Sep 2026 15:12:00 -0700
+Subject: Follow-up: integration clarifications and rate-limit concerns
+
+Hi Rishi,
+
+Thanks again for the call this morning — the demo was useful. A couple of follow-ups from our infra and platform engineering teams that I didn’t want to lose track of: 
+
+1) SDK/auth: we currently use short-lived tokens and rotate every 30 minutes. Any recommendations on how Redwood’s SDK integrates with token rotation and refresh flows?
+
+2) Routing/regions: we want to route sensitive traffic to the us-east private deployment and non-sensitive to hosted. How does routing policy work for per-route model variants?
+
+3) Structured output + tool calling: we’ll call external tools (search, enrichment) from within outputs — how do you recommend we shape function calls and validate outputs to avoid partial failures?
+
+4) Throttling: our in-house gateway returns a 429 frequently during traffic spikes; what’s Redwood’s recommended approach to 429s and idempotency to avoid duplicate downstream work?
+
+I’ve attached our preliminary requirements matrix. Can we get a concise technical checklist and an estimate for implementation effort?
+
+Thanks,
+Alyssa
+Lead Platform Engineer
+DataBeacon
+
+Attachments: requirements_matrix.xlsx (see summary page)
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Alyssa Chen <alyssa.chen@databeacon.com>
+Cc: Camila Reyes <camila_reyes@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Tue, 14 Sep 2026 17:05:00 -07:00
+Subject: Re: Follow-up: integration clarifications and rate-limit concerns
+
+Alyssa — thanks for the clear list. Summarizing next steps and a high level plan below. I’m copying Camila (solutions) and Monica (infra-eng) to scope detailed implementation items.
+
+High-level answers and action items:
+
+- SDK + Auth:
+  * Redwood SDK supports both API-key short-lived tokens and OIDC flows. For your 30-minute rotation we recommend using short-lived API keys issued by your KMS/HSM and configuring the SDK to refresh on 401 with a single background refresh per process (mutex).
+  * Implementation effort: low (1-2 engineer days to wire refresh + error handling).
+
+- Routing / Regions:
+  * Policy-based routing can be configured per API key or per route. You can pin specific routes to your private us-east deployment and allow fallback to hosted variants for non-sensitive requests.
+  * We’ll provide a sample routing policy config snippet.
+
+- Structured output / tool calling:
+  * Use Redwood’s function-calling schema with explicit type contracts; emit a stable top-level wrapper (e.g., {"tool_call": {...}}). Validate outputs server-side and implement a small orchestrator that treats failed tool calls as retryable sub-tasks rather than re-generating the entire prompt.
+
+- Throttling / 429s / Idempotency:
+  * Recommended approach: client-side exponential backoff with full jitter, max 3 retries for safe idempotent calls (e.g., embeddings, generation with request-scoped idempotency keys).
+  * For state-changing operations (tool calls that trigger billing or external side effects), attach an idempotency header: X-Request-ID (UUID v4) and persist mapping for 72 hours.
+  * Also recommend 429-aware circuit-breaker on your gateway with dynamic queueing to smooth spikes.
+
+Action items:
+1) Camila — draft a short technical checklist + sample config (SDK snippet, routing policy, auth refresh example). Target: EOD Thu 9/16.
+2) Monica — provide infra checklist for idempotency storage and recommended TTLs; draft suggested circuit-breaker settings. Target: Mon 9/20.
+3) Rishi (me) — provide a one-page PDF with recommended retry policy, sample headers, and example Redis key schema for idempotency.
+
+Attaching a short proposal PDF with the retry table and recommended headers. Also attaching an editable Mutual Action Plan (MAP) template.
+
+Would you like a short follow-up deep-dive call with Camila/Monica to review the SDK snippets?
+
+Best,
+Rishi Malhotra
+Account Executive, Redwood Inference
+
+Attachments: redwood-rate-limit-proposal.pdf, DB-4721-mutual_action_plan.xlsx
+
+From: Camila Reyes <camila_reyes@redwood.ai>
+To: Alyssa Chen <alyssa.chen@databeacon.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Thu, 16 Sep 2026 09:30:00 -07:00
+Subject: SDK snippets and routing config (deliverable)
+
+Alyssa — attaching the quick SDK examples below inline for convenience. Happy to run a 30-min sandbox session.
+
+1) Token refresh pattern (pseudo-code):
+- On 401, acquire mutex and call your token service to fetch a fresh API key. Retry request once after refresh.
+- Fail open only for read-only routes; block for state-changing routes.
+
+2) Routing policy (YAML):
+- routes:
+  - path: /v1/generate
+    priority: high
+    target: private-us-east
+    fallback: hosted-us-west
+
+3) Idempotency and 429 handling (recommended policy):
+- All requests that can mutate external state must include X-Request-ID: <uuid-v4>.
+- Retry policy: initial_delay=200ms, backoff=2.0, max_retries=3, jitter=full.
+- On 429: honor Retry-After if present; otherwise apply backoff.
+- If Retry-After > 5s, enqueue and respond to caller with 202 Accepted + polling handle.
+
+4) Embeddings / rerankers guidance:
+- Compute embeddings async in batches (client-side batcher) and attach batch_id header.
+- Use a deterministic embedding key per document to avoid re-ingestion duplicates.
+
+Next step: book a sandbox call? I have availability Fri 9/17 10–11am PT.
+
+Cheers,
+Camila Reyes
+Solutions Engineer, Redwood Inference
+
+From: Alyssa Chen <alyssa.chen@databeacon.com>
+To: Camila Reyes <camila_reyes@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Monica Patel <monica_patel@redwood.ai>
+Date: Thu, 16 Sep 2026 09:03:00 -07:00
+Subject: Re: SDK snippets and routing config (deliverable)
+
+Thanks — this is exactly the level of detail we needed. A few quick clarifications: 
+
+- For idempotency storage you suggested 72 hours — we’ll run this against our retention policy; can you recommend a Redis key format?
+- For embedding batching: can you provide a sample size recommendation (tokens or documents) and guidance on dedup window?
+
+We’d like to take the sandbox call on Fri 9/17 10am PT. I’ll send a calendar invite. If Camila can share a short runnable sample (even JS pseudo-code) ahead of the call that would help us move quicker.
+
+Appreciate the quick turnaround.
+
+—Alyssa
+

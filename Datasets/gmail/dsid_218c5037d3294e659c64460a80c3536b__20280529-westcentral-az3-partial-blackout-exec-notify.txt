@@ -1,0 +1,131 @@
+P0: WestCentral AZ-3 partial blackout — immediate routing steer & executive notify
+
+From: Monica Patel <monica.patel@redwood.com>
+To: laura.bennett@redwood.com, rafael.mendes@redwood.com, hannah.schmitt@redwood.com, evelyn.hart@redwood.com
+Date: 2028-05-29T09:12:00-07:00
+Subject: P0: WestCentral AZ-3 partial blackout — immediate routing steer & exec notify
+
+Team — raising a P0. Over the last 7 minutes WestCentral AZ-3 is producing a sharp spike in 5xx rates (user-facing API) and median token latency has jumped ~4x for customers routed there. Telemetry shows sustained backend CPU saturation on inference nodes + KV-cache evictions.
+
+Immediate asks:
+- Can we open an exec bridge (30m) to approve cross-region steering and an interim credit ask?
+- Rafael — can you confirm whether we can drain AZ-3 safely and shift to USW2/EAS1 without cache warmup causing worse latency?
+- Laura — please prep a short customer-facing note for impacted customers (VentureMed first).
+
+I am starting a PagerDuty incident (PD-77831).
+
+Thanks,
+Monica
+Monica Patel | Sr. Account Manager, Redwood Inference
+
+From: Laura Bennett <laura.bennett@redwood.com>
+To: monica.patel@redwood.com, rafael.mendes@redwood.com
+Cc: hannah.schmitt@redwood.com, evelyn.hart@redwood.com
+Date: 2028-05-29T09:16:00-07:00
+Subject: Re: P0: WestCentral AZ-3 partial blackout — immediate routing steer & exec notify
+
+On Tue, May 29, 2028 at 09:12, Monica Patel wrote:
+> Team — raising a P0...
+
+On it. I’ve pinged CS for VentureMed and asked Jane to hold traffic where possible. Rafael — fyi I included the customer-facing contact so we can align on the message.
+
+Quick notes from our side: several customers show an increase in tail latency tied to longer generation sequences (avg prompt length up 30% this hour). If we reroute cold, we should consider temporary truncation (degraded-length responses) as an interim mitigation to avoid token-cost spike and warmup latency.
+
+I will draft the external note with a clear ETA and fallback options.
+
+—Laura
+Laura Bennett | Head of Customer Success, Redwood Inference
+
+From: Jane Liu <jane.liu@venturemed.com>
+To: monica.patel@redwood.com
+Date: 2028-05-29T09:25:18-07:00
+Subject: Re: P0: WestCentral AZ-3 partial blackout — Immediate impact (VentureMed)
+
+Monica — we’re seeing 500s across our production checkout flow and average request latency is now ~4.6s (previously ~0.9s). This is preventing orders from completing and impacting revenue. Have you confirmed a failover plan? We need an estimate for restoration or a recommended mitigation.
+
+Our ops team is on standby and can accept traffic steering but need to know if any degradation mode will change API surface or responses.
+
+—Jane Liu
+VP Engineering, VentureMed
+ops@venturemed.com
+
+(Please escalate; this is high impact on our side.)
+
+From: Monica Patel <monica.patel@redwood.com>
+To: laura.bennett@redwood.com, rafael.mendes@redwood.com, hannah.schmitt@redwood.com
+Cc: jane.liu@venturemed.com
+Date: 2028-05-29T09:33:00-07:00
+Subject: Re: P0: WestCentral AZ-3 partial blackout — immediate routing steer & exec notify
+
+Jane — thanks for the signal and the metrics. Short answer: yes, we’re preparing an immediate controlled steer.
+
+Proposed actions (ready to execute pending exec sign-off):
+1) Shift 60% of VentureMed’s traffic from WestCentral AZ-3 -> USW2 (cold steer).
+2) Shift 40% -> EAS1 (hot warm lane) to preserve latency for critical flows.
+3) Enable degraded response-length policy for non-critical endpoints (reduce max tokens to 50) to reduce token-latency and cache pressure while warmup completes.
+4) Apply a temporary rate cap on long-generation endpoints for 30 minutes.
+
+We expect visible improvement within 12–18 minutes after the steer starts; full KV-cache warmup ~30–45 mins.
+
+If exec approves a customer communication we will propose: 1h ETA for primary recovery + 10% service credit for duration. I’m requesting approval on the credit ask now.
+
+Monica
+Monica Patel | Sr. Account Manager, Redwood Inference
+
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: monica.patel@redwood.com, laura.bennett@redwood.com
+Cc: hannah.schmitt@redwood.com, evelyn.hart@redwood.com
+Date: 2028-05-29T09:47:44-07:00
+Subject: Re: P0: WestCentral AZ-3 partial blackout — telemetry and proposed steer
+
+Telemetry check at 09:46: CPU horizon shows the inference fleet in AZ-3 at 95%+ on the transformer workers. KV cache miss rate spiked 6x; socket spooler errors correlate with older model variants that are under higher memory pressure.
+
+Actionable: we can do a staged canary steer (start at 20% -> 50% -> 100%) with pre-warm on EAS1 before full cutover. That should avoid the worst of cold-latency cliffs. I attached a packet dump and a telemetry snapshot for the first 20 minutes.
+
+Attachments: packet-dump-westcentral-2028-05-29.txt, telemetry-snapshot-09-40.json
+
+—Rafael
+Rafael Mendes | Senior Site Reliability Engineer, Redwood Inference
+
+From: Hannah Schmitt <hannah.schmitt@redwood.com>
+To: monica.patel@redwood.com, laura.bennett@redwood.com, rafael.mendes@redwood.com
+Cc: ceo@redwood.com, cto@redwood.com
+Date: 2028-05-29T10:05:10-07:00
+Subject: Re: P0: WestCentral AZ-3 partial blackout — exec attention requested
+
+Looping in execs for rapid approval on the customer credit and routing authority.
+
+Summary for execs:
+- Impact: multiple customers (including VentureMed) experiencing 5xx and 3–5x tail latency in WestCentral AZ-3.
+- Proposed mitigation: staged cross-region steer + degraded-length mode to mitigate warmup.
+- Customer ask: 10% credit + 1h ETA for recovery.
+
+I’ve opened SUP-2248 in Jira for billing/credit action and linked PD-77831. Need a fast sign-off on the credit (billing) and routing (network) items.
+
+Hannah
+Hannah Schmitt | VP, Site Reliability
+
+From: Monica Patel <monica.patel@redwood.com>
+To: jane.liu@venturemed.com, paul.greer@venturemed.com
+Cc: laura.bennett@redwood.com, rafael.mendes@redwood.com, hannah.schmitt@redwood.com
+Date: 2028-05-29T11:00:00-07:00
+Subject: Update: immediate actions taken + next update in 30 minutes
+
+Jane / Paul — quick update on actions we’ve executed and next steps:
+
+What we did (10:55–10:58 PDT):
+- Initiated staged steering: 20% traffic -> USW2, 20% -> EAS1 (canary), monitoring for errors.
+- Enabled degraded-length policy for non-critical endpoints for VentureMed only.
+- Rate caps applied to long-generation endpoints.
+
+Early results: 5xx rate decreased ~35% for canaried traffic; median token latency for canary routes improved to ~1.3s. Overall WestCentral tail latency has begun to decline but is not yet back to baseline.
+
+Attachments: reroute-plan-westcentral-2028-05-29.pdf
+Related: PD-77831, JIRA SUP-2248 (billing credit flow).
+
+Next comms: we will send a 30-minute update at 11:30 PDT and a formal RCA after stabilization. For impact, we are recommending a 10% service credit for the incident window — Hannah is coordinating billing approval.
+
+Apologies for the disruption. We will keep you posted and are treating this as our top priority.
+
+—Monica
+Monica Patel | Sr. Account Manager, Redwood Inference

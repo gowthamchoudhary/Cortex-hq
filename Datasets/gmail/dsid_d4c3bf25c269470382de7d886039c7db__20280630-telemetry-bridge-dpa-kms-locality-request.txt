@@ -1,0 +1,126 @@
+Transient telemetry bridge request — DPA addendum & KMS locality for short APAC run
+
+From: Ella Ramos <ella.ramos@nimblehealth.com>
+To: marissa.cole@redwood.com
+Date: Fri, 30 Jun 2028 07:12:00 -0700
+Subject: Request: short telemetry bridge for APAC analytics run
+
+Hi Marissa,
+
+Quick ask from our infrastructure team — we have a timeboxed analytics job that must run in APAC next week for regulatory reporting. The job processes telemetry (aggregated metrics and anonymized session counts, no PII) but our auditors require proof that processing and telemetry persistence occur in APAC for the run window.
+
+Can Redwood open a transient telemetry bridge pinned to an APAC region for a 36-hour window (target start: 2028-07-03T00:00+10:00)? Specific asks:
+- Confirmation that processing/storage will be APAC-hosted for the window (and whether any transient fsync/replication to other regions occurs).
+- If Redwood needs a KMS key from us (customer-supplied) vs. Redwood-managed key options.
+- A short list of subprocessors that would touch the telemetry during the window (we need roster entries for our DPA annex).
+- Evidence we can include in our audit (log snapshots, runbook, timing attestations).
+
+Attached is a spreadsheet with the job footprint and retention tolerance. Please loop in anyone from security/ops who needs to approve. We have a compliance cutover on 2028-07-06 and would prefer the run to complete before then.
+
+Thanks — Ella
+Ella Ramos
+Director, Infrastructure
+NimbleHealth
+
+attachment: nimble_apac_run_requirements.xlsx (xlsx)
+From: marissa.cole@redwood.com
+To: Ella Ramos <ella.ramos@nimblehealth.com>
+Cc: kimberly_park@redwood.com, karthik_iyer@redwood.com
+Date: Fri, 30 Jun 2028 10:03:00 -07:00
+Subject: Re: Request: short telemetry bridge for APAC analytics run
+
+Hi Ella — thanks for the clear summary and the spreadsheet. Looping in Kimberly (security/compliance) and Karthik (ops) to scope requirements and feasibility.
+
+High level: this is feasible but we need to lock three things before we can schedule the window:
+1) KMS custody approach (customer key vs Redwood-managed APAC key). If you can provide a customer-managed key in an APAC KMS, that gives the strongest locality guarantee. If not, we can use Redwood-managed keys and provide attestations + key-residency audit logs.
+2) A DPA addendum for the transient processing window (we'll draft an annex that enumerates the window, subprocessors, data types, and retention).
+3) Ops runbook and a 48-hour lead for schedule and capacity reservation.
+
+Kimberly / Karthik — can you confirm the minimum lead time and whether EdgeCache/analytics workers will perform any ephemeral replication to EU/US (we expect none but need an explicit statement)? Also please flag any telemetry retention caveats (snapshots, logs) that would count as cross-region egress.
+
+Ella — I attached the template DPA addendum we normally use for transient processing and will update it with NimbleHealth specifics once we have the subprocessor roster and KMS decision. Will also point you at a DocuSign link for signature.
+
+Best,
+Marissa
+
+attachment: redwood_dpa_addendum_nimblehealth_v1.docx (draft)
+From: kimberly_park@redwood.com
+To: marissa.cole@redwood.com, Ella Ramos <ella.ramos@nimblehealth.com>
+Cc: rishi_malhotra@redwood.com
+Date: Fri, 30 Jun 2028 12:18:00 -07:00
+Subject: Re: Request: short telemetry bridge for APAC analytics run
+
+Thanks Marissa / Ella — security checklist & quick notes below.
+
+Summary: transient APAC-only processing is acceptable under these conditions.
+
+Requirements and controls we will need from NimbleHealth:
+- KMS: preferred = customer-managed HSM key in an APAC region (Cloud KMS ARN). Alternate = Redwood-managed key with key residency log export. If customer provides a key, we will not export key material out of APAC.
+- Subprocessors: for the 36h window the following subprocessors will be in scope: EdgeCache APAC (ecap-2), Analytics Worker Pool (redwood-analytics-apac). We'll include full IDs in the DPA annex.
+- Logs & evidence: we will provide an audit snapshot (service logs + region-bound run log) and a signed timing attestation post-run. Note: diagnostic traces may be routed to our control plane in US for monitoring but will be redacted; persistent telemetry and job outputs will remain APAC.
+- Retention: by default we keep telemetry snapshots for 7 days; for this job we can set retention to 72 hours post-run (per your spreadsheet) — must agree in the addendum.
+
+Operational caveats:
+- 48h scheduling lead required to reserve capacity and lock the KMS binding.
+- If customer cannot provide a regional key, we will use Redwood-managed key and produce key-residency logs and CA-signed attestation. That path is slightly slower due to compliance checks.
+
+I attached a short checklist you can use to confirm items.
+
+attachment: transient-hop-security-checklist.pdf (pdf)
+
+Kimberly
+Director, Security & Compliance
+Redwood Inference
+
+On Fri, Jun 30, 2028 at 07:12 AM Ella Ramos <ella.ramos@nimblehealth.com> wrote:
+> Hi Marissa,
+> 
+> Quick ask from our infrastructure team — we have a timeboxed analytics job that must run in APAC next week for regulatory reporting...
+> 
+> attachment: nimble_apac_run_requirements.xlsx (xlsx)
+From: karthik_iyer@redwood.com
+To: marissa.cole@redwood.com, kimberly_park@redwood.com
+Cc: Ella Ramos <ella.ramos@nimblehealth.com>
+Date: Fri, 30 Jun 2028 14:05:00 -07:00
+Subject: Re: Request: short telemetry bridge for APAC analytics run
+
+Operational note — we can schedule the 36-hour window provided the following are in place:
+- Customer-provided KMS key in APAC OR signed acceptance of Redwood-managed-key path at least 72 hours before start.
+- Estimated job token volume <= 120M tokens (as shared in spreadsheet); if higher we need a pre-burst plan.
+- Clear fallback: if APAC capacity is unexpectedly degraded we'll failover to EU and notify NimbleHealth within 10 minutes; the addendum must explicitly list that as a contingency.
+
+Deliverables from Ops after run:
+- Region-bound runbook and timestamped audit snapshot (UTC + local TZ).
+- Signed attestation (security) and a retention override request to set snapshot deletion to 72 hours.
+
+I'll prepare a short ops statement for the DPA addendum and attach it to the DocuSign envelope. Sharing HubSpot deal and DocuSign links below.
+
+Karthik
+Senior SRE, Redwood Inference
+
+Related links: https://app.hubspot.com/deal/23456 , DocuSign: https://docusign.net/signed/NDX-ABC123
+
+On Fri, 30 Jun 2028 10:03:00 -0700 marissa.cole@redwood.com wrote:
+> Hi Ella — thanks for the clear summary and the spreadsheet...
+From: marissa.cole@redwood.com
+To: Ella Ramos <ella.ramos@nimblehealth.com>
+Cc: kimberly_park@redwood.com, karthik_iyer@redwood.com, rishi_malhotra@redwood.com
+Date: Fri, 30 Jun 2028 15:45:00 -07:00
+Subject: Re: Request: short telemetry bridge for APAC analytics run — next steps
+
+Ella — thanks everyone for the quick turn. Next steps and timeline:
+
+1) Ella / NimbleHealth confirms KMS approach by 2028-07-01 EOD (customer-provided APAC key OR accept Redwood-managed key path).
+2) Once KMS approach is confirmed, Redwood will finalize the DPA addendum and route via DocuSign. Please sign by 2028-07-02 to allow ops to reserve capacity.
+3) Redwood will set retention override to 72 hours post-run and provide the region-bound runbook + signed attestation within 48 hours of job completion.
+
+I've attached the draft addendum (redwood_dpa_addendum_nimblehealth_v1.docx) and the security checklist; Kimberly, Karthik — please add the short ops statement and your attestation block to the addendum before I create the DocuSign envelope.
+
+Ella — once signed we'll schedule the slot (target start 2028-07-03T00:00+10:00) and confirm the reserved capacity and point-of-contact for the window.
+
+Best,
+Marissa Cole
+Director, Strategic Accounts
+Redwood Inference
+
+attachments: redwood_dpa_addendum_nimblehealth_v1.docx (draft), transient-hop-security-checklist.pdf (pdf)

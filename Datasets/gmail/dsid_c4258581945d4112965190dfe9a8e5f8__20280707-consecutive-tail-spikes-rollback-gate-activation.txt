@@ -1,0 +1,114 @@
+Consecutive tail latency spikes — request to open rollback gate and temporary SLO carveout
+
+From: Danielle Park <dani@catalystpay.com>
+To: Mina Haddad <mina_haddad@redwood.ai>
+Cc: CatalystPay SRE <sre@catalystpay.com>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2028-07-07T08:32:00Z
+Subject: Re: production latency — sudden tail spikes on model v10.1
+
+Hi Mina,
+
+We started seeing a jump in P95 latency at ~07:50 UTC this morning for our payment-auth flow. Percent of requests >500ms went from ~1.2% to ~9% over the last hour. Root cause isn't obvious on our side.
+
+Attached is a brief snapshot from our logs and the SLO dashboard (slo_snapshot_20280707.png). This is impacting checkout conversion on a small but material portion of traffic. Can Redwood advise: is there a known variant rollout or quantization change for model v10.1?
+
+Short-term we need either: a fast fallback to the previous variant or a mitigation plan. Please confirm next steps and ETA.
+
+Thanks,
+Danielle Park
+Head of Platform Engineering, CatalystPay
+---
+attachment: slo_snapshot_20280707.png (image/png)
+
+From: Mina Haddad <mina_haddad@redwood.ai>
+To: Danielle Park <dani@catalystpay.com>
+Cc: Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2028-07-07T08:45:00Z
+Subject: Re: production latency — sudden tail spikes on model v10.1
+
+Hi Danielle — thanks for the flag and the snapshot. We're on it.
+
+Quick notes:
+- I can start the rollback gate process for v10.1 -> v10.0 (variant v10.0-gpu-quant) immediately, but we need explicit authorization from CatalystPay (you) to change serving variant.
+- Ben (SE) and Karthik (Eng) are looped in for fast triage; Laura from CS will coordinate customer comms.
+
+Proposed immediate plan:
+1) Engineering triage the root cause (Karthik) — 30m check-in.
+2) If no quick fix, we open the rollback gate and pin a safe variant (v10.0-gpu-quant) for 20% of traffic within 45 mins, then expand if stable.
+3) Request temporary SLO carveout while we monitor (formal approval needed for SLA exception).
+
+Can you confirm you want us to proceed with the fallback option while we investigate? If yes, we will request the SLO carveout and activate the gate.
+
+—Mina
+Mina Haddad
+Account Lead, Redwood Inference
+redwood.ai | +1 415-555-0192
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Mina Haddad <mina_haddad@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Danielle Park <dani@catalystpay.com>
+Date: 2028-07-07T09:12:00Z
+Subject: Re: production latency — sudden tail spikes on model v10.1
+
+Mina / team — quick diagnostic from our side:
+- I pulled the candidate-variant-metrics.csv and the serving logs. v10.1 shows a rising tail when sequence length > 300 tokens and kv-cache misses spike (likely due to a minor tokenizer/encoding difference introduced in v10.1 release).
+- The previous stable variant (v10.0-gpu-quant) has P95 ~210ms for the same workload.
+
+Risks and mitigation:
+- Rolling back to v10.0-gpu-quant is low-risk: same model family, fewer recent kernel path changes. Expected rollback time ~6 minutes with staged pinning.
+- If we pin 20% initially, we should see P95 drop on that cohort within one minute of traffic shift; full expansion to 100% in 20–30 minutes if stable.
+
+I attached the CSV for your review. Recommend: approve rollback gate activation + temporary SLO carveout (48-hour window) while we validate telemetry and deploy a proper hotfix.
+
+Action items (suggested):
+- Customer approval to proceed with rollback: Danielle
+- Internal rollback gate authorization: Mina + Karthik (engineering sign-off)
+- CS notification to downstream product teams: Laura
+
+—Ben
+Ben Carter
+Senior Sales Engineer, Redwood Inference
+redwood.ai
+---
+attachment: candidate-variant-metrics.csv (text/csv)
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Mina Haddad <mina_haddad@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2028-07-07T09:35:00Z
+Subject: Re: production latency — sudden tail spikes on model v10.1
+
+Acknowledging — I'm running a focused triage now. Summary of recommended internal steps:
+
+1) Immediate: open rollback gate to v10.0-gpu-quant with traffic pinning orchestration. We'll do a 20% pin -> 50% -> 100% (monitor P95 and error counts).
+2) Safety checks before expansion:
+   - Verify KV cache warmup time metrics for pinned cohort.
+   - Validate tokenization parity on customer payloads.
+   - Confirm no model-ops config change that would affect batching thresholds.
+3) Post-rollback: collect 1 hour of telemetry to confirm stability, then issue formal status update and next steps for a hotfix timeline.
+
+Note on approvals: per our rollback policy, we need two internal authorizers for an emergency rollback that affects SLA-bound customers: the Account Lead (Mina) and the On-call ML infra engineer (me). Mina, if you authorize, I'll execute the rollback now.
+
+I'll also prepare the brief for the SLO carveout request (48-hour window) so support can log it as an official exception.
+
+—Karthik
+Karthik Iyer
+Staff Software Engineer, Serving Runtime — Redwood Inference
+
+From: Mina Haddad <mina_haddad@redwood.ai>
+To: Karthik Iyer <karthik_iyer@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Danielle Park <dani@catalystpay.com>
+Date: 2028-07-07T14:05:00Z
+Subject: Re: production latency — sudden tail spikes on model v10.1
+
+Thanks team — Danielle, we have internal sign-off to proceed.
+
+Authorization: Mina Haddad (Account Lead) and Karthik Iyer (Engineering) approve activation of the rollback gate to v10.0-gpu-quant for CatalystPay. Ben to execute the staged traffic pins; Karthik to validate the safety checks during expansion. Laura to coordinate customer comms.
+
+SLO carveout: Approved provisional 48-hour SLO exception window while we validate metrics and deliver a targeted hotfix. Support will file the formal exception ticket and HubSpot note under Deal D-8243.
+
+Danielle — we'll start the staged fallback now and update you within 30 minutes with initial telemetry from the pinned cohort. Apologies for the disruption — we'll work to get you fully back to baseline quickly.
+
+Mina Haddad
+Account Lead, Redwood Inference
+mina_haddad@redwood.ai | +1 415-555-0192
+
+Onward: please mark the HubSpot deal (link above) with this action and attach the CSV/snapshot we circulated.

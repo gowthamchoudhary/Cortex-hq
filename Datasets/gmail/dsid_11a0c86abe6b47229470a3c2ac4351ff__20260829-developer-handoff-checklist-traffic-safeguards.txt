@@ -1,0 +1,158 @@
+HazelPay integration: SDK handoff, traffic shaping & retry guidance
+
+From: Chloe Martin <chloe.martin@redwood.ai>
+To: Elena Morris <elena@hazelpay.com>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Date: Sat, 29 Aug 2026 09:12:00 -0700
+Subject: HazelPay integration: SDK handoff, traffic shaping & retry guidance
+
+Hi Elena / Rajesh —
+
+Thanks again for the productive demo last week. As discussed, we want to transition from discovery to an implementation sprint and make sure your engineering team has the SDK patterns and operational knobs to avoid surprises during cutover. I'm sharing a concise handoff with next steps, owners, and a couple of attachments (mutual action plan + sample code).
+
+Quick objectives for this thread:
+- Confirm sandbox access and POC endpoint for HazelPay devs
+- Provide SDK init sample and recommended timeout/retry/429 handling
+- Agree on traffic shaping during cutover (ramp schedule + soft limits)
+
+As a starter, please confirm your internal POC (engineering contact) and preferred slot next week for a 45-min technical sync. Vanessa will own the technical runbook and code samples; I'll coordinate schedule and rollout milestones.
+
+Attachments: hazelpay-mutual-action-plan.xlsx, sdk-sample-code.tar.gz
+
+Thanks,
+Chloe Martin
+Senior CSM, Redwood Inference
+chloe.martin@redwood.ai | +1 415-555-0198
+
+
+From: Elena Morris <elena@hazelpay.com>
+To: Chloe Martin <chloe.martin@redwood.ai>
+Cc: Rajesh Kumar <rajesh@hazelpay.com>, Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Date: Sat, 29 Aug 2026 11:04:00 -0400
+Subject: Re: HazelPay integration: SDK handoff, traffic shaping & retry guidance
+
+Thanks Chloe —
+
+We're excited to get started. Rajesh (lead backend) will be our POC: rajesh@hazelpay.com (he's CC'd). We can do a technical sync on Tue 2026-09-01 at 9:30am PT / 12:30pm ET.
+
+Two quick questions for prep so we can gather our infra folks:
+1) During cutover, we'll be shifting ~150 req/s average with bursts to 600 req/s for short windows. Do you have a recommended sidecar or rate-limiter placement?
+2) How does the SDK surface retry metadata for observability (headers, metrics) so we can map to our dashboards?
+
+I've shared the attached list of our staging IPs in the mutual action plan.
+
+—Elena
+Elena Morris
+VP Product, HazelPay
+elena@hazelpay.com
+
+On Sat, Aug 29, 2026 at 9:12 AM Chloe Martin <chloe.martin@redwood.ai> wrote:
+> [original message]
+
+From: Chloe Martin <chloe.martin@redwood.ai>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Elena Morris <elena@hazelpay.com>, Rajesh Kumar <rajesh@hazelpay.com>
+Date: Sun, 30 Aug 2026 08:05:00 -0700
+Subject: Fwd: HazelPay integration: SDK handoff, traffic shaping & retry guidance
+
+Vivek — forwarding HazelPay's POC details and their traffic profile. Can you join the Tue 9:30am PT sync? We'll need an ops-focused checklist (VPC allowlist, preferred endpoint names, and any recommended autoscale thresholds) and a short blurb on the safe ramp strategy you'd suggest.
+
+Key asks for the call (we should prepare these slides/snippets):
+- Preferred endpoint: /v1/infer vs /v1/chat for their usage pattern (mostly short chat-like prompts)
+- Recommended client-side token bucket config for 600/150 burst smoothing
+- Default SDK retry policy: backoff base, max attempts, which 5xx/429 to retry
+
+I attached the mutual action plan — please add a row for the infra checklist.
+
+Thanks,
+Chloe
+
+---------- Forwarded message ---------
+From: Elena Morris <elena@hazelpay.com>
+[see original above]
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Chloe Martin <chloe.martin@redwood.ai>, Elena Morris <elena@hazelpay.com>, Rajesh Kumar <rajesh@hazelpay.com>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: Mon, 31 Aug 2026 15:26:00 -0700
+Subject: RE: HazelPay integration: SDK handoff, traffic shaping & retry guidance
+
+Hi all —
+
+Thanks for the context. Below are the practical SDK snippets and the operational rules we recommend for HazelPay's cutover. I've kept this focused so your backend and infra folks can copy/paste during the sync.
+
+1) Endpoint choice
+- For short, chat-style prompts we recommend the /v1/chat endpoint to support streaming and lower tail latency. Use /v1/infer for bulk batched scoring jobs.
+
+2) SDK init (pseudo-JS + python examples)
+- JS (node) sample:
+  const Redwood = require('@redwood/inference');
+  const client = new Redwood.Client({
+    apiKey: process.env.RW_API_KEY,
+    baseURL: 'https://api.redwood.ai/v1/chat',
+    timeoutMs: 15000 // 15s socket timeout
+  });
+
+- Python sample:
+  from redwood import Client
+  c = Client(api_key=os.environ.get('RW_API_KEY'), base_url='https://api.redwood.ai/v1/chat', timeout=15)
+
+3) Retry / timeout guidance
+- Client-side policy (recommended):
+  - Max attempts: 4 (initial + 3 retries)
+  - Retryable: network timeouts, 429, 502, 503, 504
+  - Backoff: exponential jittered base=300ms, factor=2, max_backoff=10s
+  - If body is idempotent (e.g., embeddings), retries safe; for non-idempotent streaming, prefer at-most-once but enable server-side continuation tokens when possible.
+
+4) 429 and rate-limit handling
+- Respect Retry-After header if present (seconds).
+- If 429 without header, apply exponential backoff with a randomized cap (start 500ms).
+- Surface remaining_quota and reset_window headers from the API in your dashboards. SDK exposes these as response.meta.headers.
+
+5) Traffic shaping / cutover ramp plan (example)
+- Day 0 (smoke): 5% of traffic, cap bursts to 50 req/s
+- Day 1 (ramp): 25% of traffic, cap bursts to 150 req/s
+- Day 2 (steady): 60% of traffic, monitor 95th pct latency and error rate
+- Day 3 (go-live): 100% but keep soft limit for bursts for first 2h
+
+6) Observability & tracing
+- Inject X-Request-ID client header; Redwood will return x-rw-trace for server-side spans.
+- For retries, SDK emits metrics: redwood.client.retry.count, redwood.client.retry.latency in Prometheus-friendly format.
+
+7) Example rate-limiter placement
+- We recommend a client-side token-bucket (per-worker) plus a lightweight edge throttle in front of your gateway. This prevents sudden fan-out to Redwood backend during cascading retries.
+
+8) Failover pattern
+- Configure a fallback model (smaller quantized) for degraded states, with a quality gate. Use canary traffic route to measure delta.
+
+Attachments: I've zipped a tiny sample app (sdk-sample-code.tar.gz) with a node + python snippet and a terraform snippet to add an allowlist rule.
+
+If helpful, I can paste a small Terraform snippet in the call.
+
+Cheers,
+Vanessa Ortiz
+Solutions Engineer, Redwood Inference
+vanessa.ortiz@redwood.ai | +1 650-555-0114
+
+From: Chloe Martin <chloe.martin@redwood.ai>
+To: Elena Morris <elena@hazelpay.com>, Rajesh Kumar <rajesh@hazelpay.com>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: Wed, 1 Sep 2026 10:03:00 -0700
+Subject: RE: HazelPay integration: SDK handoff, traffic shaping & retry guidance
+
+Elena/Rajesh —
+
+Thanks for the quick turnaround and for confirming Rajesh as POC. We're set for Tue 9:30am PT. Agenda for the sync (45 mins):
+- 10 min: architecture alignment (endpoints, VPC allowlist)
+- 20 min: SDK snippets and runtime behaviors (Vanessa)
+- 10 min: cutover ramp schedule and monitoring hooks (Vivek)
+- 5 min: action items + mutual action plan review (Chloe)
+
+Vanessa will share the code in the meeting. Vivek will bring the infra checklist (we've added it to the mutual action plan). Please confirm if you need additional stakeholders on the call (SRE or security).
+
+See you Tue.
+
+Best,
+Chloe Martin
+Senior CSM, Redwood Inference
+chloe.martin@redwood.ai | +1 415-555-0198

@@ -1,0 +1,124 @@
+Request: temporary rate-cap & burst exception for Clearwave pilot
+
+From: Ellen Chu <ellen.chu@clearwave.com>
+To: Camila Reyes <camila_reyes@redwood.com>
+Cc: integrations@clearwave.com
+Date: 2026-08-14T09:12:00-07:00
+Subject: Pilot launch next week — need temporary burst + SLA question
+
+Hi Camila,
+
+Hope you’re well — Clearwave is planning a limited public pilot next Tuesday to stress a new patient intake flow that will briefly spike traffic as we onboard initial partners. We ran a load test this morning and expect a 15-minute peak that could reach ~850 qps for a narrow set of routes (patient-intake and insurance-lookup). Outside that window baseline traffic will be ~40 qps.
+
+Two asks:
+- Can Redwood provide a documented exception to the default burst quota/throttling rules for that 15-minute window (we need sustained 800–900 qps on the two routes)?
+- We also need confirmation of latency/up-time commitments under the exception (Clearwave must show <200ms p95 for the intake path to our partners during the pilot).
+
+Attached is the short SOW for the pilot (Clearwave_Pilot_SOW.pdf). We’re open to a short surcharge for the burst. We need the confirmation in writing by EOD Friday to finalize ops with our partners.
+
+Thanks — Ellen
+Ellen Chu
+Head of Integrations
+Clearwave Health
+
+[Attachment: Clearwave_Pilot_SOW.pdf]
+From: Camila Reyes <camila_reyes@redwood.com>
+To: Ellen Chu <ellen.chu@clearwave.com>
+Cc: Diego Fernandez <diego_fernandez@redwood.com>
+Date: 2026-08-14T10:05:00-07:00
+Subject: Re: Pilot launch next week — need temporary burst + SLA question
+
+Hi Ellen — thanks for the heads up and the SOW. Sounds doable in principle but we’ll need to scope a narrow, timeboxed exception and align on monitoring and fallback behavior. Quick notes and next steps: 
+
+- Can you confirm the exact routes and route patterns you expect to spike (path + sample payload sizes)?
+- Are all requests authenticated with your current API key? We’ll need to map them to your account for quota routing.
+- We can offer a 1-hour window that includes the 15-minute sustained peak; our preference is to cap the exception to those named routes so it doesn’t affect other customers.
+- To meet the 200ms p95 target we’ll require the pilot to use our nearest us-west region and accept a small temporary surge fee; Diego is looped to confirm capacity.
+
+I’ll follow up with a draft SLA rider and a proposed throttle/burst configuration. If that looks good to you we’ll prepare a one-page addendum (SLA_Rider_Clearwave.pdf) and stand up monitoring alerts for the pilot window.
+
+Camila Reyes
+Account Executive, Redwood Inference
+camila_reyes@redwood.com | +1 415-555-0182
+
+On Fri, Aug 14, 2026 at 09:12 AM Ellen Chu <ellen.chu@clearwave.com> wrote:
+> Hi Camila,
+> ...
+
+From: Diego Fernandez <diego_fernandez@redwood.com>
+To: Camila Reyes <camila_reyes@redwood.com>, Michael Grant <michael_grant@redwood.com>
+Cc: Monica Patel <monica_patel@redwood.com>
+Date: 2026-08-14T12:30:00-07:00
+Subject: Re: Pilot launch next week — need temporary burst + SLA question (internal)
+
+Camila — digging in on capacity. A few technical constraints and a proposal: 
+
+1) Constraints:
+- Our fairness policy prevents open-ended bursts that would penalize other tenants; any exception must be timeboxed and route-restricted.
+- KV cache warmup could add ~20–50ms to cold calls for models with larger context; recommend Clearwave preload common prefixes if possible.
+
+2) Proposal (conditional exception):
+- Duration: 1 hour window on 2026-08-18 UTC 16:00–17:00 (you can convert to local).
+- Allowed burst: raise route-level burst cap to 1,000 qps for the two listed routes; other routes remain at standard caps.
+- Throttling behavior: progressive throttling above 900 qps with 95% of requests still served; hard cap at 1,100 qps.
+- Latency target: best-effort p95 < 200ms; we will commit to p50 < 80ms and p95 < 350ms as a contractual minimum during exception (we can’t guarantee <200ms at p95 under shared infra without a Dedicated reservation).
+- Monitoring: we’ll enable a temporary dashboard, trace sampling at 5% and an alert if p95 > 400ms or error rate > 1%.
+
+3) Commercial/legal
+- We need an SLA rider that quantifies the temporary uplift fee and limits liability during the exception window. Legal should sign off on the rider before we enable the override.
+
+If legal and sales agree on the wording I can schedule the override and ensure routing rules are applied only to Clearwave’s API key.
+
+- Diego
+Director, Infrastructure Services
+Redwood Inference
+
+On 2026-08-14 10:05, Camila Reyes wrote:
+> Hi Ellen — thanks for the heads up...
+
+From: Camila Reyes <camila_reyes@redwood.com>
+To: Ellen Chu <ellen.chu@clearwave.com>
+Cc: Diego Fernandez <diego_fernandez@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: 2026-08-14T14:20:00-07:00
+Subject: Re: Pilot launch next week — need temporary burst + SLA question
+
+Ellen — attaching the proposed one-page SLA rider and a short summary of the operational controls (SLA_Rider_Clearwave.pdf). Key points below (please review and confirm):
+
+- Window: 2026-08-18T16:00:00Z — 2026-08-18T17:00:00Z (1 hour).
+- Routes: /v1/patient-intake, /v1/insurance-lookup (route patterns restricted by path and API key).
+- Burst allowance: route cap increased to 1,000 qps for the two routes; progressive throttling above 900 qps. Hard cap at 1,100 qps.
+- Latency: Redwood commits best-effort to p95 < 200ms. Contractual minimum during the exception: p50 < 80ms and p95 < 350ms.
+- Monitoring: temporary dashboard + 5% trace sampling + alerts (p95 > 400ms or error rate >1%).
+- Commercial: one-time pilot surcharge of $1,500 + standard per-token usage.
+- Legal: rider requires sign-off and DocuSign.
+
+If that looks good I’ll route the rider to your legal and schedule the change. Note we’ll enable the override only after DocuSign is completed and you confirm the exact route patterns and API keys.
+
+Thanks — Camila
+Account Executive, Redwood Inference
+
+[Attachment: SLA_Rider_Clearwave.pdf]
+
+On 2026-08-14 12:30, Diego Fernandez wrote:
+> Camila — digging in on capacity...
+
+From: Ellen Chu <ellen.chu@clearwave.com>
+To: Camila Reyes <camila_reyes@redwood.com>
+Cc: integrations@clearwave.com
+Date: 2026-08-15T09:00:00-07:00
+Subject: Re: Pilot launch next week — need temporary burst + SLA question
+
+Camila — thanks, this looks reasonable and appreciated. We accept the proposed terms and the surcharge. Two quick items before DocuSign:
+
+1) Can you confirm the dashboard URL and that we’ll get a 30-minute sync if an alert fires?
+2) On the latency language: our partner legal will push for stricter wording on the p95 number. Could Redwood confirm best-effort <200ms in email and keep the contractual minimum language as you proposed in the rider? That would be sufficient for procurement to sign off quickly.
+
+Please send the DocuSign and the dashboard link; we’ll confirm route patterns and API keys by EOD.
+
+Best — Ellen
+Ellen Chu
+Head of Integrations
+Clearwave Health
+
+> On Aug 14, 2026, at 2:20 PM, Camila Reyes <camila_reyes@redwood.com> wrote:
+> > Ellen — attaching the proposed one-page SLA rider...

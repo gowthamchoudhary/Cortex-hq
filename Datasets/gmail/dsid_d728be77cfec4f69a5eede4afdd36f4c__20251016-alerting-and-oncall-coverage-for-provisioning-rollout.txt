@@ -1,0 +1,183 @@
+Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwoodinference.com>
+Cc: Irene Choi <irene.choi@redwoodinference.com>
+Date: Thu, Oct 16, 2025 at 9:08 AM
+Subject: Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+Vanessa,
+
+As we head into the staged rollout window for us-east/A100 (ENG-4829), I want to lock down paging coverage + initial alert thresholds so we’re not improvising mid-rollout.
+
+Can you confirm:
+1) Incident ownership model (who declares / who fixes / who approves rollback)
+2) Infra oncall coverage for rollout week (primary/secondary + escalation)
+3) Thresholds you’re comfortable paging on vs ticketing, given we expect some validation flake in the first 24–48h
+
+From SRE side: we can staff an “extra eyes” rotation for rollout hours, but we need crisp page criteria.
+
+Also attaching a draft oncall coverage matrix I pulled together so we can just edit instead of starting from scratch.
+
+Attachment: provisioning-rollout-oncall-coverage-matrix.xlsx
+
+—
+Sean Gallagher
+Director, Site Reliability Engineering
+Redwood Inference
+
+
+
+From: Vanessa Ortiz <vanessa.ortiz@redwoodinference.com>
+To: Sean Gallagher <sean.gallagher@redwoodinference.com>
+Cc: Irene Choi <irene.choi@redwoodinference.com>
+Date: Thu, Oct 16, 2025 at 10:02 AM
+Subject: Re: Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+Sean,
+
+Yes — agree we should be explicit.
+
+(1) Ownership proposal:
+- SRE owns incident process (declare, IC, comms, severity)
+- Infra/Fleet owns remediation of provisioning pipeline + image issues (reimage, quarantine policies, backing out image channel)
+- Control plane changes: Platform oncall for readiness-service bugs (but ideally we shouldn’t be exercising new behavior there during week 1 unless needed)
+- Rollback approval: Infra EM (me) + SRE oncall lead (or you if you’re around). If the rollback is a feature-flag disable, Infra can execute once we agree.
+
+(2) Coverage:
+- Fleet Ops oncall is staffed 24/7; we can add a “rollout buddy” during 9am–6pm PT for the first 3 days.
+- Escalation: me -> Jamal for capacity/business impact -> Priya if control plane dependency.
+
+(3) Alerting sensitivity:
+My main concern is we’ll page ourselves into noise if we page on any failed validation.
+
+Can we do:
+- Page only on sustained failure rate OR large quarantine spikes (since that creates immediate capacity shortfall)
+- Everything else (single-node issues, intermittent NCCL smoke flakes) goes to ticket + dashboard until we see patterns
+
+Happy to review concrete numbers if you have a proposal.
+
+—
+Vanessa Ortiz
+Engineering Manager, Infra/Fleet
+Redwood Inference
+
+
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwoodinference.com>
+Cc: Irene Choi <irene.choi@redwoodinference.com>
+Date: Thu, Oct 16, 2025 at 11:15 AM
+Subject: Re: Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+This works.
+
+Proposed initial page criteria (conservative, rollout-week only):
+
+A) Time-to-ready regression (customer-impact proxy)
+- Page if Provision→Ready P95 > 120 min for 30m (us-east, A100 pools only) AND new nodes added in that window >= 5
+- Ticket if P95 > 90 min for 60m (same filters)
+
+B) Success rate / gating failures (system health)
+- Page if “node ready success rate” < 90% over 30m AND attempts >= 20
+- Ticket if < 95% over 60m
+
+C) Quarantine spike (capacity risk)
+- Page if quarantined / provision attempts > 10% over 30m OR quarantined nodes count increases by >= 10 in 30m
+
+D) Stuck state (pipeline wedge)
+- Page if nodes in “Provisioning” or “Validating” > 50 for > 20m (again, us-east/A100 only)
+
+Noise guardrails:
+- No paging on per-node GPU health failures (Xid/ECC) unless it crosses the success/quarantine thresholds above
+- First 6 hours of rollout: paging enabled only for (C) and (D). We can turn on (A)/(B) once we see baseline.
+
+Incident flow:
+- SRE oncall is IC; first action is to confirm if this is image channel vs infra vs control plane
+- Infra oncall engages immediately if (C)/(D) triggered
+- If we think it’s new behavior: disable rollout flag for us-east/A100 and stop admitting nodes to serving pools (readiness gate should already prevent this, but the flag is the kill switch)
+
+Irene — FYI, this is the rollout-week page policy; we can tighten after we have a clean week of data.
+
+If you’re good with these numbers, I’ll ask Aisha/Sergio to tune alerts accordingly in the observability pack.
+
+—Sean
+
+
+
+From: Vanessa Ortiz <vanessa.ortiz@redwoodinference.com>
+To: Sean Gallagher <sean.gallagher@redwoodinference.com>
+Cc: Irene Choi <irene.choi@redwoodinference.com>
+Date: Thu, Oct 16, 2025 at 2:40 PM
+Subject: Re: Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+Approved on my side.
+
+Only tweak: for (A) I’d prefer P95 > 150 min initially. We’ve seen some slow brings when disk warmup is unlucky, and I don’t want to page until we know it’s systemic.
+
+Everything else looks right, especially the “first 6 hours: only (C)/(D)” guardrail.
+
+Also: please make sure the alert filters are strictly us-east + A100 + rollout-enabled pools. We had one incident last week from overly-broad tags, and I don’t want a repeat during rollout.
+
+—Vanessa
+
+
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwoodinference.com>
+Cc: Irene Choi <irene.choi@redwoodinference.com>
+Date: Fri, Oct 17, 2025 at 8:05 AM
+Subject: Re: Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+Ack — updating (A) to P95 > 150 min for 30m, ticket at > 120 min for 60m.
+
+I’ll also add an explicit note in the alert descriptions:
+- scope = rollout-enabled pools only
+- required labels = region=us-east, gpu_type=A100
+- no per-node IDs in labels (avoid cardinality blowups)
+
+Vanessa: can you drop the Fleet Ops oncall alias you want SRE to page + the “rollout buddy” schedule? Even if it’s just a rotation name, we’ll put it in the runbook.
+
+Irene: we’ll send a short daily rollout status (time-to-ready P50/P95, success rate, quarantines) for the first week.
+
+—Sean
+
+
+
+From: Irene Choi <irene.choi@redwoodinference.com>
+To: Sean Gallagher <sean.gallagher@redwoodinference.com>, Vanessa Ortiz <vanessa.ortiz@redwoodinference.com>
+Date: Fri, Oct 17, 2025 at 9:21 AM
+Subject: Re: Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+Thanks both.
+
++1 to conservative paging for the first window. Please do send the daily status (bullet format is fine). If we page, I want to see (a) suspected root cause category (image vs infra vs control plane vs cloud provider), and (b) whether we disabled the rollout flag.
+
+Vanessa — please confirm we have clear rollback ownership (who flips the flag, who communicates to Support if Dedicated readiness slips).
+
+—
+Irene Choi
+VP, Engineering
+Redwood Inference
+
+
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Irene Choi <irene.choi@redwoodinference.com>, Vanessa Ortiz <vanessa.ortiz@redwoodinference.com>
+Date: Fri, Oct 17, 2025 at 10:02 AM
+Subject: Re: Alerting + oncall coverage for Provision-to-Ready rollout (us-east/A100)
+
+Confirmed.
+
+Rollout-week operating plan (final):
+- Paging thresholds: as in my note, with Vanessa’s update (A: P95 > 150m/30m)
+- First 6 hours: only quarantine spike + stuck state paging enabled
+- Incident ownership: SRE oncall = IC; Infra/Fleet = primary resolver for provisioning/image; Platform oncall engaged only if readiness-service/control-plane issue suspected
+- Rollback/kill switch: Infra oncall flips rollout flag (feature flag disable for us-east/A100 pools) after agreement with SRE IC. Vanessa is escalation for go/no-go if unclear.
+- Comms: SRE IC posts incident updates in #incidents; Infra notifies Support if Dedicated readiness delays are expected to exceed SLA targets
+
+Vanessa — once you send the Fleet Ops oncall alias + rollout buddy schedule, I’ll paste into the runbook and into the incident template.
+
+Irene — daily status will start Monday AM PT.
+
+—Sean

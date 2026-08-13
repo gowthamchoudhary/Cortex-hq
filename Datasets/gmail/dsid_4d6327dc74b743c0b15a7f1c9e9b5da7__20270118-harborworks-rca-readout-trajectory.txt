@@ -1,0 +1,164 @@
+HarborWorks — RCA and corrective actions (exec readout)
+
+From: Alex Mercer <alex.mercer@harborworks.io>
+To: Mina Haddad <mina_haddad@redwood.com>
+Cc: Sanjay Patel <sanjay.patel@harborworks.io>
+Date: Fri, 15 Jan 2027 16:03:00 -0800
+Subject: Production latency spikes + elevated 5xx — urgent
+
+Mina —
+
+We saw a severe degradation in inference latency and an elevated 5xx/error rate across our checkout and search flows on Friday afternoon (approx 15:45-17:30 PST). CPU/GPU metrics on our side show sustained retries from the SDK and a downstream backlog building in the service that calls Redwood. This caused customer sessions to time out and manual rollbacks on our feature flag.
+
+Can you escalate? We have leadership on our side watching — this is impacting US East traffic and revenue. We need: a short root-cause note, corrective steps you will take, and an ETA for full restoration guarantees.
+
+Attaching brief logs we captured. Happy to hop on an urgent call.
+
+— Alex Mercer
+Head of Platform, HarborWorks
+
+Attachments: harborworks-logs-20270115.tar.gz (referenced)
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Alex Mercer <alex.mercer@harborworks.io>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Fri, 15 Jan 2027 16:24:00 -0800
+Subject: Re: Production latency spikes + elevated 5xx — urgent
+
+Alex —
+
+Thanks for the flag and the logs. I'm escalating internally and proposing an immediate short bridge at 16:45 PST so our on-call infra and serving leads can align with your SREs. Preliminary notes: we are seeing a correlated spike in token-generation latency and long tail 5xx from our GPU pool serving the LLM variant you have pinned. We will: 1) open a prioritized incident at our side, 2) push config to force traffic onto lower-latency model variant if needed, 3) gather kernel-level profiles to identify queuing.
+
+Karthik and Jonas are joining the bridge; Grace will coordinate comms and exec updates.
+
+Mina
+VP, Customer Reliability
+Redwood Inference
+
+---
+On Fri, 15 Jan 2027 at 16:03, Alex Mercer <alex.mercer@harborworks.io> wrote:
+> Mina —
+> 
+> We saw a severe degradation in inference latency ...
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Mina Haddad <mina_haddad@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Fri, 15 Jan 2027 17:10:00 -0800
+Subject: internal: HarborWorks incident — quick findings
+
+Team —
+
+Notes from the 16:45 bridge and immediate triage (short):
+- Symptom window: 15:43–17:22 PST, peak at ~16:02.
+- Root symptom: a sudden workload burst (approx 5x baseline QPS) combined with a KV-cache invalidation storm on the model host group; that produced re-warms and KV lookups which serialized on a hot lock in the runtime.
+- Observable effects: token latencies spiking 5x, queue depth increase, and a growth in local GPU memory churn causing transient 5xx from OOM/retry guards.
+
+Immediate mitigations applied (by 16:58):
+1) Traffic split: shifted 35% of HarborWorks traffic to the lower-latency quantized variant (v2-qtz) to relieve hot-path pressure.
+2) Autoscale tweak: reduced scale-up threshold to be more aggressive for this customer pool.
+3) Cache tuning: increased KV cache retention and disabled one aggressive eviction rule.
+
+Next actions (owner / ETA):
+- Karthik: follow up kernel-level trace and submit INF-2978 (ETA 24h).
+- Jonas: add service-level synthetic tests for anchor paths and start 1-hourly checks (ETA 12h).
+- Grace: prepare exec note and schedule customer readout for Mon 10:00 PST (ETA calendar invite sent).
+
+I'll assemble a compact RCA that we can share with HarborWorks by EOD tomorrow. Expect an internal doc + annotated graphs.
+
+Karthik
+Director, Serving Infrastructure
+Redwood Inference
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Sat, 16 Jan 2027 09:08:00 -0800
+Subject: Draft RCA and remediation plan (internal)
+
+Team —
+
+I've drafted the RCA and attached the artifacts we'll share: kernel traces, an annotated latency graph, and the corrective-action tracker. High-level summary for execs and HarborWorks:
+
+Root cause (short): A traffic surge exposed a runtime hot-path where KV cache misses and a lock in the model serving layer caused re-warms and increased GPU memory churn; the pinned model variant had a low tolerance for sudden re-warm cycles.
+
+Corrective actions (categorized):
+- Short term (now -> 72h):
+  * Keep 35% split to v2-qtz; ramp additional traffic if latency holds. (owner: Karthik)
+  * Permanently increase KV cache retention for HarborWorks host group. (owner: Karthik)
+  * Add a fast-fail fallback in the client SDK for 5xx so upstream doesn't pile on retries. (owner: Jonas)
+- Mid term (72h -> 21d):
+  * Ship a runtime patch to remove the hot lock in the KV path and make lookups lock-free. (owner: Karthik; PR target week 2)
+  * Add pre-warm hooks for pinned variants when we detect sudden QPS increases. (owner: Jonas)
+- Long term (30d+):
+  * Offer a guided model-variant pinning policy for customers that includes pre-warm budgets and burst caps. (owner: Product/DM)
+
+Communication plan: Grace to lead the external RCA send and exec readout. We will commit to daily updates for the first 5 business days and a weekly stability check for 30 days.
+
+Please review the attached RCA (harborworks-rca.pdf) and the CPU/GPU sample profiles (cpu-profiles.csv). I'll finalize EOD Sunday for the Monday meeting.
+
+Mina
+VP, Customer Reliability
+Redwood Inference
+
+Attachments: harborworks-rca.pdf, cpu-profiles.csv
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Alex Mercer <alex.mercer@harborworks.io>, Sanjay Patel <sanjay.patel@harborworks.io>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Mon, 18 Jan 2027 10:05:00 -0800
+Subject: HarborWorks RCA and corrective-action timeline (exec readout)
+
+Alex / Sanjay —
+
+Thank you for the bridge on Friday and for your patience while we completed our analysis. Attached is the RCA PDF and the set of artifacts (cpu-profiles.csv) we referenced. Executive summary below:
+
+What happened (short):
+- At ~15:43 PST on 2027-01-15, HarborWorks traffic spiked ~5x and intersected with a KV-cache invalidation storm in our serving runtime for the pinned model. That produced a set of re-warm events and increased GPU memory churn which manifested as higher token latencies and transient 5xx errors.
+
+Immediate impact: degraded latency on search/checkout flows; elevated retry rates on HarborWorks SDK; partial customer-facing timeouts for ~105 minutes during the event window.
+
+Remediation actions and timeline (high level):
+- Completed (Fri 16:58 PST): split 35% traffic to quantized variant v2-qtz; adjusted autoscale policy; relaxed one eviction rule.
+- In progress (Mon 10:00 PST): 1-hourly synthetic checks deployed (Jonas) and fast-fail client SDK update queued.
+- Planned (by 2027-01-20): runtime patch to remove lock in KV path (owner: Karthik) — will be gated through canary and smoke tests.
+- Planned (by 2027-02-05): pre-warm hooks for burst detection and a customer-specific pinning policy (owner: Product).
+
+Commitments to HarborWorks:
+- We will provide daily update notes for the first 5 business days.
+- We will run extended synthetic tests for your anchor routes and share the reports.
+- For the runtime patch, we will provide an impact plan and a rollback strategy before the change window.
+
+Owners / contacts:
+- Mina Haddad (VP, Customer Reliability) — exec readout / SLA coordination
+- Karthik Iyer (Director, Serving Infrastructure) — runtime fix
+- Jonas Weber (Senior SRE) — monitoring, canary, SDK fast-fail
+- Grace O'Connor (Customer Success) — account comms and weekly checkpoints
+
+Next: Grace will follow up with a calendar invite for the Monday 10:00 PST readout and include the extended artifacts link. Please reply if you'd like a dedicated remediation phone bridge outside the scheduled readout.
+
+Best,
+Mina Haddad
+VP, Customer Reliability
+Redwood Inference
+
+Attachments: harborworks-rca.pdf, cpu-profiles.csv
+Related links: https://drive.redwood.com/drive/folders/harborworks/rca-2027-01, JIRA: INF-2978
+From: Alex Mercer <alex.mercer@harborworks.io>
+To: Mina Haddad <mina_haddad@redwood.com>
+Cc: Sanjay Patel <sanjay.patel@harborworks.io>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Mon, 18 Jan 2027 15:40:00 -0800
+Subject: Re: HarborWorks RCA and corrective-action timeline (exec readout)
+
+Mina / team —
+
+Appreciate the clear RCA and the concrete next steps. The split to v2-qtz improved response times for us immediately and the synthetic checks are very helpful. Two asks:
+1) Can we get a short (1-page) ‘what this means for our SLA’ note we can share with HarborWorks leadership? Include the rollback and risk notes for the runtime patch.
+2) Daily status emails for the next 5 business days with a short metric block (median latency, 95th, 5xx rate).
+
+If you can get the one-pager before tomorrow's readout, that would be ideal. We have execs on at 11:30 PST.
+
+Thanks —
+Alex
+Head of Platform, HarborWorks
+
+---
+On Mon, 18 Jan 2027 at 10:05, Mina Haddad <mina_haddad@redwood.com> wrote:
+> Alex / Sanjay —
+> 
+> Thank you for the bridge on Friday...

@@ -1,0 +1,138 @@
+Custom purge certification & grace period — data retention schedules (Clearwave)
+
+From: Thomas Gray <thomas.gray@clearwavehealth.com>
+To: soojin_lee <soojin_lee@redwood.in>
+Cc: LegalOps <legalops@clearwavehealth.com>
+Date: 2026-07-08T09:12:00-07:00
+Subject: Custom purge certification & grace period — data retention schedules
+
+Hi Soojin,
+
+Thanks again for the demo last week. Clearwave is preparing our procurement packet and a couple of retention/deletion items came up from Legal/Clinical Ops that we need to bake into the order form. High level: we need the ability to set bespoke retention windows per dataset (example: diagnostic-attachments 540 days, deidentified-logs 30 days) and an explicit "grace period" (a short retention hold) that can be applied for audit and regulatory review before final irreversible purge.
+
+Questions:
+- Can Redwood support per-bucket retention windows in the Order Form (not just global retention)?
+- We need an auditable deletion certification delivered within 7 business days after purge for any dataset that Clearwave requests verification for. What evidence formats do you provide?
+- In the event of a contested retention hold (customer requests retention be extended for investigations), what is the maximum extension Redwood will allow in a hosted deployment? We may request a 120-day extension in certain cases.
+
+Attached is our retention request template (Clearwave_SLA_Retention_Request_v1.pdf) — it lists the datasets and initial windows. Can you return a proposed SLA clause and an example certification output so legal can review?
+
+Thanks,
+Thomas Gray
+Head of Platform Compliance
+Clearwave Health
+
+Attachments: Clearwave_SLA_Retention_Request_v1.pdf
+
+From: soojin_lee <soojin_lee@redwood.in>
+To: Thomas Gray <thomas.gray@clearwavehealth.com>
+Cc: vivek_kulkarni <vivek_kulkarni@redwood.in>, monica_patel <monica_patel@redwood.in>
+Date: 2026-07-08T12:03:00-07:00
+Subject: Re: Custom purge certification & grace period — data retention schedules
+
+Thomas,
+
+Appreciate the detail and the template — that helps a lot. Short answers up front: yes, we can support per-dataset retention windows in the Order Form; yes, we can deliver an auditable deletion certification; and we can support a customer-requested extension (grace/hold) but need to map the operational impacts (backup windows, cold storage delays) and the certification timing.
+
+I attached a short draft (redwood-retention-proposal-draft.docx) that outlines three options you can choose from in the Order Form:
+1) Standard: global retention + automated purge + deletion confirmation (audit log + object hash) within 5 business days.
+2) Bespoke windows: per-dataset retention with deletion certification delivered within 7 business days (CSV manifest + audit log extract).
+3) Bespoke + grace period: per-dataset windows + customer-triggered grace hold (configurable up to 120 days) — final purge occurs after grace; certification delivered within 10 business days after final purge.
+
+Operational notes:
+- Grace holds are reversible only by the customer (we will not auto-delete while hold is active).
+- Holds can be applied per dataset-id/tag, and we will surface a manifest for each purge.
+- For hosted customers, we do not guarantee immediate destruction of backups until the scheduled backup cycle completes — we will, however, include backup purge tracking in the certification.
+
+Can you confirm whether Clearwave requires an SLA-level commitment on max extension (e.g., allow up to 120 days as part of the contract) or whether you want it as a supported operational procedure (i.e., on request, subject to notices)?
+
+Thanks — looping Vivek and Monica to confirm the technical and contractual wording.
+
+Best,
+Soojin Lee
+Account Lead, Strategic Sales
+Redwood Inference
+
+Attachments: redwood-retention-proposal-draft.docx
+
+From: Thomas Gray <thomas.gray@clearwavehealth.com>
+To: soojin_lee <soojin_lee@redwood.in>
+Cc: LegalOps <legalops@clearwavehealth.com>
+Date: 2026-07-09T10:20:00-07:00
+Subject: Re: Custom purge certification & grace period — data retention schedules
+
+Thanks Soojin — that structure makes sense. A couple clarifications from Legal:
+- Clearwave prefers the 120-day max extension be an explicit optional addendum in the Order Form (we want the ability to elect it at contract signature rather than file tickets later). Can you draft a short clause that we can include?
+- For deletion certification, Legal would prefer a signed attestation (PDF) plus machine-readable evidence (CSV manifest + S3 object IDs + deletion timestamps) and an audit log extract showing the purge operation IDs.
+- If backups cannot be removed immediately, the certification should clearly state the backup retention window and the date by which backups are purged.
+
+One more ask: can you indicate whether Redwood will provide a time-limited escrow of the deleted manifests (e.g., retain the purge manifest for 6 months) so we have an independent record for audits?
+
+If you can get us sample clause language and an example certification file, Legal will take it to procurement.
+
+Thomas
+
+On Thu, Jul 8, 2026 at 12:03 PM soojin_lee@redwood.in wrote:
+> Thomas,
+>
+> Appreciate the detail and the template — that helps a lot. Short answers up front: yes...
+
+From: vivek_kulkarni <vivek_kulkarni@redwood.in>
+To: Thomas Gray <thomas.gray@clearwavehealth.com>
+Cc: soojin_lee <soojin_lee@redwood.in>, monica_patel <monica_patel@redwood.in>, rishi_malhotra <rishi_malhotra@redwood.in>
+Date: 2026-07-10T14:35:00-07:00
+Subject: Re: Custom purge certification & grace period — data retention schedules
+
+Thomas / team,
+
+Technical confirmation and delivery options below. TL;DR: we can support the Order Form addendum with a 120-day optional extension, and we can provide both PDF attestation and machine-readable evidence. Important operational caveats are noted.
+
+Operational details:
+- Deletion flow (hosted):
+  1) Customer triggers purge (or Redwood processes scheduled purge) -> objects marked for deletion and removed from active storage.
+  2) Object lifecycle removes replicas and index entries; background job removes from cold storage according to configured backup retention cycle (typical backup cycle is weekly; backup purge may lag by up to 7-14 days depending on retention tier).
+  3) Final irreversible metadata removal occurs after backup purge completes; we publish a purge manifest when the final removal job runs.
+
+- Certification artifact we will deliver:
+  * Signed PDF attestation (Redwood security contact) stating dataset IDs, purge date, and scope.
+  * CSV manifest: dataset_id, object_id, deletion_timestamp_utc, storage_tier, sha256_hash, purge_operation_id.
+  * Audit log extract: entries listing the purge_operation_id and timestamps for each lifecycle step.
+
+- Backup/escrow options:
+  * We can retain the purge manifest in an audit escrow for up to 6 months (customer option) — Redwood will store the manifest and provide a time-limited signed link.
+  * We do not retain actual deleted object content in escrow; only the manifest and audit evidence.
+
+- SLA wording considerations: we can commit to artifact delivery within 7 business days for bespoke windows (standard plan), or 10 business days if a grace hold was active and purge requires additional reconciliation. We can make the 120-day extension an Order Form addendum (opt-in).
+
+Next steps:
+- Monica / Rishi: can you draft the short Order Form clause and an addendum template that specifically references the artifact types above and the escrow option? I can produce a sample CSV (purge-certification-sample.csv) for Legal to review.
+
+Regards,
+Vivek Kulkarni
+Director, Infrastructure Operations
+Redwood Inference
+
+From: monica_patel <monica_patel@redwood.in>
+To: Thomas Gray <thomas.gray@clearwavehealth.com>
+Cc: soojin_lee <soojin_lee@redwood.in>, vivek_kulkarni <vivek_kulkarni@redwood.in>, rishi_malhotra <rishi_malhotra@redwood.in>
+Date: 2026-07-13T16:45:00-07:00
+Subject: Re: Custom purge certification & grace period — data retention schedules
+
+Thomas,
+
+Thanks for the patience — attached is a short clause and an Order Form addendum language that you can drop into procurement. Key points we included:
+- Per-dataset retention windows are selectable in the Order Form table; each dataset has a retention period and an optional "grace hold" checkbox with a maximum selectable allowance (30, 90, 120 days).
+- Deletion certification: Redwood will deliver a signed attestation PDF and a machine-readable CSV manifest plus the audit log extract. Delivery SLA: within 7 business days for standard purges, within 10 business days where a grace hold was present.
+- Backup purge disclosure: clause clearly states backup purge may lag active deletion by up to 14 days depending on storage tier; certification will include backup purge date when completed.
+- Escrow: purge manifests can be retained for up to 6 months upon customer election (opt-in; additional fee applies).
+
+I put a DocuSign link for the addendum at: https://app.docusign.com/clearwave/RW-CLW-2026-07 — we can turn the option on once procurement confirms. If the language looks good to Legal, reply-all with sign-off and we'll initiate the signature workflow.
+
+If you want us to bake the clause into a master order form right away, tell us which datasets you want to mark as eligible for the 120-day option and we will produce a ready-to-sign addendum.
+
+Best,
+Monica Patel
+Senior Counsel, Commercial Contracts
+Redwood Inference
+
+Attachments: redwood-sla-addendum-clearwave-v1.docx

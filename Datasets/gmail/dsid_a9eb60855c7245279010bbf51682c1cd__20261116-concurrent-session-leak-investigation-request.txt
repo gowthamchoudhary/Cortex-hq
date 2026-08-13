@@ -1,0 +1,128 @@
+Investigate: concurrent SDK sessions leaking / streaming disconnects (NovaHealth POC)
+
+From: Ashley Nguyen <ashley@novahealth.ai>
+To: Tessa Morgan <tessa@redwood.com>
+Date: Mon, 16 Nov 2026 15:22:00 -0800
+Subject: Re: POC notes + strange streaming drops
+
+Hi Tessa —
+
+We ran the POC with your SDK yesterday and started seeing a class of failures when multiple clinicians use the 'live summarization' feature concurrently. Symptoms: streaming stops mid-response (no error to client), then the client quickly reconnects and resumes but with a new session id. We've captured a server-side session dump and a short trace. Attaching session_dump_20261116.tar.gz and our sdk-config.yaml.
+
+Example session IDs: sess-8a4b2 (failed at 14:03 PST), sess-8a4b9 (reconnected), see logs.
+
+This is blocking our go/no-go — results look good otherwise, but reliability at scale matters. Can someone from your runtime/platform team take a look?
+
+Thanks,
+Ashley
+Product Lead, Integrations
+NovaHealth
+
+Attachments: session_dump_20261116.tar.gz (application/gzip, 14MB), sdk-config.yaml (text/yaml)
+
+From: Tessa Morgan <tessa@redwood.com>
+To: Ashley Nguyen <ashley@novahealth.ai>
+Cc: Logan Wright <logan@redwood.com>, Sean Gallagher <sean@redwood.com>, Dev Patel <dev@redwood.com>
+Date: Mon, 16 Nov 2026 16:05:00 -0800
+Subject: Re: POC notes + strange streaming drops
+
+Ashley — thank you for the detailed report and the attachments. Really sorry this is blocking the POC.
+
+Quick context for the team I'm looping in: NovaHealth hit an intermittent streaming cutoff where the client reconnects and a new session ID is created immediately. They see no error on the client and reconnection looks automatic; server-side dump indicates a dropped connection and a new handshake.
+
+Action items from me right now:
+- Can platform/runtime take an initial look at the session dump to see if there was a forced eviction or an unhandled exception? (Logan + Dev)
+- Sean, could you prioritize a short correlation between our autoscaling events and these timestamps — I suspect a node/worker recycle may correlate.
+
+I've included the exact timestamps in the attachments. We need a fast triage so we can communicate a timeline to NovaHealth and avoid jeopardizing the deal (DH-4982).
+
+I'll be available on call at 17:00 PST — can jump on if helpful.
+
+—Tessa
+Senior Sales Engineer, Redwood Inference
+Phone: +1 415 555 0101
+
+From: Logan Wright <logan@redwood.com>
+To: Tessa Morgan <tessa@redwood.com>, Ashley Nguyen <ashley@novahealth.ai>
+Cc: Sean Gallagher <sean@redwood.com>, Dev Patel <dev@redwood.com>
+Date: Mon, 16 Nov 2026 18:03:00 -0800
+Subject: Re: POC notes + strange streaming drops
+
+Thanks for the data, Ashley and Tessa. I pulled the dump and the handshake traces. Initial read: two hypotheses to prioritize — (1) KV cache eviction / prefix mismatch during concurrent prefetch leading to a stalled streaming generator that the connection-layer treats as idle, and (2) an unexpected worker restart (OOM/recycle) causing abrupt TCP closes with our retry-layer issuing a new session id when re-establishing.
+
+What I did so far:
+- Ran a quick grep over the dump for 'session-8a4b' series and aligned timestamps to internal autoscaling/rolling windows. There's a suspicious spike in GC/eviction logs around the same minute as the failure.
+- No obvious unhandled exception stack trace in the dump; it looks like connection teardown.
+
+Request to Dev: can you pull the runtime pod logs for the worker IDs: wk-phi-07 and wk-phi-09 around 2026-11-16T22:03:00Z (UTC). Also — if possible — re-run a repro in a staging pool with concurrent connections and prefetch enabled (sdk-config's prefetch: true) while keeping logging set to debug for cache/eviction events.
+
+For the customer-facing ask: I recommend we (a) confirm whether this is a cache/eviction race or worker recycle and (b) provide a temporary mitigation to disable prefetch or force session-affinity to a single worker for NovaHealth while we root cause.
+
+I'll stand by for logs.
+
+—Logan
+Platform — Runtime Lead
+
+From: Dev Patel <dev@redwood.com>
+To: Logan Wright <logan@redwood.com>, Tessa Morgan <tessa@redwood.com>, Ashley Nguyen <ashley@novahealth.ai>
+Cc: Sean Gallagher <sean@redwood.com>
+Date: Tue, 17 Nov 2026 01:12:00 +0000
+Subject: Re: POC notes + strange streaming drops
+
+Looping in findings from an initial log pull. I attached a filtered log excerpt (see attachment: session_dump_20261116.tar.gz includes logs/excerpt.log). Observations:
+- Worker wk-phi-09 performed a graceful process restart at 2026-11-16T22:02:58Z; reason recorded as scheduled coordinator update (rolling). Restart appears graceful but the connection-level ACK sequence shows a close at 22:03:01Z.
+- Around the same minute we see multiple concurrent prefetch requests with overlapping KV ranges, which triggers an eviction spike in the cache subsystem (eviction throughput spike recorded).
+- No uncaught exception; connection closed by process restart.
+
+Repro plan I executed locally in staging:
+1) Start 40 parallel clients hitting the live summarization endpoint with prefetch enabled (same sdk-config).
+2) Force a coordinator-driven rolling restart on 1 worker.
+3) Observe that some clients drop and re-establish with new session ids; the edge-case occurs when prefetch is mid-flight — the generator's state is lost.
+
+Temporary mitigations we can offer NovaHealth:
+- Flip prefetch: false in their SDK config (quick config change).
+- Enable session-affinity for their namespace so handoffs don't happen during rolling restarts.
+
+I've opened SUP-3210 with the reproduction steps and a patch proposal to persist generator state across worker handoffs, but the fix is non-trivial (~2-3 sprints to do safely). Link: https://redwood.atlassian.net/browse/SUP-3210
+
+Next technical steps:
+- I'll add a small telemetry flag to the SDK to report prefetch in-flight on reconnects so we can gather frequency metrics (low-effort).
+- Logan: can you validate whether a configuration toggle for session-affinity can be applied to NovaHealth's dedicated deployment quickly?
+
+—Dev
+Software Engineer, Runtime
+
+From: Tessa Morgan <tessa@redwood.com>
+To: Ashley Nguyen <ashley@novahealth.ai>
+Cc: Logan Wright <logan@redwood.com>, Dev Patel <dev@redwood.com>, Sean Gallagher <sean@redwood.com>
+Date: Tue, 17 Nov 2026 09:03:00 -0800
+Subject: Re: POC notes + strange streaming drops
+
+Ashley — thank you and team. Appreciate the quick turnaround from Logan and Dev. High-level customer update and next steps below (short, customer-ready):
+
+What we found:
+- The symptoms map to an interaction between SDK prefetch + our rolling worker restarts. When prefetch is active and a worker is restarted mid-prefetch, the in-flight generator state can be lost and the SDK will re-open a session (new session id) without surfacing an explicit error.
+
+Short-term mitigations we propose (pick one, we can apply immediately):
+1) Set prefetch: false in your SDK config (fast, client-side).
+2) We can enable session-affinity for your namespace so connections stay pinned during rolling restarts (platform-side config change).
+
+Medium/Long-term plan:
+- Dev raised SUP-3210 to persist generator state across worker handoffs; ETA ~2-3 sprints.
+- We'll also add a telemetry flag to measure how often prefetch was in-flight on reconnect (so we can quantify impact).
+
+Requested confirmation from NovaHealth: which mitigation would you prefer for the next 48 hours? I can push/assist with either. Also — would you like us on a short call to implement?
+
+Internal asks: Logan / Dev / Sean — please coordinate the session-affinity rollout path and any caveats we should document for the customer. I will follow up with a concise support note and rollback guidance.
+
+Thanks again — we want to keep the POC moving.
+
+Best,
+Tessa
+Senior Sales Engineer, Redwood Inference
+Phone: +1 415 555 0101
+
+On Tue, Nov 16, 2026 at 16:05 Tessa Morgan <tessa@redwood.com> wrote:
+> Ashley — thank you for the detailed report and the attachments. Really sorry this is blocking the POC.
+>
+> Quick context for the team I'm looping in: NovaHealth hit an intermittent streaming cutoff where the client reconnects and a new session ID is created immediately. They see no error on the client and reconnection looks automatic; server-side dump indicates a dropped connection and a new handshake.

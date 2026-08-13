@@ -1,0 +1,127 @@
+NorthStar - intermittent silent flows after private cutover
+
+From: Rajiv Menon <northstar-netops@northstarhealth.com>
+To: jordan_blake@redwood.ai
+Cc: vanessa_ortiz@redwood.ai
+Date: Sat, 24 Oct 2026 23:05:00 +0000
+Subject: Silent TCP flows during large file pushes after cutover
+
+Hi Jordan,
+
+We finished the private deployment cutover to the VPC tunnels this afternoon. Since then, our nightly SFTP pushes (hosted on-prem) to the analytics S3 mirror are intermittently stalling — the TCP sessions stay established but throughput drops to 0 for 20-90s, then resume. We captured a pcap and traceroute (attached).
+
+Symptoms:
+- Long-lived TCP sessions (port 50022) show bursts of packets with no ACKs for tens of seconds.
+- Retransmits pile up on the on-prem side; remote side reports no resets.
+- Problem only occurs when traffic egresses via the new private link (falls back to public path and transfer completes fine).
+
+We believe this may be related to NAT or routing at the handoff. Could you take a look? We can open a maintenance window if needed.
+
+Thanks,
+Rajiv
+NetOps Lead, NorthStar Health
+----
+Attachments: northstar-pcap-20261024.pcap (pcap), northstar-trace-20261024.txt (text)
+
+From: jordan_blake@redwood.ai
+To: Rajiv Menon <northstar-netops@northstarhealth.com>
+Cc: marissa_cole@redwood.ai, karthik_iyer@redwood.ai, vanessa_ortiz@redwood.ai
+Date: Sun, 25 Oct 2026 01:12:00 +0000
+Subject: Re: Silent TCP flows during large file pushes after cutover
+
+Rajiv — thanks for the quick capture and trace. Looping in Marissa and Karthik to triage networking/NAT interaction and SG rules.
+
+Quick asks:
+- Marissa: can you sanity-check the pcap for asymmetric routing or duplicate-SYN patterns?
+- Karthik: can you check conntrack/ephemeral port allocation on the gateway instances and whether SNAT exhaustion could explain the pauses?
+- Rajiv: can you confirm whether the on-prem side uses MSS clamping or a downstream firewall that might drop large TCP segments?
+
+We’ll start with the pcap and traceroute and follow up with an action plan. I’ve opened RI-8421 and will post notes there.
+
+—Jordan
+Director, Customer Escalations
+Redwood Inference
+
+From: marissa_cole@redwood.ai
+To: jordan_blake@redwood.ai, Rajiv Menon <northstar-netops@northstarhealth.com>
+Cc: karthik_iyer@redwood.ai, vanessa_ortiz@redwood.ai
+Date: Sun, 25 Oct 2026 06:08:00 +0000
+Subject: Re: Silent TCP flows during large file pushes after cutover
+
+Thanks — dug into the pcap and trace. Key findings:
+
+- Evidence of forward progress (data segments) from on-prem -> server, but delayed ACKs from server side for 15–40s windows. During those windows the sender retransmits and backs off.
+- TCP MSS looks consistent, but I see fragmentation on a handful of packets at the partner edge: packets with DF set that exceed 1420 bytes are being dropped and retransmitted.
+- There are intermittent duplicated SYN packets seen from the server when the flow first establishes, followed by SYN retries with identical 4-tuple — suggests hairpin/NAT path oscillation where two SNAT points are momentarily in play.
+- Traceroute shows two plausible return paths: primary via the new private tunnel, secondary via a public egress peer. TTLs and AS paths indicate split-horizon behavior at the partner handoff.
+
+Hypothesis: the on-prem -> VPC path is experiencing MTU/fragmentation drops at the edge (DF set packets being dropped), combined with a split-horizon routing asymmetry that momentarily causes packets to egress a different SNAT egress causing the server to see unexpected source ports and trigger delayed ACKs / retransmits. Conntrack on the gateway may be re-allocating ephemeral ports on handoff, creating a short window where packets are accepted but ACKs mismatched.
+
+Immediate recommended mitigations (low-risk):
+1) Apply PMTU clamp on the VPC handoff to 1400 on the gateway (temporary) to avoid DF-drop-induced stalls.
+2) Ensure security group allows the ephemeral port range 32768-60999 between the VPC and on-prem exit path (we saw a few ACKs blocked by an SG that only allowed 49152-65535).
+3) Add a short-lived static route on the gateway to prefer the private tunnel for the on-prem subnet to avoid flip-flopping during peak.
+4) Enable and monitor conntrack sticky mapping for the affected SNAT pool to prevent port rebinds during path change.
+
+I’ll prepare a step-by-step runbook for these steps. If we still see stalls after PMTU clamp, we should capture a simultaneous packet trace on both handoff points for correlation.
+
+—Marissa
+Senior Network Reliability Engineer
+Redwood Inference
+
+On Sat, Oct 24, 2026 at 23:05 Rajiv Menon <northstar-netops@northstarhealth.com> wrote:
+> Hi Jordan,
+> 
+> We finished the private deployment cutover to the VPC tunnels this afternoon. Since then, our nightly SFTP pushes...
+> 
+> (original attachments: northstar-pcap-20261024.pcap, northstar-trace-20261024.txt)
+
+From: karthik_iyer@redwood.ai
+To: jordan_blake@redwood.ai, marissa_cole@redwood.ai, Rajiv Menon <northstar-netops@northstarhealth.com>
+Cc: vanessa_ortiz@redwood.ai
+Date: Sun, 25 Oct 2026 09:23:00 +0000
+Subject: Re: Silent TCP flows during large file pushes after cutover
+
+Adding a few platform-level observations from the gateway metrics and conntrack logs:
+
+- Conntrack entries show brief bursts of port reuse for the SNAT pool when the on-prem route flaps between egress points; time windows line up with the stalls Rajiv reports. Peak conntrack usage is below capacity, but port churn is visible for affected flows.
+- NAT translations were occasionally being applied twice for flows that hit a path-change during session establishment; we have a known edge behavior when split-horizon routes cause packets to be processed by the standby NAT instance.
+- No CPU or NIC errors on the gateway instances — this appears to be path/routing instability plus MTU.
+
+I’ll push the following today to a staging gateway to validate:
+- PMTU clamp to 1400 (Marissa suggested)
+- Expand SG ephemeral range to include 32768-65535 across the private handoff temporarily
+- Enable conntrack sticky mapping flag for the SNAT pool for 24 hours and monitor for port-churn reduction
+
+If that validates, we can schedule a short maintenance window with NorthStar to apply to production gateways.
+
+—Karthik
+Principal Network Engineer
+Redwood Inference
+
+On Sun, 25 Oct 2026 06:08:00 +0000 marissa_cole@redwood.ai wrote:
+> Thanks — dug into the pcap and trace. Key findings:
+> ...
+From: Rajiv Menon <northstar-netops@northstarhealth.com>
+To: karthik_iyer@redwood.ai, marissa_cole@redwood.ai, jordan_blake@redwood.ai
+Date: Sun, 25 Oct 2026 12:47:00 +0000
+Subject: Re: Silent TCP flows during large file pushes after cutover
+
+Thanks — that aligns with what we suspected. We can do a maintenance window Tue 02:00–03:00 UTC to apply the gateway changes.
+
+Two quick notes from our side:
+- Our edge firewall does MSS clamping to 1380 for WAN links; if you clamp to 1400 on your end that should be safe.
+- We can also enable tcpdump on the on-prem egress for the window to capture both sides if needed.
+
+Please confirm the exact changes you will apply and we’ll coordinate the window.
+
+—Rajiv
+NetOps Lead, NorthStar Health
+
+---
+Action items summary:
+- Marissa/Karthik to validate PMTU clamp (1400) and conntrack sticky mapping in staging (by Mon EOD).
+- Expand SG ephemeral range to 32768-65535 on private handoff temporarily.
+- Schedule Tue 02:00–03:00 UTC maintenance with NorthStar to apply to prod gateways and collect bilateral pcaps if stalls persist.
+
+References: https://redwood.atlassian.net/browse/RI-8421, runbook: https://drive.redwood.com/teams/private-runbooks/northstar-cutover-playbook.md

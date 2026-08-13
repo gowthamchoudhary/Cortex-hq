@@ -1,0 +1,140 @@
+Post-demo: integration checklist & schema clarifications
+
+From: Neha Kapoor <neha_kapoor@redwood.ai>
+To: Samir Gupta <samir@clearsky.ai>, Priya Rao <priya.rao@clearsky.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2028-04-26T10:02:00-07:00
+Subject: Post-demo: integration checklist & schema clarifications
+
+Hi Samir / Priya — thanks again for the demo time this morning. Quick recap and proposed next steps so we all have the same picture:  
+
+What we covered
+- Demo: hosted API + private deployment options; high-level routing and fallback.
+- Use case: product search re-ranking + contextual chat for support articles. You want embeddings for semantic search and a reranker to improve CTR.
+
+Open technical items we promised to clarify (below) — Laura and I added suggested notes inline. Can you confirm or add details?
+1) SDK & auth model: Do you prefer an SDK key per service or per product environment? We recommended per-service keys + short-lived tokens for workers. See attached redwood_sdk_quickstart.md.
+2) Request/response schema: you asked about chat vs completions for the reranker pipeline and how tokenization/max_tokens affect costs.
+3) Streaming semantics: whether partial tokens should be exposed to your websocket pipeline, and stop sequence behavior when using functions/tool-calling.
+4) Embeddings vs reranker flow: where you want to persist embeddings and whether reranker will re-run on a smaller candidate set or be used as a second-stage ranker.
+
+Attachments included: redwood_sdk_quickstart.md (SDK samples), request_response_schema_draft.json (initial schema for chat/completions/tool calls), clearsky_mutual_action_plan.xlsx (proposed timeline).
+
+Immediate next steps
+- Action: Samir/Priya: confirm preferred auth model and whether you need HSM/KMS integration (reply by Thu 4/28).
+- Action: Laura: put together recommended request/response patterns for (a) candidate generation (embeddings -> ANN) and (b) reranker (chat/completions) — deliverable: short doc by 4/27.
+- Action: Karthik/Neha: finalize SOW draft and pricing for Dedicated pool assumptions (week of 5/1).
+
+Thanks — I’m looping Laura and Karthik for technical + commercial follow-up.
+
+Best,
+Neha Kapoor
+Account Executive, Redwood Inference
+neha_kapoor@redwood.ai
+
+---
+Attachments: redwood_sdk_quickstart.md (text), request_response_schema_draft.json (json), clearsky_mutual_action_plan.xlsx (spreadsheet)
+
+From: Samir Gupta <samir@clearsky.ai>
+To: Neha Kapoor <neha_kapoor@redwood.ai>, Priya Rao <priya.rao@clearsky.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2028-04-26T13:18:00-07:00
+Subject: Re: Post-demo: integration checklist & schema clarifications
+
+Thanks Neha — helpful summary. A few clarifying questions from our engineering and infra side before we lock timeline:  
+
+1) Chat vs completions for reranker: Our initial plan was: embeddings -> ANN -> top-50 candidates -> reranker. Is Redwood recommending the reranker be invoked as a completions endpoint scoring function (single-turn text input) or as a chat call to leverage system/user roles and tool-calling? We care about deterministic token accounting.
+
+2) Tokenization and max_tokens: If we send long concatenated context (customer history + top-k), should max_tokens be applied to the final model output only, or do we need to trim inputs to avoid early truncation affecting reranker behavior? Also, how do stop sequences interact with streaming — if we set multiple stop tokens, are partial streams cut earlier?
+
+3) Streaming semantics & tool-calling: If we enable streaming to our frontend websocket, can tool-calls (structured JSON outputs) be emitted as a single final message only, or will we receive incremental chunks that we need to reassemble? Prefer not to parse partial JSON.
+
+4) Embedding storage: We store vectors in our ANN; curious about Redwood's recommendations for vector freshness and whether you surface embedding version metadata in responses so we can tie reranker results back to model/quantization.
+
+If Laura can answer 1–3 and confirm the cost/latency trade-offs, we can mark the MAP milestones.
+
+—Samir
+Samir Gupta
+CTO, ClearSky.ai
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Samir Gupta <samir@clearsky.ai>, Priya Rao <priya.rao@clearsky.ai>
+Cc: Neha Kapoor <neha_kapoor@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2028-04-27T09:04:00-07:00
+Subject: Re: Post-demo: integration checklist & schema clarifications
+
+Hi Samir — good questions. Long answer short: both patterns are supported; pick based on your scoring needs. Details below (copy/paste friendly).
+
+1) Reranker invocation pattern
+- Completions-style reranker (recommended when you want a single scalar score or short label): send a prompt that includes candidate text and ask for a score. Simple, slightly cheaper.
+- Chat-style reranker (recommended when you want role-based context, multi-turn context, or function/tool-calling for structured annotations): uses messages array (system/user/assistant) and supports function calls. Slightly higher token overhead for message wrappers but gives structured output options.
+
+Suggested: for top-50 rerank -> use completions for initial quick score pass (lower latency/cost), then run chat-based second-pass on top-10 if you need structured justification.
+
+2) Tokenization & max_tokens
+- max_tokens only limits generated output tokens. Input tokens still count toward request size and affect truncation. You must trim inputs to fit model context window.
+- Best practice: build a sliding/truncation policy that keeps the most relevant context (query + candidate snippet) and enforce a token budget for inputs.
+- Stop sequences: when streaming, stops are applied at the generation layer; partial streams are emitted until the model hits a stop token or EOF. If you rely on receiving fully-formed JSON, do not process partial streams until you see the full stop token; alternatively, use non-streaming for structured tool outputs.
+
+3) Streaming + tool-calling
+- If you enable streaming with function/tool-calling, Redwood will emit token chunks as generated. Function calls are signaled as a final structured call in the assistant role, but the JSON payload can be split across chunks. We recommend one of two patterns:  
+  a) Non-streaming for tool calls (safer — you get one complete JSON in the response).  
+  b) Streaming + reassembly on client — we provide chunk metadata (sequence id, is_final flag) to make reassembly deterministic. See attached request_response_schema_draft.json for chunk fields.
+
+4) Embedding metadata
+- We attach model_id and quantization_profile fields to embedding responses. We recommend persisting these alongside vectors so you can filter by embedding generation version during recall/rerank.
+
+Implementation snippet (pseudo cURL)
+- Completions score call: 
+  curl -X POST https://api.redwood.ai/v1/completions \n    -H 'Authorization: Bearer <SK>' \n    -d '{"model":"rwd-encoder-1","input":"SCORE:\nCandidate: <text>\nQuery: <q>","max_tokens":5}'
+
+- Chat tool (non-streaming final JSON): 
+  POST /v1/chat with messages=[{role:system,content:...}, {role:user,content:...}] & "stream":false
+
+Laura — Solutions Engineer
+laura_bennett@redwood.ai
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Samir Gupta <samir@clearsky.ai>, Priya Rao <priya.rao@clearsky.ai>
+Cc: Neha Kapoor <neha_kapoor@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2028-04-27T11:45:00-07:00
+Subject: Re: Post-demo: integration checklist & schema clarifications
+
+Samir — quick commercial note: our suggested two-pass reranker approach (completions for top-50, chat second-pass on top-10) maps to the MAP milestones I attached. Estimated latency: top-50 completions scoring ~120–180ms average per request under Dedicated pool assumptions; chat second-pass ~230–400ms. We'll include both cost scenarios in the SOW.
+
+Could you confirm: preferred go/no-go for Dedicated (reserved GPUs) vs Hosted API for POC? That determines expected lead times for capacity and pricing.
+
+Karthik Iyer
+Sales Engineer, Redwood Inference
+
+From: Samir Gupta <samir@clearsky.ai>
+To: Neha Kapoor <neha_kapoor@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Priya Rao <priya.rao@clearsky.ai>
+Date: 2028-04-28T09:18:00-07:00
+Subject: Re: Post-demo: integration checklist & schema clarifications
+
+Great — this is very helpful. A few final items before we sign the MAP:  
+
+- We will proceed with Hosted API for the POC; Dedicated for production is our nominal target pending performance tests.
+- Confirming preference: non-streaming for initial reranker tool-calls (we'll only stream chat for interactive support UI).
+- Security question: do you persist input text or embeddings in Hosted mode? We need to confirm retention window and whether you can disable logging for sensitive workflows.
+
+Priya — could you file the security questionnaire answers to the Drive folder and I’ll loop Legal if needed. Neha / Laura / Karthik — can you add the non-streaming examples to the request_response_draft and push to the shared Drive by EOD?
+
+Thanks,
+Samir
+
+From: Neha Kapoor <neha_kapoor@redwood.ai>
+To: Samir Gupta <samir@clearsky.ai>, Priya Rao <priya.rao@clearsky.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: 2028-04-28T09:42:00-07:00
+Subject: Re: Post-demo: integration checklist & schema clarifications
+
+Thanks Samir — quick answers and confirmations:  
+- Hosted POC: we will set defaults to not persist raw inputs and retain embeddings for 30 days by default; we can provide a Data Processing Addendum to disable logging/retention for specific endpoints (we’ll mark this in the MAP).
+- Laura/Karthik: will add non-streaming examples and explicit chunk-reassembly notes to request_response_schema_draft.json and upload to the Drive by EOD 4/28.
+- Neha action: SOW & MAP update targeted 5/1; I’ll send a version to your HubSpot contact next.
+
+Neha Kapoor
+Account Executive, Redwood Inference
+neha_kapoor@redwood.ai

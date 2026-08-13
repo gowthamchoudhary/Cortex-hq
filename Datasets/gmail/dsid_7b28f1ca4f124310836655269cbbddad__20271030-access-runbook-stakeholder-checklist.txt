@@ -1,0 +1,127 @@
+Access runbook and stakeholder checklist for SSO/SCIM/IP cutover
+
+From: Lydia Park <lydia.park@finovate.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+Cc: security@finovate.com
+Date: Sun, 24 Oct 2027 16:12:00 -0700
+Subject: Redwood onboarding - SAML/SCIM cutover logistics
+
+Hi Vanessa,
+
+Thanks again for the walkthrough today. Our security and identity teams wanted a single checklist we can follow for the cutover window. Key asks from our side:
+- Confirm SAML SSO entity change window and rollback steps
+- SCIM mapping examples for groups + role attributes (we have nested groups)
+- IP allowlist CIDR blocks and whether Redwood supports per-tenant static IPs or a region list
+- Service account naming conventions and minimum scopes for automated provisioning
+
+We were hoping to do a dry run the week of Nov 8 and go-live the week after, but we need your runbook to align the stakeholders. Can you send the runbook and any sample artifacts? Also please include any checklist items we must have signed off by our IAM (e.g., metadata exchange, cert rotation notice).
+
+Appreciate it,
+Lydia
+
+--
+Lydia Park
+Director, Platform Security
+Finovate Solutions
+lydia.park@finovate.com
++1 (415) 555-0199
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+To: Lydia Park <lydia.park@finovate.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Mon, 25 Oct 2027 09:05:00 -0700
+Subject: Re: Redwood onboarding - SAML/SCIM cutover logistics
+
+Hi Lydia — thanks for the clear list. Attaching our first-pass runbook and a SCIM mapping sample. High-level plan below and checklist at the end of the runbook: 
+
+High-level cutover plan (proposed):
+1) Pre-cutover dry run in staging (Nov 8): validate SCIM group sync + role mapping, exercise SAML metadata swap with TTL
+2) IP allowlist pre-seed: we provide the CIDRs you need to whitelist and a temporary test IP for the dry run
+3) Service account creation & least-privilege check: we'll create a provisioning SA in our staging tenant for you to sanity-check scopes
+4) Go/No-go decision window and rollback steps (we include a DNS and cert rollback checklist)
+
+Notes on items you asked about: 
+- SAML: we support SP-initiated and IdP-initiated flows. We will provide signed metadata and a short script for cert rotate if needed.
+- SCIM: our default mapping supports nested groups and multi-valued role attributes; sample mapping (attached) shows how we map group -> role.
+- IPs: for Hosted customers we publish a stable region CIDR list; for Dedicated/Dedicated-pool customers we can provision static egress IPs (requires a Dedicated commitment).
+- Service accounts: default pattern is redwood-<customer>-provisioner with tenant tag. We recommend a single SA per org and ephemeral tokens for automation.
+
+I attached: redwood-access-runbook-v1.pdf, scim-mapping-sample.csv, ip-allowlist-range.txt.
+
+If this looks good I can loop in Marissa for approvals on the dry-run date and Ben to coordinate the provisioning tasks.
+
+Thanks,
+Vanessa
+
+--
+Vanessa Ortiz
+Customer Success Manager, Redwood Inference
+vanessa.ortiz@redwood.com
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Lydia Park <lydia.park@finovate.com>
+Cc: Neha Kapoor <neha.kapoor@redwood.com>
+Date: Tue, 26 Oct 2027 10:22:00 -0700
+Subject: Re: Redwood onboarding - SAML/SCIM cutover logistics
+
+Adding ops notes on the provisioning side.
+
+Vanessa — thanks for the attachments. A couple engineering clarifications we should capture in the runbook before dry run: 
+- Service account scopes: provisioning SA will need: scim:write, scim:read, auth:token_create. We will not grant admin:users by default.
+- Token rotation: include a section that documents short-lived token cadence. We'll provide a CLI snippet to rotate the SA token and publish to the runbook.
+- Rate limits during SCIM sync: default limit is 200 requests/min; if Finovate plans a full re-sync during window, we recommend a staggered approach.
+
+Action items for staging dry run (me):
+- Create staging SA and share creds via our secrets workflow (I will request the vault policy)
+- Provide a test egress IP (10.11.12.34) and CIDR ranges for pre-seeding
+- Run sample SCIM push and capture mapping edge-cases (nested group depth > 3)
+
+Lydia — can you confirm your IAM lead who will approve the staging SA and whether they prefer an ephemeral or long-lived workflow for the automation tokens?
+
+Ben
+
+--
+Ben Carter
+Solutions Engineering
+ben.carter@redwood.com
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Lydia Park <lydia.park@finovate.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Fri, 29 Oct 2027 14:18:00 -0700
+Subject: Re: Redwood onboarding - SAML/SCIM cutover logistics
+
+Appreciate the thorough plan. A few leadership asks before we lock dates: 
+- Ensure the runbook contains explicit rollback criteria (metric thresholds and user-visible checks) — not just steps.
+- Include a single-point communications template for both companies (status updates + incident escalation matrix).
+- Confirm any Dedicated-only features are flagged so Finovate can decide whether to pursue reserved capacity for static IPs.
+
+Vanessa, please add a short section called "Stakeholder checklist" at the top of the runbook that lists sign-offs (IAM, Network, App Owners) and who on our side owns each. For the dry run, Nov 8 still OK for the team? Ben, please coordinate the staging SA creation by Nov 5 so we have time.
+
+Marissa
+
+--
+Marissa Cole
+Head of Customer Success
+marissa.cole@redwood.com
+Redwood Inference
+
+From: Lydia Park <lydia.park@finovate.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Sat, 30 Oct 2027 11:45:00 -0700
+Subject: Re: Redwood onboarding - SAML/SCIM cutover logistics
+
+Thanks all — this is perfect. Nov 8 dry run is confirmed by our IAM (Maya Singh, maya.singh@finovate.com). We will: 
+- Whitelist the test egress IP you provided for the staging test (10.11.12.34)
+- Provide a readout of nested-group examples we want to preserve
+- Approve the stakeholder checklist doc once Vanessa adds owners and target sign-off times
+
+Please go ahead with the staging SA creation Nov 5 and share vault access per Ben's note. I'll review the runbook and get back with any redlines by EOD Mon, Nov 1.
+
+Best,
+Lydia
+
+--
+Lydia Park
+Director, Platform Security
+Finovate Solutions

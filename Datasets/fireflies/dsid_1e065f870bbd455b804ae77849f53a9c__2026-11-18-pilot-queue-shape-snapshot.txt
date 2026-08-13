@@ -1,0 +1,62 @@
+Pilot queue-shape snapshot & backpressure review
+
+Meeting header:
+- Date: 2026-11-18
+- Start: 15:00 PT
+- Duration: ~52 minutes
+- Attendees: Maya (Redwood AE), Liam (Redwood SE), Noah (CSM); Sara (AuroraPay Head of Platform), Diego (SRE), Ellen (ML Eng)
+
+Summary:
+- Quick snapshot of pilot steady-state; main focus on queue shape and emergent backpressure at 3k RPS equivalency, looking at continuous batching behaviour and concurrency targets. Agree to run per-variant latency sweeps and validate replay.
+
+Transcript:
+[00:00] Maya: okay uh let's get started, thanks everyone for joining, we wanted to do a... quick snapshot of where the pilot is at after the traffic ramp last week. um Sara, you good to kick off with what you saw on your side?
+[00:12] Sara: yeah thanks Maya, so we ramped to roughly 3k rps equivalency using our thin-client replay, mostly short prompts, average length ~80 tokens. we noticed a tail rise in latency around the 95/99, and at times the queue length spikes which then causes a couple request retries from the client.
+[00:26] Diego: yeah (interruption) the interesting bit is we start to see backpressure in our service mesh rather than in Redwood's route — requests pile in the ingress, then some get dropped. it could be how we shaped concurrency on our side.
+[00:40] Liam: right, we've seen similar patterns; continuous batching is trying to amortize tokens but when concurrency is capped too low you'll get long queueing windows that blow up pctile. couple questions, do you have the KV cache enabled in these runs?
+[00:52] Ellen: we tested two toggles: KV cache on and KV off. most of the bulk replay used KV on. toggling it off made the P95 worse by about 18% for the biggest model.
+[01:04] Liam: that aligns. another knob is batch max latency vs batch size, we can nudge batch cap from 20ms to 40ms to reduce request batching frequency which sometimes helps tail.
+[01:16] Maya: quick note — we've uploaded a snapshot deck to the shared drives, link: drive.redwood/pilot/aft-queue-snapshot (see notes).
+[01:24] Sara: cool, we'll pull it after. Diego, do you have the ingress metrics?
+[01:28] Diego: yes, I can show a clip, um (pauses) but in short the ingress queue climbs at the same cadence as the spike in Redwood's accept rate; when we hit about 60 concurrent connections per instance the mesh starts to shard requests and latency cascades.
+[01:44] Noah: that could be related to your service concurrency shaping; if you can raise the per-instance concurrency and let Redwood handle soft queuing the system might smooth out.
+[01:53] Ellen: question on that — we have strict SLA on worker thread counts, can't just blast concurrency up without mem impacts. is there a recommended concurrency target?
+[02:02] Liam: for the model family you're running, we'd typically start with per-vCPU concurrency 4-6 for lower-latency variants and 2-3 for larger when KV is enabled. but more important is the total in-flight tokens; if we keep average in-flight under 120k tokens across the pool the P95 tends to behave.
+[02:18] Sara: the numbers help, can you put that in the sheet?
+[02:21] Liam: yes i'll put a chart, i'll run model-variant sweeps for P50/P95/P99 and include with kv on/off.
+[02:28] Diego: one thing we saw — once reply queueing starts the client retries are exacerbating the burst; so we need to coordinate retry backoffs too. our replay script is currently aggressive.
+[02:40] Ellen: we can soften the retry policy, add exponential. however we still want to test Redwood burst/fallback behaviour — do you have a fallback policy we can trigger?
+[02:49] Maya: yes we do; in pilot config we can route to a cheaper quantized variant automatically when latency exceeds threshold. it's controlled by the routing policy in the pilot config. we can demo that.
+[02:58] Sara: did you see any quality regressions when falling back? we need accuracy to remain close for user flows.
+[03:04] Liam: in our internal tests quality delta was small for summary tasks, larger for open-ended creative completions. we can add a short eval set from AuroraPay (like 20 prompts) to measure delta.
+[03:14] Ellen: we'll put together that eval set, should be representative of billing descriptions and short replies.
+[03:21] Noah: action: Ellen to share eval set and test harness link.
+[03:25] Diego: another datapoint — when we tried to increase batch max latency it helped throughput but increased median by ~30ms which is okay for most flows but not for auth flows. we need route-level policies.
+[03:38] Maya: yes route-level concurrency and batch overrides are supported, you can pin auth route to a low-latency profile. we'll add recommended configs to the deck.
+[03:46] Sara: what about KV cache TTL? any sweet spots?
+[03:50] Liam: short TTLs help if your prompts vary, but for repeated prefixes a longer TTL gives large wins. for your workload with heavy repeated header patterns, increasing TTL to 2 minutes reduced token generation 7-9%.
+[04:04] Ellen: noted. will tune.
+[04:07] Maya: okay let's talk concrete next steps — Liam you'll run the latency sweeps and share CSVs, attach batch cap experiments. Ellen will run replay with softened retry and share logs. Maya will send updated pilot pricing including burst capacity and fallback policy options.
+[04:22] Sara: timeline — can we get the CSVs and pricing by EOW? means 11/23?
+[04:27] Maya: yes we can do 11/20 for pricing, 11/23 for the sweeps.
+[04:31] Diego: can we also get an example route config snippet for setting per-route batch windows? that's helpful for our infra team.
+[04:37] Liam: i'll add samples to the sheet and the deck.
+[04:40] Ellen: one more ask — security quiz: do you have a link for audit logs retention in Private mode? we might need the compliance add-on.
+[04:47] Maya: sure i'll drop the security pack link (SOC2 + audit log retention) in the CRM and add contact for security team.
+[04:53] Sara: awesome. last thing — can we schedule a focused follow-up after you upload sweeps? maybe 30 minutes next wednesday?
+[04:59] Maya: yes let's tentatively put 11/25 14:00 PT. we'll confirm in invite.
+[05:05] Noah: cool, thanks everyone.
+
+End recap (auto):
+- Run per-variant P50/P95/P99 latency sweeps with KV on/off (Liam)
+- Soften replay retries and share logs (Ellen)
+- AE to share pilot pricing with burst options and security pack (Maya)
+- Add route-level batch/concurrency examples to deck (Liam)
+- Schedule follow-up for 2026-11-25 14:00 PT
+
+References & shared artifacts:
+- deck: drive.redwood/pilot/aft-queue-snapshot
+- results sheet: drive.redwood/pilot/aft-queue-results.csv
+- replay script: gitlab.aurorapay/replay/thin-client-v3
+
+Notes on transcript quality: occasional mis-transcription of acronyms (K V cache -> KV cache), some speaker overlap labeled as interruptions.

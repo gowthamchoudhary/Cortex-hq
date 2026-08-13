@@ -1,0 +1,114 @@
+Re: Renewal planning — sizing amendment and smoothing for next term
+
+From: Asha Rao <asha.rao@novahealth.com>
+To: kimberly_park@redwood.com
+Cc: ops@novahealth.com
+Date: Tue, 20 Jun 2028 09:12:00 -0700
+Subject: Renewal planning — Q2 usage spike and possible capacity amendment
+
+Hi Kimberly,
+
+Quick note as we start renewal discussions: Q2 behavior is showing repeated short bursts where our p95 latency spikes and queueing increases — attached is the raw daily GPU utilization and token throughput for the quarter (nova_usage_report_Q2.csv). We estimate the current Dedicated tranche will be capacity-constrained if we keep the same commit profile for next term.
+
+Two asks from our side:
+- Can Redwood propose a sizing approach that smooths for peaky inference workloads while keeping committed spend reasonable?
+- We'd like a draft amendment we can run by procurement that includes both a small guaranteed top-up of GPUs for peak windows and a burst override policy.
+
+Would you and your infra team be able to sketch a recommendation this week? We're targeting a renewal signature in early July and need to lock the economics.
+
+Thanks,
+Asha
+Asha Rao
+Head of ML Ops, Nova Health
+asha.rao@novahealth.com
+
+Attachment: nova_usage_report_Q2.csv (CSV, 1.2MB)
+
+From: kimberly_park@redwood.com
+To: Asha Rao <asha.rao@novahealth.com>
+Cc: karthik_iyer@redwood.com, aditya_rao@redwood.com
+Date: Tue, 20 Jun 2028 11:04:00 -07:00
+Subject: Re: Renewal planning — Q2 usage spike and possible capacity amendment
+
+Hi Asha — thanks for the dataset and the heads-up. We dug into the report and ran a short internal simulation against three runway scenarios (steady, seasonal-peaks, and high-burst). Highlights here:
+
+- Root cause: short (2–8 minute) fan-outs during business-hour model retrains and customer demo windows cause KV cache churn and reduce effective concurrent slots by ~18–24% during peaks.
+- Short-term recommendation: Add a 10–GPU top-up pool (RTX-equivalent) that is billed at a discounted burst rate and auto-attaches during defined peak windows. This maintains your committed slab but gives headroom for the p95 latency SLO.
+- Long-term: Introduce KV-prefetching on the model serving path + prefix caching we can enable; that reduces peak token cost by ~12% and lowers the size of a required top-up.
+
+I've attached a one-page sketch and a pricing delta we can fold into an amendment. If that sounds okay, we'll draft a formal amendment with staggered billing (commit stays, burst pays-as-used with a monthly cap).
+
+Proposed next step: 30-min sync Thursday to walk the numbers with your ops team. What time works for you?
+
+Best,
+Kimberly Park
+Head of Strategic Accounts — Redwood Inference
+kimberly_park@redwood.com
+
+Attachment: proposed_amendment_draft.pdf (PDF, 68KB)
+
+From: Asha Rao <asha.rao@novahealth.com>
+To: kimberly_park@redwood.com
+Cc: ops@novahealth.com
+Date: Wed, 21 Jun 2028 08:36:00 -07:00
+Subject: Re: Renewal planning — Q2 usage spike and possible capacity amendment
+
+Kimberly — thanks for the quick analysis. A few clarifying questions from our procurement/ops side: 
+
+1) For the 10-GPU top-up, can you provide an SLA on attachment time and an upper-bound on minutes billed per attach? Our finance team wants to avoid unbounded burst billing.
+2) Would the burst pool be single-region (us-west) or multi-region? We have east coast demo customers that could trigger similar patterns.
+3) Can Redwood provide a short-run test (7–14 days) to validate the KV-prefetch improvement before we sign the amendment?
+
+If you can answer these quickly we can get legal to draft the amendment. We have a weekly renewal meeting Friday where we'd like to present a recommended structure.
+
+—Asha
+
+On Tue, Jun 20, 2028 at 11:04 AM kimberly_park@redwood.com wrote:
+> Hi Asha — thanks for the dataset and the heads-up. We dug into the report and ran a short internal simulation against three runway scenarios (steady, seasonal-peaks, and high-burst). Highlights here:
+> 
+> - Root cause: short (2–8 minute) fan-outs during business-hour model retrains and customer demo windows cause KV cache churn and reduce effective concurrent slots by ~18–24% during peaks.
+> - Short-term recommendation: Add a 10–GPU top-up pool (RTX-equivalent) that is billed at a discounted burst rate and auto-attaches during defined peak windows. This maintains your committed slab but gives headroom for the p95 latency SLO.
+> - Long-term: Introduce KV-prefetching on the model serving path + prefix caching we can enable; that reduces peak token cost by ~12% and lowers the size of a required top-up.
+> 
+> I've attached a one-page sketch and a pricing delta we can fold into an amendment. If that sounds okay, we'll draft a formal amendment with staggered billing (commit stays, burst pays-as-used with a monthly cap).
+> 
+> Proposed next step: 30-min sync Thursday to walk the numbers with your ops team. What time works for you?
+> 
+> Best,
+> Kimberly
+
+From: kimberly_park@redwood.com
+To: Asha Rao <asha.rao@novahealth.com>, ops@novahealth.com
+Cc: karthik_iyer@redwood.com, aditya_rao@redwood.com, naomi_feldman@redwood.com
+Date: Fri, 22 Jun 2028 16:43:00 -07:00
+Subject: Re: Renewal planning — sizing amendment and smoothing for next term
+
+Asha — following up after our Friday sync: thank you and your ops team for the walkthrough. Confirmed action items and commitments from Redwood below so procurement and legal can proceed: 
+
+1) Sizing amendment draft: we will prepare a redline that adds a 10-GPU burst pool with the following terms: 30s attach SLA, per-attach minimum billing 5 minutes, and a monthly protective cap (2000 minutes) to limit spend exposure.
+
+2) Region & topology: burst pool will be single-region by default (us-west) with an option to mirror to us-east for an additional one-time setup fee. We'll include both options in the amendment.
+
+3) Validation run: Redwood will run a 10-day KV-prefetch + prefix-caching test against your staging traffic window at no charge. We will deliver a short report with before/after p95 and cost delta.
+
+4) Economics: commit remains unchanged. Burst usage will be billed at a discounted rate (25% below on-demand) and subject to the monthly cap above. We'll include sample billing scenarios in the amendment.
+
+Next steps: 
+- I'll upload the draft amendment and sample billing table to the HubSpot deal and the shared Drive folder by EOD Monday.
+- Karthik will follow up with the infra-owner technical appendix for your ops team (kv-prefetch knobs and expected rollout steps).
+
+If this summary looks correct, please tell procurement/legal to expect the docs and route them to me for quick redlines.
+
+Thanks again — appreciate the pragmatic approach from your side.
+
+Best,
+Kimberly Park
+Head of Strategic Accounts — Redwood Inference
+kimberly_park@redwood.com
+
+--
+Kimberly Park
+Redwood Inference
+Phone: +1-415-555-0199
+
+Attachment: proposed_amendment_draft.pdf (updated 2 pages)

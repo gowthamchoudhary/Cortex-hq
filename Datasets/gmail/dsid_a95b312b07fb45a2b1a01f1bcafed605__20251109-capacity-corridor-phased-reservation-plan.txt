@@ -1,0 +1,108 @@
+Capacity corridor sizing & phased reservation plan for Novus AI
+
+From: laura_bennett@redwood.com
+To: ops@novusai.com
+Cc: karthik_iyer@redwood.com, ben_carter@redwood.com
+Date: Sun, 9 Nov 2025 09:12:00 -0800
+Subject: Dedicated corridor sizing — initial ask
+
+Hi Novus Ops team,
+
+Thanks for the workload traces and the sample p95/p99 latency targets. I pulled together a quick corridor-sizing worksheet (attached) that maps your daily traffic profile to three reservation corridors: baseline, corridor (sustained spike band), and burst. A few clarifying items before we lock GPU families: 
+
+- Is the 50% traffic spike window typically contiguous (e.g., a 3–6 hour daily peak) or composed of multiple short spikes?
+- Any regional split that requires dedicated instances in eu/us separately?
+- Which SLA is binding for you: p95 generation latency or APIs for embeddings/semantic search?
+
+High-level approach I propose:
+- Baseline: reserved A100-40 pools sized for 60% of average throughput (keeps unit cost predictable).
+- Corridor lane: reserve H100-80 pool for sustained daily peaks (3–8 hours) to avoid cold-instance scaling latencies.
+- Burst: shared preemptible capacity for short, high-amplitude spikes; can be a smaller RTX-class pool with autoscale policies.
+
+If you can confirm spike cadence and whether you want separate eu reservations, we’ll finalize the GPU mix and produce a phased reservation lane (Q1 ramp -> Q2 fill -> Q3 steady-state).
+
+I attached the worksheet (novus-dedicated-sizing-sheet-v2.xlsx).
+
+Thanks,
+Laura Bennett
+Senior Solutions Architect, Redwood Inference
+
+Attachments: novus-dedicated-sizing-sheet-v2.xlsx
+---
+From: ops@novusai.com
+To: laura_bennett@redwood.com
+Cc: karthik_iyer@redwood.com, ben_carter@redwood.com
+Date: Mon, 10 Nov 2025 08:45:00 -0800
+Subject: Re: Dedicated corridor sizing — initial ask
+
+On Sun, Nov 9, 2025 at 9:12 AM laura_bennett@redwood.com wrote:
+> Thanks for the workload traces and the sample p95/p99 latency targets. I pulled together a quick corridor-sizing worksheet (attached) ...
+
+Hi Laura,
+
+Thanks — good start. Quick answers: 
+- The 50% spike window is typically contiguous and weekday-heavy (roughly 06:00–10:00 PT). We see an additional smaller spike around 20:00 PT but it tends to be under 30 min.
+- We need US capacity first; EU is a Phase 2 requirement.
+- Binding SLA is p95 generation latency for critical inference routes (we can tolerate slightly higher embedding latencies).
+
+Two asks before you finalize: can you produce a per-corridor cost delta (reserved vs on-demand) and an explicit tail-latency budget if we choose H100-80 vs A100-80? Also, are there recommended quantization profiles that reduce H100 cost without regressing quality materially?
+
+— Ops (Novus)
+---
+From: laura_bennett@redwood.com
+To: ops@novusai.com
+Cc: karthik_iyer@redwood.com, ben_carter@redwood.com
+Date: Wed, 12 Nov 2025 10:30:00 -0800
+Subject: Re: Dedicated corridor sizing — initial ask (GPU mix + economics)
+
+Thanks for the quick clarifications — very helpful. I updated the worksheet and added a short economics annex to show reserved vs on-demand deltas across corridors. Summary below (full numbers in sheet/Drive link):
+
+Corridor recommendations (US-first):
+- Baseline (steady): A100-40GB reserved pool — good cost-performance for mixed batch workloads, predictable tail at typical sequence lengths.
+- Corridor (sustained peaks 06:00–10:00 PT): H100-80 reserved pool sized to absorb 70% of your peak Q1. H100 gives stronger single-request throughput and lower p95 for long sequences, which maps to your binding SLA.
+- Burst (short spikes): small cluster of A10/Ryzen-class preemptible instances for cost-effective burst when queues exceed the corridor threshold.
+
+Tail-latency guidance:
+- H100-80: expected p95 improvement of ~15–30% vs A100 for long-context generation in our benchmarks at your token lengths (table in sheet).
+- A100-80: slightly higher p95 but lower reserved price; choose if cost is primary and your prompt patterns are shorter on average.
+
+Quantization & precision:
+- We recommend INT8-like strategies for embedding-heavy routes (no quality hit in sem search).
+- For generation-critical routes, try Q4_0 mixed precision on A100 for a 10–18% cost saving with negligible subjective degradation; H100 supports a more aggressive Q4_0+ pathway in our internal tests.
+
+Phased reservation lane (proposed):
+- Phase 1 (Q1): Reserve 40% of projected peak on A100 baseline + 30% corridor H100 capacity (trial run to validate tail).
+- Phase 2 (Q2–Q3): Increase corridor fill to 70% of peak, reduce burst reliance.
+- Exit clause: 60-day review with rollback option for any corridor band that exceeds latency budget or cost thresholds.
+
+Next steps: I’ll drop the updated workbook to the Drive link and prepare a short side-by-side price appendix (reserved vs on-demand across corridors) and a draft commitment term sheet for procurement. Do you want the term sheet as a DocuSign-ready PDF or in redlineable Word?
+
+Best,
+Laura
+
+Attachments: (updated workbook uploaded to Drive)
+Related link: https://drive.redwood.example/novus/dedicated-sizing
+---
+From: sarah.mills@novusai.com
+To: laura_bennett@redwood.com, ops@novusai.com
+Cc: procurement@novusai.com
+Date: Thu, 13 Nov 2025 16:23:00 -0700
+Subject: Re: Dedicated corridor sizing — initial ask (procurement & next steps)
+
+Laura / team,
+
+Appreciate the fast turnaround and the phased plan — that aligns with our internal roadmap. Procurement prefers a DocuSign-ready PDF term sheet we can circulate internally. Please include:
+
+- Clear start/end dates for each reservation phase and a billing cadence (monthly).
+- A clause for one 30-day trial run on 10% of corridor capacity before full Phase 1 billing.
+- Audit logs access SLA and KMS integration note.
+- Liability cap language consistent with our legal team's standard (I can share redlines after first pass).
+
+We attached a short vendor intake form (procurement@novusai.com) — please confirm if Redwood can return the signed term sheet + vendor intake within 7 business days of receiving redlines. Also include the redwood-commitment-term-sheet.pdf as an attached sample so our legal can start an initial review.
+
+Thanks,
+Sarah Mills
+Sr. Procurement Manager, Novus AI
+
+Attachments: redwood-commitment-term-sheet.pdf, vendor-intake.pdf
+---

@@ -1,0 +1,119 @@
+Temporary reserve + escape-hatch for Q3 pilot capacity
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Jonas Weber <jonas_weber@redwood.ai>
+Date: Fri, 01 Jun 2028 17:23:00 +0000
+Subject: Temporary reserve + escape-hatch for Q3 pilot capacity
+
+Kim / Laura —
+
+Quick summary: Eden Health wants to run a 6-week production pilot in July (peak windows 9a-1p PT) and has asked for a short-term committed slice to guarantee latency for their integration tests and live traffic. Product is asking for a temporary reservation to cover the pilot (estimated 2x our normal pilot throughput). Ops has limited headroom in us-west and autoscale policies will evict during the daily scramble unless we bake in an exception.
+
+Can we:
+- Approve a temporary reserved slice (8 vGPU equivalent) for 7/01–8/15 with an escape-hatch to release early if infra needs it?
+- Make a one-off autoscale exception so the slices aren't preempted during the pilot's 9a-1p PT window?
+
+I've attached a quick capacity matrix showing the requested hours and a proposed runbook for the escape-hatch. If we greenlight this today we can respond to Eden with exact hours and get procurement moving.
+
+Thanks —
+Karthik
+
+[attachment: reserve_matrix_q3.xlsx (xlsx)]
+[attachment: escape-hatch-runbook.md (md)]
+
+--
+Karthik Iyer
+Head of Product Ops, Redwood Inference
+karthik_iyer@redwood.ai
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>
+Date: Fri, 01 Jun 2028 18:04:00 +0000
+Subject: Re: Temporary reserve + escape-hatch for Q3 pilot capacity
+
+Thanks Karthik — this is helpful. A couple of product asks/constraints: 
+
+- Product wants a hard SLO on tail p99 latency for the pilot (customer will gate their rollout on that metric).
+- We should avoid a long-term discount; this is explicitly a temporary carve for a pilot, not a reserved commitment.
+- Legal and Finance will want a short PO/contract stub for the 6-week window; can Procurement give a simple addendum rather than a 12-month commitment?
+
+Jonas — can infra confirm whether we can encode a time-bound reservation with an automated release (escape-hatch) that triggers if aggregate cluster utilization for the region exceeds 85% for more than 30 minutes? If that rule exists we can give Eden a concrete SLA/escape criteria.
+
+If infra is good, I'll coordinate with Procurement (Eden) and ask for vGPU hours and a DocuSign stub they can sign quickly.
+
+Kim
+
+--
+Kimberly Park
+Director, Product 
+kimberly_park@redwood.ai
+
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Laura Bennett <laura_bennett@redwood.ai>
+Date: Sat, 02 Jun 2028 02:11:00 +0000
+Subject: Re: Temporary reserve + escape-hatch for Q3 pilot capacity
+
+Short answer: yes, with caveats.
+
+Notes from infra: 
+- We can provision a time-boxed reservation for 8 vGPU-equivalent slices in us-west for 2028-07-01 through 2028-08-15. We'll represent this as a transient reservation that auto-expires at midnight UTC on 2028-08-15.
+- Escape-hatch implementation: we can implement a soft-trigger that (a) notifies product & CS at 85% cluster util for 30m, (b) attempts non-disruptive rebalancing for 10m, then (c) programmatically releases the transient reservation if util remains >90% for 15m. Release will send a webhook + email to the listed owners.
+- Autoscale exception: we can add policy-level exclusion that prevents eviction for the reservation during 09:00–13:00 PT daily for the pilot window. Outside that window standard preemption applies.
+
+Caveats: this path requires a quick config change on our allocation controller and a small DB migration to tag the transient reservations. Ops can deliver the change, but we'll need a one-hour maintenance window to flip the policy (can be done 2028-06-09 03:00–04:00 UTC).
+
+I attached a minimal runbook and the preliminary slot accounting.
+
+Jonas
+
+[attachment: escape-hatch-runbook.md (md)]
+
+--
+Jonas Weber
+Principal Infra Engineer, Redwood Inference
+jonas_weber@redwood.ai
+
+From: Eden Procurement <procurement@edenhealth.com>
+To: Kimberly Park <kimberly_park@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Ava Lee <ava.lee@cloudbrokers.io>
+Date: Sat, 02 Jun 2028 08:17:00 +0000
+Subject: Re: Temporary reserve + escape-hatch for Q3 pilot capacity
+
+Hi Kimberly / Karthik —
+
+Thanks for the fast turnaround. Eden is comfortable with the proposed time box (7/01–8/15) and the proposed escape-hatch triggers. Two quick asks from Procurement: 
+
+1) Can you confirm total committed vGPU hours and daily peak slice counts so our billing team can estimate the PO?
+2) We'd prefer the release webhook to include an estimate of expected release time and whether there will be a partial release (eg. drop from 8 -> 4 vGPU) or full release.
+
+We have an internal DocuSign flow ready — please review the stub here: https://docusign.com/link/abcd-eden-q3. If everything looks good we'll sign within 48 hours.
+
+Best,
+Maya (on behalf of Eden Procurement)
+procurement@edenhealth.com
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Eden Procurement <procurement@edenhealth.com>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: Sat, 02 Jun 2028 09:45:00 +0000
+Subject: Re: Temporary reserve + escape-hatch for Q3 pilot capacity
+
+Thanks Maya —
+
+Confirmed committed numbers (per attached matrix):
+- Total committed vGPU hours (pilot window 7/01–8/15): 8 vGPU * 24 hours * 46 days = 8,832 vGPU-hours (we'll bill daily pro rata).
+- Daily peak slices (09:00–13:00 PT): 8 vGPU-equivalent guaranteed slices. Outside peak we expect product to use autoscale as usual.
+
+Release webhook behavior: infra will include (a) expected release time, (b) current utilization snapshot, and (c) release delta (partial/full). We'll include a small text block in the DocuSign addendum that Eden's billing team can use to reconcile refunds/credits in the event of an early release.
+
+Kim — please trigger Legal/Finance to approve the simple addendum. Jonas — please confirm the maintenance window for the allocation-controller flip and call out any rollback steps. If we can sign the stub today we can schedule the config change next week and announce the maintenance window.
+
+Karthik
+
+--
+Karthik Iyer
+Head of Product Ops, Redwood Inference
+karthik_iyer@redwood.ai

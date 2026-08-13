@@ -1,0 +1,123 @@
+Request: How Redwood defines 'healthy' — measurement windows, alerting and temporary exceptions
+
+From: Procurement Team <procurement@acme-health.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>
+Cc: Ellen Ross <ellen.ross@acme-health.com>, Tom Baker <tom.baker@acme-health.com>
+Date: 2026-05-20T09:14:00-07:00
+Subject: Initial procurement questions on how you measure SLOs
+
+Hi Rafael,
+
+Thanks for the demo last week — we're collecting the technical pieces for procurement and security. A few items we need clarified about Redwood's service commitments before we proceed:
+
+- How does Redwood define a "healthy" service for uptime and latency? Please give the exact measurement windows and aggregation (rolling/interval), and the percentiles used for latency (p50/p95/p99).
+- What sampling (if any) is applied to latency metrics or traces that feed SLAs?
+- What are your default retention periods for metrics and raw traces?
+- What alerts are triggered to the customer vs internal SREs when SLOs approach violation, and what are the alerting thresholds/time windows?
+- Do you offer read-only dashboard access or a metrics export for customers who want to reconcile calculation? If so, what is the onboarding process?
+- Describe the process for a temporary exception/carve-out during onboarding (example: allow 14 days for initial migration traffic). What approvals are needed?
+
+We've attached a short questionnaire (procurement_questionnaire.docx) — if you can populate the relevant sections and return by EOD Friday it would help keep our timeline.
+
+Best,
+Procurement Team
+Acme Health
+
+Attachment: procurement_questionnaire.docx
+
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Procurement Team <procurement@acme-health.com>
+Cc: Ellen Ross <ellen.ross@acme-health.com>, Tom Baker <tom.baker@acme-health.com>, Marissa Cole <marissa.cole@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: 2026-05-20T12:02:00-07:00
+Subject: Re: Initial procurement questions on how you measure SLOs
+
+Hi Ellen / Procurement Team — thanks for the clear list. I've filled the questionnaire and summarized the answers below to be concise; I'm attaching a small CSV with example calculations and a quick dashboard snapshot so you can see the raw buckets.
+
+Summary (short answers):
+- Definition of "healthy":
+  * Availability (service-level): measured as successful request ratio over a 24-hour rolling window for SLA reporting, with 99.95% as our standard commitment for paid Dedicated plans.
+  * Latency: latency percentiles are computed from sampled request histograms. Production SLAs use p95 over a 5-minute rolling aggregation for short-term alerting, and p99 over a 30-day aggregation for contractual measurement.
+- Sampling: we use adaptive sampling for traces; latency histograms are computed from per-request telemetry with a low-rate sampling default (1-5%) for full traces but we compute latency percentiles from request-level metrics which are not fully sampled — they are aggregated via efficient counters.
+- Retention: metrics (aggregated histograms and percentiles) retained for 90 days in hot storage; 365 days for aggregated monthly rollups. Raw traces retained 30 days by default, extendable by contract.
+- Alerts & thresholds: customer-facing alerts are configurable. Default thresholds: p95 > X ms sustained for 10 minutes triggers a customer alert; p99 > Y ms sustained for 5 minutes triggers SRE escalation. For availability drops below the contractual target sustained for 3 minutes, an incident is opened automatically and both SRE + designated customer channel are notified.
+- Dashboard / export: we provide read-only Grafana dashboard access or a metrics export (Prometheus remote write or CSV) upon request. Onboarding typically requires an account-level invite + an admin token for your SRE.
+- Temporary exceptions: we can grant a time-boxed exception for onboarding (typical windows: 7–30 days). Exceptions require a signed procurement amendment with the exception window, the business reason, and expected remediation actions; they are reviewed by our SRE/Legal leads.
+
+I'll attach: slo-measurement-examples.csv (worked examples), dashboard-snapshot.png and a filled copy of your procurement_questionnaire.docx. If you'd like, we can stand up a short shared Grafana view for Ellen to validate the calculation.
+
+Next steps:
+- I'll attach the example files now.
+- If Acme wants an onboarding exception, please send the filled exception form and the target dates.
+
+Thanks,
+
+--
+Rafael Mendes
+Solutions Engineer, Redwood Inference
+rafael.mendes@redwood.com
+
+Attachments: slo-measurement-examples.csv; dashboard-snapshot.png; procurement_questionnaire.docx
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>, Procurement Team <procurement@acme-health.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: 2026-05-21T08:30:00-07:00
+Subject: Re: Initial procurement questions on how you measure SLOs
+
+On Wed, May 20, 2026 at 12:02 PM Rafael Mendes <rafael.mendes@redwood.com> wrote:
+> Summary (short answers):
+> - Latency: latency percentiles are computed from sampled request histograms...
+
+Adding a quick technical note on the percentile computation and alerts so Acme's SRE can reconcile programmatically:
+
+- Percentiles: we build windowed histograms with 1ms buckets (configurable). For rolling windows (5m, 24h), we merge bucketed counters and compute percentiles from the merged histogram. That ensures consistent aggregation across multiple hosts without raw trace reassembly.
+- Error budget: measured as 1 - availability_over_30d compared to the contractual target; we provide both raw failure count and compensated rate (excludes authorized maintenance windows).
+- Alerting cadence: short-term alerts (5–15 minute sustained breaching) are sent to customer webhook + email. If a threshold is exceeded for a configurable escalation window (default 10 minutes), we also trigger an internal on-call page.
+- Reconciliation: if Acme wants to compute independently, we can provide an API endpoint that returns the raw histogram counters for a given time range (requires a service token).
+
+Happy to walk through a short example live — I'll join the call if Rafael schedules it.
+
+Thanks,
+Karthik
+Staff SRE, Redwood Inference
+
+From: Procurement Team <procurement@acme-health.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>
+Cc: Ellen Ross <ellen.ross@acme-health.com>, Tom Baker <tom.baker@acme-health.com>
+Date: 2026-05-21T11:15:00-07:00
+Subject: Re: Initial procurement questions on how you measure SLOs
+
+Rafael / Karthik — this is helpful, thank you. Two follow-ups:
+
+1) Acme would like a 14-day onboarding exception where we don't expect the SLA to be met during bulk data migration. Please confirm the required form and timeline for approval.
+2) For reconciliation, we'd prefer read-only Grafana + an exported CSV for the 30-day window after migration. Can you provision that access and provide a token?
+
+I've attached our exception request form (procurement_exception_form.pdf) — please review and advise what you need.
+
+Regards,
+Tom Baker
+Procurement, Acme Health
+
+Attachment: procurement_exception_form.pdf
+
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Procurement Team <procurement@acme-health.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: 2026-05-22T10:46:00-07:00
+Subject: Re: Initial procurement questions on how you measure SLOs
+
+Tom — thanks, we've reviewed the attached form. Our process:
+
+- Fill the exception form and indicate the desired window (start/end) and remediation checklist.
+- A Redwood SRE + Procurement rep (Marissa) will confirm technical feasibility and sign-off.
+- Legal will generate an amendment (simple addendum) that both parties sign.
+
+We can approve a 14-day onboarding exception by default for migration windows; please populate the dates and checklist in the attached template (exception-template.docx) and return. Once we receive it we'll create an internal support ticket (ACME-9876) and provision a temporary read-only Grafana view plus a short-lived API token for CSV export.
+
+I'll ask Marissa to handle the PO/amendment flow on the commercial side.
+
+--
+Rafael Mendes
+Solutions Engineer, Redwood Inference
+
+Attachments: exception-template.docx

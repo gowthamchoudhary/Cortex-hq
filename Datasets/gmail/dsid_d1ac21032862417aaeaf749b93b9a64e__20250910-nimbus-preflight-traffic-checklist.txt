@@ -1,0 +1,121 @@
+Re: Redwood Dedicated preflight - traffic & burst checklist
+
+From: Samir Patel <samir.patel@nimbus.com>
+To: jasmine_liu@redwood.com
+Date: 2025-09-10T09:12:00-07:00
+Subject: Sizing data for Redwood Dedicated evaluation
+
+Hi Jasmine,
+
+Thanks again for the demo yesterday. We're keen to validate Redwood Dedicated for our inference tier. I attached a quick CSV with our current traffic samples (hourly QPS snapshot + sample prompt/response lengths). A couple of things to flag from our side:  
+
+- Baseline traffic: ~320 QPS globally (mostly US/EU), 12M tokens/day average.
+- Burst behaviour: retail campaign spikes up to ~4x baseline for ~30-45 minutes, typically at 09:00 PT and 18:00 PT.
+- Concurrency during spikes: single-shard concurrency approaches ~120 active sessions.
+- Prompt/response shape: average prompt ~120 tokens, avg model response ~220 tokens; however we have a 10% tail with 800+ response tokens for long-form summarizations.
+- SLA needs: p99 latency target ~250ms for short queries (< 200 tokens), best-effort for long-form.
+
+We're also working through procurement — looped in Olivia. Can you send your prefill sizing template so our infra team can complete it?
+
+Thanks,
+Samir
+Principal ML Engineer
+Nimbus Analytics
+
+Attachment: nimbus_traffic_walkthrough.csv (CSV stub: hourly_qps,peak_marker,prompt_tokens,response_tokens)
+
+From: Jasmine Liu <jasmine_liu@redwood.com>
+To: Samir Patel <samir.patel@nimbus.com>
+Cc: Olivia Chen <olivia.chen@nimbus.com>
+Date: 2025-09-10T10:25:00-07:00
+Subject: Re: Sizing data for Redwood Dedicated evaluation
+
+Hi Samir — great to get those numbers, thanks. Attached is our prefill sizing template; if your infra team can drop the exact burst durations, per-region splits, and a sample prompt mix across endpoints that will speed up a first-pass. A couple of quick clarifying questions from our side:  
+
+- Is the 4x spike observed across all regions or US-heavy?
+- For the 10% long-form tail, are those single long responses or chains of multi-turn responses?
+- Do you expect conversational state to persist (KV cache reuse) between calls for the long-form jobs?
+
+I'll start a first-cut sizing once you return the template and will share a conservative GPU SKU map (A100/RTX type options) for the initial pilot.
+
+Cheers,
+Jasmine Liu
+Solutions Engineer, Redwood Inference
+Mobile: +1 (415) 555-0199
+
+Attachment: redwood_prefill_sizing_template.xlsx (xlsx stub)
+
+From: Samir Patel <samir.patel@nimbus.com>
+To: jasmine_liu@redwood.com
+Cc: Olivia Chen <olivia.chen@nimbus.com>
+Date: 2025-09-11T08:47:00-07:00
+Subject: Re: Sizing data for Redwood Dedicated evaluation
+
+Jasmine — attaching the filled template (v1). Quick notes inline:  
+
+- Region split: 85% US, 12% EU, 3% APAC.
+- Burst shape: typically 28–42 minutes, with an initial 5–8 minute ramp and a sharp tail.
+- Long-form: ~8% are multi-turn chains (2–4 exchanges), rest are single long responses. KV reuse: yes for multi-turn chains, estimated reuse reduces token generation by ~25%.
+- Acceptable failover: if dedicated capacity is saturated, we can accept degraded throughput for long-form tasks while preserving short-query p99 SLA.
+
+Can you reflect that degradation behavior in the initial sizing so we can see required headroom?
+
+—Samir
+
+Attachment: nimbus_prefill_v1.xlsx (xlsx stub)
+
+From: Jasmine Liu <jasmine_liu@redwood.com>
+To: marissa_cole@redwood.com, karthik_iyer@redwood.com
+Cc: Olivia Chen <olivia.chen@nimbus.com>, Samir Patel <samir.patel@nimbus.com>
+Date: 2025-09-11T10:15:00-07:00
+Subject: Fwd: Sizing data for Redwood Dedicated evaluation — Nimbus prefill attached
+
+Marissa / Karthik — forwarding Nimbus' filled prefill (attached). Highlights that matter for sizing:  
+
+- Baseline 320 QPS, US-heavy. Peak bursts ~4x for ~30–45m; ramp of ~5–8m.
+- Long-form tail ~10% (8% multi-turn), KV reuse ~25% for multi-turns.
+- Short-query p99 SLA 250ms is non-negotiable; long-form can degrade.
+
+Asks: can we produce two scenarios for the upcoming sales review on Mon?
+  1) Conservative: provision to meet p99 250ms for short-queries during peak without degrading short-query SLA (higher GPU reserve).
+  2) Cost-optimized: aggressive oversubscription where long-form work is queued/degraded during spikes (lower reserve).
+
+Karthik — can you sketch the GPU SKU mix and an initial cluster footprint (nodes, expected concurrency per GPU, batching assumptions) for both scenarios? Marissa — I'll slot a 20-min run-through with the AE and Samir on Monday.
+
+Thanks,
+Jasmine
+Solutions Engineering
+
+Quoted: "On 2025-09-11 08:47, Samir Patel <samir.patel@nimbus.com> wrote:
+> Jasmine — attaching the filled template (v1). Quick notes inline:..."
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: jasmine_liu@redwood.com, marissa_cole@redwood.com
+Cc: Samir Patel <samir.patel@nimbus.com>, Olivia Chen <olivia.chen@nimbus.com>
+Date: 2025-09-12T11:05:00-07:00
+Subject: Re: Fwd: Sizing data for Redwood Dedicated evaluation — Nimbus prefill attached
+
+Quick first-pass sizing notes (high-level):  
+
+Conservative scenario (preserve short-query p99 during peak):
+- Target capacity: handle sustained 4x peak with 10% headroom => design for ~1,400 QPS sustained during peak windows.
+- Proposed GPU mix: 8x A100-80GB (or equivalent Ampere SKU) across 4 nodes (2 GPUs/node) with per-GPU concurrency target ~40 short queries/sec at assumed batching latency 10–20ms.
+- Long-form handling: dedicate 1 GPU's worth of capacity as spill for long-form so short-queries don't queue; this reduces total available for long jobs but keeps p99 tight.
+- KV cache: enable per-session caching for multi-turn chains; expect ~25% token savings noted.
+
+Cost-optimized scenario (allow long-form degradation):
+- Target capacity: size for ~1,000 QPS peak with 20% oversubscription for short-queries and queued long-form work.
+- Proposed GPU mix: 6x A100-80GB across 3 nodes; higher packing for long-form to reduce unit cost.
+- Expected p99 impact: short-query p99 remains ~260–300ms under worst-case; non-compliant if strict 250ms is enforced — depends on agreed fallbacks.
+
+Operational notes / follow-ups:
+- We'll produce a detailed token-econ and cost table for both options (est. by EOW).
+- Need to confirm sample prompt distribution per endpoint to refine batching profiles.
+- Recommend a pilot week with real traffic mirroring (shadow mode) before committing to Reserved Capacity.
+
+I'll draft a short slide with the two options for Monday's meeting. Happy to tweak GPU SKUs if Nimbus prefers different hardware vendor connectors.
+
+—Karthik
+Senior Solutions Engineer, Redwood Inference
+
+Quoted earlier message preserved for context.

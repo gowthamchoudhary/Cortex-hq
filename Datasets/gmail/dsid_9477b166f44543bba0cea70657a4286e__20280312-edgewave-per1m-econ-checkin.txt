@@ -1,0 +1,109 @@
+EdgeWave: per-1M token economics & next test plan
+
+From: Rajiv Menon <rajiv@edgewave.ai>
+To: lauren.bishop@redwood.com
+Date: 2028-03-12T09:14:00-07:00
+Subject: Follow-up on unit economics from today's demo
+
+Hi Lauren,
+
+Thanks for the demo this morning — quick note from our end while we regroup internally. We liked the routing/fallback demo and the KV cache concept. Two asks so we can prioritize:
+
+1) A clean per-1M token price comparison (all-in) vs Google/Azure endpoints you benchmarked — ideally under our expected mix: ~70% chat (completion), 30% embeddings for semantic search.
+2) A short list of the exact test harness you used (batch sizes, concurrency, cache-hit assumptions) — procurement wants to validate assumptions before we run our infra POC.
+
+Also: we're sensitive to tail latency — our SLA is 200ms p95 for interactive workflows. Can you call out typical p95 numbers when caching is applied?
+
+Rajiv
+Rajiv Menon
+CTO, EdgeWave
+rajiv@edgewave.ai
+
+From: Lauren Bishop <lauren.bishop@redwood.com>
+To: Rajiv Menon <rajiv@edgewave.ai>
+Cc: ben.carter@redwood.com, grace.oconnor@redwood.com
+Date: 2028-03-12T11:02:00-07:00
+Subject: Re: Follow-up on unit economics from today's demo
+
+Rajiv — thanks for the call and clear asks. High-level recap and attachments below; I attached a one-page summary (redwood_vs_hyperscaler_summary.pdf) and the detailed cost model (edgewave_cost_model_v1.xlsx).
+
+Quick answers up front:
+- Baseline per-1M tokens (hosted API, mixed workload): Redwood estimate = $11.8 / 1M tokens (assumes 60/40 generation/embedding split for internal tests). Hyperscaler A (managed LLM endpoint) = ~$21.4 / 1M; Hyperscaler B = ~$18.9 / 1M.
+- Cache and batching assumptions in the workbook: 55% KV cache hit assumed for chat prefix reuse; batching window = 50ms; effective concurrency = 32 workers.
+- Latency: with a 55% cache hit on prompt prefixes we see p50 = ~65ms, p95 = ~180ms for the mixed chat path in our hosted measurements. If you push cache hit to 70% (more session affinity), p95 drops to ~140ms.
+
+What I attached/linked:
+- Sheet 1: "Per1M Summary" — simple row-by-row unit economics per model/route with our operating assumptions.
+- Sheet 2: "Assumptions & Harness" — exact harness config (batch sizes, concurrency, sequence lengths used).
+- PDF: one-page bullets and a chart showing cost vs cache hit rate.
+
+Proposed next steps (low lift POC):
+1) We run a 2-day head-to-head using your representative trace (you provide a 6-hour sample or we run in-proxy recording).
+2) Redwood will submit a reproducible benchmark (our harness) and share the raw logs + cost delta summary.
+3) Procurement confirms the SLAs and we provide a short commercial term sheet for a pilot.
+
+Ben and Grace are looped for the technical POC scoping — Ben can you propose a minimal config (target tokens/day, concurrency) for EdgeWave?
+
+Thanks — happy to jump on another 30-min call to walk the workbook.
+
+— Lauren
+Lauren Bishop
+Sr. Solutions Engineer, Redwood Inference
+lauren.bishop@redwood.com
+
+From: Ben Carter <ben.carter@redwood.com>
+To: lauren.bishop@redwood.com, Rajiv Menon <rajiv@edgewave.ai>
+Cc: grace.oconnor@redwood.com
+Date: 2028-03-13T08:45:00-07:00
+Subject: Re: Follow-up on unit economics from today's demo
+
+Thanks Lauren. A few notes from the engineering side to make the head-to-head actionable. I've sketched a minimal POC config below — I'll upload a runnable config to the Drive link once you confirm.
+
+Minimal POC parameters (recommended):
+- Duration: 48 hours (to cover diurnal variance)
+- Token budget: 2M tokens/day (we recommend starting with 1M gen / 1M embed)
+- Sequence length distribution: gen median 128 tokens, embeddings fixed 1536 dim
+- Batching: continuous batching with 50ms window, max batch = 64 tokens per request
+- Cache: KV store with 10k entries, mimic 60% hit rate for the initial run (we can tune to your observed session reuse)
+- Concurrency: 16 workers per shard, target 120 rps across the cluster
+
+Metrics we'll collect:
+- Per-1M token cost (cloud and infra spend + Redwood hosting delta)
+- Latency p50/p95/p99 both with and without cache
+- Model quality deltas on a 200-sample prompt set you provide
+
+Deliverables:
+- Raw logs (token counts, latency histograms)
+- Cost model filled with your cloud egress/pricing (EdgeWave) to show true bill delta
+- Short exec one-pager summarizing trade-offs and recommended config for production
+
+If that looks good to you Rajiv, can you:
+- Share a representative 4-6 hour traffic sample (or authorize Redwood to capture demo-mode traces), and
+- Confirm procurement questions we flagged in the workbook (especially around data retention and audit logs).
+
+I'll prepare the harness config and a small k8s job that you can run on a dev cluster if you prefer local-run.
+
+— Ben
+Ben Carter
+Sr. Solutions Architect, Redwood Inference
+ben.carter@redwood.com
+
+From: Rajiv Menon <rajiv@edgewave.ai>
+To: Ben Carter <ben.carter@redwood.com>, lauren.bishop@redwood.com
+Cc: EdgeWave Procurement <procurement@edgewave.ai>
+Date: 2028-03-14T15:22:00-07:00
+Subject: Re: Follow-up on unit economics from today's demo
+
+Ben / Lauren — this looks actionable, thank you. Procurement will review the workbook this week — I'll push to get the sample trace by EOD Friday. A couple quick clarifications from procurement:
+
+- Can you confirm while running the POC, what data retention / logs Redwood keeps by default and how long (we need that for our security review).
+- If the POC demonstrates a 40% cost delta in your favor, what's the earliest commercial pilot term you can offer (monthly reserved capacity or pilot pricing)?
+
+Ben: please send the harness config to the Drive link and I'll task our infra team to run it if we want local-run. Otherwise we can flip the authorized trace to you.
+
+I'll be available next Tue/Wed for a 30-min sync after we've digested the workbook.
+
+Regards,
+Rajiv
+
+

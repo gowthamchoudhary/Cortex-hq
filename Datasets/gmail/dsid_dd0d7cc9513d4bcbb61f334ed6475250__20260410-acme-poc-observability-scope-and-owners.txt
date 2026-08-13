@@ -1,0 +1,157 @@
+ACME POC: observability scope, owners, and timeline
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Anna Keller <anna.keller@acme-corp.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>
+Date: Fri, 10 Apr 2026 09:12:00 -0700
+Subject: ACME POC: initial observability scope and proposed next steps
+
+Anna — thanks again for the time this morning. Quick recap and a proposed plan for the POC observability surface so we can align with your engineering and security teams. Please review and confirm owners / any gaps.
+
+POC goal (30 days): validate inference performance and observability for the edge analytics workflow (ingest -> model -> enrich -> store) with a representative dataset and load. Success criteria (short):
+- Functional: model outputs match accuracy baseline on the shared eval set (we'll use your 1k sample).
+- Performance: median end-to-end inference latency < 180ms; p95 < 450ms under the agreed load profile.
+- Observability: dashboards and alerts in Datadog showing request throughput, p95 latency, error rate, and KV cache hit rate; distributed traces for sampled requests; export of structured logs to your Splunk collector.
+
+Observability scope (what Redwood will deliver):
+- Dashboards: summary latency/cost dashboard, per-model route breakdown, and a POC health dashboard (uptime, error trends).
+- Tracing: inject trace IDs and produce spans for request lifecycle (ingest, model, postprocess). We'll provide OpenTelemetry-compatible exporters.
+- Logs: structured JSON logs with token counts, model version, request_id, trace_id; support export to S3/Splunk with retention config.
+- Metrics: request_count, token_count, latency_ms (p50/p95/p99), error_rate, kv_cache_hit_rate, model_version, queue_depth.
+- Alerts: p95 latency breach, error_rate spike, KV cache < 60%.
+
+Evaluation plan / ownership:
+- Redwood (Jonas): deliver dashboard templates, tracing middleware, and log export configuration.
+- Redwood (Lauren): coordinate test harness and load profile (we'll share a JMeter/Locust script).
+- ACME (Anna): validate datasets, provide dev credentials for Splunk/S3, and nominate security owner for compliance questions.
+
+Proposed timeline (target):
+- Day 0 (Mon Apr 12): access & credentials exchanged; kickoff.
+- Day 3: dashboard + tracing PoC in staging.
+- Day 7-14: load testing and fine-tuning.
+- Day 21-30: evaluation period and review.
+
+Next steps (please):
+1) Confirm the security contact for entitlements & SOC2 evidence (we need a point of contact for the questionnaire).
+2) Confirm whether Splunk or S3 is the preferred log sink and retention requirements.
+3) Approve the timeline or propose shifts.
+
+Attachments: I attached a short POC observability requirements workbook (poc_obs_requirements.xlsx) and a sample network diagram.
+
+Thanks — I'll loop in Sergio and the infra team once we have your security contact.
+
+— Jonas
+Jonas Weber
+Senior Solutions Engineer | Redwood Inference
+jonas.weber@redwood.com | +1 415 555 0123
+
+
+From: Anna Keller <anna.keller@acme-corp.com>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>
+Date: Fri, 10 Apr 2026 11:03:00 -0700
+Subject: Re: ACME POC: initial observability scope and proposed next steps
+
+Thanks Jonas — this matches what we discussed. Quick answers and a couple of additions: 
+
+1) Security contact: please loop in Michael Chu (michael.chu@acme-corp.com) — he owns vendor reviews.
+2) Log sink: Splunk is preferred for now; retention target is 90 days for structured logs. If necessary we can archive to S3 after 90 days.
+3) Timeline: the proposed dates look fine; we may push Day 0 to Apr 13 if we need approvals from procurement.
+
+A couple of asks from the product team: can the dashboards include a per-model token-cost estimate (rough) and a CSV export of sampled traces for offline analysis?
+
+I'll confirm the 1k sample eval set by Monday. Please include a short onboarding doc for our infra team covering required ports and IPs (we'll expect your network diagram).
+
+On security & SOC2 evidence: Michael will send the questionnaire separately, but we will need: SOC2 Type II report, data retention policy, and whether any PII is persisted in logs.
+
+— Anna
+Anna Keller
+Product Manager | ACME Corp
+anna.keller@acme-corp.com
+
+From: Michael Chu <michael.chu@acme-corp.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Anna Keller <anna.keller@acme-corp.com>
+Cc: ACME Security <security@acme-corp.com>
+Date: Fri, 10 Apr 2026 13:20:00 -0700
+Subject: Re: ACME POC: initial observability scope and proposed next steps
+
+Jonas / Anna — Michael here. A few security items to surface up-front so we don't hit blockers mid-POC: 
+
+1) Evidence: please provide a current SOC 2 Type II report and contact for any SOC scope questions.
+2) Logs: confirm that logs will be redacted for PII by default. We need a clear mapping of fields and whether any user identifiers are present.
+3) Network: our infra team will want TLS mutual auth or a private peering option for the POC — can Redwood support an IP allowlist + TLS client certs?
+4) Audit logs: we need a minimum of 90 days retention for audit trails; is that configurable?
+
+From a monitoring perspective, we will need:
+- Retention SLA for traces and logs (90 days), ability to export to our Splunk instance.
+- Alerting RBAC: who at ACME gets pages for p95 latency / error spikes?
+
+If you can send the SOC2 link and a short redaction matrix by EOD Mon, that will help us accelerate approvals.
+
+Thanks,
+Michael Chu
+Security Operations | ACME Corp
+michael.chu@acme-corp.com
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Sergio Alvarez <sergio_alvarez@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: Fri, 10 Apr 2026 14:05:00 -0700
+Subject: Internal: ACME POC — observability owners and deliverables (FYI/asks)
+
+Sergio / Lauren — heads-up thread with ACME. Key asks below; can you confirm ownership and ETA for the deliverables so I can commit to Anna & Michael?
+
+Deliverables we need to own:
+- Dashboard templates (Datadog): summary + per-route + POC health — Owner: Sergio? ETA: 3 business days after Day 0.
+- Tracing middleware + OpenTelemetry exporter: Owner: Sergio, assist from infra. ETA: Day 3 staging.
+- Log export config (structured JSON, Splunk HEC): Owner: Lauren — need creds from ACME to validate in staging. ETA: Day 5.
+- Load test harness (Locust): Owner: Lauren — will parameterize the 1k eval set and agreed RPS profile. ETA: Day 7.
+- Network checklist & diagram review: Owner: Sergio — verify IP allowlist and TLS client cert support.
+
+Attachments: poc_obs_requirements.xlsx (contains field mapping, sample log JSON, and suggested alert thresholds) and network_diagram.png.
+
+Risks / open items:
+- PII redaction: we need to provide a redaction matrix; Michael asked for this by Mon EOD.
+- Credentials: Anna may push Day 0 to Apr 13 — adjust ETA accordingly.
+
+Please reply with short confirmation of owners and any blockers. I'll send a succinct recap to ACME once you're aligned.
+
+— Jonas
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Anna Keller <anna.keller@acme-corp.com>
+Cc: Michael Chu <michael.chu@acme-corp.com>, Sergio Alvarez <sergio_alvarez@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: Sun, 12 Apr 2026 08:40:00 -0700
+Subject: Re: ACME POC: initial observability scope and proposed next steps — confirmed owners & timeline
+
+Anna / Michael — quick update after aligning with the team:
+
+Confirmed owners:
+- Dashboards & tracing middleware: Sergio Alvarez (sergio_alvarez@redwood.com)
+- Log export + load harness: Lauren Bishop (lauren_bishop@redwood.com)
+
+Updated timeline (accounting for Apr 13 Day 0):
+- Apr 13: credentials & kickoff
+- Apr 16: dashboard + tracing PoC in staging
+- Apr 20-24: load testing and tuning
+- Apr 27-30: evaluation and final review meeting
+
+Security / evidence: SOC2 Type II link: https://redwood.example/compliance/soc2-type2-2026 (read-only). Attached redaction matrix is in the shared Drive link: https://drive.example.com/drive/folders/ACME-POC-OBS (see poc_obs_requirements.xlsx). Logs will be redacted for PII by default; the workbook lists the fields and the redaction rules.
+
+Observability acceptance criteria (for signoff):
+- Dashboards show correct metrics and a CSV export of sampled traces is available.
+- p95 latency under the agreed load <= 450ms, and error_rate < 0.5% sustained.
+- Log export to Splunk validated and sample events match the field mapping.
+
+Next steps:
+1) Anna: confirm Splunk HEC creds or S3 target so Lauren can validate.
+2) Michael: confirm RBAC for alerting recipients (who should be paged).
+3) ACME & Redwood: schedule a 45-min kickoff Apr 13 (I can send a calendar invite).
+
+If that looks good I'll lock the kickoff and share the HubSpot POC plan (link below).
+
+HubSpot plan: https://hubspot.example/deal/RDW-ACME-1129
+
+— Jonas
+Senior Solutions Engineer | Redwood Inference
+jonas.weber@redwood.com
++1 415 555 0123

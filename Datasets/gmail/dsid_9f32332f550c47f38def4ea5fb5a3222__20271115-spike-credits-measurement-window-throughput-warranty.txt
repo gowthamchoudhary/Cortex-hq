@@ -1,0 +1,114 @@
+Dedicated commit — throughput warranty, spike credits & measurement window
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Pedro Alvarez <pedro@fintechco.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: 2027-11-01T15:22:00-08:00
+Subject: Dedicated commit — throughput warranty & measurement window
+Attachments: throughput-test-plan.csv (CSV stub), SLA-draft-v3.pdf (PDF stub)
+
+Pedro — thanks again for taking the call yesterday. As we move toward a Dedicated GPU commit, legal and procurement asked for a concrete, measurable definition of the throughput warranty and how we’ll measure it. I want to propose a pragmatic, audit-friendly approach and get your feedback before we bake it into the SLA draft.
+
+High level ask: can FintechCo accept a warranty that guarantees a sustained tokens/sec value with an explicit allowance for short bursts (we’re calling them “spike credits” below) and a clear measurement window and sampling method?
+
+Quick context: your commit target is 250k tokens/sec sustained across the pool for model class M-Large with an overall latency SLO of p95 under X ms (we’ll refine the numbers below). We need to agree on:
+- Definition of sustained throughput (how we aggregate sample points, percentile to use, and sample window)
+- Spike handling: allowable short bursts above committed rate and how they consume/earn credits
+- Latency targets and the measurement buckets (short/medium/long prompt mixes)
+- What to exclude from measurement (deploy windows, major incidents, and synthetic test traffic)
+
+I attached a lightweight throughput-test-plan.csv with an example sample dataset and an SLA-draft-v3.pdf with legal-friendly phrasing. Suggested defaults (please comment):
+- Sustained throughput: 95th percentile of per-minute tokens/sec measured over a rolling 30-day window.
+- Spike credits: allow bursts up to 3x committed tokens/sec for up to 5 minutes per hour; bursts consume credits from a monthly bucket-sized proportional to the overage.
+- Latency: measured per request, reported as p50/p95 per bucket; buckets defined by token length: short (0–64 tokens), medium (65–512), long (>512).
+
+If that sounds reasonable I’ll get Ben to sketch the math for how spike credits and billing adjustments would work in practice and produce an example month showing credits consumed vs. credits remaining.
+
+Thanks — J
+
+--
+Jordan Blake
+Account Executive, Dedicated Sales
+Redwood Inference
+
+From: Pedro Alvarez <pedro@fintechco.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: FintechCo Procurement <procurement@fintechco.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: 2027-11-03T09:47:00-08:00
+Subject: Re: Dedicated commit — throughput warranty & measurement window
+
+Jordan — appreciate the summary. Procurement and I reviewed the attachments and have a few clarifying questions before we sign off:
+
+1) Spike tolerance: the business will have predictable short bursts (end-of-hour batch jobs and market open spikes). Can you explain how the "monthly bucket" is sized? We’re worried about paying for inevitable, small bursts.
+
+2) Latency SLOs: for our use case we need p95 under 300ms for short prompts and p95 under 800ms for long prompts. Will the measurement account for multi-model routing (you mentioned fallback variants)?
+
+3) Measurement fidelity: Procurement would prefer a per-minute sampling cadence but may accept a 30s cadence if the measurement noise is documented. We also want an exclusion for planned deploy windows (we typically have a 10–20 minute rolling deploy each day).
+
+If you can provide a concrete example showing a month where we exceed committed sustained throughput for two short spikes (each 10 minutes) and how the bucket would be adjusted, that will help procurement sign off.
+
+Pedro
+Head of Platform, FintechCo
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Pedro Alvarez <pedro@fintechco.com>
+Date: 2027-11-08T11:03:00-08:00
+Subject: Re: Dedicated commit — throughput warranty & measurement window
+
+Looping in a concrete proposal and worked examples. Pedro — thanks for the clear asks. Below is a measurement methodology and a sample calculation. I kept the mechanics intentionally simple to make it auditable by both sides.
+
+1) Measurement cadence and sustained definition
+- Sample granularity: 60s (per-minute) tokens/sec as the primary metric (aligns with procurement preference). We record per-minute tokens/sec for every pool node and aggregate at pool-level.
+- Sustained throughput (committed): defined as the 95th percentile of per-minute tokens/sec across all minutes in the 30-day measurement window. 
+
+2) Spike credits (how they work)
+- Monthly spike credit bucket is sized as: committed_tokens_per_second * 60 * allowance_minutes_per_month * spike_multiplier_factor
+  - allowance_minutes_per_month default: 150 minutes (i.e., ~5 minutes per day)
+  - spike_multiplier_factor default: 2.5 (allows short bursts up to 2.5x without immediate billing penalty)
+- Consumption rule: when per-minute tokens/sec exceeds committed_tokens_per_second, the overage for that minute (minute_tokens - committed_tokens_per_second) * 1 minute is deducted from the bucket.
+- Example: committed 250,000 tokens/sec -> bucket = 250,000 * 60 * 150 * 2.5 = 5,625,000,000 tokens for the month. If you have two 10-minute spikes to 600,000 tokens/sec, overage per minute = 350,000 tokens/sec -> per-minute overage = 350,000 * 60 = 21,000,000 tokens; for 20 minutes total -> 420,000,000 tokens consumed (7.5% of bucket).
+
+3) Latency buckets and targets
+- Buckets by prompt length: short (0–64 tokens), medium (65–512), long (>512).
+- Targets we recommend for contract: short p95 <= 300ms, medium p95 <= 450ms, long p95 <= 800ms. Latency measured at application ingress after KV cache warm start.
+
+4) Exclusions and noise handling
+- Exclude measurement minutes from the sustained calculation for: documented deploy windows (up to 20 minutes/day), provider-initiated maintenance with 2-hour notice, and verified major incidents.
+- Synthetic internal load (synthetic test traffic) will be marked and excluded; Redwood will provide a signed CSV of synthetic test windows for audit.
+
+5) Sampling & auditability
+- All raw per-minute samples retained in an immutable store for 90 days for both parties to audit. We’ll provide a monthly CSV export with: timestamp, pool_tokens/sec, aggregated_pool_minute, latency_p50, latency_p95, flags (deploy, synthetic, incident).
+
+6) Billing and credits reconciliation
+- If monthly sustained 95th percentile remains at or above committed_tokens_per_second -> no billing adjustment.
+- If the 95th percentile falls below committed -> understand as surplus capacity (no negative credit).
+- If bucket is exhausted and overages continue, standard overage rates (TBD in commercial sheet) apply per-million tokens.
+
+Attached I’ve uploaded a sample CSV (throughput-test-plan.csv) and a one-page worked example; I can convert this to a short summary doc for procurement/legal wording. If you want we can add a rolling 10-minute smoothing step before computing per-minute samples (to reduce jitter) — that will lower the measured 95th percentile by ~2–6% in our internal tests.
+
+Would you like us to bake this into SLA-draft-v4 with the example math included?
+
+— Ben
+Director, Commercial Pricing
+Redwood Inference
+
+
+From: Pedro Alvarez <pedro@fintechco.com>
+To: Ben Carter <ben.carter@redwood.com>, Jordan Blake <jordan.blake@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: 2027-11-15T09:10:00-08:00
+Subject: Re: Dedicated commit — throughput warranty & measurement window
+
+Ben/Jordan — this is really helpful and close to what we need. A couple of final notes from procurement/legal before we close:
+
+• Bucket size: the example math is reasonable. Procurement asks that the allowance_minutes_per_month be surfaced as a negotiable term (we’d like the default at 150 but the contract should allow us to increase to 300 for a fee).
+• Smoothing: please include the optional 10-minute smoothing clause as an appendix (we’ll test both).
+• Audit access: we want a once-per-quarter joint audit where we can validate raw per-minute samples in a read-only view.
+
+If Redwood can produce SLA-draft-v4 that includes the exact formulas, the worked example you provided, and a short plain-language summary page for our CFO, we’ll route to legal for a final signature. Once we have that I’ll circulate to procurement and get DocuSign started.
+
+Thanks — Pedro
+Head of Platform, FintechCo
+
+--
+Pedro Alvarez
+FintechCo

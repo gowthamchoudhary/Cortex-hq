@@ -1,0 +1,127 @@
+Audit export protocol & attestation for admin-activity (Crestline)
+
+From: audit@crestline-analytics.com (Marta Lozano)
+To: soojin_lee@redwood.ai, kimberly_park@redwood.ai
+Date: Fri, 02 Mar 2028 09:12:00 -0700
+Subject: Request: admin-activity audit export options and evidence attestation
+
+Hi Soojin / Kimberly,
+
+We're preparing for a scoped SIG/SOC2 review and need a concrete proposal for how Redwood can deliver admin-activity evidence (operator actions, console events, privilege escalations) for our tenant. Key asks from our side:
+- Prefer incremental/delta exports (daily) with attestable manifests and checksums
+- PII masking rules applied at export time for end-user emails and IPs
+- Jurisdictional redaction: exclude EU tenant slices for US-only export bundle
+- Proof-of-delivery and a short SLA for on-demand pulls (we may request live slices during QA)
+
+Can you outline format options (Parquet/JSONL), transport (S3/SFTP), signing/manifest approach, and expected timelines? Also flag any constraints for legal holds or retention carveouts.
+
+Thanks,
+Marta Lozano
+Lead Compliance Analyst
+Crestline Analytics
+[Attachment: crestline_export_questions_v1.xlsx (spreadsheet)]
+From: soojin_lee@redwood.ai
+To: audit@crestline-analytics.com (Marta Lozano)
+Cc: kimberly_park@redwood.ai, karthik_iyer@redwood.ai, logan_wright@redwood.ai
+Date: Fri, 02 Mar 2028 12:01:00 -07:00
+Subject: Re: Request: admin-activity audit export options and evidence attestation
+
+Hi Marta — thanks for the clear list. High-level options below; I'll follow up with an implementation checklist and a sample signed manifest by EOD Monday.
+
+1) Export formats and schemas
+- Parquet (columnar) with a companion JSONL event index: best for large historical slices and efficient PII redaction.
+- Single-file JSONL: easier for ad-hoc queries and streaming but larger.
+- Each exported event includes: event_id, timestamp_utc, actor_internal (redwood_id), action, target_resource, ip_address_raw (masked if PII rule), kv_meta (operation context), and operator_session_id.
+
+2) Incremental / delta delivery patterns
+- Daily delta bundles (UTC day) + on-demand delta window (t+0..t+6h) for live QA.
+- Each bundle carries a signed manifest (HMAC-SHA256) and per-file SHA256 checksums; manifest itself is signed with Redwood's KMS-backed key and timestamped.
+
+3) Transport and attestation
+- Preferred: Customer-owned S3 bucket (cross-account write) with an S3 prefix per day. Fallback: SFTP with signed manifest.
+- Proof-of-delivery: We publish a delivery receipt entry in the manifest and provide a signed ack (JSON) with envelope encryption metadata (KMS key id).
+
+4) PII & jurisdictional redaction
+- Two-stage redaction: (a) field-level masking rules at export time (deterministic hash for emails, truncated IP blocks) and (b) tenant-slice redaction when requested (we can skip record exports for EU tenant ids).
+- Redaction policy configurable per export request and recorded in manifest.
+
+5) Legal holds and retention carveouts
+- We honor RFC-constrained legal holds: we can produce a separate immutable bundle that preserves raw operator-event lines for a limited window (requires enterprise Private/Dedicated contract).
+
+Open questions for you:
+- Do you want deterministic pseudonymization (consistent mapping across exports) or irreversible hashing?
+- Preferred transport (S3 vs SFTP) and whether you can provide cross-account write access.
+
+Attaching the export template (crestline_export_template.md) and will send the internal checklist to my team.
+
+Regards,
+Soojin Lee
+Compliance Solutions Lead
+Redwood Inference
+[Attachment: crestline_export_template.md (text)]
+From: soojin_lee@redwood.ai
+To: karthik_iyer@redwood.ai, logan_wright@redwood.ai, kimberly_park@redwood.ai
+Date: Fri, 02 Mar 2028 12:04:00 -07:00
+Subject: Internal: Crestline incremental export — implementation notes
+
+Team, quick implementation notes to align on before I send the manifest sample to the customer:
+- Schema: use parquet + companion JSONL index; include event lineage fields (ingest_node, producer_version).
+- Signing: manifest.hmac -> sign using Redwood KMS (RSA-2048) then include KMS-key-id and sig timestamp in manifest. Karthik: can we provide optional HSM-signed attestations for this customer?
+- PII policy: Kimberly to draft deterministic pseudonymization (salt per-customer) so Crestline can link identities across exports during their internal QA. Note that deterministic mapping requires secure salt storage and key controls.
+- Jurisdictional slice: Logan to surface tenant-id filters and confirm EU/US tenancy mapping with product.
+- On-demand SLA: offer a standard 24h window for small slices (<= 100k events) and a negotiated 72h for larger pulls.
+
+I'll include the implementation_checklist.pdf in the next message to the customer.
+
+Thanks,
+Soojin
+From: legal@crestline-analytics.com (Rob Chen)
+To: soojin_lee@redwood.ai
+Cc: audit@crestline-analytics.com (Marta Lozano)
+Date: Mon, 05 Mar 2028 08:33:00 -07:00
+Subject: Re: Request: admin-activity audit export options and evidence attestation
+
+Soojin — couple clarifying points from Legal and Audit:
+- For PII masking: we prefer deterministic pseudonymization so our internal tooling can correlate accounts across exports. Please confirm whether Redwood will store the per-customer salt or if we must bring our own.
+- Time normalization: all event timestamps must be provided in UTC and include the original timezone offset in metadata (we use it for local incident timelines).
+- Proof-of-delivery: we need a signed manifest plus a cryptographic receipt that includes the S3 object etag and the manifest signature so we can verify ingestion end-to-end.
+- Can you include an example of the signed-manifest and a sample incremental Parquet file for internal validation?
+
+Thanks,
+Rob Chen
+Senior Counsel
+Crestline Analytics
+From: soojin_lee@redwood.ai
+To: audit@crestline-analytics.com (Marta Lozano), legal@crestline-analytics.com (Rob Chen)
+Cc: kimberly_park@redwood.ai, karthik_iyer@redwood.ai, logan_wright@redwood.ai
+Date: Mon, 06 Mar 2028 15:47:00 -07:00
+Subject: Re: Request: admin-activity audit export options and evidence attestation — proposed delivery plan
+
+Marta / Rob — attaching the sample artifacts and a concise delivery plan. Answers inline to your asks.
+
+- Deterministic pseudonymization: we can provide deterministic pseudonymization using a customer-specific salt. By default Redwood will generate the salt and store it in our KMS-protected secret store; if you require, we can accept and use a customer-provided salt (preferred for highest control).
+
+- Timestamps: exports will be in UTC (ISO-8601) with each record including original_timezone_offset in the event-level metadata.
+
+- Proof-of-delivery: attached signed-manifest-crestline-20280306.json includes: per-file SHA256, S3 ETag, manifest_hmac, kms_key_id, and a delivery_receipt object that we will publish back to the HubSpot deal record for your ingestion system. The manifest is signed by Redwood's KMS RSA key; we can add HSM attestation as an add-on.
+
+- Example artifacts: attached sample-incremental-export.parquet (small extract) and signed-manifest. Please use the drive link below for a short verification script (parquet -> checksum) we included.
+
+Deliverables and timeline:
+- Monday (today): sample manifest + sample Parquet (attached) — delivered.
+- Wednesday: implementation checklist and S3 cross-account test (we request a temporary write prefix).
+- Next week: first full daily delta bundle and signed manifest.
+
+Attachments: signed-manifest-crestline-20280306.json, sample-incremental-export.parquet, implementation_checklist.pdf
+
+Action items for Crestline:
+1) Confirm whether you want Redwood-managed salt or will provide your own.
+2) Provide S3 cross-account write role ARN or SFTP endpoint and an access window for a test write (Wed preferred).
+
+If that looks good, I'll open the delivery runbook in our Console and schedule the test.
+
+Best,
+Soojin Lee
+Compliance Solutions Lead
+Redwood Inference
+[Attachments: signed-manifest-crestline-20280306.json (json), sample-incremental-export.parquet (parquet), implementation_checklist.pdf (pdf)]

@@ -1,0 +1,134 @@
+Ingress conduit options — VPC peering vs PrivateLink vs S2S VPN
+
+From: Liam O'Connor <liam.oconnor@harbortech.com>
+To: Tessa Morgan <tessa.morgan@redwoodinference.com>
+Date: Thu, 29 Oct 2026 09:12:00 -0700
+Subject: Ingress conduit options — shorthand question
+
+Hi Tessa,
+
+Attaching a quick topology (HarborTech_network_topology.pdf) — were evaluating private connectivity for a Redwood Private deployment and want a short recommendation on the right ingress conduit. high-level constraints:
+- No traffic should traverse the public Internet (regulatory requirement).
+- Cross-account access (Redwood managed account <-> our prod VPC).
+- Expected sustained traffic: 150-250 Mbps, occasional spikes to ~600 Mbps.
+- 99th percentile latency goal to Redwood inference endpoints < 15 ms (us-east-1).
+- We want minimal operational surface but strong isolation and auditability for SOC2 (in progress).
+
+Options on the table: VPC peering, AWS PrivateLink (VPC Endpoint Services), or a site-to-site VPN (IPSec) to our on-prem or Transit Gateway.
+
+Can you call out the pragmatic tradeoffs (security/compliance, maintenance, failover, throughput, cost) and which you would pilot first for HarborTech? Also: who typically terminates TLS and where should KMS live for Private deployments?
+
+Thanks — if this is better as a quick call we can set one up.
+
+Liam O'Connor
+Network Architect, HarborTech
+liam.oconnor@harbortech.com
++1 (415) 555-0147
+
+Attachments: HarborTech_network_topology.pdf (diagram), sample firewall rules (referenced)
+
+From: Tessa Morgan <tessa.morgan@redwoodinference.com>
+To: Liam O'Connor <liam.oconnor@harbortech.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Kimberly Park <kimberly.park@redwoodinference.com>
+Date: Thu, 29 Oct 2026 10:03:00 -0700
+Subject: Re: Ingress conduit options — shorthand question
+
+Thanks for the diagram, Liam  
+
+Quick summary up front: for your constraints Id recommend piloting PrivateLink (interface endpoints) first with a fallback path (Transit Gateway + peering) for high-throughput batch traffic. Rationale in bullets below.
+
+Why PrivateLink first (short):
+- Strong isolation: connections are per-service and dont expose your VPC routes to Redwoods account (reduced blast radius).
+- Compliance-friendly: AWS flow logs + VPC endpoint-level logging + easy isolation for audits.
+- Operational simplicity for application-level calls (mutual TLS between your services and Redwood).
+
+Caveats:
+- Throughput per ENI can be constrained; we treat heavy sustained bandwidth with either multiple endpoints or an alternate peering/transit route.
+- Slightly higher per-GB cost vs peering, and additional ENI management.
+
+When peering or VPN makes sense:
+- VPC Peering (or Transit Gateway attachments) for sustained, high-throughput low-latency traffic where cross-account route exposure is acceptable and you control both VPCs.
+- Site-to-site VPN: good as a temporary fallback or for on-prem connectivity; increased latency and head-of-line encryption cost; maintenance overhead (rekeying, tunnels).
+
+TLS/KMS:
+- We recommend mutual TLS terminated at the Redwood Private control plane for session management, with customer-side TLS for end-to-end encryption where you require key ownership.
+- For regulated customers wanting exclusive key control, we support customer-managed KMS/HSM (you supply the CMK) in Private deployments; otherwise Redwood-managed KMS with strict audit logs is common.
+
+Next steps I propose:
+1) Quick 30-min technical sync to look at traffic profile and failure modes (please share p95/p99 request sizes and concurrency).
+2) Pilot with a single PrivateLink endpoint in us-east-1 for control-plane calls + a small production route through a Transit Gateway attachment for higher-throughput workloads.
+3) We'll supply a short checklist (redwood_privatedeploy_checklist.xlsx) outlining required firewall rules, CIDR ranges, and audit hooks.
+
+Ben and Kimberly are looped in — Ben can sketch the comparison matrix and Kimberly can confirm our recommended checklist for audit artifacts.
+
+Best,
+Tessa Morgan
+Sr. Solutions Engineer, Redwood Inference
+T: +1 (650) 555-0133
+
+Attachment: redwood_privatedeploy_checklist.xlsx (checklist stub)
+
+From: Ben Carter <ben.carter@redwoodinference.com>
+To: Liam O'Connor <liam.oconnor@harbortech.com>, Tessa Morgan <tessa.morgan@redwoodinference.com>
+Cc: Kimberly Park <kimberly.park@redwoodinference.com>
+Date: Fri, 30 Oct 2026 08:20:00 -0700
+Subject: Re: Ingress conduit options — short matrix and numbers
+
+On Thu, Oct 29, 2026 at 09:12 AM Liam O'Connor <liam.oconnor@harbortech.com> wrote:
+> Attaching a quick topology...
+
+Thanks for the clear ask — I put together a short comparison (attached as conduit_comparison_table.csv) and pulled some numbers you can use for capacity planning. Highlights:
+
+1) PrivateLink (Interface endpoint)
+- Pros: Isolated, per-service access; good for control-plane and request/response patterns; simple to lock down via endpoint policies.
+- Cons: ENI throughput limits per AZ; youll want 23 endpoints spread across AZs for durability.
+- Throughput: Baseline single ENI ~1-5 Gbps but practical sustained single-connection bandwidth often <1 Gbps depending on instance types. Use multiple parallel connections.
+- Ops: Low for standard app traffic, medium if you manage many endpoints or require cross-account endpoints.
+
+2) VPC Peering / Transit Gateway
+- Pros: Very low latency, high throughput, predictable L4 connectivity; works well for bulk data and streaming.
+- Cons: Cross-account peering exposes route tables; less granular service-level isolation. Transit Gateway adds cost but simplifies multi-VPC scaling.
+- Throughput: effectively limited by instance/network performance and TGW attachments; comfortably supports sustained 1 Gbps+ workloads.
+
+3) Site-to-site VPN
+- Pros: Works for on-prem and hybrid; encrypted tunnel over public internet or Direct Connect; lower up-front change to network topology.
+- Cons: Higher latency and jitter; maintenance (rekeying, tunnel monitoring); not ideal for sub-15ms latency SLOs unless paired with Direct Connect.
+
+Failover patterns we recommend:
+- Active control-plane via PrivateLink with peering/TGW path available as a warm standby for heavy batch traffic.
+- Health checks and route preference: endpoint-client side health check -> endpoint fails -> route traffic via TGW peering with rate-limiting backpressure.
+
+Operational notes:
+- Auditability: enable VPC Flow Logs + CloudTrail for endpoint creation; export logs to a dedicated S3 bucket (Customer-managed encryption recommended).
+- KMS: if HarborTech requires exclusive HSM-based keys, we can design for a customer-managed CMK (you retain rotation policies); otherwise Redwood-managed KMS with role-based access and logging works for most customers.
+
+Ive attached the CSV with numbers and a simple decision tree. Happy to walk through it on the call Tessa proposed.
+
+Ben Carter
+Principal Solutions Architect, Redwood Inference
+ben.carter@redwoodinference.com
+
+Attachment: conduit_comparison_table.csv (numeric comparison)
+
+From: Liam O'Connor <liam.oconnor@harbortech.com>
+To: Tessa Morgan <tessa.morgan@redwoodinference.com>, Ben Carter <ben.carter@redwoodinference.com>
+Cc: HarborTech Network Team <network@harbortech.com>, Kimberly Park <kimberly.park@redwoodinference.com>
+Date: Mon, 01 Nov 2026 16:45:00 -0700
+Subject: Re: Ingress conduit options — scheduling pilot call
+
+Tessa / Ben, thanks for the rapid turnaround and the matrix. Thats helpful.
+
+Were happy to pilot PrivateLink for control-plane calls and keep a Transit Gateway route as a standby for high-throughput batches. A few quick answers:
+- Traffic profile: p50 payload ~1.2 KB, p95 ~12 KB; concurrency up to 900 requests/sec during short bursts (15s).
+- Compliance: HarborTech is mid-audit for SOC2; we will insist on customer-managed CMK for the pilot if possible.
+- We can open the required firewall rules; Ill share the exact CIDRs during the sync.
+
+I booked a 30-min slot: Tue Nov 2, 10:00 AM ET (calendar invite sent). HubSpot deal here: https://app.hubspot.com/contacts/123456/deal/HT-2026-1543.
+
+Please bring the checklist and the conduit comparison table. Also, our procurement team will likely request a short note about expected monthly egress with PrivateLink vs peering so we can estimate costs for our budget.
+
+Liam O'Connor
+Network Architect, HarborTech
+liam.oconnor@harbortech.com
+
+Attachments referenced: HarborTech_network_topology.pdf (original), procurement/estimate-request.pdf (internal)

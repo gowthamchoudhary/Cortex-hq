@@ -1,0 +1,149 @@
+Off-net egress policy and authorization for private endpoint deployment
+
+From: Michael Lee <michael.lee@acmehealth.com>
+To: vanessa_ortiz@redwood.ai
+Cc: Acme Health Security <acme-security@acmehealth.com>, EdgeCorp SRE <security_ops@edgecorp.io>
+Date: 2026-11-18T09:14:00-05:00
+Subject: Private deployment - off-net / egress details needed
+
+Vanessa,
+
+Thanks for the walkthrough earlier. As we start the Private deployment prep, our security team needs a concrete egress & firewall acceptance sheet to sign off on the VPC/NAT side. Specifically we need:
+- A definitive list of IPv4 ranges (or FQDNs) to allow outbound to (control plane, telemetry, licensing).
+- Ports/protocols required and whether UDP DNS is needed.
+- TLS/SNI/certificate requirements (do you require SNI/hostname validation or client certs?).
+- Guidance if we must NAT to static public IP(s) vs. using a customer egress proxy.
+- Any expected outbound connections to CDN/S3 endpoints, metrics collectors, or 3rd-party telemetry hosts.
+
+We'd like this in a one-pager with a simple diagram so our infra and compliance teams can approve the firewall change window. Attached is our internal compliance questionnaire (acme_redwood_malp_req.pdf).
+
+Thanks,
+Michael Lee
+Head of Infrastructure Security
+Acme Health
+
+
+
+From: vanessa_ortiz <vanessa_ortiz@redwood.ai>
+To: Michael Lee <michael.lee@acmehealth.com>
+Cc: ben_carter@redwood.ai, laura_bennett@redwood.ai, marcus_lin@redwood.ai
+Date: 2026-11-18T11:02:00-05:00
+Subject: Re: Private deployment - off-net / egress details needed
+
+Michael —
+
+Appreciate the clear ask. I pulled together our recommended acceptance options below and attached a short diagram + a proposed CSV of the IP ranges we request be whitelisted from your NAT. There are two supported patterns; pick whichever fits your compliance posture.
+
+Option A — Static outbound IPs (preferred for simple allowlisting):
+- Outbound (TLS) to the following IP prefixes (source NATed from your VPC to static public IPs):
+  - 34.198.128.0/24
+  - 52.23.64.0/24
+  - 3.231.12.0/24
+  - 13.54.101.0/24
+- Ports: 443 (TCP) required.
+- DNS: recommend allowing TCP/UDP 53 to your resolver; alternating approach below avoids needing UDP 53.
+- Notes: these IPs are for control plane, runtime telemetry and license validation. We will provide a signed IP-list CSV (attached) and maintain a one-week rotation notice for changes.
+
+Option B — Egress via customer-managed HTTPS proxy (recommended for environments that disallow any external NAT):
+- Allow outbound to your internal proxy host(s) only (proxy does the TLS termination to Redwood).
+- Required: proxy must preserve SNI and forward the upstream Host header. Support for CONNECT tunneling is required.
+- Ports: 443 (TCP) to the proxy; proxy needs to support CONNECT for arbitrary hostnames.
+- Advantage: no direct public IP allowlisting on your internal firewall; you can apply deep inspection & logging at the proxy.
+
+Other requirements & clarifications:
+- Certificate validation: Redwood requires standard TLS 1.2+ with full chain verification; no client cert required by default. We validate SNI on the control plane; if you terminate TLS at the proxy you must forward SNI.
+- Keepalives/Idle timeouts: allow 15+ minute TCP keepalives for long‑running streams (chat/streaming RPCs).
+- DNS: If you cannot allow UDP 53 outbound, configure split-horizon to resolve our internal runtime hostnames to private addresses or use the proxy pattern.
+- Passive telemetry: we send aggregated usage/health pings; telemetry endpoints are within the IP ranges above. No payload contains customer prompts or PII by default — metadata only.
+
+If you confirm which option you prefer I can loop in Marcus (network) to draft the firewall rule table and Laura (security) for the audit checklist. I attached a diagram (private_endpoint_diagram_v2.png) and the CSV with the IP ranges (ip_allowlist_proposal.csv).
+
+— Vanessa Ortiz
+Director, Solutions Engineering
+Redwood Inference
+vanessa_ortiz@redwood.ai
++1 (415) 555-0198
+
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Michael Lee <michael.lee@acmehealth.com>, vanessa_ortiz@redwood.ai
+Cc: laura_bennett@redwood.ai, priyom_das@redwood.ai
+Date: 2026-11-18T13:22:00-05:00
+Subject: Re: Private deployment - off-net / egress details needed
+
+Michael / team —
+
+Quick follow-up on the firewall rule specifics when you choose Option A (static outbound):
+- Source: your VPC outbound NATed public IP(s) (we need the public IP(s) that will appear on egress).
+- Destination: IP set (see CSV). Rules should be 1:1 allow for TCP/443 only.
+- Stateful behavior: allow established, related. Drop invalid.
+- ICMP: allow Echo/Reply between your VPC and our IPs during the change window for troubleshooting; optionally log and drop afterwards.
+- Health checks: Our control plane may open short-lived connections from the listed ranges — please do not rate-limit below 5/s at the firewall level during rolling updates.
+- NAT timeout: ensure long TCP idle timeout (>= 900s) or use application-level keepalives for streams.
+
+If you need a sample ASA/Juniper/PaloAlto rule snippet I can export one.
+
+Regards,
+Marcus Lin
+Network Engineer, Redwood Inference
+marcus_lin@redwood.ai
+
+
+From: Michael Lee <michael.lee@acmehealth.com>
+To: vanessa_ortiz@redwood.ai, marcus_lin@redwood.ai
+Cc: Acme Health Security <acme-security@acmehealth.com>, EdgeCorp SRE <security_ops@edgecorp.io>
+Date: 2026-11-19T08:09:00-05:00
+Subject: Re: Private deployment - off-net / egress details needed
+
+Vanessa / Marcus —
+
+Thanks, that helps a lot. We prefer Option B (proxy) for now because it fits our egress inspection policy. Two quick asks before we sign off:
+1) Can you confirm Redwood will accept requests tunneled over an HTTPS CONNECT (our proxy will not re-encrypt to the final TLS endpoint)?
+2) We need a short audit checklist for our compliance team listing what telemetry is sent and retention windows.
+
+Also attaching our security team's completed questions (acme_redwood_malp_req.pdf) with a few inline points — Laura, could you weigh in here on telemetry & retention?
+
+Best,
+Michael
+
+> On Nov 18, 2026, at 11:02 AM, vanessa_ortiz@redwood.ai wrote:
+> > Vanessa —
+> > 
+> > Appreciate the clear ask. I pulled together our recommended acceptance options below...
+
+
+From: laura_bennett <laura_bennett@redwood.ai>
+To: Michael Lee <michael.lee@acmehealth.com>, vanessa_ortiz@redwood.ai
+Cc: ben_carter@redwood.ai, priyom_das@redwood.ai
+Date: 2026-11-19T15:02:00-05:00
+Subject: Re: Private deployment - off-net / egress details needed
+
+Michael —
+
+Short answers to your asks and an audit checklist excerpt below. We'll turn this into a one-page artifact for your compliance team and sign-off.
+
+1) CONNECT support: Yes — Redwood supports upstream HTTPS CONNECT tunnels. Requirements: the proxy must not perform TLS re-termination for the end-to-end channel (i.e., support true TCP CONNECT). SNI must be preserved by the proxy.
+
+2) Telemetry & retention (summary):
+- What we collect: service health metrics (CPU/memory usage), request metadata (timestamp, model id, token counts), and anonymized performance telemetry. We do NOT collect customer prompt text, audio, or model outputs by default.
+- Purpose: platform health, capacity planning, regression detection.
+- Retention: raw metrics retained for 90 days; aggregated summaries retained for 24 months.
+- Access: telemetry access limited to Redwood SRE + Product; export requires managerial approval and is logged.
+
+Audit checklist excerpt (for sign-off):
+- Egress pattern: Option B confirmed (HTTPS CONNECT via customer proxy).
+- Proxy requirements: supports CONNECT, preserves SNI, forwards Host header, provides request-level logging with timestamps and upstream IP.
+- Firewall rules: allow outbound TCP/443 from proxy to Redwood control hostnames/IPs.
+- TLS: TLS 1.2+ with chain verification; no client cert required unless requested in writing.
+- Logging: proxy logs retained for 90 days; security export via S3/GDrive requires approval.
+- Change control: Redwood will provide >= 7 days notice for planned outbound IP changes.
+
+Attachments included in the final one-pager: private_endpoint_diagram_v2.png, ip_allowlist_proposal.csv (if you later choose Option A), and a signed telemetry statement.
+
+Happy to hop on a 30-minute call if you want to walk this through with your infra & compliance teams.
+
+— Laura Bennett
+Security & Compliance Lead
+Redwood Inference
+laura_bennett@redwood.ai
+

@@ -1,0 +1,145 @@
+SprintWave: intermittent WebSocket chunked stream timeouts — urgent
+
+From: Tom Reynolds <tom.reynolds@sprintwave.ai>
+To: marcus_lin@redwood.com
+Cc: ops@sprintwave.ai
+Date: Wed, 26 May 2027 14:37:00 -0000
+Subject: Production: streaming sessions hang intermittently (high impact)
+
+Marcus —
+
+We're seeing widespread user-facing failures on our streamed completions today. Rough summary: a subset of websocket sessions return an initial series of tokens, then stop emitting further chunks for 30–120s; clients report a socket that appears "open" but no additional payloads arrive. This started ~14:15 UTC and is ongoing.
+
+Impact: ~12% of active sessions across our Europe and US regions are affected, causing degraded UX for live assistants and multi-party chat. Error rate in our client telemetry spiked from 0.6% to 9% over the last hour. Latency for non-stream endpoints is fine.
+
+We've included three example request traces and a screenshot of the client console in the attachment. Any immediate mitigation would be appreciated — we can temporarily fall back to non-streamed polling if you recommend it, but that's high-friction for our users.
+
+Example request ids in the log: SW-REQ-17b4, SW-REQ-17c2, SW-REQ-182a (timestamps included).
+
+Please escalate — this is interfering with our launch demo this afternoon.
+
+Thanks,
+Tom
+Tom Reynolds
+Head of Platform Engineering, SprintWave
+ops@sprintwave.ai
+
+---
+Attachments: sprintwave_request_samples.log (text), sprintwave_screenshot_1.png (image)
+From: marcus_lin@redwood.com <marcus_lin@redwood.com>
+To: Tom Reynolds <tom.reynolds@sprintwave.ai>
+Cc: marissa_cole@redwood.com, markus_klein@redwood.com, karthik_iyer@redwood.com, sean_gallagher@redwood.com
+Date: Wed, 26 May 2027 14:44:00 -0000
+Subject: Re: Production: streaming sessions hang intermittently (high impact)
+
+Tom — thanks for the quick note and the samples. I'm opening a high-priority war room and looping in CS and engineering.
+
+Immediate asks from our side so we can triage faster:
+- Can you confirm whether affected sessions are routed through any customer-side reverse proxy / CDN or if they connect straight to Redwood-hosted API endpoints?
+- Are the failing sessions uniformly across model variants and shard ids (we see the request ids but need the full request headers if possible)?
+- Please provide a small curl/websocket handshake capture (ws headers) for one affected session if available.
+
+Short-term mitigation we can push now: 1) set a short-lived gateway policy to disable streaming for your account and route to non-stream endpoints (we can toggle this immediately); 2) increase proxy keepalive / ping interval between your edge and Redwood to avoid idle timeouts — we'll coordinate values once we know your proxy.
+
+I've attached a trace template request if you want to paste it in (we're also asking Engineering for a deeper kernel-level trace). We'll aim for a 30-minute sync; I'll follow up with a calendar invite for 15:15 UTC.
+
+—Marcus Lin
+Account Executive, Redwood Inference
+marcus_lin@redwood.com
+
+---
+Attachments: redwood_trace_request_template.txt
+From: Elena Novak <e.novak@sprintwave.ai>
+To: marcus_lin@redwood.com
+Cc: Tom Reynolds <tom.reynolds@sprintwave.ai>, ops@sprintwave.ai
+Date: Wed, 26 May 2027 15:03:00 -0000
+Subject: Re: Production: streaming sessions hang intermittently (high impact)
+
+Hi Marcus —
+
+Thanks for the fast reply. Quick answers:
+- Sessions go through our edge fleet (open-source proxy) in front of Redwood; we do TLS termination at the proxy.
+- Failures appear across two model variants we tried (rw-large-v2 and rw-medium).
+- Included a capture of a websocket handshake and the request IDs you asked for; see sprintwave_request_samples.log.
+
+Notes from our ops team (copied below):
+> We saw abrupt gaps in chunk arrivals at 14:21 UTC for a subset of sessions. The socket remained ESTABLISHED; client retried and eventually observed the next chunk ~75s later. No upstream TCP disconnects observed at the proxy layer.
+
+We're available for the 15:15 UTC sync. If you think disabling streaming temporarily is safest, please proceed — we can revert after you confirm the root cause.
+
+Elena
+Elena Novak
+Senior SRE, SprintWave
+
+---
+Attachments: sprintwave_request_samples.log
+From: markus_klein@redwood.com <markus_klein@redwood.com>
+To: marcus_lin@redwood.com, marissa_cole@redwood.com, karthik_iyer@redwood.com
+Cc: sean_gallagher@redwood.com
+Date: Wed, 26 May 2027 15:27:00 -0000
+Subject: RE: Production: streaming sessions hang intermittently (high impact)
+
+Team — quick diagnostic notes after ingesting the logs and an initial trace:
+
+What we see
+- Chunks are emitted by the runtime (token generation traces show steady output).
+- Packets carrying chunk frames are observed by our egress proxies but for affected sessions there's a long pause before the downstream ACKs arrive. TCP-level retransmits are minimal; the socket remains ESTABLISHED.
+
+Suspected root cause
+- There's evidence of a broken interaction between client-side proxy buffer management and our chunked transfer framing: some proxies group small frames into larger TCP segments but fail to flush immediately when application-level chunks arrive, producing client-side "quiet windows" despite an open socket. This behavior is exacerbated by intermediate CDN or proxy keepalive settings that aggressively coalesce writes.
+
+Immediate mitigations (we can implement now)
+1) Temporarily enforce a streaming-to-poll fallback flag for SprintWave (we can flip it from our console within 5 minutes). This will avoid the problem entirely at the cost of higher token latency.
+2) Add periodic 1-byte heartbeats on streamed responses (we can deploy a small runtime change as a hotfix to push keepalive frames every 10s while we fully fix behavior).
+3) Work with SprintWave to adjust their proxy TCP_NODELAY / flush frequency — Elena's team indicated they control the edge fleet.
+
+Next actions
+- Karthik: please capture server-side tcpdump and nginx-style proxy_stats for 14:15–14:45 UTC window and upload to the shared drive link.
+- Marissa: coordinate customer comms and an offer for a one-time credit given user impact.
+- Marcus/Sean: prepare exec summary for SprintWave leadership if they request.
+
+I'll start a small hotfix branch for the heartbeat patch and put up an internal patch build for validation. If the heartbeat reduces quiet windows we can push the change with a low-risk rollout.
+
+—Markus Klein
+Principal Software Engineer (Runtime)
+markus_klein@redwood.com
+
+---
+Attachments: redwood_trace_SW-1023.json
+From: marcus_lin@redwood.com <marcus_lin@redwood.com>
+To: Tom Reynolds <tom.reynolds@sprintwave.ai>
+Cc: marissa_cole@redwood.com, markus_klein@redwood.com, karthik_iyer@redwood.com, sean_gallagher@redwood.com
+Date: Thu, 27 May 2027 09:12:00 -0000
+Subject: Re: Production: streaming sessions hang intermittently (high impact) — exec summary and next steps
+
+Tom / Elena —
+
+Quick executive summary and our plan:
+
+What happened:
+- Intermittent streaming "quiet windows" where clients saw no token updates for tens of seconds despite the socket staying open. Our traces show the runtime emitted tokens; intermediate proxy behavior delayed delivery.
+
+Impact:
+- ~12% session error spike; user-visible interruption for live assistant flows.
+
+Immediate mitigations we've implemented:
+1) We enabled a temporary account-level fallback to non-streamed responses for SprintWave (rollbackable).
+2) Engineering has staged a hotfix that inserts periodic 1-byte keepalive frames in streamed responses; rollout to your requests starts in the next 30 minutes.
+3) We're coordinating with your ops team to tune proxy flush/keepalive settings to avoid coalescing-induced pauses.
+
+Next steps / timeline:
+- 09:30 UTC: Hotfix rollout begins (can be rolled back).
+- 10:00 UTC: Karthik will share tcpdumps and proxy metrics in the shared folder for joint analysis.
+- 12:00 UTC: Follow-up sync to confirm regression metrics and plan any permanent server-side fix.
+
+Customer goodwill:
+- Marissa will propose a goodwill credit to SprintWave for today's disruption.
+
+Please ping this thread if you need the fallback toggled sooner or want a dedicated war room line. We're treating this as P1 until we validate a full mitigation.
+
+—Marcus Lin
+Account Executive, Redwood Inference
+marcus_lin@redwood.com
+
+---
+Cc: marissa_cole@redwood.com, markus_klein@redwood.com, karthik_iyer@redwood.com, sean_gallagher@redwood.com

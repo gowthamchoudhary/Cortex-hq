@@ -1,0 +1,142 @@
+Evaluation MAP & success criteria for Redwood pilot
+
+From: Marissa Cole <marissa@redwood.com>
+To: Emily Chen <emily@openretail.com>
+Cc: Jordan Lee <jordan@openretail.com>
+Date: Thu, 12 Jun 2025 15:22:00 -0700
+Subject: Evaluation MAP & success criteria for Redwood pilot
+
+Hi Emily,
+
+Thanks again for the time today — excited about the pilot. I attached a first-pass Mutual Action Plan (Redwood_MAP_v1.pdf) and a one-sheet of proposed success criteria. High-level ask: can we align on exit gates and acceptance tests so both teams have a clear go/no-go on pilot close?
+
+Proposed structure (in the MAP):
+- Goal: Validate Redwood inference for product search reranking in production-like conditions
+- Timeline: 6 weeks from sign -> pilot kickoff -> 4-week evaluation window -> final decision 2 weeks after evaluation
+- Exit gates / acceptance criteria (draft):
+  - Latency: p95 inference latency < 220ms for 95% of requests at target QPS
+  - Throughput: sustained QPS >= 1500 with <= 5% error rate
+  - Cost: per-1M-token unit economics within 20% of target (we’ll provide burn estimates)
+  - Quality: NDCG@10 improvement >= 7% vs baseline model on your eval set
+  - Data controls: logs redacted for PII, retention = 90 days
+
+Acceptance tests (examples to include in evaluation-plan.xlsx):
+- Synthetic load test (latency & error monitoring)
+- A/B evaluation on holdout queries (NDCG, CTR delta)
+- Live ramp checklist (traffic split, fallback policies, KV cache priming)
+
+Next steps: if the criteria above look reasonable, can you confirm 1) a target pilot kickoff week, 2) who on your side will own the eval data and acceptance sign-off, and 3) any org-specific exit gates (e.g., procurement or security sign-off) we should add?
+
+I'll loop in Rishi (solutions) and Vivek (infra) on details. Attaching the MAP and placeholder SOW.
+
+Thanks,
+Marissa Cole
+Enterprise Sales, Redwood Inference
+marissa@redwood.com
++1 (415) 555-0198
+
+Attachments: Redwood_MAP_v1.pdf, SOW_OpenRetail_draft.docx
+From: Emily Chen <emily@openretail.com>
+To: Marissa Cole <marissa@redwood.com>
+Cc: Jordan Lee <jordan@openretail.com>, procurement@openretail.com
+Date: Fri, 13 Jun 2025 10:45:00 -0700
+Subject: Re: Evaluation MAP & success criteria for Redwood pilot
+
+Hi Marissa,
+
+Appreciate the write-up — this is a good starting point. A few clarifications from our team:
+
+- Timeline: can we shorten the evaluation window to 3 weeks? Our Q2 roadmap is tight.
+- Latency: p95 < 220ms sounds fine if that's for representative 512-token requests; please confirm what sequence length you used for your estimate.
+- Quality: we prefer both NDCG@10 and CTR lift, and we will expect a minimal regression on precision@5.
+- Data controls: procurement will require SOC2 evidence (or a SOC2 questionnaire) and confirmation that logs are encrypted at rest; also add a clause about log export (we need to be able to retrieve audit logs).
+
+For acceptance sign-off: Jordan will be our technical owner; procurement will need to approve the SOW before kickoff. Can you add a hard gate for procurement sign-off in the MAP?
+
+If you can update the MAP and a short evaluation-plan.xlsx with concrete test definitions (how we measure NDCG/CTR, sample sizes, test windows), we can review and aim to sign the SOW the week of June 23.
+
+Thanks,
+Emily Chen
+Product Director — Search & Personalization
+OpenRetail Inc
+emily@openretail.com
+
+On Thu, Jun 12, 2025 at 3:22 PM Marissa Cole <marissa@redwood.com> wrote:
+> (see above)
+
+From: Marissa Cole <marissa@redwood.com>
+To: Rishi Malhotra <rishi@redwood.com>, Vivek Kulkarni <vivek@redwood.com>
+Cc: Priyom Das <priyom@redwood.com>
+Date: Fri, 13 Jun 2025 13:05:00 -0700
+Subject: Fwd: Evaluation MAP & success criteria for Redwood pilot
+
+Team — forwarding Emily's reply. Two asks: 1) Can we validate our latency estimates for 512-token requests and provide the exact test harness we used (seq len, batch size, quantization profile)? 2) Can you draft a concrete set of acceptance tests with pass/fail thresholds (these will go into evaluation-plan.xlsx).
+
+Key constraints from customer: 3-week evaluation window (they'd like shorter), procurement SOC2 + log export gate, and Jordan will be sign-off.
+
+Draft idea for acceptance tests (short):
+- Perf load test: run Gatling load for 1 hour at target QPS of 1500; p95 < 220ms, errors < 5%
+- Quality test: run A/B on 100k queries split 50/50 for 14 days; measure NDCG@10 and CTR; require NDCG@10 >= 7% uplift and CTR lift >= 1.5% (stat sig)
+- Reliability test: 99.9% success rate for inference calls during evaluation window
+
+Rishi/Vivek — can you reply with any constraints (infra, priming times, expected cold-start behavior) and whether we can support a 3-week window? I'll consolidate and send back to Emily with updated attachments.
+
+Thanks,
+Marissa
+
+Attachments: evaluation-plan.xlsx (placeholder)
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Marissa Cole <marissa@redwood.com>, Vivek Kulkarni <vivek@redwood.com>
+Date: Mon, 16 Jun 2025 09:17:00 -0700
+Subject: Re: Fwd: Evaluation MAP & success criteria for Redwood pilot
+
+Marissa — quick notes from infra/solutions:
+
+- Latency estimate: our benchmark for the quantized variant used 512-token sequences, batch sizes of 8, and a warm KV cache. The p95 220ms number is achievable in Dedicated mode; hosted API may see +30–50ms variance at peak. We will call that out in the MAP.
+- 3-week window: feasible if we reduce the A/B duration to 10 days and increase query sample size to keep statistical power (we recommend 120k queries total).
+- Acceptance tests (concrete):
+  1) Performance load: 60-minute load at target QPS (1500) — p95 < 220ms, errors <5% — PASS if both true.
+  2) Quality A/B: 10-day experiment, 1:1 split, 120k queries — PASS if NDCG@10 uplift >= 7% and CTR lift >= 1.2% (p<0.05).
+  3) Security gate: procurement must return signed SOW and SOC2 questionnaire completed — PASS when signed doc present.
+  4) Operational: live fallback configured and tested (toggle to baseline returns <1% error) — PASS when failover test completes.
+
+I attached a skeleton evaluation-plan.xlsx (columns: test, metric, method, sample_size, pass_threshold, owner). Also adding a note: we need the customer's sample queries and a holdout set prior to kickoff — Jordan should own that.
+
+I'll prepare a short runbook for failover and cache priming. Vivek: I'll sync with you on capacity reservations (Dedicated pool).
+
+-rishi
+Solutions Engineer, Redwood Inference
+rishi@redwood.com
+
+From: Marissa Cole <marissa@redwood.com>
+To: Emily Chen <emily@openretail.com>
+Cc: Jordan Lee <jordan@openretail.com>, Rishi Malhotra <rishi@redwood.com>, Vivek Kulkarni <vivek@redwood.com>, procurement@openretail.com
+Date: Fri, 20 Jun 2025 09:11:00 -0700
+Subject: Re: Evaluation MAP & success criteria for Redwood pilot
+
+Hi Emily / Jordan,
+
+Thanks for the quick feedback — attached is an updated MAP and the evaluation-plan.xlsx with concrete tests (see attachments). Summary of agreed gates and timeline: 
+
+- Kickoff target: week of 2025-06-30 (aiming to sign SOW by June 25 via DocuSign)
+- Evaluation window: 10 days of A/B (start after warm-up and priming), with a 3-week overall pilot engagement for smoke, tuning, and A/B run (timeline: 3 weeks total)
+- Exit gates (all required for a green close):
+  1) Perf: p95 < 220ms at target QPS (1500) during a 60-minute load test
+  2) Quality: NDCG@10 uplift >= 7% and CTR lift >= 1.2% (10-day A/B, 120k queries)
+  3) Security/Procurement: signed SOW and completed SOC2 questionnaire (procurement sign-off)
+  4) Operational: failover tested; rollback playbook validated
+
+Acceptance tests: listed in evaluation-plan.xlsx with ownership and pass thresholds. If all gates pass, we recommend moving to an expanded rollout and will prepare a post-pilot SOW amendment. If any gate fails, the MAP includes a remediation plan and a single re-test opportunity within 14 days.
+
+DocuSign link for the SOW: https://docusign.com/link/abc123-sign
+HubSpot deal: https://app.hubspot.com/deals/12345-RDW-3742
+
+Emily — can you confirm procurement will review by June 24 and Jordan will provide the holdout queries by June 26? Once confirmed, we'll put the SOW on the DocuSign route.
+
+Best,
+Marissa Cole
+Enterprise Sales, Redwood Inference
+marissa@redwood.com
+
+Attachments: Redwood_MAP_v1.pdf, evaluation-plan.xlsx, SOW_OpenRetail_draft.docx

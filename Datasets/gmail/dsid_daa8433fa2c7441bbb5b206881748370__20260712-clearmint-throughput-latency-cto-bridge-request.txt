@@ -1,0 +1,136 @@
+Urgent: ClearMint production latency spike and reserved throughput gap
+
+From: Sara Kendall <sara@clearmint-payments.com>
+To: Jordan Blake <jordan_blake@redwood.com>
+Date: Sun, 12 Jul 2026 08:23:00 -0700
+Subject: Prod alert — 95p latency doubled, 5% error rate, throughput below reserved
+
+Jordan,
+
+We started seeing a severe degradation on ClearMint side starting ~07:10 PT: 95th percentile generation latency jumped from ~180ms to ~1.3s and our client-side error rate is ~5% (mostly 503s / backend timeouts). Throughput measured on our side has dropped ~30% versus our reserved baseline for the window.
+
+Attached is a short sample of request/response traces (clearmint_error_log_0712.txt) and a CSV extract of the pool metrics we receive from the SDK (pool_metrics_2026-07-12.csv).
+
+This is impacting live transactions (payments) during our peak hour. We have re-routed some traffic but the business impact is material — we need an urgent mitigation and a timeline for a fix. Can we get a call in the next 20 minutes? I have Jacob on standby.
+
+Requested escalation: immediate engineering triage + notification to your ops/execs if this will require capacity adjustments or an SLA exception.
+
+—Sara
+Sara Kendall
+Head of Platform Engineering, ClearMint Payments
+
+Attachment: clearmint_error_log_0712.txt (snippet)
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Sara Kendall <sara@clearmint-payments.com>
+Cc: Irene Choi <irene_choi@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Soojin Lee <soojin_lee@redwood.com>
+Date: Sun, 12 Jul 2026 08:28:00 -0700
+Subject: Re: Prod alert — 95p latency doubled, 5% error rate, throughput below reserved
+
+Sara — thanks for the heads up and the logs. Jacob — copied for awareness.
+
+We’re spinning up an immediate bridge with infra and ops. Irene and Soojin are joining the call now to triage metrics and root cause; Marissa is on standby for CS communications.
+
+Immediate asks from our side: share any spike correlation (time of day, payload sizes, context window increases) and whether you recently pinned a new model or increased max_tokens. I’ll get infra to propose short-term mitigations (routing / burst) and a longer-term plan.
+
+I'll send a join link for a quick 15m triage and then escalate to execs if we confirm reserved shortfall.
+
+—Jordan
+Account Executive, Redwood Inference
+
+On Sun, Jul 12, 2026 at 08:23 AM Sara Kendall <sara@clearmint-payments.com> wrote:
+> Jordan,
+>
+> We started seeing a severe degradation on ClearMint side starting ~07:10 PT...
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Irene Choi <irene_choi@redwood.com>, Soojin Lee <soojin_lee@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: Sun, 12 Jul 2026 08:33:00 -0700
+Subject: INTERNAL: ClearMint production degradation — immediate triage and mitigation options
+
+Team — Sara from ClearMint reports a 95p latency spike to ~1.3s, ~5% 503 error rate, and an observed ~30% throughput drop versus their reserved baseline. Attached metrics from the customer and our telemetry indicate rapid queueing at the dedicated GPU pool serving their reservation.
+
+Quick context: they are on a Reserved plan, model v2.1 (pinned), 8k context. Customer said they deployed a change this morning that increased median prompt length (no confirmation yet).
+
+Immediate mitigation options to propose on the bridge (order matters):
+1) Short term (0–15m): enable customer-specific burst capacity and temporarily raise pool headroom (proposed_burst_plan.pdf attached). This requires ops approval for overage and may incur overage billing.
+2) Canary routing (15–45m): route 20% of their traffic to a quantized v2.1-q variant with identical outputs verified by evals — reduces per-token latency/cost and eases pooling pressure.
+3) Runtime knobs (15–60m): drop continuous batch window to force smaller batches, disable aggressive prefix cache invalidation for this tenant, and reduce max_allowed_batch to limit serialization delays.
+4) Customer-side: ask ClearMint to temporarily reduce max_tokens or pin to shorter context for high-volume endpoints.
+
+Irene / Soojin — can you confirm current pool saturation, current batching distribution, and whether we have any automatic fallback already active for this reservation? Also include expected time to activate burst capacity and the cost delta.
+
+Marissa — we may need a brief customer-facing exec note if this goes beyond a simple runtime tweak. Vivek, tagging you as CTO in case we need a capacity commit or priority allocation.
+
+—Jordan
+
+Attachments: proposed_burst_plan.pdf
+
+From: Irene Choi <irene_choi@redwood.com>
+To: Jordan Blake <jordan_blake@redwood.com>, Soojin Lee <soojin_lee@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: Sun, 12 Jul 2026 09:02:00 -0700
+Subject: Re: INTERNAL: ClearMint production degradation — immediate triage and mitigation options
+
+Summary of triage (live):
+- Observed: dedicated-pool-42 serving ClearMint reservation reached sustained GPU utilization > 94% at 07:08 PT; queue depth jumped 6x; KV cache churn increased after a set of prompts with longer context were detected.
+- Root cause (likely): sudden shift in prompt length distribution + pinned model variant preventing transparent fallback. The runtime’s batching heuristics created larger batches for longer sequences which increased tail latency; combined with KV cache churn this produced queuing and 503s.
+
+Data points:
+- avg_seq_len (last 90m): 2.7k -> 6.1k median during spike
+- batch_size distribution shifted right (p50->p75 increased by ~40%)
+- no infra hardware faults; pool headroom exhausted for sustained period
+
+Proposed immediate actions (we can execute now):
+A) Enable burst headroom on pool-42 (approx +25% capacity) — can be active in ~6 minutes. Requires ops sign-off and customer notification for overage.
+B) Canary 15% traffic to v2.1-quant (runbook: https://redwood.app/runbooks/gpu_saturation) — can reduce latency tail quickly.
+C) Shorten batch window to 20ms to reduce large-sequence aggregation (runtime change) — low-risk, no restart, takes ~10 minutes to propagate.
+
+Longer-term: recommend a model-variant policy change for pinned customers so we can transparently serve quantized equivalents during headroom events, and an autoscale soft-threshold tied to sequence-length distribution.
+
+I will start A+B+C now pending operations authorization. If the customer insists on guaranteed reserved throughput, we will need an emergency capacity add (reserved pool increase) which is an exec-level commercial change.
+
+—Irene
+Irene Choi, Director, Infrastructure
+
+On Sun, Jul 12, 2026 at 08:33 AM Jordan Blake <jordan_blake@redwood.com> wrote:
+> Team — Sara from ClearMint reports a 95p latency spike to ~1.3s...
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Sara Kendall <sara@clearmint-payments.com>, Jacob Mills <jacob.mills@clearmint-payments.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Irene Choi <irene_choi@redwood.com>, Soojin Lee <soojin_lee@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: Mon, 13 Jul 2026 16:02:00 -0700
+Subject: Follow-up & exec note: ClearMint impact and proposed bridge actions
+
+Sara / Jacob — thank you for your patience. Quick readout and next steps from our side after the triage:
+
+What happened
+- Root cause: a sudden, sustained increase in prompt lengths caused larger batching and higher KV churn on the dedicated pool serving your reservation. That exhausted headroom and produced queuing and 503s.
+
+Actions we executed (sunday)
+- Enabled temporary burst capacity on pool-42 (+~25%) which stabilized queue depth within 10 minutes (we saw 95p latency drop from ~1.3s to ~420ms).
+- Canary routing: shifted 20% traffic to a quantized v2.1-q variant — reduced CPU/GPU work per token and improved tail latency for canary traffic.
+- Runtime tweak: shortened batch aggregation window to 20ms for your tenant to break up large sequence batching.
+
+Near-term ask (requires quick agreement):
+1) Exec decision on whether we should provision an increased reserved commitment for ClearMint for the next 30 days (options attached). This is a commercial change; it ensures headroom for sustained higher average sequence lengths.
+2) If commercial cannot move quickly, allow us to keep burst headroom on for 48 hours while we run a controlled canary and provide detailed regressions. Burst will be charged as overage per your contract terms.
+
+Proposed timeline
+- Now: keep burst active and monitor (security and billing unaffected).
+- Next 48h: run canary + evals to confirm parity on outputs and performance.
+- 72h: present a recommended reserved increase or an alternate routing SLA.
+
+Marissa will coordinate any exec outreach and commercial terms. Vivek / Irene are on the thread for technical signoff. Please let me know if you want an exec-level call (we can set this up now) — we will keep the burst and canary until we have a decision.
+
+—Jordan
+Jordan Blake
+Account Executive, Redwood Inference
+Redwood Inference | jordan_blake@redwood.com | +1 (415) 555-0109
+
+Attachments: pool_metrics_2026-07-12.csv, proposed_burst_plan.pdf
+
+On Sun, Jul 12, 2026 at 09:02 AM Irene Choi <irene_choi@redwood.com> wrote:
+> Summary of triage (live):
+> - Observed: dedicated-pool-42 serving ClearMint reservation reached sustained GPU utilization > 94%...

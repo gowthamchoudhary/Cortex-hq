@@ -1,0 +1,114 @@
+Urgent: HaloAnalytics v4.2 quant rollout causing latency and error spikes
+
+From: Danielle Park <danielle@haloanalytics.com>
+To: Chloe Martin <chloe_martin@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: procurement@haloanalytics.com
+Date: Mon, 16 May 2027 08:22:00 -0700
+Subject: Immediate: v4.2 quant profile rollout causing 2-3x p95 and decode errors
+
+Chloe / Marissa,
+
+We pushed Redwood model v4.2 with the new quant profile (quantB) this morning across our prod fleet (~60% traffic) and are now seeing p95 latency jump from ~320ms to ~950ms and a spike in decode-related 5xxs. Throughput dropped by about 28% despite the model being nominally smaller. Customers are reporting timeouts on long prompts.
+
+Attached a short metrics snapshot and one decoder trace showing multiple retry loops. This is urgent — our SRE wants either an immediate rollback or a mitigation plan within the hour. Please advise next steps and who from your side will take point.
+
+Attachments: [metrics-snapshot-20270516.csv (CSV, 128KB)], [decoder-trace-20270516.log (text, 54KB)]
+
+Thanks,
+Danielle Park
+Head of Platform
+HaloAnalytics
+
+From: Chloe Martin <chloe_martin@redwood.com>
+To: Danielle Park <danielle@haloanalytics.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Mon, 16 May 2027 08:38:00 -07:00
+Subject: Re: Immediate: v4.2 quant profile rollout causing 2-3x p95 and decode errors
+
+Thanks for the heads up, Danielle — really sorry for the disruption. I'm pulling together diagnostics now. Preliminary checks from our telemetry show:
+- Increased kernel fallbacks for attention kernels after the quant switch (more int8->fallback to float paths).
+- Memory pressure on hosts serving long-context requests leading to spill/retries.
+- A small uptick in transient 5xxs correlated with the time of rollout (around 07:55 UTC).
+
+I'm attaching the same artifacts you sent plus our aggregated p95/5xx timelines.
+
+Immediate plan:
+1) Pause further rollout to remaining hosts (we've halted the canary).
+2) If you want, we can roll back you to v4.1-quantA across the 60% slice — takes ~18-22 minutes to complete and will restore previous latencies in our tests.
+3) Engineering will perform a targeted kernel/quant-profile trace to determine why the int8 path is falling back.
+
+Marissa and Jonas — can you confirm rollback readiness and target window (we should avoid billing cycles if possible)?
+
+Attachments: [redwood-agg-p95-5xx-20270516.csv (CSV, 210KB)]
+
+-Chloe
+Chloe Martin
+Account Executive, Customer Escalations
+Redwood Inference
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Chloe Martin <chloe_martin@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Aditya Rao <aditya_rao@redwood.com>, Danielle Park <danielle@haloanalytics.com>
+Date: Mon, 16 May 2027 08:45:00 -07:00
+Subject: Re: Immediate: v4.2 quant profile rollout causing 2-3x p95 and decode errors
+
+Looping in Ops and SEs. Quick notes from customer-facing side:
+- HaloAnalytics is on a reserved Dedicated plan; latency regressions here risk SLA credit conversations if not addressed promptly.
+- Procurement is asking for written remediation timelines.
+
+Jonas / Aditya — Chloe suggests rollback to v4.1-quantA. If we do the rollback, we should also prepare a customer-facing postmortem and an estimated timeline to full re-deploy after we root-cause. Danielle, we propose rollback now unless you object.
+
+Marissa Cole
+Director, Customer Success
+Redwood Inference
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Chloe Martin <chloe_martin@redwood.com>
+Cc: Aditya Rao <aditya_rao@redwood.com>, Danielle Park <danielle@haloanalytics.com>
+Date: Mon, 16 May 2027 09:02:00 -07:00
+Subject: Re: Immediate: HaloAnalytics v4.2 quant profile rollout - initial triage
+
+Thanks for the quick escalation. Summary of technical triage so far:
+- The v4.2 quantB profile reduces model size but triggers mixed-precision kernels for certain attention shapes common to Halo's long prompts. On our test rigs we see the int8 path hit a codegen guard that forces a slower float fallback for sequences > 1024 tokens. That fallback path induces additional memory allocations and increases latency.
+- The memory pressure then causes occasional request retries on a minority of hosts; the retry behavior surfaces as increased 5xxs and lowers throughput under sustained load.
+
+Immediate mitigations:
+A) Roll back HaloAnalytics traffic slice from v4.2 to v4.1-quantA (safe, tested). Estimated time: 20 minutes to complete for the current fleet slice. Expected result: p95 back to baseline and 5xxs drop.
+B) If rollback is not acceptable, we can deploy a temporary config that forces the int8 kernels for the affected shapes (requires a quick kernel pin and a short restart window). Risk: small accuracy deviation in a narrow prompt profile.
+
+Recommended action: Rollback + postmortem. I'll schedule a quick ops window now.
+
+—Jonas
+Jonas Weber
+VP, Inference Engine
+Redwood Inference
+
+From: Chloe Martin <chloe_martin@redwood.com>
+To: Danielle Park <danielle@haloanalytics.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Aditya Rao <aditya_rao@redwood.com>
+Date: Tue, 17 May 2027 12:03:00 -07:00
+Subject: Executive summary & remediation plan — HaloAnalytics v4.2 rollout impact
+
+Danielle,
+
+Confirming we completed the rollback for your 60% traffic slice at 11:42 PDT this morning. Early monitoring shows p95 latency returned to ~330ms and 5xx error rate back to baseline within ~10 minutes of completion. We're continuing to monitor the entire fleet for residual signal.
+
+What happened (brief):
+- v4.2 (quantB) introduced a quant path that, for long-sequence attention shapes typical of your workload, triggered a fallback to a slower float kernel and increased host memory pressure. That cascade produced higher p95 and intermittent retries.
+
+Immediate next steps (48h plan):
+1) Full postmortem and customer-facing RCA (owner: Marissa) — draft by EOD tomorrow.
+2) Engineering root cause and fix: patch kernel guard and add a deterministic test for the affected attention shapes (owner: Jonas) — target 72h for fix + validation.
+3) Longer-term: rework quant profile selection to include workload-shaped validation and per-account rollout gating (owner: Aditya + Product).
+
+We will share the postmortem and a mitigation checklist for your procurement team. Please let us know if you need an expedited exec call; I'm happy to set up 30 minutes with Jonas and Marissa.
+
+Attachments: [redwood-rollback-log-20270517.txt (text, 12KB)]
+Monitoring: https://app.datadog.com/monitors/halo-requests-p95
+
+Apologies again — we know these regressions are disruptive and appreciate you escalating quickly.
+
+-Chloe
+Chloe Martin
+Account Executive, Customer Escalations
+Redwood Inference

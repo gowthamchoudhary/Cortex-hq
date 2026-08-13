@@ -1,0 +1,119 @@
+Customer escalation — first-token delay traced to edge POP handshake
+
+From: Samir Shah <samir@acme-corp.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Mon, 18 May 2026 09:12:00 -0700
+Subject: Increasing first-token latency since 5/17 — urgent
+
+Vanessa / Marissa,
+
+We're seeing a sharp regression in first-token latency (TTFT) from our production requests to Redwood's hosted API starting late Saturday (05/17). p95 moved from ~180ms to ~650ms and p99s spike over 1.2s intermittently. This is affecting page load for our chat widget and causing user timeouts.
+
+We collected a few traces (attached) and observed elevated TLS handshake times between our client and your edge nodes for a subset of requests. Can you confirm whether there are any ongoing network/CDN changes or known upstream issues? Need escalation — our CS/PL are getting pressure.
+
+Sample request IDs: req_9a7c, req_9a7d, req_9b1f
+Attachments: traces_0518.tar.gz (pcap snippets)
+
+Thanks,
+Samir Shah
+Principal Infra Engineer, Acme Corp
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+To: Connor O'Brien <connor_obrien@redwood.com>, Aditya Rao <aditya_rao@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Rachel Kim <rachel_kim@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: Mon, 18 May 2026 09:45:00 -0700
+Subject: Fwd: Increasing first-token latency since 5/17 — urgent
+
+Connor / Aditya — escalating a customer outage affecting p95/p99 TTFT for Acme. Customer observed elevated TLS handshake times to our edge (they included pcap snippets). Please triage and advise on impact, root cause hypothesis, and mitigation.
+
+Key asks:
+- Is this isolated to a specific edge POP / CDN provider?
+- Can we pin the regression to any change (config push, cert rotation, upstream routing)?
+- Temporary mitigations we can offer the customer (region pinning, fallback to dedicated capacity, client-side retry/backoff guidance).
+
+I copied Marissa and Rachel for account comms and Lauren for incident SLA/credits guidance.
+
+Vanessa
+Account Executive — Enterprise Sales
+Redwood Inference
+
+From: Connor O'Brien <connor_obrien@redwood.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Aditya Rao <aditya_rao@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Rachel Kim <rachel_kim@redwood.com>
+Date: Mon, 18 May 2026 11:20:00 -0700
+Subject: Re: Fwd: Increasing first-token latency since 5/17 — urgent
+
+Vanessa / team — initial triage notes below. I attached a trimmed pcap and a CSV with p95/p99 series for 05/17-05/19.
+
+Summary:
+- Correlation between elevated TTFT and a ~200-400ms increase in TLS handshake time on a subset of client->edge flows. Handshake time here = time between TCP handshake complete and TLS ClientHello->ServerHello completion for the first TLS flight.
+- Affected flows are concentrated in a handful of edge POPs in us-west and us-east, all using the same upstream CDN provider (third-party edge carrier).
+- No recent cert rotation in our control plane. No config pushes from infra since 05/15.
+- Upstream BGP flaps noted in provider status logs around 05/17 03:00-07:00 UTC that align with the worst spikes.
+
+Hypothesis: intermittent degradation at the upstream edge carrier causing delayed ALPN/TLS processing or queueing before our edge terminators. This increases time-to-first-byte / token because the token generation can't start until the TLS handshake completes and we've received the initial bytes.
+
+Immediate mitigations we can do:
+- Reroute affected customer traffic to an alternate POP path (manual policy override) — low-risk, requires short config push and will need coordination with traffic team.
+- Offer the customer to route their requests to a dedicated region (Dedicated or Private) while we investigate — may require sales/ops approval for credits.
+- Ask customer to enable 2nd-tier client retries with jitter to hide transient handshake delays for non-critical requests.
+
+Next steps: I'm spinning up packet captures across the suspect POPs and will request carrier incident logs. Will update in ~2 hours.
+
+Connor
+SRE — Serving Runtime
+
+From: Aditya Rao <aditya_rao@redwood.com>
+To: Connor O'Brien <connor_obrien@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Rachel Kim <rachel_kim@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: Mon, 18 May 2026 13:05:00 -0700
+Subject: Re: Fwd: Increasing first-token latency since 5/17 — urgent
+
+Connor — thanks for the quick triage. Please prioritize:
+1) Exact scope (how many customers, what percent of requests, which regions/POP IDs).
+2) Concrete rollback or route override that we can execute now — minimize customer blast radius.
+3) ETA for root cause and mitigation.
+
+Marissa / Rachel / Vanessa — keep Acme closely updated. If we need to offer credits or a temporary Dedicated route, call it out with an estimate of cost/impact. Marketing/ops needs a single-line summary for downstream comms.
+
+If this is a carrier-specific degradation, we'll need to schedule an emergency call with their support and escalate to our partnerships lead.
+
+-Aditya
+VP, Platform Engineering
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Samir Shah <samir@acme-corp.com>, Elena Duarte <elena.duarte@acme-corp.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Rachel Kim <rachel_kim@redwood.com>
+Date: Tue, 19 May 2026 08:32:00 -0700
+Subject: Re: Increasing first-token latency since 5/17 — urgent
+
+Samir / Elena,
+
+Thanks for the quick signal and the trace artifacts — very helpful. Connor has identified an intermittent TLS handshake delay at a small set of our edge POPs that appears to be upstream-carrier-related. Engineering is actively investigating.
+
+Temporary customer-facing mitigations we can offer now:
+- We can pin your traffic to a nearby alternative region (us-east-2) for the next 24-48 hours while we validate the reroute. This is the fastest option to reduce TTFT spikes.
+- If you prefer not to reroute, enable client-side 2nd-tier retries with exponential backoff for 300ms+ latencies; this often masks transient edge handshake issues.
+- We will prioritize your requests for a temporary Dedicated port if you want to avoid multi-tenant edge variability — requires a short procurement discussion.
+
+Please let us know which you'd prefer. We're available for a 30-minute call today to run through options.
+
+Attachments: quick_reroute_steps.md (stub), timeseries_0517-0519.png (stub)
+
+Best,
+Marissa Cole
+Customer Success Manager, Redwood Inference
+
+From: Samir Shah <samir@acme-corp.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Cc: Elena Duarte <elena.duarte@acme-corp.com>, Connor O'Brien <connor_obrien@redwood.com>
+Date: Wed, 20 May 2026 16:45:00 -0700
+Subject: Re: Increasing first-token latency since 5/17 — urgent
+
+Marissa / team — quick follow-up after we applied the reroute to us-east-2 per your guidance. Observed immediate improvement: p95 back to ~210ms, p99 under 400ms for the last 6 hours. No errors observed. Looks like the edge POP path was the root cause in our case.
+
+We appreciate the rapid response — please keep us posted on carrier root cause and any permanent remediation. We'll consider Dedicated if this recurs.
+
+Samir
+Principal Infra Engineer, Acme Corp

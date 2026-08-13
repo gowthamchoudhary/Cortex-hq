@@ -1,0 +1,154 @@
+Re: RFP — Migration bridge and acceptance matrix (follow-up)
+
+From: Peter Hughes <peter.hughes@globex.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Date: Fri, 09 Apr 2027 15:12:00 -0700
+Subject: RFP — migration validation & acceptance criteria
+
+Vanessa,
+
+Thanks for taking the RFP. Attached is a short set of follow-up questions the architecture team asked after reviewing the initial submission (see attachment: Globex_RFP_questions_v2.docx). The execs want clarity on the migration approach and measurable acceptance gates before they sign off on the SOW. In particular they asked for:
+- A concrete phased timeline (discovery -> pilot -> broad traffic) with estimated durations and decision gates.
+- Integration steps for auth, data retention, and audit logs with our SIEM (Splunk).
+- How you propose to validate model parity and quality regressions during a pilot.
+- Roll-forward / rollback criteria and expected RTO/RPO for each phase.
+
+We need your answers by EOD Monday (PST) to keep procurement on the schedule. Can you also attach any matrices you typically use for acceptance sign-off?
+
+Best,
+Peter Hughes
+Head of Engineering — Integrations
+Globex Corporation
+
+Attachment: Globex_RFP_questions_v2.docx (docx, 34KB)
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Peter Hughes <peter.hughes@globex.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Sat, 10 Apr 2027 09:08:00 -0700
+Subject: Re: RFP — migration validation & acceptance criteria
+
+Peter —
+
+Appreciate the clear list. I compiled the answers below and attached our proposed acceptance matrix (Redwood_proposed_acceptance_matrix.xlsx). High-level summary first, then the detailed steps you can drop into the procurement/SOW.
+
+Executive summary (TL;DR):
+- We recommend a four-phase approach: 1) Discovery & baseline, 2) Pilot (shadow + limited production), 3) Progressive ramp (traffic shaping), 4) Full cutover & stabilization.
+- Typical time box: 2–4 weeks discovery, 3–6 weeks pilot, 2–4 weeks progressive ramp, 1–2 weeks stabilization — adjustable by mutual readiness gates.
+- Validation: automated eval harness (prompt sets + metrics), side-by-side A/B parity checks, sample human review for edge cases.
+- Rollback / rollback-to-last-known-good snapshot supported at every stage; expected RTO for switching traffic is <5 minutes for hosted/dedicated routes, with config rollback orchestration in ~30–60 minutes depending on infra changes.
+
+Detailed plan and decision gates:
+Phase 0 — Preparation (pre-engagement)
+• Deliverables: network allowlists, service account keys, compliance questionnaire answers (we'll provide templates).
+• Duration: 3–7 days.
+
+Phase 1 — Discovery & baseline
+• Activities: workload profiling, seq-len distribution, baseline cost/latency measurement using a representative sample (we'll run a benchmark agent against a non-prod slice).
+• Deliverables: baseline report, target SLOs, recommended batching/quantization profile.
+• Decision gate: sign-off if latency and quality baselines meet agreed SLO band.
+• Duration: 2–4 weeks.
+
+Phase 2 — Pilot (shadow + micro-production)
+• Activities: deploy private/dedicated endpoint per agreed topology; run traffic shadowing for N days, then route 1–5% production traffic to Redwood with feature flags.
+• Quality validation: nightly automated evals (ROUGE/BLEU where applicable, classification accuracy, hallucination rate), weekly human review of 200 sample sessions.
+• Safety: progressive rate limits, prefix/KV cache isolation, and token logging with masked PII per your retention policy.
+• Decision gate: move to ramp if parity metrics within thresholds AND runbook-tested rollback completes successfully in staging.
+• Duration: 3–6 weeks.
+
+Phase 3 — Progressive ramp (traffic shaping)
+• Activities: incremental traffic increases (5% -> 25% -> 50% -> 100%), with health checks (latency, errors, token-cost delta) at each step. We recommend minimum 48–72 hour observation windows per increment.
+• Rollout controls: model variant pinning, autoscale thresholds, and automated fallback to a lower-cost or previous model if error or quality regressions exceed thresholds.
+• Duration: 2–4 weeks.
+
+Phase 4 — Full cutover & stabilization
+• Activities: final config flips, extended monitoring for 14 days, runbook handoff to your SREs.
+• Deliverables: production runbook, incident threshold sheet, audit logs export for your retention window.
+
+Rollback and recovery specifics:
+• Quick rollback: re-route traffic to prior endpoint/variant in <5 minutes for hosted/dedicated routes.
+• Full rollback (schema/back-end changes): 30–60 minutes to execute orchestration plus verification.
+• Data recovery: logs and audit artifacts are retained per configured policy; restoration depends on your retention window — we'll include a step-by-step in the SOW appendix.
+
+Validation & acceptance matrix (attached):
+• Functional parity thresholds (token-level KL divergence, top-k overlap), latency/D99 targets, error-rate caps, and sample-size criteria for human review sign-off.
+• We included explicit test cases for auth flow, audit-trace validation with Splunk events, and telemetry hooks.
+
+Integration checklist (highlighted items):
+• Auth: OAuth2 or mTLS for private control plane; we support SAML/OIDC for console access and service accounts for programmatic calls.
+• Logging: structured JSON token-level logs; direct Splunk HEC integration or forwarding via a collector.
+• Networking: VPC peering options or IP allowlist + TLS; private deployments can run behind your egress controls.
+• Compliance: SOC2 artifact bundles, audit log SLA, and optional HSM/KMS integration.
+
+Next steps we propose:
+1) Kickoff workshop (2 hours) to confirm test prompts, retention windows, and SLO bands — proposed Tue 13 Apr.
+2) Baseline run (we'll schedule the benchmark) — target week of 19 Apr.
+3) Pilot start: target 26 Apr (contingent on kickoff outcomes).
+
+Attached: Redwood_proposed_acceptance_matrix.xlsx (contains the gate-by-gate pass/fail criteria and sample sign-off template). Also attaching a CSV of suggested pilot test cases (Pilot-test-cases.csv).
+
+I'll loop Monica (PM) on the SOW details and Marissa (solutions) for technical ops readiness. If you'd like we can convert the acceptance matrix to a short document your legal team can embed in the SOW.
+
+Thanks — happy to jump on a call if you'd prefer to walk through the matrix live.
+
+—
+Vanessa Ortiz
+Director, Strategic Accounts
+Redwood Inference
+vanessa_ortiz@redwood.ai | +1 (415) 555-0193
+
+Attachments: Redwood_proposed_acceptance_matrix.xlsx (xlsx, 42KB), Pilot-test-cases.csv (csv, 8KB)
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Sat, 10 Apr 2027 09:11:30 -0700
+Subject: Fwd: RFP — migration validation & acceptance criteria
+
+Marissa / Monica —
+
+Forwarding Peter's note and our proposed matrix. Quick asks for internal coordination: 
+1) Marissa: confirm which infra owners we should list for the VPC peering and whether we need a dedicated account for staging.
+2) Monica: can you confirm we have an SLO worksheet ready for the pilot (latency targets + nightly eval cadence)? If possible attach the SLO doc to this thread before Mon EOD.
+3) Both: confirm resource availability for the proposed kickoff Tue 13 Apr (2-hour workshop).
+
+If we get these bits by EOD Monday we can commit to the pilot dates I proposed.
+
+Quoted below for context.
+
+On Sat, Apr 10, 2027 at 09:08 Vanessa Ortiz <vanessa_ortiz@redwood.ai> wrote:
+> Peter —
+> 
+> Appreciate the clear list. I compiled the answers below and attached our proposed acceptance matrix (Redwood_proposed_acceptance_matrix.xlsx). High-level summary first, then the detailed steps you can drop into the procurement/SOW.
+> ...
+> —
+> Vanessa
+
+Vanessa
+Director, Strategic Accounts
+Redwood Inference
+
+
+From: Sasha Ramirez <sasha.ramirez@globex.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Cc: Peter Hughes <peter.hughes@globex.com>
+Date: Sun, 11 Apr 2027 10:05:00 -0700
+Subject: Re: RFP — migration validation & acceptance criteria
+
+Vanessa,
+
+Thanks for the thorough response — the matrix looks good at first pass. A couple quick asks before kickoff:
+- Can you share the list of 25 sample prompts/test-cases you plan to use during the automated nightly runs? We need to confirm they don't include PHI and reflect our real conversational patterns.
+- Procurement would like the SOW draft and a DocuSign link for an initial statement of work and pilot fees (we're ready to sign a pilot SOW once the acceptance gates are embedded).
+- For Splunk integration: can you confirm whether you forward events directly (HEC) or expect us to pull from an S3 bucket? Our security team prefers direct ingestion.
+
+If those items are covered we'll confirm the Tue kickoff.
+
+Sasha Ramirez
+Program Manager — Platform Integrations
+Globex Corporation
+
+---
+On Sat, Apr 10, 2027 at 09:08 Vanessa Ortiz <vanessa_ortiz@redwood.ai> wrote:
+> Peter —
+> 
+> Appreciate the clear list. I compiled the answers below and attached our proposed acceptance matrix...
+
+Attachment: DocuSign_SOW_GL B-2027-001 (link sent separately)

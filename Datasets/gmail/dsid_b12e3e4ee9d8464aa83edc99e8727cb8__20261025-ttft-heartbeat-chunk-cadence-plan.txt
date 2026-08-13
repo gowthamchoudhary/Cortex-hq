@@ -1,0 +1,97 @@
+Post-call: TTFT targets + streaming heartbeat & chunk cadence
+
+From: Jordan Blake <jordan.blake@redwoodinference.com>
+To: Oliver Chang <oliver.chang@streamlytics.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Laura Bennett <laura.bennett@redwoodinference.com>
+Date: 2026-10-25T14:02:00-07:00
+Subject: Post-call: TTFT targets + streaming heartbeat & chunk cadence
+
+Thanks again for the call today — quick recap and proposed next steps so we have alignment on the performance side before we scope the pilot. High-level notes: 
+
+- Agreed TTFT targets: p50 <= 120ms, p95 <= 300ms for the interactive flows (single-turn prompts ~150-600 tokens).
+- Expected concurrency/throughput: initial ramp to 60 concurrent streams, ~180 requests/min sustained, with spikes to ~200 r/min for peak batch events.
+- Streaming mode: StreamLytics prefers WebSocket for lower tail latency; they’ll accept SSE if WebSocket isn’t possible on their client, but WebSocket is primary.
+- Chunk cadence: target emissions every 150–250ms for a human-facing chat UI. We discussed tradeoffs: smaller, frequent chunks reduce perceived TTFT but increase token framing overhead.
+- Heartbeat/keepalive: client requests a 30s heartbeat to detect stale connections; OK to use a small noop chunk if no content.
+- Fallbacks: If streaming stalls >1s, client will reconnect and re-request with the last-offset token id (they can tolerate up to 1s rehydration delay).
+
+Action items / next steps: 
+1) StreamLytics to send a representative 30-minute load profile and sample prompt set (Oliver).
+2) We'll run a 1-hour pilot perf run (Ben to schedule) and capture TTFT p50/p95, chunk latency distribution, and CPU/GPU utilization.
+3) Dev notes: Ben/Laura will share a short pilot runbook and a proposed test window.
+4) Jordan to update HubSpot deal HSP-4789 with the pilot scope and SLOs.
+
+Attachments: none on my note — Oliver mentioned he'd send a CSV with the load profile.
+
+Thanks — I’ll block a preliminary 1-hour slot next week and Ben will confirm availability.
+
+—
+Jordan Blake
+Senior Solutions Engineer | Redwood Inference
+jordan.blake@redwoodinference.com | +1 (415) 555-0132
+
+From: Oliver Chang <oliver.chang@streamlytics.com>
+To: Jordan Blake <jordan.blake@redwoodinference.com>
+Cc: Maya Ramesh <maya.r@streamlytics.com>, Ben Carter <ben.carter@redwoodinference.com>
+Date: 2026-10-26T09:18:00-07:00
+Subject: Re: Post-call: TTFT targets + streaming heartbeat & chunk cadence
+
+Appreciate the clear recap, Jordan — this matches what we discussed. A few clarifications from our side and I attached the load profile CSV (streamlytics-load-profile.csv).
+
+Clarifications / constraints: 
+- WebSocket is strongly preferred — our web front-end uses a persistent socket layer and we have existing reconnection logic that assumes message framing semantics similar to WebSocket (we can adapt to SSE but would like to avoid it).
+- Heartbeat: 30s is fine but if you can push a lightweight 10–15 byte noop every 60s that would also work for intermediate network middleboxes; we still want a 30s health-check window client-side.
+- TTFT targets: p50 100–120ms is doable; p95 at ~300ms is tight but acceptable if you can keep backend CPU/GPU scheduling stable during spikes. Please record kernel/gpu busy fractions during the pilot.
+- Chunk cadence: 200ms is our minimal acceptable spacing; we prefer 150ms for smoother typing-flows. If you have a cost/latency tradeoff recommendation we’d love to see a short doc.
+
+Attachment: streamlytics-load-profile.csv (30m sample, 1s granularity).
+
+We can make next Tuesday / Wednesday windows for the pilot — leaning toward Wed AM PST.
+
+—
+Oliver Chang
+Head of Product Engineering | StreamLytics
+oliver.chang@streamlytics.com
+
+From: Ben Carter <ben.carter@redwoodinference.com>
+To: Oliver Chang <oliver.chang@streamlytics.com>, Jordan Blake <jordan.blake@redwoodinference.com>
+Cc: Laura Bennett <laura.bennett@redwoodinference.com>
+Date: 2026-10-27T11:42:00-07:00
+Subject: Re: Post-call: TTFT targets + streaming heartbeat & chunk cadence
+
+Thanks Oliver — got the CSV and scanned the spike patterns. Quick pilot plan (attached: redwood-pilot-runbook.pdf):
+
+- Pilot objective: confirm TTFT p50/p95, chunk latency distribution, connection stability under 60 concurrent streams and 200 r/min peak.
+- Test harness: we'll run three 20-minute windows (steady, ramp, spike) using your CSV as the traffic generator.
+- Metrics we will capture: TTFT p50/p75/p95, first-chunk latency, inter-chunk spacing histogram, GPU util & host CPU, connection drop/reconnect events, and per-connection bytes.
+- Chunk cadence recommendation: start with 150ms emission target; if we see CPU-side framing overhead >6% of token-processing time we’ll re-test at 220ms and compare user-perceived time (we’ll attach a short A/B note).
+- Heartbeat approach: Redwood will emit a 1-byte noop every 60s by default; if middlebox issues appear we’ll switch to 30s noops for the pilot window.
+
+Request from StreamLytics: confirm preferred pilot windows (Wed AM PST preferred by you) and provide a Slack contact for on-the-fly troubleshooting.
+
+I’ll provision a small reserved capacity pool for the run and share access to the perf dashboard.
+
+—
+Ben Carter
+Performance Engineer | Redwood Inference
+ben.carter@redwoodinference.com
+
+From: Jordan Blake <jordan.blake@redwoodinference.com>
+To: Oliver Chang <oliver.chang@streamlytics.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Laura Bennett <laura.bennett@redwoodinference.com>
+Date: 2026-10-28T09:15:00-07:00
+Subject: Re: Post-call: TTFT targets + streaming heartbeat & chunk cadence
+
+Perfect — all noted and I’ve updated HubSpot (HSP-4789) with the pilot scope and the SLOs we agreed on (p50 <= 120ms, p95 <= 300ms). Final checklist before we lock the run: 
+
+- StreamLytics to confirm Wed, 2026-10-29 09:00–10:00 PST for the 1-hour pilot (three 20-min windows).
+- Please provide Slack handle (or number) for on-call troubleshooting during the run.
+- Ben will send the runbook and perf dashboard link by EOD today.
+- We will capture a short A/B note comparing 150ms vs 220ms chunk cadence and include a simple client-side recommendation for perceived typing smoothness vs cost.
+
+If that all looks good I’ll send a calendar invite with a Zoom link and the runbook attached. Thanks everyone — looking forward to a smooth pilot.
+
+—
+Jordan Blake
+Senior Solutions Engineer | Redwood Inference
+jordan.blake@redwoodinference.com

@@ -1,0 +1,94 @@
+Clarifying deployment + data isolation requirements (Hosted vs Dedicated vs Private)
+
+From: Camila Reyes <camila.reyes@redwoodai.com>
+To: Alice Gupta <alice.gupta@medsync.com>
+Cc: Marcus Lin <marcus.lin@redwoodai.com>, Priyom Das <priyom.das@redwoodai.com>
+Date: 2029-09-10T15:22:00-07:00
+Subject: Clarifying deployment + data isolation requirements (Hosted vs Dedicated vs Private)
+
+Hi Alice — thanks again for the call earlier. Quick recap and the asks we promised to capture so your SecOps team can sign off. I kept this narrow to the deployment/data isolation points we discussed.
+
+Summary of what we heard:
+- Primary requirement: no cross-tenant access to PHI workloads and strong custody controls for both training/processing and logs.
+- Preference leaning toward Dedicated capacity if we can guarantee network egress controls + customer-managed KMS. Private VPC is still on the table if control plane residency is required.
+
+Open questions / asks for you:
+1) Do you require a customer-managed control plane (Private) or is an isolated Dedicated environment with BYOK + VPC peering acceptable?
+2) Minimum retention for audit logs (you mentioned ~12 months on the call — please confirm).
+3) Any mandatory requirements around on-prem processing (air-gapped) vs cloud-only?
+
+What we’ll send over by EOD: a short deployment matrix that maps Hosted / Dedicated / Private to the exact custody boundaries (who holds keys, where logs live, network isolation patterns). I attached the matrix draft for your review (redwood-deployment-matrix.xlsx).
+
+Proposed next step: 30-minute technical workshop with your SecOps + our infra engineers to validate the matrix and confirm KMS/keystore integration. Can you share two windows next week?
+
+Thanks — Camila
+--
+Camila Reyes
+Enterprise AE | Redwood Inference
+camila.reyes@redwoodai.com | +1 415-555-0193
+
+From: Alice Gupta <alice.gupta@medsync.com>
+To: Camila Reyes <camila.reyes@redwoodai.com>
+Cc: MedSync SecOps <secops@medsync.com>
+Date: 2029-09-11T09:03:00-07:00
+Subject: Re: Clarifying deployment + data isolation requirements (Hosted vs Dedicated vs Private)
+
+Camila — appreciate the clear summary. A few clarifications from SecOps (copied):
+
+- Control plane: MedSync policy defaults to customer-managed control plane for any system that processes PHI. That said, we can consider Redwood Dedicated if the control plane can be deployed in our VPC or you provide a Private control plane option.
+- KMS: must be BYOK; HSM-backed keys preferred. Key lifecycle operations need to be auditable by our auditors.
+- Logs: retention minimum 12 months, immutable storage preferred. Access to logs must be restricted to a MedSync admin list.
+- Egress/Ingress: No outbound model weights or training artifacts may leave MedSync-owned storage unless explicitly granted.
+
+Can you confirm whether Dedicated capacity supports: (a) private peering with customer VPC; (b) per-tenant GPU pools (no shared processes); and (c) a separate audit stream we can ingest?
+
+Also attaching the MedSync security questionnaire excerpt that lists mandatory controls (see medsync-sla-ask.pdf).
+
+Thanks — Alice
+
+On Mon, Sep 10, 2029 at 3:22 PM Camila Reyes <camila.reyes@redwoodai.com> wrote:
+> Hi Alice — thanks again for the call earlier...
+
+From: Marcus Lin <marcus.lin@redwoodai.com>
+To: Alice Gupta <alice.gupta@medsync.com>, Camila Reyes <camila.reyes@redwoodai.com>
+Cc: Priyom Das <priyom.das@redwoodai.com>
+Date: 2029-09-11T12:18:00-07:00
+Subject: Re: Clarifying deployment + data isolation requirements (Hosted vs Dedicated vs Private)
+
+Alice — quick technical answers to the bullets you asked about. I’ll keep it high level and flag where we’ll need a short workshop to walk architecture diagrams.
+
+(a) Private peering for Dedicated: yes — Dedicated capacity can be deployed behind a VPC peering connection (or PrivateLink) so traffic between MedSync and Redwood compute is kept on the cloud provider's network. That still implies our control plane (by default) is hosted unless we ship a Private control plane deployment into your VPC (separate offering).
+
+(b) Per-tenant GPU pools: Dedicated offers tenant isolation at the compute level (separate GPU instances/VMs per tenant). We do not colocate tenant workloads in the same process but some orchestration components may be shared; for the strictest separation we recommend Private where the control plane and orchestration run in your environment.
+
+(c) Audit stream: we can publish an audit log feed to your S3/GCS bucket (immutable lifecycle rules can be applied on your side). We also support syslog/CloudWatch export for integrations. Retention policies are configurable; default retention in our hosted control plane is 90 days but we can configure 12+ months for Dedicated/Private via contract (we noted the SLA ask).
+
+Other notes:
+- BYOK & HSM: supported. We integrate with customer KMS (AWS KMS CloudHSM, Azure KeyVault HSM). Key operations remain visible to the customer; we can provide signed attestations.
+- Egress of artifacts: we can block outbound copying of model checkpoints by policy; any exception would require explicit signed approval.
+
+I attached a short deployment matrix (redwood-deployment-matrix.xlsx) that shows which custody guarantees apply to each deployment mode. Recommend a 45-minute technical workshop — proposed slots: Tue 9/17 10:00–10:45 PT or Wed 9/18 14:00–14:45 PT.
+
+If you want written responses to specific lines in the questionnaire we can also map answers to each control.
+
+—Marcus
+Marcus Lin
+Head of Infra Prod | Redwood Inference
+marcus.lin@redwoodai.com
+
+From: Alice Gupta <alice.gupta@medsync.com>
+To: Camila Reyes <camila.reyes@redwoodai.com>, Marcus Lin <marcus.lin@redwoodai.com>
+Date: 2029-09-12T09:02:00-07:00
+Subject: Re: Clarifying deployment + data isolation requirements (Hosted vs Dedicated vs Private)
+
+Thanks Marcus — that helps a lot. We’re inclined to start with Dedicated + VPC peering if the control plane residency questions can be addressed (we'll need contract language for key custody and log ownership).
+
+Alice here — we’ll take Tue 9/17 10:00 PT for the workshop. Please send an invite and a short pre-read (diagram + matrix) so our architects can scan ahead. Also include a rough delta vs Hosted pricing and an estimated 8–12 week rollout timeline for Dedicated + BYOK.
+
+Appreciate the quick turnaround.
+
+Best,
+Alice
+Alice Gupta
+Head of IT Security | MedSync Health
+alice.gupta@medsync.com | +1 617-555-0108

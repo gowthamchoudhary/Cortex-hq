@@ -1,0 +1,107 @@
+Demo follow-up: RAG fit + actionable eval plan for Questiva
+
+From: Sofia Ivanova <sofia.ivanova@redwood.ai>
+To: Lee Carter <lee.carter@questiva.com>, Amelia Zhou <amelia.zhou@questiva.com>
+Cc: Questiva Tech Ops <techops@questiva.com>
+Date: Sat, 12 Dec 2026 15:03:00 -0800
+Subject: Demo follow-up: quick RAG fit notes + next steps
+
+Hi Lee / Amelia —
+
+Thanks again for the time today — loved the walkthrough of the claims ingestion flow and the two query patterns you described (support chat retrieval + structured Q&A for benefit lookups). High level takeaways on fit and risks: 
+
+- Fit: RAG looks promising for both patterns. Short-answer benefit lookups will need high precision and provenance; chat use-case will need a faster path with tolerant recall.
+- Risks: (1) source freshness — you update policy docs weekly; (2) assertion-level hallucination in multi-hop answers; (3) latency budget for chat (target <350ms p95).
+
+Recommended next steps (I captured these as actionable items for the pilot):
+1) Pilot config proposal: retrieval_top_k=10, embed model=text-embedding-3-large, chunk_size=800 tokens, overlap=128, reranker_topk=5 (CE-v2 cross-encoder for final pass).
+2) Model family recommendations to benchmark: redwood-instruct-13B-qlora (baseline cost-efficient), redwood-xl-70B-fp16 (higher-quality where provenance matters).
+3) We’ll run a 2-week eval with your prompt set (attached) + our benchmark harness. Deliverables: precision@1 for grounding, source-attribution rate, hallucination rate, latency p95.
+
+Attachments: questiva_prompt_suite_v1.json, retrieval_bench_questiva_20261212.csv (seed queries + sample docs).
+
+Proposed timeline: start eval week of 2026-12-20 -> initial results by 2026-12-31.
+
+Can you confirm alignment on the retrieval/reranker defaults above and whether Tech Ops can share an S3 sample or Snowflake read-only view for the corpus?
+
+Thanks — talk soon.
+
+--
+Sofia Ivanova
+Senior Solutions Engineer | Redwood Inference
+sofia.ivanova@redwood.ai | +1 415-555-0123
+
+
+From: Lee Carter <lee.carter@questiva.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.ai>, Amelia Zhou <amelia.zhou@questiva.com>
+Date: Sun, 13 Dec 2026 09:12:00 -0800
+Subject: Re: Demo follow-up: quick RAG fit notes + next steps
+
+Sofia — thanks for the recap, this is exactly the level of detail we need. A few clarifications: 
+
+- Retrieval_top_k=10 and reranker_topk=5 sound reasonable; for chat we'd like to see a separate low-latency configuration (retrieval_top_k=6, reranker topk=3) to target the 350ms p95.
+- We can provide a Snowflake read-only view (Tech Ops will handle credentials). I’ll loop them in.
+- Quick ask: can you include a “regression guardrail” we can run daily against the prompt set? We want early signals if hallucination spikes.
+
+Also attaching our internal acceptance criteria doc (will share via Drive). If this plan looks good we’re happy to kick the eval next Monday (20th).
+
+Best,
+Lee
+Head of Product, Questiva
+lee.carter@questiva.com
+
+
+From: Sofia Ivanova <sofia.ivanova@redwood.ai>
+To: Neha Kapoor <neha.kapoor@redwood.ai>, Aditya Rao <aditya.rao@redwood.ai>
+Date: Mon, 14 Dec 2026 10:05:00 -0800
+Subject: Fwd: Demo follow-up: quick RAG fit notes + next steps — ops + eval tasks
+
+Neha / Adi — forwarding the Questiva thread. Key asks for the pilot:
+
+- Tech ops: set up a Snowflake read-only view and a minimal sampling job so we can run freshness checks. Lee said Tech Ops will handle creds.
+- Retrieval config to test (we should run both):
+  * High-precision (benefit lookups): retrieval_top_k=6, chunk_size=600, overlap=96, reranker=CE-v2, reranker_threshold=0.65
+  * Chat (conversational): retrieval_top_k=10, chunk_size=1024, overlap=128, reranker=lightweight-dot (cheap re-rank) + CE-v2 fallback if confidence<0.7
+- Embeddings: use text-embedding-3-large for production-style runs, but run a cheaper text-embedding-3-small sweep to measure cost/recall tradeoffs.
+- Models to include in the sweep: redwood-instruct-13B-qlora (baseline), redwood-13B-8bit-quant (fast), redwood-xl-70B-fp16 (quality).
+- Eval harness: benchmarks we want saved: grounding_precision_at_1, source_attribution_rate, answer_latency_p95, hallucination_rate_by-category. Please add a daily regression check that computes these metrics on the prompt suite and posts to /alerts/questiva-hallucination if hallucination_rate increases >5% vs baseline.
+
+Attachments: retrieval_bench_questiva_20261212.csv (seed queries), questiva_prompt_suite_v1.json (prompts & expected assertions).
+
+Can you own the infra pieces (Neha) and the benchmark pipeline + alert (Adi)? I’ll prep the initial job spec and the SOW draft for legal.
+
+Thanks,
+Sofia
+
+
+From: Amelia Zhou <amelia.zhou@questiva.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.ai>, Lee Carter <lee.carter@questiva.com>
+Cc: Neha Kapoor <neha.kapoor@redwood.ai>, Aditya Rao <aditya.rao@redwood.ai>, Questiva Tech Ops <techops@questiva.com>
+Date: Mon, 20 Dec 2026 11:22:00 -0800
+Subject: Re: Demo follow-up: quick RAG fit notes + next steps
+
+Sofia — thanks, all. Confirming:
+
+- Tech Ops will provision the Snowflake view by EOD Wednesday (2026-12-22).
+- We’re happy with the two retrieval configs and the suggested models. Please include the cheaper embedding sweep so we can baseline cost.
+- Questiva agrees to the pilot timeline: start 2026-12-20 (we’ll give an initial sample dataset) -> checkpoint 2026-12-31.
+
+Action items for Redwood (Sofia / Neha / Aditya):
+- Finalize eval harness and daily regression alert (metrics above).
+- Share Pilot SOW draft and a short runbook for toggling the reranker (CE-v2 <-> lightweight-dot) during the pilot.
+- Upload initial benchmark results to the Drive folder and post the HubSpot deal update.
+
+We’ve attached a signed NDAs link and flagged procurement to expect an SOW. Lee will coordinate with procurement for expedited review.
+
+I’ll wait for the SOW and infra confirmation — excited to get started.
+
+Best,
+Amelia Zhou
+Director, Tech Integrations | Questiva Health
+amelia.zhou@questiva.com
+
+---
+Attachments referenced: SOW-Questiva-RAG-pilot-draft.pdf
+HubSpot: https://hubspot.com/deal/Q-2026-4421
+Drive: https://drive.google.com/drive/folders/1a2B_Questiva-RAG-eval
+

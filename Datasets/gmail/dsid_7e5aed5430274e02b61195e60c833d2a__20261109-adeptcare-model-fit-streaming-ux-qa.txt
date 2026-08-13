@@ -1,0 +1,151 @@
+Post-call: model-fit & streaming UX follow-ups (AdeptCare)
+
+From: Sean Gallagher <sean@redwood.ai>
+To: Laura Simmons <laura@adeptcare.com>, Kevin Ortiz <kevin.ortiz@adeptcare.com>
+Cc: Marissa Cole <marissa@redwood.ai>
+Date: 2026-11-09T15:03:00-05:00
+Subject: Discovery recap & next steps — model fit + streaming UX
+
+Hi Laura / Kevin,
+
+Thanks again for the call today — great context on the clinician triage use case and the constraints around in-session summarization. Quick recap and proposed next steps so we can move to a short proof-of-concept: 
+
+What we heard
+- Primary goal: near-real-time summarization and short-form guidance inside clinician UI (assistant populates notes + key actions).
+- Latency target: p95 partial-update <= 300ms for ~64-token partials; end-to-end response for full summary ~1s p95.
+- Privacy: prefer private deployment (VPC/on-prem) or dedicated capacity; PHI cannot leave their controlled environment.
+- Failure modes you observed: partial outputs sometimes stop mid-sentence; UI shows half-sentences which confuses clinicians.
+
+Initial model candidates (to evaluate) — we'll run small-scale bench:
+- redwood-7b-quant (fast, low cost) — good baseline for latency, may show more partial-coherence issues with short stop sequences.
+- redwood-13b-ptq (better token coherence under streaming, modest cost increase).
+- llama2-70b-chat-q6f (high quality but higher latency; reserve for comparison if latency targets can be met).
+
+Deliverables I attached:
+- prompt set (adeptcare-prompt-set-v1.json) with the 10 test prompts we discussed
+- benchmark scaffold (adeptcare-benchmarks-20261109.html) with scripts and initial perf targets
+- short proposal draft (proposal-draft-AdeptCare-v1.pdf) — pricing ballpark for a 2-week pilot and dedicated capacity options
+
+Immediate next steps
+1) We’ll run the above benchmarks on hosted dev infra and send back a short report (token latency breakdown, partial-coherence notes) — target: 3 business days.
+2) Technical deep-dive: propose Nov 12, 11am PT with Marissa (inference lead) and Rishi (runtime).
+3) If benchmarks look good, we propose a 2-week POC in a dedicated environment (on-prem/dedicated as you prefer).
+
+Attachments: [Attachment: adeptcare-prompt-set-v1.json (9 KB)], [Attachment: adeptcare-benchmarks-20261109.html (120 KB)], [Attachment: proposal-draft-AdeptCare-v1.pdf (32 KB)]
+
+Thanks — happy to adjust if I missed anything.
+
+Best,
+Sean Gallagher
+Enterprise Solutions
+Redwood Inference
+sean@redwood.ai
+
+
+From: Laura Simmons <laura@adeptcare.com>
+To: Sean Gallagher <sean@redwood.ai>
+Cc: Kevin Ortiz <kevin.ortiz@adeptcare.com>
+Date: 2026-11-09T18:21:00-05:00
+Subject: Re: Discovery recap & next steps — model fit + streaming UX
+
+Thanks Sean — this is helpful and aligns with what we discussed. A couple of clarifying questions before the benchmark run: 
+
+1) Partial output behavior: our UI currently renders streaming tokens as they arrive. The problem we see is the model occasionally emits an incomplete clause and then pauses (e.g., "The patient should be" and nothing more for 300ms) — clinicians interpret this as a system hang. From your experience, is this primarily a prompt/stop-sequence issue or a model-coherence problem? Which of the candidates above is least likely to show those mid-sentence pauses?
+
+2) Stop sequences vs. explicit delimiters: we use newlines and '###' as delimiters in some places. Are there recommended best practices for streaming (e.g., keep a short hold-buffer, only render after punctuation, or insert client-side heuristics)?
+
+3) Cost: curious about a ballpark for redwood-13b-ptq versus redwood-7b-quant for a sustained 10k daily interactions pattern. Any rough estimates would help us prioritize.
+
+We can confirm Nov 12 for the deep-dive; Kevin and I will be there.
+
+—Laura
+Laura Simmons
+Head of Clinical Innovation
+AdeptCare
+laura@adeptcare.com
+
+On Mon, Nov 9, 2026 at 3:03 PM Sean Gallagher <sean@redwood.ai> wrote:
+> Thanks again for the call today — great context on the clinician triage use case and the constraints around in-session summarization....
+
+From: Marissa Cole <marissa@redwood.ai>
+To: Sean Gallagher <sean@redwood.ai>, Rishi Malhotra <rishi@redwood.ai>, Priya Natarajan <priya@redwood.ai>
+Date: 2026-11-10T09:45:00-05:00
+Subject: RE: Discovery recap & next steps — model fit + streaming UX (internal notes)
+
+Looping you in with a quick internal plan to address Laura's questions and to shape the benchmark run. Key points and proposed configs below.
+
+Quoted from Laura's email:
+> "the model occasionally emits an incomplete clause and then pauses... is this primarily a prompt/stop-sequence issue or a model-coherence problem?"
+
+Short answer: both, usually. Streaming partials are affected by model tokenization/coherence, generation temperature/penalties, and the streaming policy on the server/client.
+
+Proposed evaluation checklist (to run against provided prompt_set_v1):
+- Compare 7b-quant vs 13b-ptq on the 10 prompts: metrics = token-level p95 latency, end-to-end response p95, partial-coherence score (see bench scaffolding), and "partial-hang" count (instances where partial stops >150ms mid-clause).
+- Run a pass with different generation configs:
+  - temp 0.2, top_p 0.9, presence/penalty 0.0 (default)
+  - temp 0.0, deterministic (to see if fewer mid-sentence pauses)
+  - max_new_tokens trim to 128 for streaming snippets
+- Streaming policy variants:
+  - immediate-flush: stream tokens as emitted (baseline)
+  - hold-final-token 150ms: buffer the last token for 150ms before emitting (reduces half-sentence flashes)
+  - punctuation-hold: only render after sentence-ending punctuation or after X ms
+- Client heuristics: prefer inserting a soft loader UI for partials (3-dot).
+
+Implementation notes (runtime):
+- KV cache prefixing: for clinician dialog there is a high prefix-repeat rate — enable prefix KV caching to reduce compute and improve partial token latencies for repeated context.
+- Batch sizing: keep request continuous-batch small (1-4 reqs) for sub-300ms p95; larger batches hurt partial latency.
+- Quantization tradeoffs: 7b-quant gives better latency/cost; 13b-ptq improves coherence in long-form streaming. We'll record partial-coherence deltas and attach sample traces.
+
+Attachments/references for the run:
+- bench harness link: https://drive.redwood.ai/share/adeptcare/benchmarks
+- sample evaluation prompts (also attached to Sean's original mail)
+
+I'll run the first pass this afternoon on dev infra and send results by EOD tomorrow. Assigning Rishi to monitor token latency traces and Priya to capture partial-coherence metrics and UI artifacts.
+
+Marissa
+Director, Inference & Evals
+Redwood Inference
+marissa@redwood.ai
+
+
+From: Sean Gallagher <sean@redwood.ai>
+To: Laura Simmons <laura@adeptcare.com>, Kevin Ortiz <kevin.ortiz@adeptcare.com>
+Cc: Marissa Cole <marissa@redwood.ai>, Rishi Malhotra <rishi@redwood.ai>
+Date: 2026-11-11T09:17:00-05:00
+Subject: Re: Post-call: model-fit & streaming UX follow-ups (AdeptCare)
+
+Hi Laura / Kevin —
+
+Quick answers and an immediate mitigation plan based on Marissa's run: 
+
+Why you see mid-sentence pauses
+- Generation stalls can come from model tokenization boundaries or short-lived attention/compute backpressure on the runtime.
+- On the client side, immediate-flush streaming surface renders whatever partial tokens arrive, so any micro-pause looks like a partial sentence stop.
+
+Immediate mitigations (low lift)
+1) Server-side "hold-final-token" policy (buffer last token for 150ms) — reduces flashes of half-sentences without noticeable end-to-end latency increase for clinicians.
+2) Use a soft client heuristic: show an animated ellipsis if the latest token did not end with punctuation and <200ms has elapsed.
+3) Prompt tweak: avoid prompts that end with open clauses (e.g., "The patient should be") — add an explicit completion anchor like "Summary:" or an end marker '###' to gate finalization.
+
+Model recommendation
+- For the POC we recommend redwood-13b-ptq as the primary variant: in Marissa's quick pass it reduced partial-hang count by ~60% vs redwood-7b-quant while p95 token latency remained within an acceptable multiple (approx +1.8x cost). We can attach the numeric report in the formal bench.
+
+Cost ballpark (10k daily interactions; conservative estimate)
+- redwood-7b-quant: ~ $2,200/month (approx) in hosted usage-equivalent
+- redwood-13b-ptq: ~ $4,000/month (approx) in hosted usage-equivalent
+(We will provide formal TCO once you confirm deployment preference and actual token distributions.)
+
+Proposal & next steps
+- Offer: 2-week POC on dedicated capacity (recommended) — includes 100k tokens/day baseline, streaming config tuning, and a small UI integration playbook.
+- I'll attach the updated proposal (proposal-draft-AdeptCare-v1.pdf) and the initial bench snapshot.
+- Confirm deep dive: Nov 12, 11am PT — Marissa and Rishi will bring traces and config diffs.
+
+Attachments: [Attachment: adeptcare-benchmarks-20261109.html (120 KB)], [Attachment: proposal-draft-AdeptCare-v1.pdf (32 KB)]
+
+If this works, we can kick the bench run into a dedicated environment and share an SOW with pilot pricing.
+
+Best,
+Sean Gallagher
+Enterprise Solutions
+Redwood Inference
+sean@redwood.ai

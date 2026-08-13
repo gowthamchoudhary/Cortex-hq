@@ -1,0 +1,116 @@
+Urgent: FastBank outage — runtime logs & chain-of-custody questions
+
+From: Aaron Lee <aaron.lee@fastbank.com>
+To: rafael_mendes@redwood.ai
+Cc: ops@fastbank.com, maya.patel@fastbank.com
+Date: 2026-11-07T09:12:00Z
+Subject: High latency + 5xx spike right now — what logs can you give us?
+
+Rafael,
+
+We just experienced a large spike in token latency and a corresponding rise in API 5xx errors starting ~08:45 UTC. Our payments flow timed out for several customers and we've opened an incident. We need runtime traces and request/response logs for the interval 08:30–09:30 UTC immediately for our postmortem and for compliance. Two specific asks from our security team: (1) confirm whether request IDs map back to customer identifiers in your logs, and (2) what your retention window is for full request traces.
+
+Can you provide an export or confirm next steps? This is high priority for our SOC and legal.
+
+Thanks,
+Aaron
+Aaron Lee
+Head of Platform Ops, FastBank
+aaron.lee@fastbank.com
+
+Attachment: fastbank_request_packet.zip (contains initial incident timestamps and sample request IDs)
+From: rafael_mendes@redwood.ai
+To: Aaron Lee <aaron.lee@fastbank.com>
+Cc: monica_patel@redwood.ai, sean_gallagher@redwood.ai
+Date: 2026-11-07T09:28:00Z
+Subject: Re: High latency + 5xx spike right now — what logs can you give us?
+
+Aaron, thanks for the heads up — I'm on it. Looping in Monica (CS) and Sean (Ops) to pull the artifacts and coordinate.
+
+Monica / Sean: please prioritize an evidence export covering 08:30–09:30 UTC (include request traces, worker metrics, scheduler logs, and any gateway error stacks). Aaron's team included a sample of request IDs in the attached packet.
+
+Quick answers to Aaron's questions while we pull things:
+- Request IDs: we can map our internal request_id to the customer-provided request IDs if those were included in the payloads, but we do not join PII to the runtime traces in the standard export. We'll confirm if any customer identifiers are present in the specific traces.
+- Retention: standard runtime traces are retained for 30 days; full raw traces for incidents are kept for 90 days under our incident retention policy when an export is requested.
+
+Sean: please indicate expected ETA for a runnable export and whether we'll need security/oncall to produce a signed chain-of-custody.
+
+Rafael Mendes
+Account Executive, Redwood Inference
+rafael_mendes@redwood.ai
++1 415-555-0147
+From: monica_patel@redwood.ai
+To: Aaron Lee <aaron.lee@fastbank.com>, rafael_mendes@redwood.ai
+Cc: sean_gallagher@redwood.ai
+Date: 2026-11-07T09:45:00Z
+Subject: Re: High latency + 5xx spike right now — what logs can you give us?
+
+Aaron — I hear you. We're treating this as an incident-facing evidence request. Sean, can you pull the following items and package them into a timestamped bundle:
+- runtime_trace_20261107.log (08:30–09:30 UTC)
+- access_log_snippet.csv (filtered to the request IDs Aaron provided)
+- scheduler_metrics.json (1m granularity)
+- error_stacks.txt (gateway + modelapprox traces)
+
+Also noting request from FastBank SOC about mapping to customer identifiers — per Rafael, we'll confirm what fields are present. If any PII appears in the traces, we'll flag and redact before handing over. We will provide a signed hash and manifest for chain-of-custody.
+
+ETA: Sean estimates ~3 hrs for a first bundle, faster for a compressed sample. Will update.
+
+Thanks,
+Monica Patel
+Customer Success, Redwood Inference
+monica_patel@redwood.ai
+From: sean_gallagher@redwood.ai
+To: rafael_mendes@redwood.ai, monica_patel@redwood.ai
+Cc: karthik_iyer@redwood.ai, evelyn_hart@redwood.ai
+Date: 2026-11-07T10:12:00Z
+Subject: Re: High latency + 5xx spike right now — what logs can you give us?
+
+Quick ops update and security checklist:
+- I have begun a scoped export for 08:30–09:30 UTC. First-pass artifacts: runtime_trace_20261107.log, access_log_snippet.csv (filtered to supplied request IDs), and a short worker-telemetry CSV.
+- Expected time to complete full export and manifest: ~2.5 hours. I will deliver an initial redacted sample in ~45 minutes for FastBank to validate it's the right slice.
+- Chain-of-custody: to support legal/forensics we will
+  1) generate SHA256 hashes for each file,
+  2) timestamped manifest signed by our oncall service account, and
+  3) preserve original export in the incident bucket with restricted ACLs.
+
+Security question from Karthik (cc'd): does FastBank need a notarized attestation or is a signed manifest sufficient for their compliance? Sean
+
+Attachment references: runtime_trace_20261107.log (in-progress), access_log_snippet.csv (partial)
+
+—Sean Gallagher
+Senior Site Reliability Engineer
+sean_gallagher@redwood.ai
+
+From: karthik_iyer@redwood.ai
+To: Aaron Lee <aaron.lee@fastbank.com>, sean_gallagher@redwood.ai, monica_patel@redwood.ai
+Cc: rafael_mendes@redwood.ai
+Date: 2026-11-07T12:05:00Z
+Subject: Re: High latency + 5xx spike right now — incident-time data handling & PII question
+
+Aaron / FastBank SOC — quick note from security. Two items important for your compliance team: 
+1) PII presence: Our runtime trace schema does not record raw payment PANs or full SSNs. However, downstream customer payloads sometimes include identifiers (customer_id, email_hash, correlation_id). If you require the removal of those identifiers before export, tell us which fields to redact; redaction will be applied to a separate 'sanitized' bundle.
+2) Legal hold / evidence retention: Redwood can extend the incident retention to 365 days for this case if requested by legal. That requires an approved request and will be logged in our compliance tracker.
+
+For chain-of-custody and formal attestation, we can provide: signed manifest + SHA256, export ACL snapshot, and optional notarized PDF attestation (extra lead time—48–72 hrs). If FastBank needs signed, time-stamped notarization, please indicate and provide the recipient legal contact.
+
+Karthik Iyer
+Principal Security Engineer, Redwood Inference
+karthik_iyer@redwood.ai
+
+From: Aaron Lee <aaron.lee@fastbank.com>
+To: rafael_mendes@redwood.ai, monica_patel@redwood.ai, sean_gallagher@redwood.ai, karthik_iyer@redwood.ai
+Date: 2026-11-07T17:38:00Z
+Subject: Re: High latency + 5xx spike right now — runtime logs & chain-of-custody questions
+
+Thanks — this is exactly what we needed. Two follow-ups: (1) please produce the redacted bundle that removes customer_id and email_hash fields and (2) we will need a signed manifest plus notarized attestation for our audit (legal requires notarization). Our legal contact is Maya Shah (maya.shah@fastbanklegal.com). Please advise on timeline for the notarized PDF so we can plan our postmortem deliverables.
+
+Appreciate the rapid turnaround.
+
+—Aaron
+
+On Sat, Nov 7, 2026 at 09:28 AM rafael_mendes@redwood.ai wrote:
+> Aaron, thanks for the heads up — I'm on it. Looping in Monica (CS) and Sean (Ops) to pull the artifacts and coordinate.
+>
+> Rafael Mendes
+> Account Executive, Redwood Inference
+> rafael_mendes@redwood.ai

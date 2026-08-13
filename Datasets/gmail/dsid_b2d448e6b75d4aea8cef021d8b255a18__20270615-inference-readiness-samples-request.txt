@@ -1,0 +1,129 @@
+Stellardata discovery: prompt samples & redaction question
+
+From: Aisha Rahman <aisha.r@redwood.ai>
+To: Lena Ortiz <lena.ortiz@stellardata.com>, Gabe Ross <gabe.ross@stellardata.com>
+Cc: Ben Carter <ben.c@redwood.ai>, Laura Bennett <laura.b@redwood.ai>
+Date: Sun, 13 Jun 2027 16:02:00 -0700
+Subject: Stellardata discovery: prompt samples & redaction question
+
+Hi Lena / Gabe — thanks again for the time earlier. Quick recap and concrete asks so we can move to a light eval: 
+
+Recap (what we heard)
+- Primary use case: document search summarization + answer classification for legal discovery (multi-paragraph outputs, conservative tone).
+- Volume: ~5M queries/month expected peak; most queries < 256 tokens, but some long-doc contexts up to ~2k tokens.
+- Latency target: ~300ms p50 for interactive UI; batch reranks OK at higher latency.
+- Key quality concerns: hallucination on legal citations, redaction of attorney-client sensitive spans, and preserving redaction auditability.
+
+Asks / next steps
+1) Can you upload 30–50 representative prompts (real examples and edge-case triggers) to the attached CSV template (ai_sample-template.csv)? Mark any prompt rows that contain sensitive tokens and indicate how you would like them redacted (pseudonymize / redact / hash).
+2) In the upload, please flag 5–10 edge-case examples we should prioritize (e.g., heavily redacted transcripts, nested Q&A, documents with embedded tables).
+3) Confirm whether you can provide the samples via an S3 preprod bucket (preferred) or if you need to share via Drive. We can run a sandboxed eval against a sanitized S3 snapshot.
+
+What we'll do on our side
+- Run a lightweight eval: accuracy (F1 / precision/recall for classifications), hallucination checks (citation consistency), and throughput/latency on candidate model variants.
+- Recommend 2–3 model configurations for cost/latency/accuracy tradeoffs and provide a short benchmark report.
+- Share redaction guidance and a short regex/heuristics checklist for common PII patterns.
+
+Timeline proposal
+- Please upload samples by Thursday (2027-06-17). We’ll run an initial pass and return a short benchmark + recommendations by Friday the 18th.
+
+Notes: attaching a simple CSV template to make the intake easier. If you want, include example expected outputs (gold labels) for 10–15 prompts — that helps our eval.
+
+Thanks — Aisha
+Aisha Rahman
+Enterprise Sales
+Redwood Inference
+
+From: Gabe Ross <gabe.ross@stellardata.com>
+To: Aisha Rahman <aisha.r@redwood.ai>
+Cc: Lena Ortiz <lena.ortiz@stellardata.com>, Ben Carter <ben.c@redwood.ai>
+Date: Mon, 14 Jun 2027 09:45:12 -0700
+Subject: Re: Stellardata discovery: prompt samples & redaction question
+
+Thanks Aisha — good recap. Attaching a first pass (stellardata-sample-prompts.csv) with 25 prompts and notes. A few items/questions: 
+
+- We included expected output snippets for 8 prompts (see column "expected_output"). Is that sufficient for your eval?
+- For redaction: we prefer pseudonymization for names in outputs but complete redaction for case numbers. We flagged those in the file.
+- On the S3 question: we can create a preprod S3 snapshot and grant read-only access. It will still contain some PII; can you confirm Redwood can run the eval on our non-prod bucket under an NDA (we have a standard DPA / SOC2 requirement)?
+
+Also — what model families would you typically recommend for conservative legal output where citation hallucination is a risk? Concerned about token costs and throughput.
+
+Thanks,
+Gabe
+Gabe Ross
+Product Lead, Search
+Stellardata
+
+Attachments: stellardata-sample-prompts.csv (csv)
+
+From: Aisha Rahman <aisha.r@redwood.ai>
+To: Gabe Ross <gabe.ross@stellardata.com>, Lena Ortiz <lena.ortiz@stellardata.com>
+Cc: Laura Bennett <laura.b@redwood.ai>, Ben Carter <ben.c@redwood.ai>
+Date: Mon, 14 Jun 2027 14:20:00 -0700
+Subject: Re: Stellardata discovery: prompt samples & redaction question
+
+Gabe — appreciate the sample pack and the flags. Answers inline and plan below.
+
+On expected outputs: 8 gold labels is helpful — sufficient for an initial precision/recall check. If you can add a few more for the most critical edge cases (e.g., table-parsing and multi-section excerpts) that will help.
+
+On S3 and data handling: we can run the eval in a sandboxed Redwood private tenancy under a DPA/NDA. My ops contact will need the S3 path and an IAM role with read-only permissions. We won’t store the snapshot; we can mount ephemeral access for the run and provide an audit log export after the run.
+
+Model recommendations (short list & rationale)
+- RW-chat-13B-quant (fast, low cost): good for classification and short summarization where throughput matters.
+- Open-70B-q4f16 (balanced): stronger on long-form fidelity; good candidate for citation-preserving summaries with some quantization tradeoffs.
+- RW-chat-70B-boost (higher-cost): prioritize accuracy and conservative wording; best for legal sections where hallucination tolerance is near zero.
+
+Evaluation plan
+- Accuracy: run classification F1 + basic QA / citation sanity checks on the gold-labeled subset.
+- Hallucination: automated citation matching + manual spot checks on 20 examples.
+- Latency/cost: measure p50/p95 latency and cost-per-1k tokens on your input length distribution.
+
+Redaction guidance (quick starter)
+- For names: pseudonymize (Name_###) in outputs; keep a mapping in your logs if you need reversible linkage.
+- For case numbers and SSNs: full redaction (replace with <REDACTED_CASE_NUMBER>).
+- Suggested regex examples (non-exhaustive):
+  - Case numbers: ([A-Z]{1,3}-?\d{2,6})
+  - SSN-like: (\b\d{3}-?\d{2}-?\d{4}\b)
+  - Emails: ([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})
+
+I’ve attached a short PII/redaction checklist (pii-redaction-checklist.pdf). Laura — can you pick two engineers to schedule the eval run once Gabe confirms S3 access? We’re aiming to kickoff Wed morning (2027-06-16) if samples and access are in place.
+
+Aisha
+
+Attachments: pii-redaction-checklist.pdf (pdf)
+
+From: Ben Carter <ben.c@redwood.ai>
+To: Lena Ortiz <lena.ortiz@stellardata.com>, Gabe Ross <gabe.ross@stellardata.com>
+Cc: Aisha Rahman <aisha.r@redwood.ai>, Laura Bennett <laura.b@redwood.ai>
+Date: Tue, 15 Jun 2027 08:10:00 -0700
+Subject: Re: Stellardata discovery: prompt samples & redaction question
+
+Hi Lena / Gabe — looping in a quick commercial note as we prep the eval.
+
+- We can likely include a 4–6 week pilot credit package for the initial evaluation + a follow-on production proof-of-concept. That’s typically tied to an evaluation scope (e.g., up to X tokens / Y test runs) — I’ll draft a short SOW once we confirm the sample size.
+- On legal/DPA: our legal team can sign your DPA; procurement@stellardata.com, please point us to the right contact for onboarding paperwork.
+
+If you want a purchase-ready quote for the 3 model configurations Aisha mentioned, tell us which one you expect to pilot and we’ll produce a draft estimate.
+
+Thanks,
+Ben
+VP, Sales Engineering
+Redwood Inference
+
+From: Lena Ortiz <lena.ortiz@stellardata.com>
+To: Ben Carter <ben.c@redwood.ai>, Aisha Rahman <aisha.r@redwood.ai>, Gabe Ross <gabe.ross@stellardata.com>
+Date: Tue, 15 Jun 2027 09:30:00 -0700
+Subject: Re: Stellardata discovery: prompt samples & redaction question
+
+Ben / Aisha — thanks. We’ll provision a preprod S3 bucket (read-only IAM role) and upload a sanitized snapshot by EOD today. Procurement contact is procurement@stellardata.com (cc’d). Attaching a short manifest with the files we’ll include.
+
+On the model side: we’d like to pilot the balanced variant first (Open-70B-q4f16 equivalent) — aim for the best accuracy / cost mix. Please send the SOW and any minimal access docs needed for onboarding.
+
+Onwards — Lena
+
+Forwarded message:
+On Mon, Jun 14, 2027 at 2:20 PM Aisha Rahman <aisha.r@redwood.ai> wrote:
+> Gabe — appreciate the sample pack and the flags. Answers inline and plan below.
+> ...
+
+Attachments: data_sharing_manifest.txt (txt)

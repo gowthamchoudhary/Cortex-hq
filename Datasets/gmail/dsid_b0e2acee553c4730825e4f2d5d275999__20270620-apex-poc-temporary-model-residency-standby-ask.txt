@@ -1,0 +1,130 @@
+Apex PoC: temporary model residency + warm-standby capacity ask
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2027-06-20T16:12:00Z
+Subject: Apex PoC — ask: short-term model residency and warm standby capacity
+
+Team,
+
+Following today’s POC call with Apex (Lisa Brown copied), they’ve surfaced two asks as conditions for signing the pilot SOW:
+
+1) Temporary model residency: Apex wants the ability to "pin" a specific model variant to their tenant for the duration of the trial (up to 30 days) so results remain deterministic for their internal compliance review.
+
+2) Warm standby capacity: they require a guaranteed warm standby (pre-warmed instances) for a peak of ~12 rps sustained bursts during demo windows so latency stays below 120ms.
+
+Why this matters now: Legal + Security want deterministic outputs during their audit windows and Procurement is conditioned on predictable latency during the executive demo. The PoC is high-propensity: expected ARR if greenlit ~ $420k. Close target is 2027-07-15.
+
+Can Eng/Product weigh in with:
+- Feasibility and recommended approach (short notes)
+- Rough EFFORT estimate (dev-weeks + infra cost delta)
+- Risk notes and any blocking compliance items
+- A path for a short-term implementation (flag or config) vs. long-term product work
+
+Attachments: SOW_draft_Apex.pdf (linked to the proposed terms).
+
+Asking for a consolidated reply by EOD 2027-06-21 so we can include technical notes in the exec one-pager.
+
+Thanks,
+Ben
+--
+Ben Carter
+Enterprise Sales
+Redwood Inference
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Lisa Brown <lisa.brown@apexfin.com>
+Date: 2027-06-20T17:02:00Z
+Subject: Re: Apex PoC — ask: short-term model residency and warm standby capacity
+
+Thanks Ben — quick clarifying Qs for Eng/Product before we escalate:
+- For model residency, do we need tenant-level persistent storage of model artifacts, or is tagging + routing sufficient for the PoC?
+- For warm standby, is a dedicated reserved pool required or can we achieve acceptable latency via prioritized scheduling?
+
+Ben — FYI, Apex is flexible on how this is implemented as long as we can guarantee deterministic outputs during a 30-day window and hold latency during 1-hour exec demos.
+
+If Eng/Product can reply with high-level tradeoffs and a delta estimate I’ll fold into the one-pager.
+
+Tessa
+--
+Tessa Morgan
+Head of Sales Ops (acting)
+Redwood Inference
+
+From: Dev Patel <dev.patel@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2027-06-21T14:30:00Z
+Subject: Re: Apex PoC — ask: short-term model residency and warm standby capacity
+
+On Mon, Jun 20, 2027 Ben Carter wrote:
+> Following today’s POC call with Apex ...
+
+Quick feasibility note from Eng: short answer — doable with caveats.
+
+Model residency options (tradeoffs):
+- Tag & route: lowest effort. We route requests for apexfin tenant to a chosen model variant and keep routing in the control plane. Pros: no per-tenant storage change; Cons: if the model is evicted or topology changes, outputs could diverge. No strong guarantees for exact deterministic outputs across infra changes. Estimated effort: ~1-2 dev-weeks for config + rollout.
+- Persistent residency: persist a copy of model artifacts (or pinned weights) for the tenant on a dedicated node pool. Pros: stronger determinism; Cons: storage + licensing + infra cost; more invasive. Estimated effort: ~4-8 dev-weeks + infra lead time.
+
+Warm standby options:
+- Priority scheduling onto shared pools with pre-warmed workers at queue front: medium effort (2-3 dev-weeks) and relies on scheduler changes and SLI guardrails.
+- Dedicated reserved pool (hard reservation): higher infra cost but simplest from SLA perspective; needs reservation policy and billing/usage separation (3-5 dev-weeks + infra provisioning).
+
+Short-term mitigation path we can ship quickly (1–2 weeks):
+1) Use Tag & route for model selection + a temporary dedicated small reserved pool sized for demo bursts (manual provisioning).
+2) Instrument tracing and snapshot outputs for the 30-day window so Apex can verify determinism during review.
+
+Risks: rollback semantics for pinned model during canary/rollback, and increased operational burden for manual pool management.
+
+ETA rough: if we scope as short-term workaround (tag+manual pool) — 1–2 dev-weeks and ~$1.5k/mo extra infra for demo support. For product-grade solution (persistent residency + reservation) — 6–10 dev-weeks and design work for rollback/SLI, plus a small infra recurring cost.
+
+Happy to sketch an RFC and an incremental rollout plan if Product wants to push to roadmap committee.
+
+—Dev
+--
+Dev Patel
+Staff Engineer, Serving Runtime
+Redwood Inference
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2027-06-22T09:00:00Z
+Subject: Re: Apex PoC — ask: short-term model residency and warm standby capacity
+
+Thanks Dev — this is exactly the level of detail we need. A couple of product notes and a recommendation:
+
+Product tradeoffs:
+- The Tag & route + manual reserved pool is our fastest near-term path and acceptable for PoC guarantees if we also produce an "output snapshot" audit so Apex’s compliance team can validate.
+- The persistent residency is a product investment (useful beyond Apex) — ties into model versioning + rollback work we’ve discussed.
+
+Recommendation:
+1) Approve short-term workaround now (Tag + small reserved pool + tracing snapshots) to unblock the PoC.
+2) Put persistent residency (tenant model persistence) on the Q3 roadmap as a prioritized feature — ask Eng for a T-shirt estimate and risk matrix so I can present to the Roadmap Committee on 2027-06-25.
+
+Karthik — can you own the consolidation of estimates (cost, dev-weeks, operational runbook) and produce a one-pager with an exec-friendly risk matrix? I’ll handle roadmap escalation. Link to draft doc: https://drive.redwood.com/apex/poc-ask-spec
+
+Marissa
+--
+Marissa Cole
+Product Manager, Enterprise
+Redwood Inference
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: 2027-06-23T18:15:00Z
+Subject: Re: Apex PoC — ask: short-term model residency and warm standby capacity
+
+Thanks all — to close the loop for Sales:
+- We’ll go with Product’s recommendation to ship the short-term workaround (Tag & route + small reserved pool + tracing snapshots).
+- Karthik: please finalize the one-pager with concrete cost numbers and a short runbook by EOD 2027-06-24. Attach the one_pager_Apex.pdf to this thread when ready.
+- Dev: please prepare a minimal playbook for manual pool provisioning and an ops checklist for the exec demo (who to page, how to re-route traffic).
+
+Ben — I’ll take the exec sign-off path once we have the one-pager. If we can get that by tomorrow EOD we should be able to keep the July 15 target.
+
+Tessa
+--
+Tessa Morgan
+Head of Sales Ops (acting)
+Redwood Inference
+
+Attachments referenced: one_pager_Apex.pdf, traffic_profile_ask.csv

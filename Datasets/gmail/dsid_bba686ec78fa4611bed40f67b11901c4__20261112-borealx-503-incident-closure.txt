@@ -1,0 +1,142 @@
+BorealX model elevated 5xx/timeouts — incident communication and recovery notes
+
+From: Olga Petrov <olga.petrov@redwood.com>
+To: Priya Reddy <pri.reddy@borealanalytics.com>, support@borealanalytics.com
+Cc: Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Thu, 12 Nov 2026 09:12:00 -0700
+Subject: BorealX elevated 5xx/timeouts — immediate update and mitigation
+
+Hi Priya / Boreal support team,
+
+TL;DR: Between 08:45–09:05 PST today we observed an elevated rate of 5xx responses and timeouts for requests routed to the BorealX model variant serving in us-west-2. Impacted workload: long-context encoding (input lengths >12k tokens) from a small subset of clients — including Boreal Analytics.
+
+What we saw
+- ~12:45–13:05 UTC: 5xx rate for BorealX rose from ~0.1% to ~8% for your project ID (boreal-prod).
+- Errors: predominantly 503 gateway/timeouts and some 500s tied to internal cache eviction failures.
+
+Immediate mitigation we applied
+1) Traffic routing: We rolled a partial traffic diversion to a compatible fallback model (BorealX-stable-v3) for requests with context >10k tokens, reducing error rate back to baseline for most traffic.
+2) Capacity increase: Temporarily raised KV cache headroom on the serving pool to avoid immediate evictions.
+3) Observability: Captured detailed traces and error-samples (attached) and opened RW-INC-2026-9823.
+
+Next steps (short term)
+- Ops will complete a configuration rollback for a recent runtime change (v2.7 attention cache tweak) that we suspect introduced a memory regression; aiming for full rollback by EOD PST.
+- We'll run a targeted verification pass for your traffic patterns and share results by EOD tomorrow.
+
+Attachments: borealx-error-samples.jsonl (examples of failing requests), borealx-rca-notes.pdf (ops notes in progress).
+
+We know this is disruptive — sorry for the interruption. I’ll follow up with a root cause summary and timeline once ops validates the rollback. If you need a phone bridge now, I can open one.
+
+Thanks,
+Olga Petrov
+Account Lead, Enterprise Success
+Redwood Inference
+olga.petrov@redwood.com
++1 (415) 555-0186
+
+
+From: Priya Reddy <pri.reddy@borealanalytics.com>
+To: Olga Petrov <olga.petrov@redwood.com>, support@borealanalytics.com
+Cc: Samir Gupta <samir@borealanalytics.com>
+Date: Thu, 12 Nov 2026 09:27:00 -0700
+Subject: Re: BorealX elevated 5xx/timeouts — immediate update and mitigation
+
+Thanks Olga — appreciate the immediate heads up. A few quick clarifying questions:
+
+1) Can you confirm whether any inference inputs or generated outputs were persisted outside our project scope? Data residency is a hard requirement for us.
+2) We saw increased tail latency and some request retries triggered from our side; can you advise whether retries will be counted against quota during the mitigation window?
+
+We would like to join a short bridge if you're standing one up. Our SRE (Samir) is on this thread and can join.
+
+—Priya
+Priya Reddy
+Head of Product — ML Platform
+Boreal Analytics
+priya.reddy@borealanalytics.com
++1 (650) 555-0222
+
+On Thu, Nov 12, 2026 at 09:12 AM Olga Petrov <olga.petrov@redwood.com> wrote:
+> TL;DR: Between 08:45–09:05 PST today we observed an elevated rate of 5xx responses and timeouts for requests routed to the BorealX model variant serving in us-west-2.
+> ...
+
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Olga Petrov <olga.petrov@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Priya Reddy <pri.reddy@borealanalytics.com>
+Date: Thu, 12 Nov 2026 10:05:00 -0700
+Subject: Re: BorealX elevated 5xx/timeouts — immediate update and mitigation
+
+Hi all — ops update and answers to Priya’s questions below. Copying the incident channel notes.
+
+Short answers
+- No evidence of data escaping project boundaries or being persisted externally. Traces indicate failures occured during KV cache management paths, not in the network/persistence layers.
+- We will NOT charge for failed/errored tokens during the mitigation window (11/12 08:40–11/12 12:00 PST). We will apply billing adjustments to the affected invoices and follow up with a credit.
+
+Technical summary (ops notes)
+- Root cause (preliminary): A runtime change deployed in v2.7 modified the attention-KV garbage collection heuristic. Under very long-context workloads, this produced a growth in per-request memory accounting that could trigger cache eviction races and then cause worker threads to return 5xx when a critical resource was exhausted.
+- Impact vector: Requests with >10k tokens processed in a single session (docs ingestion + multi-turn chat) disproportionately hit the codepath.
+- Fix applied: Rolled back the v2.7 heuristic to the previous stable behavior on the BorealX serving pool at 09:50 PST. We also increased the KV cache soft limit by 25% for the affected pool to smooth the transition.
+- Validation: Post-rollback telemetry shows 5xx rate dropped to baseline (<0.2%) within 12 minutes. We ran synthetic workload samples that approximate Boreal’s traffic and saw stable latency and no eviction-driven errors.
+
+Follow-ups and commitments
+1) Engineering will produce a formal RCA document by EOD tomorrow with exact timelines and a patch that hardens the GC heuristic under long-context workloads.
+2) We will add a synthetic test that replays your long-session traces against new runtime builds before canarying them.
+3) We'll provide you with the raw failure samples we collected (attached) and schedule a 1:1 technical review next week to walk through fixes and any changes you should expect in latency/throughput.
+
+If you want a bridge now, I can set one up — otherwise we will send the RCA and propose times for a nerd-out next Thursday.
+
+Ben Carter
+SRE Lead, Production Inference
+Redwood Inference
+ben.carter@redwood.com
+
+On Thu, Nov 12, 2026 at 09:27 AM Priya Reddy <pri.reddy@borealanalytics.com> wrote:
+> Thanks Olga — appreciate the immediate heads up. A few quick clarifying questions:
+> ...
+
+
+From: Olga Petrov <olga.petrov@redwood.com>
+To: Priya Reddy <pri.reddy@borealanalytics.com>, support@borealanalytics.com
+Cc: Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Fri, 13 Nov 2026 16:40:00 -0700
+Subject: BorealX incident — post-incident summary, credits, and long-term mitigations
+
+Priya / Samir / Boreal support,
+
+Follow-up as promised — consolidated post-incident note and next steps. Thank you for your patience and for flagging observed retries.
+
+Incident timeline (UTC):
+- 2026-11-12T08:40:00Z — first uptick in 5xx observed for BorealX pool servicing boreal-prod.
+- 2026-11-12T09:50:00Z — rollback of v2.7 attention-KV heuristic on affected pool initiated.
+- 2026-11-12T10:02:00Z — rollback completed; KV soft limit increased; synthetic checks started.
+- 2026-11-12T10:15:00Z — error rate returned to baseline for majority of traffic.
+
+Root cause (final)
+- A memory-accounting regression introduced in runtime v2.7 changed the timing of KV garbage collection under long-context encoding. For certain workloads that maintain long-lived KV state, GC could fail to reclaim memory quickly enough, causing worker resource exhaustion and resulting in 5xx/timeouts.
+
+Customer impact and actions we took
+- Affected requests: primarily long-session ingestions and multi-turn chats >10k tokens originating from your project.
+- Data exposure: No evidence that any input or output left your project or was written to external systems.
+- Billing: We will issue a credit for all errored tokens during the incident window (11/12 08:40–11/12 12:00 PST). Our billing team will follow up with the exact credit amount within 5 business days.
+
+Remediation and prevention plan
+1) Engineering patch: A permanent fix that corrects the GC timing and adds conservative back-pressure to the KV path will be deployed behind canary by 11/20/2026.
+2) Regression tests: New long-context synthetic tests will be added to the CI pipeline to block builds that regress memory under replayed traces.
+3) Canary policy: We’ve updated our canary policy to include a long-context traffic slice for any runtime or kernel changes affecting KV/attention behavior.
+4) Operational: We will expose a per-pool KV headroom metric in Console so customers can monitor the metric tied to this issue.
+
+Attachments:
+- borealx-error-samples.jsonl — sanitized request/response samples we collected (no PII).
+- borealx-rca-notes.pdf — engineering timeline and patch notes.
+
+Next steps
+- I’ll schedule a 1:1 technical review (Ben + Jonas + you) for the week of 11/16; please let me know preferred times.
+- Billing will contact Samir with the credit details.
+
+Again, apologies for the disruption. If anything else appears odd on your side, please escalate to this thread and we’ll prioritize.
+
+Best,
+Olga Petrov
+Account Lead, Enterprise Success
+Redwood Inference
+olga.petrov@redwood.com
++1 (415) 555-0186

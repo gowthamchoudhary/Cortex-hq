@@ -1,0 +1,115 @@
+Urgent: VeloTech Dedicated Pool 503s — throttle domain & credits
+
+From: VeloTech Ops <support@velotech.io>
+To: Soojin Lee <soojin_lee@redwood.ai>
+Date: Tue, 18 Sep 2028 08:12:00 -0700
+Subject: Abnormal 503s on our dedicated pool (region us-west)
+
+Hi Soojin,
+
+We started seeing a spike of 503s and elevated latency against our dedicated pool (pool-id: velotech-prod-west) around 07:50 PDT. This lasted ~30 minutes and impacted some customer-facing endpoints — we saw retries and backoff kicked in. We're both on a Reserved plan and this is causing support pages to degrade.
+
+Attached are a couple of console traces and a sample request/response window. Can you confirm whether this is an ongoing Redwood-side issue or if we should look internally? We have a business review with our CTO at 10:00 and need a quick summary.
+
+Thanks,
+Julia Kim
+Head of Platform, VeloTech
+attachments: traces_window_0750.log (text), sample_response.json (json)
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Engineering Ops <eng-ops@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 18 Sep 2028 08:25:00 -07:00
+Subject: Fwd: Abnormal 503s on our dedicated pool (region us-west)
+
+Team — forwarding an urgent report from VeloTech. They saw a 30m window of 503s around 07:50 PDT on velotech-prod-west.
+
+Immediate asks:
+- Quick triage: confirm whether this maps to autoscaler activity, node drain, or a routing change.
+- If Redwood-side, propose a short customer-facing blurb we can send to Julia before 10:00.
+- If not Redwood-side, list the logs/headers we need from VeloTech.
+
+I can jump on 09:00 stand if helpful.
+
+Thanks,
+Soojin
+Senior Customer Success Manager, Redwood Inference
+soojin_lee@redwood.ai | +1 415-555-0182
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Engineering Ops <eng-ops@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 18 Sep 2028 09:40:00 -07:00
+Subject: Re: Fwd: Abnormal 503s on our dedicated pool (region us-west)
+
+Quick summary from runtime/allocator side:
+- Timeline: 07:47–08:18 PDT we observed an autoscaler churn event in us-west-2 for the tenant fairshare domain matching velotech-prod-west.
+- Root cause hypothesis: a recently deployed fairshare change (diff attached) inadvertently reduced the domain's effective weight when short-lived burst tasks arrive. That caused sustained queueing and a handful of request timeouts surfaced as 503s.
+- Mitigation performed: at 07:58 we rolled back the fairshare tweak (rollback-id: rb_20280918_0758) and increased eviction headroom for the tenant. That restored normal QPS by ~08:06.
+- Impact: ~31 minutes of elevated error-rate for a small percentage (~2.3%) of requests; no data leakage.
+
+Next steps I'm pushing:
+1) Full postmortem doc with logs and metric slices (will attach 1-2 hour postmortem brief).
+2) Patch to prevent low-weight regression for domains with reserved capacity (PR queued).
+3) Short-term account-level credit offer and committed schedule for a customer debrief.
+
+I'll prepare a short customer blurb — see draft below.
+
+--- DRAFT to send to VeloTech ---
+Hi Julia — quick update: we detected an internal configuration change to our internal fairshare policy which transiently reduced capacity available to your reserved domain. We rolled back the change and restored service within ~20 minutes. We will follow up with a detailed postmortem and a proposed credit for the impact window. Can we schedule a 30-minute debrief tomorrow?
+
+--- end draft ---
+
+Ben
+Senior Software Reliability Engineer, Redwood Inference
+attachments: fairshare_policy_diff.txt (text)
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Julia Kim <julia.kim@velotech.io>, VeloTech Ops <support@velotech.io>
+Cc: Ben Carter <ben_carter@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Tue, 18 Sep 2028 11:05:00 -07:00
+Subject: Re: Abnormal 503s on our dedicated pool (region us-west)
+
+Hi Julia — thank you for flagging this and for the traces. Apologies again for the disruption this morning. Short summary for your CTO call: 
+
+What happened
+- We deployed a configuration change to our fairshare allocation logic which temporarily reduced the effective scheduling weight for your dedicated domain. That increased queueing and led to elevated 503s between 07:47–08:18 PDT.
+
+What we did
+- We rolled back the configuration at 07:58 PDT and increased eviction headroom for your tenant; traffic levels returned to baseline by ~08:06 PDT.
+
+Impact
+- ~31 minutes of increased errors affecting ~2–3% of requests. No request payloads were persisted outside of normal logs.
+
+Next steps we are taking
+- Formal postmortem and metric slices (attached brief).
+- A code/guardrail change to prevent the low-weight regression from being applied to domains with reserved capacity (PR in review).
+- We will apply a Customer Service Credit to your account covering the impacted window and will coordinate details offline.
+- We propose a 30-minute technical debrief tomorrow 10:00–10:30 PDT; if that doesn't work please suggest alternatives.
+
+Attachments included: velotech_postmortem_brief.pdf (summary), fairshare_policy_diff.txt (the diff we reverted).
+
+Again — I'm sorry for the disruption. Ben and I are available on the debrief and will bring operational logs and mitigations.
+
+Best,
+Soojin Lee
+Senior Customer Success Manager, Redwood Inference
+soojin_lee@redwood.ai | +1 415-555-0182
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Thu, 20 Sep 2028 15:04:00 -07:00
+Subject: Internal: VeloTech debrief outcomes and next actions
+
+Team — follow-up from the debrief with Julia and Velotech leadership (held 09/19):
+- They accepted the credit proposal (one-time credit equivalent to 3 hours of provisioned throughput). Finance will issue invoice adjustment (FinOps ticket created).
+- Action items assigned:
+  * Ben: complete the guardrail PR and land it to prod by 2028-09-26. (owner: Ben, ticket: SRE-8890)
+  * Karthik: add an alert that flags domain-weight deltas for reserved domains (owner: Karthik, ETA: 2028-09-22).
+  * Marissa: coordinate credit issuance with FinOps and legal; confirm statement of credit to VeloTech by EOD 2028-09-21.
+- I'll assemble a short public-facing ops note for VeloTech and a separate internal blameless postmortem summary for the SRE/Eng leads.
+
+Thanks everyone for the quick turnaround. Let's keep the communication thread tidy and I'll close the external ticket once credits are applied.
+
+Soojin
+Senior Customer Success Manager, Redwood Inference

@@ -1,0 +1,139 @@
+SEV-1 update: action plan and postmortem roadmap
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: alice.chen@acme-corp.com, tom.wu@acme-corp.com
+Cc: david_kim@redwood.ai, marissa_cole@redwood.ai, evelyn_hart@redwood.ai
+Date: Tue, 14 Sep 2026 09:12:00 -0700
+Subject: Investigating elevated error rates — Redwood Inference (SEV-1)
+
+Alice / Tom,
+
+We’re seeing elevated 5xx error rates for your hosted inference endpoints that started ~08:50 PDT and are impacting some p95 latency sensitive calls to model redwood-13b-usw2. I’ve escalated this to SEV-1 and we’ve spun up a conference bridge for triage (link below).
+
+Immediate actions in progress:
+- Engineering on-call (David) is gathering runtime logs and checking autoscaling health.
+- We are routing new requests to a fallback variant where possible to reduce customer impact.
+- A temporary throttle rule has been applied to heavy batch jobs in your account.
+
+Bridge: https://meet.redwood.ai/bridge/SEV1-0914-kp (please join if you can)
+Estimated ETA for meaningful update: 30–45 minutes.
+
+I’ll keep you updated in this thread and on the bridge — we know this is impacting your storefront experiments and prioritized it accordingly.
+
+Best,
+Kimberly Park
+Customer Success Manager, Redwood Inference
+kimberly_park@redwood.ai
++1 (415) 555-0123
+
+Attachments: SEV1_timeline_draft.pdf (draft notes), redwood_service_logs_20260914.zip (partial log export)
+
+From: David Kim <david_kim@redwood.ai>
+To: kimberly_park@redwood.ai, marissa_cole@redwood.ai, evelyn_hart@redwood.ai
+Cc: alice.chen@acme-corp.com, tom.wu@acme-corp.com
+Date: Tue, 14 Sep 2026 09:28:00 -07:00
+Subject: Re: Investigating elevated error rates — Redwood Inference (SEV-1)
+
+I’m on the bridge. Quick notes:
+- Root cause hypothesized: KV cache corruption during a rolling kernel swap on one of the inference shards (us-west-2-a).
+- Symptoms: sudden spike in timeouts and OOMs leading to reject traffic; autoscaler is not adding capacity because of a health probe flapping condition.
+- Immediate mitigations: draining the affected shard and re-routing traffic; restarting the shard with conservative kernel config; clearing local KV cache across the pool.
+
+Action items I’ve assigned:
+1) David: drain and restart shard 3 (in progress).
+2) Marissa: coordinate customer-facing exec message once we have impact numbers.
+3) Evelyn: prepare postmortem timeline draft (I attached a first pass).
+
+Will post logs and timeline to the drive link in 20–30m.
+
+-David
+David Kim
+SRE Lead, Redwood Inference
+david_kim@redwood.ai
+From: Alice Chen <alice.chen@acme-corp.com>
+To: kimberly_park@redwood.ai, david_kim@redwood.ai
+Date: Tue, 14 Sep 2026 09:41:00 -07:00
+Subject: Re: Investigating elevated error rates — Redwood Inference (SEV-1)
+
+Kim, David — thanks for the quick response. Can you confirm which of our endpoints are affected and an approximate number of failed requests? Our SREs are seeing increased 502s on the checkout inference endpoint and need to triage on our side too.
+
+We’ll join the bridge now.
+
+— Alice
+Alice Chen
+Engineering Manager, Infrastructure
+Acme Retail
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: alice.chen@acme-corp.com, tom.wu@acme-corp.com
+Cc: kimberly_park@redwood.ai, david_kim@redwood.ai, evelyn_hart@redwood.ai
+Date: Tue, 14 Sep 2026 10:05:00 -07:00
+Subject: RE: Investigating elevated error rates — Redwood Inference (SEV-1) — customer update
+
+Hi Alice / Tom,
+
+Thanks again for joining the bridge. Short executive update for your leadership and stakeholders:
+
+Summary: We identified a degraded inference shard in us-west-2 causing ~12% of requests to the checkout-model endpoint to fail with 502/504 between 08:50–09:40 PDT. Our mitigation (drain + restart + conservative kernel rollout) has restored traffic for most customers; we expect full recovery in the next 15–30 minutes while we validate for recurrence.
+
+Impact: ~12% error rate at peak; p95 latency increased from 180ms → 720ms for a 25-minute window. No data exfiltration.
+
+What we did: drained affected shard, cleared local KV caches, rolled back to a stable kernel, and temporarily routed new traffic to a fallback model variant for checkout requests.
+
+Next steps and timeline:
+- 10:20 PDT: validate recovery metrics and start gradual traffic re-introduction.
+- By 11:00 PDT: confirm full recovery and remove temporary throttles.
+- By EOD: deliver postmortem timeline and short RCA draft.
+
+We’ll follow this thread with the postmortem and a recommended mitigation plan (configuration guardrails + automated cache consistency check).
+
+Apologies for the disruption — we understand the customer impact and are treating this at highest priority.
+
+Regards,
+Marissa Cole
+VP, Customer Success, Redwood Inference
+marissa_cole@redwood.ai
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: alice.chen@acme-corp.com, tom.wu@acme-corp.com
+Cc: david_kim@redwood.ai, marissa_cole@redwood.ai, evelyn_hart@redwood.ai
+Date: Tue, 14 Sep 2026 14:30:00 -07:00
+Subject: Post-incident: timeline and next steps (draft)
+
+Alice / Tom,
+
+Thank you for your patience. Recovery was confirmed at 10:12 PDT after the restart and traffic reintroduction. Attached is a draft timeline and the logs we’ve collected so far. High-level items we will include in the postmortem:
+
+- Timeline of events (detection, mitigations, recovery) — attached (SEV1_timeline_draft.pdf).
+- Root cause hypothesis: KV cache inconsistency triggered by kernel swap under memory pressure; follow-up: detailed RCA with heap dumps and kernel metrics.
+- Remediation plan: automated cache scrub on kernel swap, improved health-probe sensitivity, and a conservative kernel rollout policy for shards handling latency-critical endpoints.
+- Customer impact statement and compensatory credit proposal (subject to account team review).
+
+Desired owners:
+- RCA & technical remediation: David Kim (SRE)
+- Customer communications & credits: Marissa Cole (VP CS) and Kimberly Park (CSM)
+- Postmortem writeup: Evelyn Hart (Incident Response)
+
+Next scheduled items:
+- EOD (today): Share final timeline and preliminary RCA.
+- +3 business days: Deliver full postmortem with remediation tickets and rollout schedule.
+
+If you’d like a short executive call for your leadership, Marissa is available today at 16:00 PDT.
+
+Best,
+Kimberly Park
+Customer Success Manager, Redwood Inference
+
+Attachments: SEV1_timeline_draft.pdf, redwood_service_logs_20260914.zip
+
+From: Tom Wu <tom.wu@acme-corp.com>
+To: kimberly_park@redwood.ai, marissa_cole@redwood.ai
+Cc: alice.chen@acme-corp.com, david_kim@redwood.ai
+Date: Wed, 15 Sep 2026 15:30:00 -07:00
+Subject: Re: Post-incident: timeline and next steps (draft)
+
+Thanks for the thorough update. We reviewed the timeline and logs and appreciate the proposed mitigations. Please proceed with the postmortem and remediation tickets. We’d like to be looped in for the +3 day review.
+
+Tom
+Tom Wu
+SRE, Acme Retail

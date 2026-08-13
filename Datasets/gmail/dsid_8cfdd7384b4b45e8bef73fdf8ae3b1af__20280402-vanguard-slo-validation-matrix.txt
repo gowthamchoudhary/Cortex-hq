@@ -1,0 +1,121 @@
+SLO validation matrix & next steps for Vanguard pilot
+
+From: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+To: Laura Chen <laura.chen@vanguardai.com>, Vanguard AI Ops <ops@vanguardai.com>
+Cc: Karthik Iyer <karthik_iyer@redwoodinference.com>, Priyom Das <priyom_das@redwoodinference.com>
+Date: Mon, 02 Apr 2028 15:12:00 +0000
+Subject: SLO validation matrix & next steps for Vanguard pilot
+
+Hi Laura — great to meet your team on the call today. Quick recap and proposed next steps so we keep momentum for the dedicated-capacity pilot.
+
+Recap (what we heard)
+- Target: sub-200ms median response for short completions; p95 target ~600ms for 256-token completions (streaming enabled).
+- Expected concurrency pattern: steady 30 rps baseline with short bursts to 120 concurrent streams during peak workflows.
+- Payloads: mix of short prompts (10-50 tokens) and multi-turn streaming sessions (avg 180 tokens).
+- Compliance: you will run pilot in our Dedicated pool (customer VPC) with standard audit logging.
+
+Immediate asks / proposed pilot scope
+1) Validation matrix: compare H100-80GB vs A100-80GB for the model family you plan to serve (open-model default). Measure p50/p95 latency, throughput (tokens/s), and VRAM headroom with 1x and 2x replica configs. I attached a preliminary "vanguard_slo_table.xlsx" with columns we can fill during benchmarks.
+2) Reserved throughput sizing: we'll propose a baseline reserved tokens/sec and a burst policy. For your traffic profile I recommend starting with reserved 40 rps (sustained) and allow 3x burst to 120 for 5-minute windows — we'll validate in the pilot.
+3) Streaming requirements: initial-token latency and steady-stream throughput are both gating metrics. We need a sample trace of a typical session (timings and token counts). Can you attach a sanitized trace?
+4) Pilot timeline: propose a 2-week bench run + 1 week of smoke tests in your VPC.
+
+Next steps (owners)
+- Laura / Vanguard: share sample_trace.json and confirm the canonical model+quantization config you want us to test.
+- Redwood (Karthik + Priyom): produce benchmark matrix (H100 vs A100) and a test-plan.yaml capturing step-by-step commands.
+- Sergio: coordinate logistics, provide cost estimate and SLA note for the reserved pool.
+
+If that aligns, I’ll schedule the benchmark window for next Tuesday and loop in Billing for the commit.
+
+Thanks — happy to adjust targets if they were understood differently on your side.
+
+—
+Sergio Alvarez
+Enterprise Sales, Redwood Inference
+sergio.alvarez@redwoodinference.com
++1 (415) 555-0192
+
+Attachments: vanguard_slo_table.xlsx
+
+From: Karthik Iyer <karthik_iyer@redwoodinference.com>
+To: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+Cc: Priyom Das <priyom_das@redwoodinference.com>, Ben Carter <ben_carter@redwoodinference.com>
+Date: Tue, 03 Apr 2028 09:03:00 +0000
+Subject: Re: SLO validation matrix & next steps for Vanguard pilot
+
+Sergio / team — adding technical detail and a proposed bench matrix before we lock timeline.
+
+High-level bench matrix (proposed)
+- HW rows: H100-80GB (single GPU), H100-80GB (2x for concurrency), A100-80GB (single), A100-80GB (2x).
+- Model variants: FP16 baseline, int8-quantized variant (if your model weights allow).
+- Workloads: short-completion (10–50 tokens, 1k samples), streaming session (avg 180 tokens, 500 sessions), adversarial long-tail (1k tokens, 100 samples).
+
+Metrics to capture per run
+- p50 / p95 / p99 latency (initial-token + full-completion), tokens/sec, effective concurrency, GPU memory utilization, NVLink utilisation, CPU workers blocked, and per-request KV-cache hit rate.
+
+Pilot config suggestions
+- Start: 1 replica H100 for 40 rps sustained — measure headroom.
+- Scale scenario: 2 replicas H100 to verify steady-state at 120 concurrent streaming sessions.
+- Fallbacks: measure A100 config to show cost/lambda tradeoffs (A100 might need additional replicas for same p95).
+
+We’ll prepare a reproducible test-plan.yaml (I attached a draft) that can run inside your VPC with our benchmark harness (we’ll provide an AWS container image). Priyom, please add ops notes about network egress limits and a guardrail for token cost.
+
+Karthik
+Principal Systems Engineer, Redwood Inference
+karthik_iyer@redwoodinference.com
+
+Attachments: test-plan.yaml
+
+From: Laura Chen <laura.chen@vanguardai.com>
+To: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+Cc: Vanguard AI Ops <ops@vanguardai.com>
+Date: Wed, 04 Apr 2028 18:45:00 +0000
+Subject: Re: SLO validation matrix & next steps for Vanguard pilot
+
+Sergio / Karthik — this looks good, thanks. A few clarifications from our engineering team: 
+
+- Sample traffic: attached is an anonymized session export "sample_trace.json" (short + streaming mixes). The bursts we mentioned are typically the result of user-initiated workflows that spawn parallel chat sessions — peak of ~120 concurrent streams for 3–7 minutes happens twice an hour.
+- Model: we’ll be serving vanguard-llama-70B (FP16 production weights). We are open to int8 trials but would like to keep a baseline FP16 run.
+- SLO tweak: median (p50) target we care about is closer to 150ms for the short path; p95 target remains ~600ms.
+- Availability: the earliest window we can give you for pilot infra is Apr 9–20; ops will need a runbook for any changes to network/firewall rules.
+
+Two asks:
+1) Can Redwood include a simple cost delta row in the sheet (H100 vs A100) so we can justify the commit?
+2) We’d like a 30-minute alignment call next Monday (Apr 8) to finalize the exact bench commands.
+
+If that works we’ll hand off an IAM account and a small sample dataset to run the bench.
+
+—
+Laura Chen
+Head of Platform Engineering, Vanguard AI
+laura.chen@vanguardai.com
+
+Attachments: sample_trace.json
+
+From: Sergio Alvarez <sergio.alvarez@redwoodinference.com>
+To: Laura Chen <laura.chen@vanguardai.com>
+Cc: Karthik Iyer <karthik_iyer@redwoodinference.com>, Priyom Das <priyom_das@redwoodinference.com>, Ben Carter <ben_carter@redwoodinference.com>
+Date: Thu, 05 Apr 2028 09:20:00 +0000
+Subject: Re: SLO validation matrix & next steps for Vanguard pilot
+
+Thanks Laura — perfect. Confirming next steps and owners: 
+
+- Redwood to produce:
+  • Completed bench matrix (H100 vs A100) including a simple cost delta row (Karthik) — due Apr 11.
+  • Reproducible test-plan.yaml for run inside your VPC + container image (Priyom) — due Apr 10.
+  • Preliminary cost estimate for a 30-day reserved pool with burst to 120 (Ben) — due Apr 11.
+- Vanguard to provide:
+  • IAM user + sanitized sample dataset (Laura / Ops) — by Apr 8 morning.
+  • Confirmation of Apr 9–20 pilot window.
+
+I’ll book the Apr 8 30-minute alignment call for 10:00am PT and send a calendar invite with a short agenda. After alignment we’ll kick off the bench on Apr 9 and aim to deliver the completed SLO table by Apr 11.
+
+If anything changes on your side, ping me and I’ll re-adjust owners. Looking forward to proving the SLOs.
+
+—
+Sergio Alvarez
+Enterprise Sales, Redwood Inference
+sergio.alvarez@redwoodinference.com
++1 (415) 555-0192
+
+Related links: https://app.hubspot.com/deals/4521

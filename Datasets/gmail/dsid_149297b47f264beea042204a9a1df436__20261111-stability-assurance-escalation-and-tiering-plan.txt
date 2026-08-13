@@ -1,0 +1,154 @@
+Request: Reliability Assurance & Premium Tier Path for Q4 Renewal
+
+From: Elena Karpov <ekarpov@fintrust.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>
+Cc: FinTrust Procurement <procurement@fintrust.com>
+Date: 2026-10-22T09:18:00-07:00
+Subject: Service reliability incidents and renewal questions
+
+Hi Naomi,
+
+Thanks for taking this. Over the last six weeks we've seen several reliability issues that materially impacted our production classifiers. Summary below:
+
+- 2026-09-05 21:14 UTC: increased 95th pct latency across inference endpoints (spikes to ~1.8s, normal ~0.45s) for ~45 minutes.
+- 2026-09-18 03:22 UTC: KV cache misses after model rollout causing elevated token compute and cost; increased tail latency for short requests.
+- 2026-10-11 14:02 UTC: regional failover latency (eu-west) during a cluster maintenance window; some requests returned 500 for ~12 minutes.
+
+We've attached a CSV with our incident timeline and business impact estimates (fintrust-incident-summary-2026Q3.csv). Our renewal with Redwood is scheduled for the end of November and the execs are asking for a concrete remediation and assurance plan before we commit to expansion.
+
+Concretely we need:
+- A proposed SLO improvement plan with measurable targets for 95th/99th latency and regional availability.
+- Commercial options (credits, tier addendum, or Dedicated/premium pilot) if you cannot meet the targets within a committed window.
+- A short timeline for mitigation steps and a point of contact for operational escalation.
+
+Can we schedule a 30–45 minute call early next week to review your proposed plan? We prefer a time on Tuesday or Wednesday morning PST.
+
+Best,
+Elena
+Director, Site Reliability
+FinTrust
+
+Attachments: fintrust-incident-summary-2026Q3.csv
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Elena Karpov <ekarpov@fintrust.com>
+Cc: Jordan Blake <jordan.blake@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: 2026-10-22T11:02:00-07:00
+Subject: Re: Service reliability incidents and renewal questions
+
+Elena — thanks for the clear timeline and for flagging the commercial timeline. I'm really sorry for the disruption here and appreciate the detail in your CSV.
+
+Plan from our side:
+1) Immediate: Marcus will lead a focused post-mortem and provide a short remediation plan and runbook within 3 business days.
+2) Near term (2–4 weeks): tactical mitigations (KV cache tuning, targeted kernel/quantization rollbacks where needed) to stabilize tail latency.
+3) Pilot: offer a 6-week Dedicated/premium onramp for a subset of FinTrust traffic with defined SLOs and enhanced support.
+4) Commercial: Jordan will propose an addendum that includes a short-term credit structure and an optional path to a full premium SLO.
+
+We can definitely meet next Tuesday 2026-10-27 at 10:00am PST (or 8:00am if you prefer earlier). I've cc'd Jordan and Marcus so they can share details and times if that slot doesn't work.
+
+I will follow up with a consolidated agenda and the first-pass remediation notes from Marcus.
+
+Thanks — Naomi
+Head of Customer Success, Redwood Inference
+naomi.feldman@redwood.com
+
+---
+Attachment: none
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Elena Karpov <ekarpov@fintrust.com>
+Cc: Jordan Blake <jordan.blake@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: 2026-10-23T08:30:00-07:00
+Subject: Re: Service reliability incidents and renewal questions — technical notes
+
+Hi team — quick technical note following Naomi's note and after an initial look at FinTrust's traces and our telemetry. High level: several signals point to a combination of (A) suboptimal KV cache warming after recent model rollouts, and (B) transient kernel scheduling contention on shared host pools during backfill windows.
+
+Immediate mitigations we propose:
+- Pin the most latency-critical FinTrust routes to a smaller, warmed pool to reduce cold-start tail; enable prefix pre-warming for the next two rollouts.
+- Temporarily raise the allocation weight for FinTrust in the shared scheduler during peak windows to avoid noisy-neighbor effects.
+- Revert the last quantization flag toggle on the model that correlates with the Sep 18 spike; run canary on <5% traffic first.
+
+Targeted SLO improvements we believe are achievable inside a 3-week execution window if we run the pilot:
+- 95th percentile latency: from ~1.2s to <= 600ms for median-sized requests.
+- 99th percentile latency: from ~1.8s to <= 900ms with caching and scheduler isolation.
+- Regional availability (eu-west): >= 99.95% for the pilot cohort.
+
+I'll prepare a short runbook and estimated timeline (2–4 business days for immediate mitigations, pilot onboarding ~1 week). Attaching my initial incident runbook and a short checklist.
+
+Marcus Lin
+Staff SRE, Redwood Inference
+marcus.lin@redwood.com
+
+Attachments: technical-incident-runbook.pdf
+From: Elena Karpov <ekarpov@fintrust.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>
+Cc: FinTrust Procurement <procurement@fintrust.com>, Jordan Blake <jordan.blake@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: 2026-10-25T14:15:00-07:00
+Subject: Re: Service reliability incidents and renewal questions — follow-up
+
+Naomi / Marcus — thanks for the rapid turnaround and for the clear mitigation steps. A few clarifying items from the FinTrust side:
+
+1) Can you confirm the pilot cohort sizing (requests per second / percent of overall traffic) and the anticipated change in cost if we move that traffic into a Dedicated/premium pool? Procurement needs a ballpark delta.
+2) For the proposed SLOs above we will need explicit language in the renewal addendum that ties credits to measured misses over a monthly window.
+3) Given our audit requirements, please include what additional monitoring/alerting you will expose to our on-call (Prometheus/Grafana links or direct alert hooks).
+
+Procurement would like an initial commercial sketch (order of magnitude) and a clean addendum draft we can review with legal. Can Jordan send something that includes sample credit calculations and escalations?
+
+Thanks — Elena
+
+On Tue, Oct 23, 2026 at 8:30 AM Marcus Lin <marcus.lin@redwood.com> wrote:
+> Hi team — quick technical note following Naomi's note and after an initial look at FinTrust's traces and our telemetry...
+> 
+> [truncated for thread]
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Elena Karpov <ekarpov@fintrust.com>
+Cc: Naomi Feldman <naomi.feldman@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: 2026-11-02T10:00:00-07:00
+Subject: Commercial sketch: Dedicated pilot + addendum (FT-4392)
+
+Elena — looping back with a commercial proposal sketch for procurement to review. High level:
+
+Option A — 6-week Dedicated pilot (pilot cohort = 10% production traffic or up to 50rps, whichever is lower)
+- Onboarding fee: waived for pilot.
+- Pilot pricing: usage billed at hosted rates; pilot operational support included (SLA backstop for pilot cohort).
+- If FinTrust converts to the premium tier within 60 days after pilot: 12-month committed contract, volume-tiered pricing (TBD based on committed qps), and an SLA addendum with credits for monthly SLO misses.
+
+Option B — Immediate premium addendum (12-month)
+- Premium tier base uplift: ~20–35% over current unit pricing depending on committed capacity and regional footprints.
+- Credit structure: explicit monthly credit bands tied to 95th/99th latency and regional availability; legal to review exact language.
+
+Sample next steps:
+- I will put a clean addendum draft in HubSpot (deal FT-4392) and share a DocuSign link for procurement review.
+- Naomi to schedule the pilot kickoff call; Marcus to own runbook execution.
+
+Links: HubSpot deal: https://app.hubspot.com/deal/FT-4392
+DocuSign (addendum draft): https://www.docusign.com/00A1B2C3D4E5
+
+If you want, we can commit to a one-time good-faith operational credit (applied to the first invoice after renewal) conditional on signing the pilot addendum within 21 days. I'll outline numbers in the addendum.
+
+Cheers,
+Jordan Blake
+Account Executive, Redwood Inference
+jordan.blake@redwood.com
+
+Attachments: proposed-premium-addendum-v1.docx
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Elena Karpov <ekarpov@fintrust.com>
+Cc: Jordan Blake <jordan.blake@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: 2026-11-11T16:43:00-08:00
+Subject: Re: Service reliability incidents and renewal questions — next steps and exec call
+
+Elena — thanks again for the patience and the thorough questions. Summary and immediate asks before our exec call on Monday 2026-11-15 at 9:00am PST: 
+
+- Marcus will complete the runbook and pilot onboarding checklist by EOD Friday (2026-11-13).
+- Jordan will post the addendum draft and a simple credit schedule in HubSpot by EOD Friday so procurement has time to review (deal FT-4392).
+- We are prepared to offer a one-time operational credit equal to 10% of the next invoiced amount if FinTrust signs the pilot addendum within 21 days; this will be captured in the addendum.
+
+Agenda for the exec call: 1) review pilot SLOs and measurement, 2) commercial terms and credit mechanics, 3) timeline & escalation path.
+
+Please confirm the meeting time and whether legal/procurement will join. I'll attach the addendum draft to the calendar invite.
+
+Best regards,
+Naomi Feldman
+Head of Customer Success, Redwood Inference
+naomi.feldman@redwood.com
+
+Attachments: proposed-premium-addendum-v1.docx

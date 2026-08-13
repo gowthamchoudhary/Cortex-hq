@@ -1,0 +1,142 @@
+Urgent: Zendrive checkout latency spike — command hub and exec coordination
+
+From: Rajiv Mehta <rajiv@zendrive.com>
+To: Alex Martinez <alex@redwood.com>
+Cc: Elena Park <elena.park@zendrive.com>
+Date: 2027-05-06T08:12:00-07:00
+Subject: Realtime: sustained 95th+ latency on checkout API
+
+Alex —
+
+We started seeing a sustained spike on the checkout API around 07:58 PDT. 95th percentile latency jumped from ~80ms to ~1.2s, and error rate (5xx) is ~4.8% over the last 25 minutes. Customers report timeouts and failed tokenizations. We've attached a handful of traces and a short trace bundle (customer-traces-20270506.zip).
+
+Notable: most of the 5xx are immediate 502/503s coming back from your inference endpoint; retries are compounding. This is hitting our US-west fleet only (traffic split is 72% west). We can temporarily re-route some traffic, but we'd prefer Redwood to handle mitigation since this looks like a runtime-side regression.
+
+Can you stand up an urgent bridge and advise ETA on a fix or mitigation? We have CISO (Elena) and SRE on the line.
+
+--
+Rajiv
+SRE Lead, Zendrive
+
+From: Alex Martinez <alex@redwood.com>
+To: Rajiv Mehta <rajiv@zendrive.com>
+Cc: Elena Park <elena.park@zendrive.com>
+Date: 2027-05-06T08:25:00-07:00
+Subject: Re: Realtime: sustained 95th+ latency on checkout API
+
+Rajiv — thanks for the alert and the traces. I've acknowledged with the on-call and am creating an internal command hub now.
+
+Immediate next steps (already kicked off):
+- On-call has pinned and is running quick health checks on the US-west serving pool.
+- Spinning a temporary increase in capacity for Zendrive (30% extra headroom) to reduce retries.
+- Suspect canary change rolled out to a subset of hosts; we are validating whether a rollback is needed.
+
+I will loop in Laura (Customer Ops) and Marissa (Support Lead) and route updates back to you every 30 minutes. Scheduling a 10:30 PDT status call — invite incoming.
+
+Attachments: acknowledgement.txt
+
+—
+Alex Martinez
+Customer Reliability Manager, Redwood Inference
+
+From: Laura Bennett <laura@redwood.com>
+To: Alex Martinez <alex@redwood.com>, Marissa Cole <marissa@redwood.com>
+Cc: Jonas Weber <jonas@redwood.com>
+Date: 2027-05-06T09:05:00-07:00
+Subject: Re: Urgent: Zendrive checkout latency spike — command hub and exec coordination
+
+Looping in the right folks. Quick asks for the command hub:
+- Please confirm whether this correlates to the canary we promoted yesterday (model v2.3-canary). If so, we should drop the canary and fail back to v2.2 immediately and notify Zendrive.
+- CS wants to know the customer impact window and a tentative SLA credit. Recommend we propose a temporary 10% credit for May as a stopgap — exec approval required.
+- Sales/Account Exec should be copied for any contractual comms; Alex, can you confirm AP will handle that?
+
+I will prepare an exec-facing summary once we have the mitigation outcome.
+
+—
+Laura Bennett
+Head of Customer Operations, Redwood Inference
+
+From: Jonas Weber <jonas@redwood.com>
+To: Alex Martinez <alex@redwood.com>, Laura Bennett <laura@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: 2027-05-06T09:42:00-07:00
+Subject: Re: Realtime: sustained 95th+ latency on checkout API (tech notes)
+
+Quick diagnostic from infra:
+- We observed elevated OOM/kernel-failure signals on a small subset of p4d-like hosts in us-west2 (host-az2-78, host-az2-79). Kernel logs indicate miscompiled kernels were deployed during the last optimization pass for attention-kernel (recent compile job: runtime-build-20270505-az2).
+- Symptoms: KV cache evictions leading to repeated cold-start refill, which increases token generation latency; moreover, the serving runtime returned 502 on OOM path and the autoscaler detected the spike and started reactive scaling, which created a feedback loop with retries.
+
+Actions I've initiated:
+1) Marked the affected hosts as DRAINING and are redirecting new requests away. (host-list-az2-78.txt attached)
+2) Initiated rollback of model v2.3-canary to v2.2 on the us-west pool.
+3) Increased autoscaling headroom and temporarily raised max-inflight per-GPU to reduce queuing.
+4) Captured kernel-level failure bundles and core dumps (kernel-failure-logs.tar.gz attached) for post-mortem.
+
+Short ETA: rollback and drain should finish by ~10:00 PDT; we expect noticeable reduction in 95th latency within 15–20 minutes of the rollback finishing. If rollback doesn't stabilize, next step is to route a portion of traffic to eu-west as a protective measure.
+
+—
+Jonas Weber
+Infrastructure & Runtime Lead, Redwood Inference
+
+From: Alex Martinez <alex@redwood.com>
+To: Rajiv Mehta <rajiv@zendrive.com>, Zendrive SRE <ops@zendrive.com>, Elena Park <elena.park@zendrive.com>
+Cc: Laura Bennett <laura@redwood.com>, Marissa Cole <marissa@redwood.com>, Jonas Weber <jonas@redwood.com>
+Date: 2027-05-06T10:30:00-07:00
+Subject: Zendrive update — immediate mitigations deployed and next steps
+
+Rajiv / Elena —
+
+Quick update from the command hub:
+- Root cause (preliminary): a recent runtime optimization build promoted attention kernels with a codegen mismatch on a subset of hosts in us-west which led to memory pressure and KV cache thrashing. That manifested as higher tail latency and increased 5xx.
+- Mitigations completed:
+  1) Rolled back model canary v2.3 -> v2.2 for all us-west serving pools (completed 09:58 PDT).
+  2) Drained 6 affected hosts (host-az2-78/79 + neighbors) and isolated them for debug.
+  3) Increased temporary capacity headroom by 30% and raised concurrency limits to reduce queuing.
+
+Customer-facing impact: your checkout traffic saw the bulk of the spike from 07:58–09:20 PDT. Aggregate 95th latency is back down to ~95ms in us-west and error rate has dropped below 0.5% after the rollback and drain. We will continue to monitor for the next 4 hours and publish rolling 1-hour summaries.
+
+Next steps and asks:
+- We propose to offer a 10% service credit for May while we complete a full RCA; need exec approval for customer-facing comms.
+- Request Zendrive permission to run a post-mortem shareable report and to share kernel logs with your SRE/CISO for transparency.
+- Scheduled a 13:00 PDT call to walk through the timeline and mitigation; invite (calendar) should arrive shortly.
+
+Attachments: mitigation-checklist-20270506.pdf
+
+Thanks for your patience — Alex will be your point for exec comms and credit/contract questions.
+
+—
+Alex Martinez
+Customer Reliability Manager, Redwood Inference
+
+From: Alex Martinez <alex@redwood.com>
+To: Laura Bennett <laura@redwood.com>, Marissa Cole <marissa@redwood.com>, Jonas Weber <jonas@redwood.com>
+Date: 2027-05-06T20:45:00-07:00
+Subject: Executive summary (Zendrive incident) — timeline, impact, and ask
+
+Team — final executive summary for the leadership thread. Please review and flag anything urgent before I forward to VP Sales and CFO.
+
+Incident timeline (concise):
+- 07:58 PDT: Zendrive alerts via support channel (95th latency +1.2s, 5xx ~4.8%).
+- 08:12 PDT: Customer traces received; command hub stood up.
+- 08:25 PDT: On-call ack + temporary capacity increase initiated.
+- 09:00 PDT: Identified miscompiled runtime kernels on subset of us-west hosts; started draining affected hosts.
+- 09:58 PDT: Rolled back v2.3-canary -> v2.2 across us-west.
+- 10:15 PDT: Measured 95th P95 back to ~95ms; 5xx < 0.5%.
+
+Impact metrics (approx):
+- Customer: Zendrive saw ~320 failed checkouts during the 82-minute window; peak error rate 4.8%.
+- Platform: transient autoscaler churn increased cost by an estimated $2.1k for the mitigation window (we absorbed this as part of immediate recovery).
+
+Root cause (prelim): codegen mismatch during the runtime build process produced kernels that did not handle recent quantization/attention path changes correctly on a micro subset of GPU images — triggered KV cache thrash and OOM paths.
+
+Actions completed:
+- Rollback of the canary and host drain (completed).
+- Captured full failure bundles and started full RCA (GH issue redwood/runtime#4321).
+- Short-term platform changes: add a build-gate to run attention-kernel smoke tests; expand canary cohort validation; add autoscaler hysteresis for rapid churn.
+
+Executive asks: approval to offer Zendrive a 10% credit for May invoice (estimated cost impact to Redwood: $6k); approval to produce a shareable post-mortem and share kernel-level logs with Zendrive SRE/CISO; approval to notify Sales to begin outreach with formal credit proposal and goodwill offer.
+
+If no objections in the next 2 hours, I'll proceed to: (1) post the credit proposal to Zendrive, (2) publish the RCA draft to the shared drive, and (3) schedule a follow-up 24-hour check-in with the customer.
+
+—
+Alex Martinez
+Customer Reliability Manager, Redwood Inference

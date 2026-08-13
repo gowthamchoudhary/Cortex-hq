@@ -1,0 +1,151 @@
+Capacity rebalance latency: mitigation, timeline and post-incident summary
+
+From: logan.wright@redwood.ai
+To: sara.holt@novaai.com
+Cc: ops@novaai.com
+Date: 2028-11-14 09:12 -0800
+Subject: Incident detected: elevated latency during reserved pool rebalance
+
+Hi Sara —
+
+We detected a sustained increase in median inference latency and a small uptick in 429s for requests routed to your Dedicated GPU pool between 2028-11-14T08:45 and 2028-11-14T09:05 PST. We initiated a capacity rebalance to redistribute reserved nodes across AZs; during the rebalance some models experienced longer startup latencies as KV caches warmed and a subset of requests were briefly routed to warmup nodes.
+
+What we observed (summary):
+- Impact window: ~20 minutes (08:45–09:05 PST)
+- Symptoms: 95th p50 -> p95 latency jump from ~120ms to ~1.2s for gpt-large variants, transient 429s at <0.5% of traffic
+- Trigger: an automated rebalance that coincided with a burst of provisioning activity in the pool
+
+Immediate actions taken:
+- Rolled back the rebalance and pinned your tenant to existing nodes to restore steady-state routing
+- Applied a temporary routing policy to fallback to our lower-latency model variant for in-flight requests
+- Opened support ticket RI-20281114-338 and engaged SRE on-call
+
+I've attached a short incident_timeline.csv and a debug_log_snippet.txt showing the scheduler events. Can you confirm if you saw user-facing errors or degraded UX? If you have request IDs for impacted calls, send them and we'll prioritize tracing.
+
+Apologies for the disruption — we treat Dedicated pool availability seriously and will follow up with a remediation plan and credit proposal where appropriate.
+
+Best,
+Logan Wright
+Account Executive, Redwood Inference
+log an.wright@redwood.ai
+
+Attachments: incident_timeline.csv (csv), debug_log_snippet.txt (text)
+From: sara.holt@novaai.com
+To: logan.wright@redwood.ai
+Date: 2028-11-14 09:37 -0800
+Subject: Re: Incident detected: elevated latency during reserved pool rebalance
+
+Thanks Logan —
+
+We did see increased timeouts on our production inference path and one internal alert. A small percentage of users reported degraded responses. I pulled a couple of request IDs: req-5231f9 and req-52327a — both show 502/timeout in our side traces. Our SRE asked whether this was a capacity rebalance vs scheduler bug.
+
+Two quick asks:
+1) ETA on a full write-up and whether you will propose a credit for the window
+2) Whether you applied any routing changes that could affect model semantic differences — we rely on the exact model variant for deterministic outputs.
+
+If helpful, I can do a quick sync this afternoon (PST).
+
+Sara Holt
+Head of Platform Ops, Nova AI
+sara.holt@novaai.com
+
+---Quoted message follows---
+> On 2028-11-14 09:12 Logan Wright wrote:
+> > We detected a sustained increase in median inference latency...
+
+
+From: logan.wright@redwood.ai
+To: marissa.cole@redwood.ai, karthik.iyer@redwood.ai, grace.oconnor@redwood.ai
+Cc: sara.holt@novaai.com
+Date: 2028-11-14 10:05 -0800
+Subject: Fwd: Incident detected: elevated latency during reserved pool rebalance
+
+Team — looping you in for quick ops coordination. Key context: Nova AI observed production timeouts (Sara provided two request IDs). We rolled back the rebalance and applied a temporary fallback to a compatible model variant, but Sara flagged concern about semantic differences.
+
+Immediate action items:
+- Marissa: confirm whether fallback model variant is byte-for-byte compatible for their pinned model (if not, revert fallback and route to warm nodes only)
+- Karthik: trace req-5231f9 and req-52327a across the scheduler logs and GPU host logs, attach any gcore/oom events
+- Grace: prepare a short customer-facing timeline and a proposed credit (start with 1 day equivalent committed capacity credit)
+
+Notes: suspected root cause is aggressive simultaneous warmup + autoscaler-triggered rebalance. We need to harden the rebalance window logic to avoid overlapping with warmup bursts.
+
+I'll keep Sara updated.
+
+Thanks,
+Logan
+
+
+From: karthik.iyer@redwood.ai
+To: logan.wright@redwood.ai, marissa.cole@redwood.ai, grace.oconnor@redwood.ai
+Date: 2028-11-14 12:12 -0800
+Subject: Re: Fwd: Incident detected: elevated latency during reserved pool rebalance
+
+Quick update from traces:
+- req-5231f9 and req-52327a both hit the scheduler during the rebalance window and were routed to a node that was still finishing KV cache warmup for that model family. The node itself shows no OOMs or driver errors; the extra latency is dominated by cold-attention cache miss penalties and model tensor warmup (roughly 700–900ms extra).
+- Autoscaler logs show a rebalance event triggered by the cluster optimizer at 08:44 after a topology change (multiple maintenance tasks completed). The rebalance started while several allocations were in progress.
+
+Short-term mitigation notes:
+- We'll disable automatic rebalances during any active node provisioning for pools with active pinned tenants; this can be toggled per-pool today as a control-plane safeguard (we will make it the default for Dedicated).
+- We will also extend warmup concurrency limits so that a single rebalance doesn't cause large numbers of cold starts simultaneously.
+
+I'll attach the raw scheduler excerpt to the support ticket.
+
+Karthik
+Sr. SRE, Redwood Inference
+
+Attachments: debug_scheduler_excerpt.log (attached to ticket)
+From: logan.wright@redwood.ai
+To: sara.holt@novaai.com
+Cc: marissa.cole@redwood.ai, karthik.iyer@redwood.ai, grace.oconnor@redwood.ai
+Date: 2028-11-15 08:29 -0800
+Subject: Mitigation applied and customer next steps (RI-20281114-338)
+
+Hi Sara —
+
+Thanks again for the IDs — Karthik confirmed the increased tail latency was due to KV cache warmup on nodes routed during an automated rebalance. What we did over the last 24 hours: 
+- Disabled the automatic rebalance for your Dedicated pool and pinned allocations to the previous node set to prevent further disruption
+- Implemented a conservative warmup-concurrency cap to stagger cache population
+- Deployed a control-plane safeguard to block rebalances while provisioning events are active (this is gated to Dedicated pools and will roll out to all Dedicated customers in the next 48 hours)
+
+Customer-facing compensation: we are offering a credit equal to 24 hours of committed capacity for the affected pool, applied to your next billing cycle. Grace will follow up with the formal credit note.
+
+Compatibility note: the fallback routing we used was to a compatible variant intended for availability-only (semantics preserved to within model family tolerances). I recognize deterministic outputs matter — we did not change the architecture or quantization during the fallback. If you prefer, we can revert any in-flight fallbacks and re-route to the pinned nodes while we warm caches proactively.
+
+Proposed next step: 30-minute post-incident review with our SRE and product team to walk timeline and fixes. Are you available 2028-11-16 10:00 PST?
+
+Attached: temporary_fallback_runbook.pdf
+Ticket: https://support.redwood.ai/ticket/RI-20281114-338
+
+Best,
+Logan Wright
+Account Executive, Redwood Inference
+
+
+From: logan.wright@redwood.ai
+To: sara.holt@novaai.com
+Cc: marissa.cole@redwood.ai, karthik.iyer@redwood.ai, grace.oconnor@redwood.ai
+Date: 2028-11-17 15:33 -0800
+Subject: Post-incident summary and permanent mitigations (follow-up from review)
+
+Hi Sara —
+
+Thanks for taking the 11/16 review. Per our discussion, attached is the short postmortem slide deck and the action tracker. TL;DR: root cause was a control-plane rebalance triggered during an active provisioning window; the collision produced concurrent warmups that spiked p95 latency for a short window.
+
+What we will deliver (commitments):
+- Control-plane change to prevent rebalances during provisioning: deployed to 100% of Dedicated pools by 2028-11-18 23:59 PST
+- Warmup concurrency limits: safe default rolled out platform-wide by 2028-11-20
+- Improved monitoring: synthetic probes per-pool for p95 latency that will page SRE at a lower threshold; ETA 2028-11-22
+- Billing credit: 24 hours of committed capacity applied to your next invoice (Grace will email the credit memo)
+
+Permanent engineering fixes (longer-term):
+- Smarter rebalance algorithm that staggers node warmups with affinity hints (Q1 2029 target)
+- Model routing verification tests in the canary pipeline to catch semantic drift when a fallback is used (Q1 2029)
+
+If you'd like we can copy the action tracker to a shared Drive and add your SRE. Appreciate your patience — we know predictability on Dedicated is critical.
+
+Best regards,
+Logan Wright
+Account Executive, Redwood Inference
+
+Attachments: postmortem-slide-deck.pdf
+Support ticket: https://support.redwood.ai/ticket/RI-20281114-338

@@ -1,0 +1,121 @@
+Gateway model intake: exception request & rollout plan
+
+From: Alex Johnson <alex@sunriselabs.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: acct-success@sunriselabs.com
+Date: 2026-10-12T09:12:00-07:00
+Subject: New Gateway v2 variant — intake + temporary pin ask
+
+Hi Hannah,
+
+Quick context: Sunrise Labs is preparing to ship a customer-facing update that relies on the new Gateway-v2 architecture (improved context handling + rotary embedding tweak). Our SREs validated the model locally but asked us to coordinate with you because the new runtime shape looks like it will break the existing Gateway-v1 pinned variant in hosted deployments.
+
+Request: we need Redwood to onboard Gateway-v2 as a new model variant and (critically) allow a 7-day pin exception on our account so we can validate in staging and run canary traffic. During that window we will revert to gateway-v1 if anything regresses. Attached is a short spec and a compatibility matrix (gateway_spec_v2.pdf, compat_matrix.csv).
+
+Timing: target rollout to customers week of Oct 19. Is it possible to get an intake + compatibility check this week? If not, what is the earliest safe pin + canary window you can offer?
+
+Thanks — happy to jump on a quick call if helpful.
+
+Alex Johnson
+Platform Lead, Sunrise Labs
+alex@sunriselabs.com
+
+--
+Attachments: gateway_spec_v2.pdf (PDF, 180KB), compat_matrix.csv (CSV, 12KB)
+From: Hannah Schmitt <hannah_schmitt@redwood.com>
+To: Dev Patel <dev_patel@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Alex Johnson <alex@sunriselabs.com>
+Date: 2026-10-12T10:05:00-07:00
+Subject: Re: New Gateway v2 variant — intake + temporary pin ask
+
+Thanks for the note, Alex — and thanks for the attachments. Looping in Eng, Product, Infra, and Research to triage. Internal owners: can we get a quick compatibility triage and estimate for a short-term pin?
+
+What I need from each of you for a go/no-go convo later today:
+- Dev: 1) compatibility delta summary (KV cache / tensor layout / quantization) and 2) rough ETA to produce a compat shim or runtime patch if required.
+- Jonas: quick safety/safety-eval smoke checks we should run before canary.
+- Marissa: is this Sunrise deal strategic — do we prioritize for a fast-track intake? If so, what product concessions (canary percentage, rollback conditions) do we accept?
+- Karthik: capacity & pinning windows — what short windows can you support without breaking other commit pools?
+
+Proposed meeting: 10/12 3:00pm PT — 30 minutes. If you cannot make, reply with your notes here.
+
+Hannah
+Director, Customer Success (Redwood Inference)
+--
+
+From: Dev Patel <dev_patel@redwood.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Alex Johnson <alex@sunriselabs.com>
+Date: 2026-10-12T13:18:00-07:00
+Subject: Re: New Gateway v2 variant — intake + temporary pin ask
+
+Quick triage notes (high level):
+1) Compatibility delta: Gateway-v2 introduces two non-backwards-compatible changes: a) rotary embedding parameterization (different positional encoding layout) and b) KV cache key ordering for multi-query attention. Both will cause cached prefixes generated on v1 to be incompatible if switched mid-session.
+2) Impact: Hosted routing + cache reuse between requests could lead to garbled continuations for live sessions during a mixed-variant rollout. Offline batch/embeddings unaffected.
+3) Options to unblock:
+   - Short-term: allow account-level variant pinning for the Sunrise account on the gateway-v2 variant in staging, with traffic split controlled by Redwood. This is strictly a routing change and does not require kernel work.
+   - Mid-term: implement a compat shim that can detect v1-v2 prefixes and gracefully invalidate cache on variant switch (ETA ~3-4 weeks, depends on kernel QA).
+   - Fallback: force per-request explicit model-version header (customer-managed) — low overhead but requires Sunrise to change client.
+
+Estimate for a staging pin + canary: we can enable account-level pinning and an isolated canary cluster within 48 hours once infra approves capacity. No runtime kernel changes required for that path.
+
+I will upload a short tech note and a minimal test harness to the INF ticket (INF-9876) by EOD.
+
+-Dev
+Senior Software Engineer, Serving Runtime
+--
+Attachment referenced: compat_matrix.csv
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>, Dev Patel <dev_patel@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Alex Johnson <alex@sunriselabs.com>
+Date: 2026-10-12T15:02:00-07:00
+Subject: Re: New Gateway v2 variant — intake + temporary pin ask
+
+Thanks — quick safety note from research: our standard safety/eval suite flagged two low-severity regressions on vignette tests for Gateway-v2 (hallucination rate + factuality delta on narrow QA). They are not showstoppers but we should add a focused regression check in the canary (10k prompt slice).
+
+Proposed smoke checks for the canary:
+- 10k prompt regression against our Golden QA set (run in staging)
+- Toxicity scan (lightweight)
+- Latency/percentile P95 regression for the new layout under production load (because KV changes can affect perf profiles)
+
+I can own the eval runs but will need the eval_schedule.xlsx filled with the canary configuration and expected thresholds.
+
+-Jonas
+Applied ML, Inference Research
+--
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>, Dev Patel <dev_patel@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Alex Johnson <alex@sunriselabs.com>
+Date: 2026-10-12T16:10:00-07:00
+Subject: Re: New Gateway v2 variant — intake + temporary pin ask
+
+Context on prioritization: Sunrise Labs is a mid-enterprise customer running a high-visibility retail pilot. We can fast-track the intake if Product signs off on the rollback SLA and the customer accepts a limited canary (max 5% of traffic for the first 48 hours).
+
+Product ask / acceptance criteria (proposal):
+- Canary: 5% traffic for 48 hours with automated rollback on: >2% QA regression OR >10% latency increase at P95.
+- Pin window: 7 days for initial validation in staging + canary, after which we either convert to full rollout or require a compat shim/rollback plan.
+- SLOs: latency P95 must not regress by more than 10% vs v1 baseline in canary.
+
+If we accept these boundaries I will authorize expedited intake and tell Sales to put Sunrise into the fast-track queue. Hannah — if you confirm, I'll create the product ticket and sign the SLA.
+
+-Marissa
+VP, Product
+--
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>, Dev Patel <dev_patel@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Alex Johnson <alex@sunriselabs.com>
+Date: 2026-10-13T11:34:00-07:00
+Subject: Re: New Gateway v2 variant — intake + temporary pin ask
+
+Infra note and schedule: we can carve an isolated canary pool for Sunrise and enable account-level pinning in staging. Constraints:
+- Must apply pin outside of the shared reserved GPU pools; we will use an isolated burst cluster (costly) for the 48-hour canary. This is OK for a one-off but we need commitment from the customer that we can fully rollback to v1 after the 48-hour validation.
+- Timeline: if Product creates the intake ticket and Sales gets Sunrise to accept the canary SLA by EOD Oct 13, we can have staging pin + isolated canary ready by Oct 15 EOD.
+- Post-canary: if no blockers, we can schedule the gradual rollout the week of Oct 19, but only after the compat shim or client-header fallback is decided for long-term safety.
+
+I'll add the capacity plan to INF-9876 and tag the cost owner.
+
+-Karthik
+Head of Dedicated & Private Deployments
+--
+

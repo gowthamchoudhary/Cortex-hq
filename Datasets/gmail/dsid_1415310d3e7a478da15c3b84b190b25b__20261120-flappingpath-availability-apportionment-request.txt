@@ -1,0 +1,111 @@
+Flapping path availability: probe discrepancy & maintenance attribution
+
+From: Carlos Mendes <carlos@mediagro.com>
+To: Vivek Kulkarni <vivek@redwood.com>
+Cc: SLA Team <sla-team@orbithealth.com>, ops@skylink.net
+Date: Fri, 20 Nov 2026 09:12:00 -0500
+Subject: Intermittent flaps affecting availability (Nov 12-18)
+
+Hi Vivek —
+
+We're reconciling our availability ledger and see a mismatch vs the SLA uptime tally for Nov 12–18. Our monitoring shows a series of short, high-frequency path flaps on one of the primary POPs that caused ~2.8% apparent unavailability during business hours. Redwood's portal flags a maintenance window on Nov 15 in the same region and appears to have excluded some of the window from the tally.
+
+Two asks:
+- Can you confirm how that Nov 15 maintenance window was applied to the availability calculation (full exclusion, partial apportionment, or none)?
+- We're attaching our probe dumps and a short CSV summary — can the Redwood team cross-check and propose an apportionment?
+
+Attachments: uptime-summary-Nov12-18.csv, edge-probe-logs-1105-1118.zip (see attached)
+
+This is a time-sensitive billing/reconciliation item; our procurement team has paused the renewal approval pending clarity.
+
+Thanks,
+Carlos Mendes
+SRE Lead, Mediagro
+
+---
+
+
+From: Vivek Kulkarni <vivek@redwood.com>
+To: Carlos Mendes <carlos@mediagro.com>
+Cc: Marissa Cole <marissa@redwood.com>, Ben Carter <ben@redwood.com>, SLA Team <sla-team@orbithealth.com>
+Date: Fri, 20 Nov 2026 10:03:00 -05:00
+Subject: Re: Intermittent flaps affecting availability (Nov 12-18)
+
+Carlos —
+
+Thanks for the note and for the attachments. I'm escalating this to our SLO reconciliation team (Marissa) and looping Ben for commercial impact. We'll triage immediately.
+
+High-level: our standard policy is to exclude scheduled maintenance windows when the maintenance event is platform-initiated and a customer opt-in was recorded; for partial overlaps we run a time-weighted apportionment between maintenance and customer-impact windows. However, I don't want to rely on memory here — Marissa, can you confirm whether the Nov 15 record applied a full exclusion or a time-weighted split for OrbitHealth's tenancy?
+
+Carlos — we'll aim to provide an initial reconciliation within 48 hours and a proposed apportionment by end-of-day Monday. If you can call out any probe IDs that matter most, that will help speed the verification.
+
+Best,
+Vivek
+Director, Customer Reliability
+Redwood Inference
+
+---
+
+
+From: Marissa Cole <marissa@redwood.com>
+To: Carlos Mendes <carlos@mediagro.com>, Vivek Kulkarni <vivek@redwood.com>
+Cc: Ben Carter <ben@redwood.com>, ops@skylink.net
+Date: Fri, 20 Nov 2026 13:18:00 -05:00
+Subject: Re: Intermittent flaps affecting availability (Nov 12-18)
+
+Carlos, Vivek —
+
+I pulled the account ledger and the maintenance log for Nov 15. Short summary:
+
+- Nov 15 maintenance was a regional routing configuration push targeted at a subset of POPs; it was scheduled 02:00–03:00 UTC (reported in the portal). The operation was completed within the expected maintenance window.
+- The probe flaps you attached are concentrated in two hours on Nov 16 (local business hours), not during the 02:00–03:00 UTC window. However, we see a handful of short BGP withdrawals starting Nov 15 22:48 UTC that persisted with higher churn through Nov 16 11:10 UTC.
+- Our availability pipeline uses a two-step filter: (1) exclude certified maintenance windows (explicitly scheduled on the account) from contiguous outage periods, (2) time-weighted apportionment for multi-factor events where maintenance and third-party upstream failures intersect. For this tenant, the Nov 15 maintenance record was applied as a certified exclusion only for the 02:00–03:00 UTC period. The later flaps were not excluded.
+
+What this means for reconciliation:
+- If Mediagro attributes the Nov 16 flaps to an upstream CDN/peering provider, we can evaluate a split for the overlapping periods where Redwood's routing change (Nov 15) increased path instability for 30–90 minutes afterward. We will not fully exclude Nov 16 unless there is proof the event originated entirely upstream and outside the region we control.
+
+Request from our side to speed resolution:
+- Can you flag the probe IDs that show the highest error rates (attach a short sample of 10 failed probe IDs)?
+- Please confirm whether OrbitHealth's contractual monitoring uses our portal probes or an independent probe network — that affects the apportionment calculation.
+
+For transparency I'm attaching an initial CSV export of our processed uptime windows for Nov 12–18 (attached: uptime-summary-Nov12-18-redwood.csv). I'll also open JIRA SLA-1987 and add the raw collector traces.
+
+Proposed next steps:
+1) Mediagro provides the 10 representative probe IDs and confirms monitoring origin (own probes vs portal probes).
+2) Redwood will run a side-by-side traceroute/probe comparison for the flagged intervals and publish a time-weighted apportionment proposal in JIRA SLA-1987.
+3) Commercial: Ben, can we hold off any credit determination until the technical apportionment is agreed? If necessary we can offer a provisional credit pending final reconciliation.
+
+Marissa Cole
+SLO Reconciliation Lead
+Redwood Inference
+
+Attachments: uptime-summary-Nov12-18-redwood.csv
+
+---
+
+
+From: Carlos Mendes <carlos@mediagro.com>
+To: Marissa Cole <marissa@redwood.com>, Vivek Kulkarni <vivek@redwood.com>
+Cc: Ben Carter <ben@redwood.com>, ops@skylink.net, SLA Team <sla-team@orbithealth.com>
+Date: Fri, 20 Nov 2026 15:42:00 -05:00
+Subject: Re: Intermittent flaps affecting availability (Nov 12-18)
+
+Thanks, Marissa — appreciate the clear steps.
+
+I've attached the 10 sample probe IDs and marked the ones where our internal traceroutes show egress flaps. We run independent probes (GlobalProbeNet) for contractual uptime, not Redwood's portal probes — please use our traces as the primary source for the time windows we dispute.
+
+Quick note on timeline: our renewal committee needs a provisional apportionment before Nov 24 to proceed with purchasing approvals. If Redwood can enter a provisional split (we suggest 60/40 upstream/Redwood split for the Nov 16 window based on our forensic), we can proceed while JIRA SLA-1987 remains the single source of truth for final reconciliation.
+
+Links: JIRA SLA-1987 (attached to this thread), Drive folder with full traces: https://drive.google.com/drive/folders/1abcExampleLink
+
+Attachments: mediagro-samples-1105-1118.csv
+
+Carlos Mendes
+SRE Lead, Mediagro
+
+On Fri, Nov 20, 2026 at 13:18, Marissa Cole <marissa@redwood.com> wrote:
+> Carlos, Vivek —
+> 
+> I pulled the account ledger and the maintenance log for Nov 15...
+> 
+> (message truncated)

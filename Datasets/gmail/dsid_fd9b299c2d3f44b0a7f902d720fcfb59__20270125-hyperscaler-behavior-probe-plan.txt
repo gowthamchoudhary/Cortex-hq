@@ -1,0 +1,108 @@
+Call recap + probe plan: inference behavior vs hyperscalers (tooling, streaming, structured outputs)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: James Nolan <james.nolan@averytech.com>, Priya Singh <priya.singh@cloudops.io>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: 2027-01-25T15:08:00-08:00
+Subject: Call recap + probe plan: inference behavior vs hyperscalers (tooling, streaming, structured outputs)
+
+Thanks again for the time today — great discussion. High-level recap and concrete next steps below so we keep momentum on the comparative evaluation.
+
+Quick TL;DR
+- Main asks from Avery: deterministic function/tool calling, reliable structured JSON output for downstream parsers, and streaming behavior when responses are interrupted or truncated.
+- Hyperscaler behavior we need to probe: tokenization differences, function-call arbitration (confident vs ambiguous), partial-stream handling and reconnect scenarios.
+
+Proposed probe plan (owners & rough timeline):
+1) Deterministic function calling (owner: Karthik) — run 3 prompt families that lead to identical function signatures across 1000 prompts, measure misfires/false-positive function calls and signature variance. Target: initial results by 2027-01-27.
+2) Structured outputs (owner: Laura) — validate JSON schema enforcement across payloads with nested arrays, edge-case characters, and length limits. Include strict vs lenient parsing modes. Target: 2027-01-28.
+3) Streaming & interruption (owner: Ben) — simulate network disconnects, resumptions, and mid-stream fallback; measure partial-object recovery and how each provider signals truncation. Target: 2027-01-29.
+
+Attachments: parity_probe_matrix.xlsx (test matrix + expected metrics), sample_webhook_payloads.json (example payloads you asked for).
+
+Immediate asks for Avery: can you share a single representative downstream parser (or spec) that your infra uses to validate structured outputs? That will let us make the tests realistic.
+
+Next call: propose a 30-min sync on 2027-01-28 to review Karthik/Laura's initial findings. Please confirm availability.
+
+Thanks,
+Ben
+Ben Carter
+Account Executive, Redwood Inference
+redwood.ai
+
+
+From: James Nolan <james.nolan@averytech.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Priya Singh <priya.singh@cloudops.io>, Laura Bennett <laura.bennett@redwood.ai>
+Date: 2027-01-25T16:03:00-08:00
+Subject: Re: Call recap + probe plan: inference behavior vs hyperscalers (tooling, streaming, structured outputs)
+
+Thanks Ben — helpful plan. A couple quick clarifications from our side:
+
+1) Downstream parser: attaching a spec excerpt in the sample_webhook_payloads.json you referenced. We validate strictly: keys must appear in order (not ideal, we know), and unknown keys are dropped. We also run a schema check that fails on trailing commas and broken escape sequences.
+2) Environment: we’ll run probes from our staging cluster (eu-west) but can also spin up a us-east runner if needed for latency-sensitive tests. For determinism tests we'll use a fixed RNG seed on our side; we'd like to see provider-side behavior with the same prompt set.
+
+I can confirm availability for 2027-01-28 10:00am PST.
+
+Also, we can share 50 representative prompts (variety + edge cases) if you want them; shipping as a CSV.
+
+—James
+VP, Product Engineering
+Avery Tech
+
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: James Nolan <james.nolan@averytech.com>, Ben Carter <ben.carter@redwood.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>
+Date: 2027-01-26T09:14:00-08:00
+Subject: Re: Call recap + probe plan: inference behavior vs hyperscalers (in-line parity probe matrix)
+
+Adding the initial parity probe matrix and a test-owner breakdown. I uploaded a working copy to the Drive link (see related_links). Highlights:
+
+- Determinism tests: 3 buckets (intent-steady, borderline-invocation, contextual-ambiguity). Metrics: function-invocation-rate, signature-drift, post-call confidence delta.
+- Structured JSON: run strict-mode first (fail on invalid JSON), then lenient-mode to observe automatic correction behaviors (if any). We’ll capture error messages to map to our parser failure modes.
+- Streaming: 4 scenarios — clean completion, network loss at 25%, 50%, 75% token progress, and mid-stream restart with a resumed session. We'll record provider error codes, reconnect semantics, and whether partial JSON is returned.
+
+I've attached parity_probe_matrix.xlsx with columns: test_id, prompt_sample_ref, provider_config, expected_outcome, metric_targets. Please confirm the 50 sample prompts from Avery when available — we want to keep the representative set identical across providers.
+
+Action items I own: prepare strict-mode structured-output harness and JSON validator by EOD 2027-01-27. Karthik — can you add the function-call instrumentation hooks to capture fine-grained logits/signature calls?
+
+-Laura
+Senior Solutions Engineer, Redwood Inference
+
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Laura Bennett <laura.bennett@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, James Nolan <james.nolan@averytech.com>
+Date: 2027-01-26T11:03:00-08:00
+Subject: Re: Call recap + probe plan: inference behavior vs hyperscalers (function-call instrumentation notes)
+
+Quick technical note on the function-call tests:
+
+- I’ll instrument the run to log both pre-softmax logits for the token that triggers a call and the decoded function signature string. That will let us identify whether differences are due to tokenization or beam/greedy decoding differences.
+- For ambiguous prompts, we’ll include disambiguation follow-ups (short clarifying Qs) to see whether providers prefer to ask vs auto-call.
+- I’ll also add a binary flag in the matrix for models that support explicit function schema enforcement vs heuristic-based.
+
+One ask for Avery: if you have any provider-side examples of the false-positive/false-negative function call events you saw in prod, please drop one in the Drive link — that will help us craft closer edge-cases.
+
+—Karthik
+Principal Applied ML Engineer, Redwood Inference
+
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: James Nolan <james.nolan@averytech.com>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: 2027-01-27T09:12:00-08:00
+Subject: Re: Call recap + probe plan: inference behavior vs hyperscalers (confirming schedule and deliverables)
+
+Perfect — thanks everyone. Quick confirmation of next steps:
+- Avery: share 50 prompts CSV and the downstream parser example (if you can drop them into the Drive link that’s ideal).
+- Karthik: instrumentation harness in staging by 2027-01-27 EOD.
+- Laura: strict-mode validator + parity matrix final by 2027-01-27 EOD.
+- Ben: run initial streaming interruptions on hosted config 2027-01-29 AM; will surface any immediate regressions.
+
+Call confirmed: 2027-01-28 10:00am PST (30m). I’ll send an invite.
+
+If anything changes ping me here — otherwise we’ll proceed to run the probe and collect comparison metrics against the hyperscaler endpoints.
+
+Thanks,
+Ben
+

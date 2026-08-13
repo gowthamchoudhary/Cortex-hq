@@ -1,0 +1,135 @@
+Streaming SLO request — TTFT & sustained token throughput for real‑time product
+
+From: Sara Wong <sara.wong@acme-corp.com>
+To: Lauren Bishop <lauren_bishop@redwood.com>
+Cc: Acme Ops <ops@acme-corp.com>
+Date: 2026-11-05T09:12:00-08:00
+Subject: Streaming SLO request — TTFT & sustained tokens
+
+Hi Lauren,
+
+Thanks for taking this — we have a pilot kicking off later this month and need clarity on whether Redwood can commit to differentiated SLOs for streaming endpoints vs non-streaming (sync) endpoints. Our product is live transcription & enrichment; latency to first token matters for the UX and we also have sustained bursts during speaker overlaps. Key asks: 
+
+- Time-to-first-token (TTFT): median <= 180ms, P95 <= 350ms for streaming responses at our expected concurrency.
+- Sustained throughput: 500 tokens/sec sustained for windows up to 30s (bursts), ability to handle short-term 800 tokens/sec peaks without failing requests.
+- Uptime: we need an SLO tied to streaming endpoints (separate from batch/generate endpoints) for the pilot (Nov 20 start).
+
+We understand this is heavier than standard hosted streaming commitments. We're willing to discuss a Dedicated/Provisioned option or a surcharge for a higher SLA. Attached is our latency profile and suggested SLOs (streaming_slo_proposal.pdf) and a comparison table vs normal endpoints (sla_comparison_table.xlsx). Can you confirm whether Redwood can: (1) provide a streaming-specific SLO for TTFT and tokens/sec, and (2) issue a short-term exception for the pilot if needed?
+
+Deadline: we need the SLO decision by COB Nov 12 to finalize pilot infra.
+
+Thanks,
+Sara
+Sara Wong
+Senior Product Manager — Real Time
+Acme Analytics
+(attachment: streaming_slo_proposal.pdf (PDF), sla_comparison_table.xlsx (XLSX))
+
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: Sara Wong <sara.wong@acme-corp.com>
+Cc: Priyom Das <priyom_das@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: 2026-11-05T10:05:00-08:00
+Subject: Re: Streaming SLO request — TTFT & sustained tokens
+
+Hi Sara — thanks for the clear ask and the attachments, I’ve pulled them in. I’ll get engineering and SRE eyes on this today. A couple quick clarifying Qs that will materially change feasibility and cost: 
+
+1) Expected sustained concurrency during pilot (connections concurrently streaming) and typical request lengths (avg tokens per response).
+2) Which model family are you planning to run (open LlamaX, gpt-compat, etc.) and max prompt/context window — that impacts both TTFT and batch scheduling.
+3) Are you open to a Dedicated/Provisioned pool for the pilot? That’s usually required for strict TTFT guarantees.
+
+I’ve looped in Priyom (sales engineering) for a technical assessment and Rishi for approval on any exception/price addendum. We’ll aim to come back with a proposed constrained SLO for the pilot by EOD Nov 9 so your legal can start drafting.
+
+—Lauren
+Lauren Bishop
+Account Executive, Redwood Inference
+On Thu, Nov 5, 2026 at 09:12 AM Sara Wong <sara.wong@acme-corp.com> wrote:
+> Hi Lauren,
+> 
+> Thanks for taking this — we have a pilot kicking off later this month and need clarity on whether Redwood can commit to differentiated SLOs for streaming endpoints vs non-streaming (sync) endpoints...
+
+From: Priyom Das <priyom_das@redwood.com>
+To: Lauren Bishop <lauren_bishop@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: 2026-11-05T11:35:00-08:00
+Subject: Re: Streaming SLO request — TTFT & sustained tokens
+
+Quick tech take (summary) — I pulled the attachments and ran preliminary perf estimates with infra: 
+
+- Baseline: hosted streaming endpoints (shared) typically see median TTFT ~220–320ms depending on model and concurrent connections; P95 often in 400–600ms range under mixed load.
+- Non-streaming (generate): TTFT is effectively higher because we wait for chunking/finish, but tokens/sec after generation can be higher for batch paths.
+
+Feasibility notes for Sara’s ask: 
+- TTFT median <=180ms is attainable if we 1) pin a Dedicated instance pool for their traffic, 2) pre-warm model weights and KV cache, and 3) enforce a small max context for streaming calls. With these, P50 ~120–180ms and P95 ~300–400ms is realistic.
+- Sustained 500 tokens/sec: achievable on provisioned A100-class instances with quantized model and worker-level parallelism for short bursts (<=30s). For 800 tokens/sec peaks the risk of transient request queuing increases unless we reserve burst capacity (additional nodes).
+
+Recommendations: 
+1) Offer them a Dedicated streaming pool with pre-warmed nodes (pin count based on their concurrency).
+2) Define a pilot SLO bundle: Streaming TTFT P50 <= 180ms, P95 <= 400ms; sustained throughput 450 tokens/sec (guaranteed) with a soft-cap for bursts up to 800 tokens/sec best-effort.
+3) Add an automatic fallback policy: if Dedicated pool saturates, redirect some traffic to a compatible lower-SLO variant (async/generate) with graceful degradation.
+4) Capture expected concurrency & avg tokens per request from Acme to size pool and price.
+
+Cost notes: reserving pre-warmed Dedicated nodes and burst reserve will add ~20% premium on committed monthly spend for pilot sizing we just estimated. We should present a pilot addendum (SLA + pricing + capacity plan) rather than a permanent hosted SLO change.
+
+I can draft a short SLO summary for legal if Rishi signs off.
+
+—Priyom
+Senior Solutions Engineer, Redwood Inference
+
+On Thu, Nov 5, 2026 at 10:05 AM Lauren Bishop <lauren_bishop@redwood.com> wrote:
+> Hi Sara — thanks for the clear ask and the attachments, I’ve pulled them in...
+
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+To: Lauren Bishop <lauren_bishop@redwood.com>, Priyom Das <priyom_das@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: 2026-11-05T13:00:00-08:00
+Subject: Re: Streaming SLO request — TTFT & sustained tokens
+
+Lauren/Priyom — reviewed Priyom’s notes and the attachments. I approve offering Acme a constrained pilot SLO with the following conditions: 
+
+- SLO (pilot, 30 days): Streaming endpoints on a Dedicated pool.
+  - TTFT: P50 <= 180ms, P95 <= 400ms.
+  - Sustained throughput: guaranteed 450 tokens/sec per pooled allocation with the ability to burst up to 800 tokens/sec best-effort for windows <= 30s.
+  - Uptime: 99.5% for the streaming pool during pilot.
+- Constraints: must sign a 30-day pilot addendum, provide expected concurrency & avg tokens/request by Nov 9, and accept automatic, documented fallback to the non-streaming route if pool capacity is exhausted.
+- Pricing: add a 20% surcharge on committed Dedicated spend for the pilot (covers reserved burst and pre-warm).
+
+Legal to prepare a short addendum and CS/ops to validate capacity plan. Marissa — please coordinate the Ops runbook and postmortem cadence for the pilot.
+
+Rishi
+Director, Sales Operations
+
+On Thu, Nov 5, 2026 at 11:35 AM Priyom Das <priyom_das@redwood.com> wrote:
+> Quick tech take (summary) — I pulled the attachments and ran preliminary perf estimates with infra...
+
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: Sara Wong <sara.wong@acme-corp.com>
+Cc: Priyom Das <priyom_das@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2026-11-05T16:45:00-08:00
+Subject: Re: Streaming SLO request — TTFT & sustained tokens
+
+Hi Sara — quick update and next steps. We’ve reviewed your proposal and can offer a constrained pilot SLO under the following summary (per internal sign-off):
+
+- Pilot SLO (30 days) on a Dedicated/Provisioned Streaming pool:
+  • TTFT: P50 <= 180ms; P95 <= 400ms
+  • Sustained throughput: 450 tokens/sec guaranteed (per pooled allocation); burst up to 800 tokens/sec best-effort for windows <= 30s
+  • Uptime: 99.5% on the Dedicated streaming pool for the pilot
+
+Conditions & next steps:
+1) Please confirm expected concurrent streams and average tokens per response by Nov 9 so we can size the Dedicated pool.
+2) Legal will issue a pilot addendum (DocuSign link below) reflecting the SLOs, pricing (20% surcharge on committed Dedicated spend), and fallback policy. Please sign by Nov 12 to meet your Nov 20 pilot start.
+3) Once signed, we’ll schedule a tech kickoff (Nov 13 suggested) with Priyom & Marissa to walk the runbook and observability hooks.
+
+DocuSign: https://docusign.com/abc123
+HubSpot deal: https://app.hubspot.com/deals/1234567
+
+If you’re OK with the approach I’ll have legal send the addendum and ops prep the pool sizing template.
+
+Thanks — looking forward to getting this live.
+
+—Lauren
+Lauren Bishop
+Account Executive, Redwood Inference
+(attachment: streaming_slo_proposal.pdf (PDF))
+
+On Thu, Nov 5, 2026 at 01:00 PM Rishi Malhotra <rishi_malhotra@redwood.com> wrote:
+> Lauren/Priyom — reviewed Priyom’s notes and the attachments. I approve offering Acme a constrained pilot SLO with the following conditions...

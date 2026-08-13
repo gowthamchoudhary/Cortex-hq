@@ -1,0 +1,144 @@
+PayGate: checkout 5xx/429 surge — exec brief + actions
+
+Customer reported a sudden spike of 5xx/429 errors and timeouts affecting checkout traffic. Triage identified a combination of upstream client retry patterns and a KV cache eviction boundary after a config change; mitigation included temporary traffic shaping and emergency capacity increase. Follow-ups: alerting rules updated, runbook additions, SLO retuning, capacity plan for peak traffic, and an SDK retry guideline for PayGate.
+From: Helen Jones <helen.jones@paygate.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>
+Cc: PayGate Ops <ops@paygate.com>
+Date: Thu, 15 Jan 2026 09:12:00 -0800
+Subject: URGENT: Checkout 5xx/429 spike impacting transactions
+
+Evelyn —
+
+We just observed a dramatic increase in failed checkouts between 08:45–09:05 PST. Customers see 500s and 429s, many payments are abandoned. Attached is a screenshot from our checkout dashboard and a brief log snippet. We've already had billing notices go out. Can you please escalate to your SREs immediately? This is high-severity for us.
+
+What we've seen:
+- ~12% of checkout requests returning 5xx, another ~7% 429s
+- Retries from the client are amplifying user-facing latency
+- We are running the Redwood hosted inference for token classification during checkout (model: rwd-small-v1)
+
+Please let me know expected ETA for a mitigation plan.
+
+— Helen
+Helen Jones
+Head of Ops, PayGate Inc.
+helen.jones@paygate.com
++1 415-555-0199
+
+Attachments: paygate-error-screenshot.png, initial-logs-snippet.txt
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Helen Jones <helen.jones@paygate.com>
+Cc: Sean Gallagher <sean.gallagher@redwood.com>, Jonas Weber <jonas.weber@redwood.com>
+Date: Thu, 15 Jan 2026 09:20:00 -0800
+Subject: Re: URGENT: Checkout 5xx/429 spike impacting transactions
+
+Helen — thanks for the flag and the artifacts. I'm escalating to our SRE and account teams now.
+
+Sean / Jonas: taking high priority — Helen pasted rates above; PayGate is on a standard hosted plan but is driving peak checkout traffic this morning. Can you triage and propose an immediate mitigation (traffic shaping, fallback model, regional routing)? Also please confirm if this looks like a transient retry storm vs. a capacity/serving regression.
+
+I'll coordinate with PayGate and keep execs updated.
+
+Evelyn Hart
+Senior Account Manager, Redwood Inference
+evelyn.hart@redwood.com
+
+On Thu, Jan 15, 2026 at 09:12 AM Helen Jones <helen.jones@paygate.com> wrote:
+> Evelyn —
+>
+> We just observed a dramatic increase in failed checkouts between 08:45–09:05 PST....
+From: Sean Gallagher <sean.gallagher@redwood.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Jonas Weber <jonas.weber@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Helen Jones <helen.jones@paygate.com>
+Date: Thu, 15 Jan 2026 09:37:00 -08:00
+Subject: Re: URGENT: Checkout 5xx/429 spike impacting transactions — initial triage
+
+Evelyn / team — initial findings from the runbook triage:
+
+1) Timeline: error spike starts ~08:42; token-level latency climbs and 429s begin at 08:44; peak at 08:50; partial recovery at 09:10 after PayGate reduced client retry rate.
+
+2) Root cause (probable): a config push earlier this morning adjusted KV cache eviction thresholds on the serving nodes (rollout at 07:58). At typical token windows this causes increased cache misses which materially increased p99 generation latency. Client SDKs observing increased latency retried aggressively and hit throttling bands, producing 429s and amplifying load.
+
+3) Immediate mitigations applied (09:00–09:20):
+   - Rolled back the cache threshold change on the affected pool (mitigated most p50/p95 latencies).
+   - Applied temporary rate-limiter exemptions for PayGate traffic (to reduce 429s while rolling back).
+   - Requested a soft quota bump for the next 6 hours from capacity (used Dedicated burst pool).
+
+4) Evidence: attaching a short logs snippet (initial-logs-snippet.txt) and a quick analysis chart. We opened SUP-4591 to capture follow-ups.
+
+Next steps recommended:
+- Update alerting to include cache-eviction delta triggers and prefix-KV hit-rate on critical pools.
+- Add an automated rollback check to config rollout pipelines when p95 latency on a tenant crosses threshold.
+- Work with PayGate to adjust SDK retry/backoff defaults (reduce immediate retry fanout).
+
+I'll stand by for more forensic logs if needed. Proposed follow-up meeting at 10:30 PST to align on customer comms and long-term fixes.
+
+— Sean
+Sean Gallagher
+Sr. SRE, Redwood Inference
+sean.gallagher@redwood.com
+
+On Thu, Jan 15, 2026 at 09:20 AM Evelyn Hart <evelyn.hart@redwood.com> wrote:
+> Helen — thanks for the flag and the artifacts. I'm escalating to our SRE...
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Helen Jones <helen.jones@paygate.com>
+Date: Thu, 15 Jan 2026 10:45:00 -08:00
+Subject: Re: URGENT: Checkout 5xx/429 spike — exec summary and ask
+
+Team / Helen —
+
+Thanks Sean for the quick triage. For execs and the customer I recommend the following immediate asks:
+
+- Customer comms: promise a 24-48h RCA and action plan. Evelyn, can you confirm?
+- Temporary capacity: coordinate with capacity ops to keep PayGate on the burst pool for at least 24 hours; request confirmed quota increase.
+- Traffic routing: if tail latency remains poor, shift a low-percentage of traffic to a warmed fallback model instance in a different AZ (avoid full cutover unless necessary).
+- SDK tweaks: offer PayGate a guidance patch to reduce retry concurrency and add jitter; Marissa, can we draft a short SDK note and a recommended backoff pack?
+
+I'll loop in leadership if capacity ops can't commit to the temporary bump. We need SLA posture and potential credits discussion if there is measurable customer impact.
+
+Jonas Weber
+Director, Account Strategy, Redwood Inference
+jonas.weber@redwood.com
+
+On Thu, Jan 15, 2026 at 09:37 AM Sean Gallagher <sean.gallagher@redwood.com> wrote:
+> Evelyn / team — initial findings from the runbook triage:
+>
+> 1) Timeline: error spike starts ~08:42...
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Helen Jones <helen.jones@paygate.com>
+Cc: Sean Gallagher <sean.gallagher@redwood.com>, Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Sun, 18 Jan 2026 17:28:00 -08:00
+Subject: Post-incident update: PayGate checkout spike — actions and owners
+
+Helen / team — thank you again for your patience while we triaged. This is a concise post-incident update and the follow-up actions we've committed to.
+
+What happened (short):
+- A config rollout reduced effective KV cache residency on a serving pool, increasing cache-miss-driven p95 latencies. Client SDK retry patterns amplified load and caused throttling (429s) and transient 5xxs at peak.
+
+Immediate mitigations (same day):
+- Rolled back the cache threshold change; latency returned to baseline within ~20 minutes.
+- Temporarily routed PayGate traffic to burst capacity and applied per-tenant exemptions to limit 429s.
+
+Committed follow-ups and owners: (all tickets: SUP-4591)
+- Alerting: add eviction-delta and per-tenant KV hit-rate alerts — Owner: Sean Gallagher — ETA: 2026-01-22.
+- Runbook: add a KB for retry-storms (playbook-diff.pdf attached) and an automated rollback gate on config pushes — Owner: Marissa Cole — ETA: 2026-01-25.
+- SLO tuning: evaluate p95 SLO for tenant-critical endpoints and add a golden routing policy for checkout flows — Owner: Jonas Weber / Capacity Ops — ETA: 2026-02-01.
+- Customer SDK guidance: provide recommended retry/backoff defaults and sample patch — Owner: Marissa Cole — ETA: 2026-01-20.
+- Capacity plan: capacity ops to provision a standby burst slice for PayGate during their daily peak window — Owner: Capacity Ops — ETA: 2026-01-19.
+
+Executive note: if capacity ops cannot commit to the standby slice, we'll escalate to product leadership for a short-term credit and priority scheduling.
+
+Next touchpoint: we scheduled a 30-minute follow-up on Tue 2026-01-19 09:00 PST (calendar invite sent). Please review the attachments and SUP-4591 for the detailed log captures.
+
+Evelyn Hart
+Senior Account Manager, Redwood Inference
+Phone: +1 650-555-0123
+
+Attachments: playbook-diff.pdf
+
+On Thu, Jan 15, 2026 at 10:45 AM Jonas Weber <jonas.weber@redwood.com> wrote:
+> Team / Helen —
+>
+> Thanks Sean for the quick triage. For execs and the customer I recommend the following immediate asks:
+>
+> - Customer comms: promise a 24-48h RCA and action plan. Evelyn, can you confirm?
+> - Temporary capacity: coordinate with capacity ops to keep PayGate on the burst pool for at least 24 hours; request confirmed quota increase...

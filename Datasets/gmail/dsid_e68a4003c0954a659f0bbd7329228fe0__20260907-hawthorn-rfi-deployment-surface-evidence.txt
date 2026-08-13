@@ -1,0 +1,115 @@
+Hawthorn RFI: deployment separation, data flow, and residual risk evidence
+
+From: Emily Turner <emily.turner@hawthorn.com>
+To: ben_carter <ben.carter@redwood.com>
+Cc: Timothy Cho <tim.cho@hawthorn.com>
+Date: 2026-09-07T14:02:00-07:00
+Subject: Hawthorn RFI: deployment separation, data flow, and residual risk evidence
+
+Hi Ben —
+
+Thanks for taking this. As part of Hawthorn Financial's vendor security review for Q4, we need a short packet addressing deployment separation, data-flow boundaries, and a high-level threat/residual risk summary specific to multi-tenant hosted inference. The RFI spreadsheet is attached (hawthorn_rfi_template.xlsx).
+
+Top asks (we've highlighted these in the attached sheet):
+- A network diagram showing tenant demarcation, control plane vs data plane, and any sidecar proxies.
+- Description of persistent KV/cache behavior: what is persisted, encryption at rest, and retention windows.
+- Egress and outbound controls: how you prevent noisy downstream connections and how outbound flows are filtered/allowlisted.
+- A concise threat model summary (1 page) that lists likely adversary vectors and mitigations, particularly around cross-tenant leakage and supply-chain components (build artifacts, third-party tool integrations).
+- Evidence links for SOC 2 attestation and any penetration test reports you can share under NDA.
+
+Can you send an initial packet by EOD Thursday (Sep 10)? We may follow with a short technical review call.
+
+Thanks,
+Emily Turner
+Senior Vendor Security Manager
+Hawthorn Financial
+
+Attachment: hawthorn_rfi_template.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+From: ben_carter <ben.carter@redwood.com>
+To: Emily Turner <emily.turner@hawthorn.com>
+Cc: laura_bennett <laura.bennett@redwood.com>, priyom_das <priyom.das@redwood.com>
+Date: 2026-09-07T16:18:00-07:00
+Subject: Re: Hawthorn RFI: deployment separation, data flow, and residual risk evidence
+
+Emily —
+
+Appreciate the clear asks and the template. We're pulling together a compact evidence packet and can deliver the first pass by EOD Thursday (Sep 10) as requested. Attaching an initial set of artifacts and a short narrative: redwood_deployment_overview_v1.pdf, network_zone_diagram.drawio (export), and egress_controls_table.csv.
+
+Quick notes up front:
+- Tenant separation: control plane is logically isolated from customer inference workloads; data paths use ephemeral sidecars per-tenant with strict RBAC and short-lived cert rotation.
+- KV/cache: we do not persist customer prompts or model KV state to long-term storage for hosted customers by default; where we do persist (dedicated/private options) data-at-rest is encrypted via customer-managed KMS and retention is configurable. 
+- Egress: default deny egress rules; customers can configure allowlists for integrations via approved connectors; central egress proxies perform TLS inspection for metadata-only telemetry — no decryption of customer payloads.
+
+I'll schedule a 30-minute technical review for Sep 10 in case you want to walk through. Laura and Priyom — can you help validate the SOC 2 / penetration test links and finalize the threat summary?
+
+Best,
+Ben Carter
+Director, Solutions Engineering
+Redwood Inference
+
+Attachments: redwood_deployment_overview_v1.pdf (application/pdf), network_zone_diagram.drawio (application/vnd.drawio), egress_controls_table.csv (text/csv)
+From: laura_bennett <laura.bennett@redwood.com>
+To: ben_carter <ben.carter@redwood.com>
+Cc: priyom_das <priyom.das@redwood.com>
+Date: 2026-09-08T09:04:00-07:00
+Subject: Fwd: Hawthorn RFI: deployment separation, data flow, and residual risk evidence
+
+Ben — forwarding the thread. I've drafted the 1-page threat summary and an evidence manifest (evidence_manifest.md) that maps each RFI line item to a supporting artifact/link. A few clarifications required from Emily on sidecar configuration: whether Hawthorn views cache persistence as a blocker for hosted or if they are looking for private deployment options.
+
+Forwarded message:
+> From: Emily Turner <emily.turner@hawthorn.com>
+> Date: 2026-09-07T14:02:00-07:00
+> Subject: Hawthorn RFI: deployment separation, data flow, and residual risk evidence
+> To: ben_carter <ben.carter@redwood.com>
+>
+> [original ask and attachments]
+
+Priyom — I'm attaching the draft threat summary in the drive location and calling out two quick technical bullets in-line in the manifest where we should be explicit (KV in-memory handling; sidecar auth token rotation cadence). I also added a short note on our canary/fall-back plan (how we degrade to lower-capacity predictable model variants).
+
+-L
+
+Attachments: evidence_manifest.md (text/markdown)
+From: Emily Turner <emily.turner@hawthorn.com>
+To: ben_carter <ben.carter@redwood.com>
+Cc: Timothy Cho <tim.cho@hawthorn.com>
+Date: 2026-09-09T08:27:00-07:00
+Subject: Re: Hawthorn RFI: deployment separation, data flow, and residual risk evidence
+
+Ben/Laura —
+
+Thanks, this looks like a good start. A couple clarifying questions before the call:
+1) You mention "no persistence of customer prompts or model KV state to long-term storage by default." For hosted customers, can you confirm whether ephemeral KV is ever written to disk during scaling events or OOM scenarios? If so, what protections (encryption, ephemeral file systems) are applied?
+2) For SOC 2 evidence: can you point us to a downloadable summary or a redacted report under NDA? We can push an NDA quickly if needed.
+
+Also — Hawthorn has a list of approved third-party connectors (we can share) and wants assurance that only allowlisted connectors can be configured by customers in your hosted offering. Is that an admin-level control?
+
+Appreciate the quick turn; the team will review before the Sep 10 call.
+
+Emily
+
+SecurEval: please hold on external pen test requests until we sign an NDA.
+
+From: ben_carter <ben.carter@redwood.com>
+To: Emily Turner <emily.turner@hawthorn.com>
+Cc: laura_bennett <laura.bennett@redwood.com>, priyom_das <priyom.das@redwood.com>
+Date: 2026-09-10T10:12:00-07:00
+Subject: Re: Hawthorn RFI: deployment separation, data flow, and residual risk evidence
+
+Emily —
+
+Thanks for the questions. Short answers here, full evidence linked in the packet at https://redwoodcloud.drive/hawthorn/HAW-2026-091/evidence/. We'll also provide a redacted SOC 2 report under NDA; happy to accept your standard NDA or send ours.
+
+1) Ephemeral KV on hosted: We run KV/state in RAM and favor in-memory only for the hosted API. In rare scale-recovery scenarios (container restart, node OOM), we do not write KV blobs to durable customer-visible disk. If a crash dump is captured for debugging it is scrubbed and encrypted; permanent persistence only occurs for Dedicated or Private deployments where the customer explicitly opts in. Ephemeral filesystem usage is enforced on tmpfs for any transient artifacts and mounted with node-level encryption policy where supported. See sidecar_kv_persistence_note.txt attached.
+
+2) Allowlisted connectors: Connector configuration is an admin-tier control. For hosted customers, account admins may enable approved connectors; self-service connectors are restricted via account-level feature toggles and an allowlist. We can map your approved connectors against our allowed set during onboarding.
+
+3) SOC 2: summary and auditor contact are available. Link above.
+
+If that covers the immediate asks, let's plan the 30-minute technical review at 11:00 AM PDT Sep 10 (I booked an invite). We'll walk through the diagram and threat summary.
+
+Best regards,
+Ben Carter
+Director, Solutions Engineering
+Redwood Inference
+
+Attachments: sidecar_kv_persistence_note.txt (text/plain)

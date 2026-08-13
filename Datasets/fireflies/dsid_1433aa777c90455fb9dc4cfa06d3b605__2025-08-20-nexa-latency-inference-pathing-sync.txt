@@ -1,0 +1,82 @@
+NexaHealth pilot — latency metrics review & inference pathing decisions
+
+Weekly POC sync focused on reducing TTFT and stabilizing streaming latency. Reviewed recent runs: hosted baseline, dedicated with fused kernels, and a quantized 4-bit variant. Identified two clear experiments: kernel A/B across real prompts and streaming chunk-size tuning in client infra. Agreed on data handoffs and dates for next steps.
+[00:00] Maya (Redwood AE): Hey everyone, thanks for jumping on. quick agenda — quick status, results we shipped this week, Carlos will go through the kernel numbers, then we want to decide next experiments for the pilot.
+[00:25] Priya (NexaHealth - ML): Thanks. we've been seeing some variability in start-up latency, TTFT is kinda all over when we hit long inputs.
+[00:40] Carlos (Redwood SE): Cool, I'll try to be succinct. baseline hosted run — with the default runtime and no prefix cache — TTFT median about 120ms, p95 210ms on your typical 256 token prompt set. After we enabled fused-attn kernels and tuned the scheduler we saw median drop to ~78ms p95 140ms, but that was on our dedicated infra trace.
+[01:15] David (NexaHealth - Infra): Is that with batching? we usually have bursts that push up queueing.
+[01:25] Carlos: These numbers were single request paths, minimal batching to measure TTFT. We also did small-batch tests (batch size 4) where avg per-token latency was slightly better for throughput but TTFT increased by ~20ms because of the batching window.
+[01:45] Priya: Right, so for our real-time summarization flow TTFT matters more than token cost.
+[01:52] Maya: Totally, that was our assumption. so we need the model path that favors TTFT — lower startup overhead — while keeping streaming smooth.
+[02:05] Carlos: We also looked at quantization. 4-bit qform gave a small TTFT improvement (about 8-12ms) but the variance increased on corner cases — long sequences. Might be quantization noise or different kernel fallback.
+[02:26] Sara (Product): Are there quality regressions when you quantize? we can't degrade extractive summarization metrics.
+[02:33] Carlos: We ran the eval harness on your eval set — Rouge/F1 dropped <0.6% on average but a few outliers at the long end did show slight hallucination flags, so we flagged those prompts.
+[02:50] Priya: okay please mark those outliers. we can consider a hybrid approach — quantized for short flows, full precision for long.
+[02:58] Carlos: Exactly. that's one of the options.
+[03:05] Maya: Quick note — shared the benchmark sheet earlier (link: https://redwood.share/bench/nexa-aug) — folks should be able to view.
+[03:16] David: got it. saw the kernel runs, curious about streaming chunking — how big were the chunks you tested?
+[03:24] Carlos: We tried 64 token chunks and 128 token chunks. 64 gave lower per-chunk latency but more HTTP overhead; 128 fewer chunks but slightly higher latency for early tokens. For TTFT + perceived start, 64 felt snappier.
+[03:40] Priya: our UX team suggested showing first sentence within 150ms ideally. Are we close?
+[03:46] Carlos: With fused kernels + 64-token streaming and little to no batching, median first-byte ~85ms on dedicated; hosted was around 120ms depending on region egress.
+[04:02] Priya: That aligns with what we saw. the problem is in staging sometimes it jumps to 300ms at p95.
+[04:10] Carlos: Those spikes matched times when KV cache misses happened; one of your longer prompts warmed up different KV table shapes. our suggestion: prefix caching for repeated conversation IDs + small warm-up trick.
+[04:24] David: how intrusive is prefix caching to our infra? we've got strict mem budgets.
+[04:30] Carlos: It's a runtime-side optimization; for dedicated we can tune cache size. For hosted you'd rely on our adaptive eviction. Memory impact is proportional to cached kv size and sequence length; we can show expected mem curves in the bench sheet.
+[04:43] Maya: we'll add mem curve plots to the sheet.
+[04:47] Sara: What about kernel selection? you mentioned fused-attn — any other kernels?
+[04:51] Carlos: There's fused-attn (good for short-medium seq), block-sparse kernels for very long sequences, and a fallback vectorized kernel. The tradeoffs are latency vs throughput and stability. The A/B we want to run is fused-attn vs default optimized vector kernel across your live prompt distribution.
+[05:12] Priya: That distribution includes some ~2k token prompts for research summaries — do fused-attn handle that?
+[05:18] Carlos: Fused-attn degrades as seq grows; block-sparse or chunked attention works better beyond ~1k tokens. That's why we asked for the histogram of your prompt lengths.
+[05:30] Priya: I'll upload that.
+[05:33] Maya: Reminder: action item for Priya to send 200 long-tail prompts and histogram.
+[05:38] [06:00] Carlos: Quick note on network: when we saw p95 spikes in hosted tests some were due to edge egress limits in your VPC setup — David, you mentioned your router caps were 500 rps?
+[06:12] David: yes, burst to 750 in peak, but sustained is 500.
+[06:17] Carlos: For the streaming experiment we'll need a test window where you lift egress capping to reproduce the bursts; otherwise the network masks runtime gains.
+[06:24] David: okay we can do a scheduled window.
+[06:28] [07:00] Priya: let's talk instrumentation — we'd like token-level latencies in our APM. can you provide trace hooks?
+[07:08] Maya: yes, the SDK emits token-level events and trace IDs; we can drop a tracing example into the shared repo.
+[07:14] Carlos: We'll also include a micro-benchmark script you can run behind your router to simulate sustained bursts and streaming chunking.
+[07:22] Priya: great.
+[07:25] [09:00] Sara: so decision point — do we prioritize fused-attn (low TTFT for most traffic) or hybrid with dynamic kernel selection?
+[09:10] Carlos: Our recommendation is dynamic routing: fused-attn for <512 tokens, block-sparse or chunked for >1k, and a fallback to vectorized when we detect instability. But dynamic adds complexity.
+[09:25] Priya: complexity is okay if ops overhead is low. we can't have more than 1% error budget.
+[09:31] Maya: Also reminded that Dedicated gives us more levers (cache size, kernel tuning) while hosted is faster to iterate.
+[09:40] David: Are there cost numbers? switching to dedicated for this pilot impacts spend.
+[09:45] Maya: Carlos, quick cost delta?
+[09:48] Carlos: Dedicated pilot estimated +25% monthly cost but gives steady p99 and lower TTFT variance. The merged savings from quantization and batching could offset 10-12% depending on traffic shape. We'll put a cost scenario table in the sheet.
+[10:08] [12:00] Priya: I'm concerned about quality with quantization — can we do a guardrail that routes prompts above N tokens to full precision automatically?
+[12:12] Carlos: Yes, can be policy-based routing — sequence-length threshold triggers full-precision instance. It's part of the rollout config.
+[12:20] Priya: ok do that for now.
+[12:22] [14:00] Maya: Quick pause — any blockers from legal/security?
+[14:07] Sara: We need the SOC 2 attestation and a copy of audit log format; you shared earlier but need example entries.
+[14:15] Maya: I'll resend the SOC2 PDF and an example of the audit log lines. 
+[14:21] [16:00] David: For the streaming trial we need your sample client that uses keepalive and small chunk windows — can you provide?
+[16:07] Carlos: Yes, we have a streaming client repo; will handover link and a dockerized example.
+[16:15] Maya: I'll add that to the bench sheet links.
+[16:20] [18:00] Priya: Let's set measurable success criteria for the next run — target median TTFT <100ms, p95 <160ms on our primary region for 95% of test set. If we hit those we expand the pilot.
+[18:32] Carlos: Accepted, we'll try to hit those in the A/B kernel run.
+[18:38] [20:00] Sara: Also want an explicit rollback plan if quality dips with quantization.
+[20:06] Maya: policy-based routing plus canary on small % traffic is the plan, with auto-fallback to full precision model. We'll document steps.
+[20:18] [22:00] Carlos: Technical detail — when you stream with 64 token chunks we recommend small TCP keepalive of 15s and client ack windows to avoid connection resets. Otherwise we saw a chunk lost behavior and re-sends that add ~120ms.
+[22:36] David: noted. we'll adjust infra.
+[22:40] [25:00] Priya: Any surprises in the data?
+[25:06] Carlos: One thing — a small subset of prompts triggered a kernel fallback in runtime because of certain attention mask patterns; that added 200-300ms. We're flagging those prompts and will include mask-normalization in the preproc suggestions.
+[25:22] Priya: we'll test normalization.
+[25:26] [28:00] Maya: Recap time — Carlos will run kernel A/B (fused vs default) on 1k prompt set, include mem curves, quality diffs and upload to bench by 26th. Priya will send long-tail prompts and histogram by 22nd. David will open a scheduled egress window and send router config. Maya will send SOC2 + audit log example and pricing doc by tomorrow.
+[28:58] Sara: can we also get a short doc on rollback and canary config?
+[29:05] Maya: yes, will add a one-pager.
+[29:14] [32:00] Priya: how about timeline — after the kernel A/B, when do we reconvene?
+[32:08] Maya: propose 2025-08-28 for a streaming deep-dive with your infra team.
+[32:15] Priya: works for us.
+[32:18] [35:00] Carlos: small note on metrics — please enable token-level tracing and include trace IDs with bench runs so we can map spikes to kernel choices.
+[35:12] David: will do.
+[35:16] [38:00] Sara: any competitor comments — we had an RFP and MegaCloud AI offered a lower cost but higher TTFT; we prefer Redwood's tunability.
+[38:10] Maya: good to know — we'll highlight cost vs latency tradeoffs in the scenario table.
+[38:20] [42:00] Priya: final question — if fused-attn gives best TTFT for 70% of traffic but struggles on 5% extremes, will Redwood's runtime auto-fallback be seamless?
+[42:12] Carlos: Yes, the runtime supports hot fallback; the initial hit is a small latency bump while the alternative kernel spins up, usually <200-300ms on those single occurrences.
+[42:24] Priya: ok acceptable if infrequent.
+[42:30] [45:00] Maya: okay folks, thanks — we'll track action items in the bench sheet and update next steps. next call 2025-08-28 for the streaming deep dive.
+[45:15] Sara: thanks all.
+[45:20] David: thanks.
+[45:25] Priya: thanks, bye.
+[45:30] [END TRANSCRIPT]

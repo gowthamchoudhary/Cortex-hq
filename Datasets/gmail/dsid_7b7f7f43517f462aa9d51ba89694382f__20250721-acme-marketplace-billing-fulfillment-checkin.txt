@@ -1,0 +1,144 @@
+ACME onboarding: AWS Marketplace SaaS fulfillment & billing integration
+
+From: Samantha Green <samantha.green@acmeanalytics.com>
+To: Karthik Iyer <karthik.iyer@redwood.ai>
+Cc: Diego Rojas <diego.rojas@acmeanalytics.com>
+Date: Mon, 21 Jul 2025 09:03:00 -0700
+Subject: Questions after demo: AWS Marketplace metering & fulfillment
+
+Hi Karthik,
+
+Thanks again for the demo this morning — the team at Acme is excited about moving forward. Before we lock timelines with procurement, two quick clarifying questions on the Marketplace integration:
+
+1) Metering responsibility: for a SaaS contract where we will be billed via AWS Marketplace, do you handle the metering webhook and entitlement mapping on Redwood's side or should our engineering team own that?
+
+2) Invoice and billing flow: once metered usage is reported, how does invoicing and billing reconciliation work for our finance team? We're trying to understand the dispute window and what evidence Redwood provides (usage reports, per-customer logs, export format).
+
+We're targeting a mid-August pilot. Attached is our high-level procurement timeline and the template SOW we mentioned. Can you confirm what you need from us to kick off the integration?
+
+Thanks,
+Samantha
+Samantha Green
+Head of Platform
+Acme Analytics
+[Attachment: ACME_Marketplace_SOW_v1.pdf (PDF, 1.1MB)]
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Samantha Green <samantha.green@acmeanalytics.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Monica Patel <monica.patel@redwood.ai>
+Date: Mon, 21 Jul 2025 11:20:00 -0700
+Subject: Re: Questions after demo: AWS Marketplace metering & fulfillment
+
+Samantha —
+
+Great questions, and congrats on the decision to pilot. Short answers up front:
+
+- Metering responsibility: Redwood will host the metering endpoint for the hosted offering and can deliver webhook receipts to your backend. We also provide an optional lightweight adapter (sample payload + verification) that you can run inside your stack if you prefer end-to-end control.
+- Invoicing/reconciliation: For Marketplace SaaS listings, AWS generates invoices to the buyer and remits to the seller (you or Redwood depending on listing mode). We provide per-customer usage exports and an audit log (CSV/JSON) for the exact meter-IDs we submitted. Dispute window: standard 30 days from invoice receipt — we keep raw meter events for 12 months by default and can extend retention under contract.
+
+Action items I propose:
+1) Marissa to share the webhook payload example and signature verification notes.
+2) Ben to confirm recommended listing type (seller of record vs. reseller model) and pricing implications.
+3) Karthik/Monica to align on SOW and legal checklist; we'll review your template and flag any AWS-specific clauses.
+
+Can we book a 30-minute integration call Wednesday? I'm free 10:00–12:00 PT.
+
+—Karthik
+Karthik Iyer
+Senior Partnerships Manager, Redwood Inference
+
+On Mon, Jul 21, 2025 at 09:03 AM Samantha Green <samantha.green@acmeanalytics.com> wrote:
+> Thanks again for the demo...
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Karthik Iyer <karthik.iyer@redwood.ai>, Samantha Green <samantha.green@acmeanalytics.com>
+Cc: Ben Carter <ben.carter@redwood.ai>
+Date: Tue, 22 Jul 2025 08:45:00 -0700
+Subject: Re: Questions after demo: AWS Marketplace metering & fulfillment
+
+Hi Samantha —
+
+Following up with the technical details Karthik mentioned. Below is a short primer and the sample webhook payload attached (metering-webhook-sample.json).
+
+Overview:
+- Metering endpoint: Redwood can call your /marketplace/consume endpoint with an event for each reported MeterDimension. Alternatively, Redwood can host the endpoint and translate internal usage to AWS meter IDs. For the hosted offering we usually host the publisher side and deliver signed events to buyer backends for reconciliation.
+- Authentication: We sign webhook payloads with an HMAC-SHA256 header (X-Redwood-Signature) — verify using the shared secret we provision per-account.
+- Entitlement mapping: Map your account ID (acme_org_id) to AWS customer entitlement_id at onboarding. We recommend storing both values in your entitlement table and accepting incoming meter events by entitlement_id.
+
+Sample verification snippet (pseudo):
+- Compute HMAC of payload using secret
+- Compare to X-Redwood-Signature (constant-time compare)
+- Reject if older than 5 minutes (prevent replay)
+
+Retention & exports:
+- Raw meter events: 12 months (extendable)
+- Daily reconciliation exports: CSV and line-item JSON per AWS customer id
+- Report fields: meter_id, timestamp_utc, quantity, entitlement_id, internal_request_id, signature
+
+Attachments:
+- metering-webhook-sample.json — example payload + signature header (attached)
+
+If you want, we can run a short test harness during the call: Redwood pushes a 5-user test event and your endpoint responds with 200/ack.
+
+Cheers,
+Marissa
+Marissa Cole
+Senior Solutions Engineer, Redwood Inference
+[Attachment: metering-webhook-sample.json (text, 3KB)]
+
+On Mon, Jul 21, 2025 at 11:20 AM Karthik Iyer <karthik.iyer@redwood.ai> wrote:
+> Samantha —
+> > Great questions...
+
+From: Samantha Green <samantha.green@acmeanalytics.com>
+To: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Cc: Diego Rojas <diego.rojas@acmeanalytics.com>, Ben Carter <ben.carter@redwood.ai>
+Date: Tue, 22 Jul 2025 10:12:00 -0700
+Subject: Re: Questions after demo: AWS Marketplace metering & fulfillment
+
+Thanks Marissa — this is helpful. A couple follow-ups from procurement/finance:
+
+- Retention: we typically require 18 months of raw meter events for audits. Would Redwood be able to extend retention to 18 months under the pilot SOW?
+- Export format: we prefer newline-delimited JSON for automated ingestion. Can you deliver reconciliation exports in NDJSON?
+- PO & timeline: attached our PO and internal go/no-go checkpoints.
+
+Attached: ACME_PO_789.pdf.
+
+If you can confirm retention & NDJSON exports, we'll lock the August pilot dates and prepare the PO approval chain.
+
+Best,
+Samantha
+
+On Tue, Jul 22, 2025 at 08:45 AM Marissa Cole <marissa.cole@redwood.ai> wrote:
+> Hi Samantha —
+> > Following up with the technical details...
+[Attachment: ACME_PO_789.pdf (PDF, 210KB)]
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Samantha Green <samantha.green@acmeanalytics.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Monica Patel <monica.patel@redwood.ai>
+Date: Thu, 24 Jul 2025 15:12:00 -0700
+Subject: Re: Questions after demo: AWS Marketplace metering & fulfillment
+
+Samantha — thanks for the PO and the clear asks. Quick commitments from our side: 
+
+- Retention: we can extend raw meter event retention to 18 months for the pilot; will add that clause to the SOW (Marissa/Monica to update).
+- Export format: we will provide daily reconciliation as NDJSON (newline-delimited JSON) delivered to your S3 bucket or via secure transfer.
+- Test plan: schedule a 30-minute integration test on Wednesday Aug 6 at 10:00 PT — Redwood will push three signed test events, you respond 200/ack.
+
+Next steps and owners:
+- Marissa Cole: finalize webhook spec and test harness (deliverable: metering-webhook-sample.json + verification guide) — due 2025-07-28
+- Monica Patel: update SOW with 18-month retention and export SLA; coordinate legal review — due 2025-07-29
+- Ben Carter: follow up on listing model and pricing impact — due 2025-07-30
+- Samantha/Diego: confirm PO approval and pick final pilot date (target Aug 4–8) — please confirm by Friday 2025-07-25
+
+I'll upload the updated SOW and a DocuSign link once Monica confirms wording. HubSpot deal is ACME-2025-034 (link below).
+
+Thanks — looking forward to the pilot.
+
+—Karthik
+Karthik Iyer
+Senior Partnerships Manager, Redwood Inference
+
+On Tue, Jul 22, 2025 at 10:12 AM Samantha Green <samantha.green@acmeanalytics.com> wrote:
+> Thanks Marissa — this is helpful...
+>
+> [HubSpot: https://app.hubspot.com/contacts/12345/deal/ACME-2025-034]

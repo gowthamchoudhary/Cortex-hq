@@ -1,0 +1,113 @@
+Post-call: Hyperion discovery — unit-econ assumptions & next tests
+
+From: Sofia Ivanova <sofia.ivanova@redwood.com>
+To: Alicia Ramos <alicia.ramos@hyperioncloud.com>
+Cc: ben.carter@redwood.com, marissa.cole@redwood.com
+Date: Tue, 10 Nov 2026 15:22:00 -0800
+Subject: Post-call: Hyperion discovery — unit-econ assumptions & next tests
+
+Hi Alicia — thanks again for taking time today. Quick recap and proposed next steps so we keep momentum on the evaluation: 
+
+Summary of what we heard
+- Primary use: realtime customer-support summarization + few-shot retrieval for contextual answers (avg prompt length ~180 tokens, response ~350 tokens).
+- Current pain: hyperscaler cost variability and inconsistent tail latencies; they want predictable per-1M token economics and clear fallbacks.
+
+Redwood differentiation (high-level)
+- Production-first routing: we can pin a lower-cost quantized variant for non-critical traffic and automatically fail over to a higher-SLO variant for latency-sensitive requests.
+- Built-in prefix/KV caching + per-customer cache policies reduces token spend on repeated contexts.
+- Transparent per-route cost breakdown to feed into your internal TCO model (attached).
+
+Initial unit-econ assumptions (attached spreadsheet has line-by-line):
+- Base gen cost (1M tokens): Redwood hosted baseline estimate = $32.40 for our curated M-quant variant (assumes batching avg 8, cache hit 12%).
+- Hyperscaler reference: Hyperscaler A quoted ~$45/1M under their public endpoint for an equivalent model; their quote assumes lower batching and no prefix caching.
+- Key levers: batching, cache hit rate, and segregation of inference tiers (SLA vs background).
+
+Proposed short tests we can run next week (minimal infra on your side)
+1) 1M-token synthetic run with your promptset (we'll replay sample-eval-promptset.jsonl). Measure per-1M tokens, p50/p95 latencies, and effective cache hits.
+2) A small A/B: same prompts against Hyperscaler A and Redwood with identical concurrency profile (we provide the harness).
+3) Live prefix-cache test using a 24-hour window of representative sessions to show real cache hit delta.
+
+Ask/Logistics
+- Can DevOps provide a short-lived service account + IP allowlist so we can run the A/B from our test harness? (procurement and security folks can be looped for access).
+- Proposed dates: Wed 11/11 — lightweight replay (1). Thu 11/12 — A/B (2).
+
+Attaching redwood_cost_model_v1.xlsx with the assumptions called out above and sample-eval-promptset.jsonl (small subset).
+
+Next step for us: Ben will follow with the more granular per-call cost math and a suggested canary config. I’ll stand up the drive folder and the harness and share links.
+
+Thanks — Sofia
+Sofia Ivanova
+Senior Solutions Engineer, Redwood Inference
+[Attachment: redwood_cost_model_v1.xlsx (xlsx, 120KB)]
+[Attachment: sample-eval-promptset.jsonl (jsonl, 18KB)]
+From: Alicia Ramos <alicia.ramos@hyperioncloud.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.com>
+Cc: procurement@hyperioncloud.com, devops@hyperioncloud.com
+Date: Tue, 10 Nov 2026 17:05:00 -0800
+Subject: Re: Post-call: Hyperion discovery — unit-econ assumptions & next tests
+
+Thanks, Sofia — helpful recap. A few clarifying questions before we lock dates: 
+
+1) The $32.40 / 1M number — is that inclusive of network egress and your hosted infra margin, or is it purely model execution? We need a like-for-like with our hyperscaler quote for procurement.
+2) The 12% cache-hit assumption — what cache key strategy produces that for customer-support flows? Our sessions often include long rolling contexts; if hit rates are lower (5–7%) the delta tightens.
+3) For the A/B, can you guarantee identical concurrency shaping? Our infra team wants the same token arrival pattern so we don't bias the hypervisor scheduling.
+
+procurement@hyperioncloud.com: please advise on the minimum compliance/credentials needed to allow Redwood to run the replay from your environment.
+
+If you can answer 1–3 by EOD we can commit resources for Wed/Thu. Also looping our DevOps lead so we can provision the allowlist if agreed.
+
+— Alicia Ramos
+Head of Platform Engineering, Hyperion Cloud
+
+On Tue, Nov 10, 2026 at 3:22 PM Sofia Ivanova <sofia.ivanova@redwood.com> wrote:
+> Hi Alicia — thanks again for taking time today. Quick recap and proposed next steps so we keep momentum on the evaluation:...
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Alicia Ramos <alicia.ramos@hyperioncloud.com>
+Cc: Sofia Ivanova <sofia.ivanova@redwood.com>, marissa.cole@redwood.com
+Date: Wed, 11 Nov 2026 09:10:00 -0800
+Subject: Re: Post-call: Hyperion discovery — unit-econ assumptions & next tests
+
+Hi Alicia — quick answers and a short plan: 
+
+1) Price breakdown: the $32.40 / 1M is our delivered hosted price (model execution + infra + telemetry + 90-day retention costs); exported line items are in the attached sheet. For an apples-to-apples hyperscaler comparison we can strip Redwood platform add-ons (observability/trace retention) — that reduces raw model execution to ~$28.10 / 1M.
+
+2) Cache strategy: for support workflows we use a session-based prefix key with a 15-minute sliding window by conversation_id. In our customers we see a bimodal hit distribution — 20–25% for repeat user questions in an active session, and 5–8% for cross-session repeats. Your 5–7% case is realistic for long-tail; the key is to surface which traffic can be tiered to cheaper variants.
+
+3) Concurrency shaping: yes — we'll provide an identical token arrival trace and an open-source harness (wrk-like) to replay at your desired QPS. We'll run both endpoints from the same runner (in your VPC or an allowlisted Redwood agent).
+
+Suggested experimental design (minimal):
+- Baseline replay: 200k tokens initially to sanity-check harness and measure p50/p95.
+- Full 1M replay: measure avg tokens/sec, p50/p95, CPU/GPU utilization, and effective cache hits.
+- A/B: run 3x with randomized order to avoid warm-cache bias.
+
+Deliverables we’ll provide after runs:
+- Per-1M token executed cost with and without observability enabled.
+- Batched vs non-batched delta (we'll show expected cost curves as you vary avg batch size from 1 to 16).
+- A short summary doc showing where Redwood gives unit-econ advantage and where hyperscaler may be competitive (e.g., if you have >40% cache hits and always batch at 12+ we converge).
+
+Logistics items: 
+- Sofia: can you share the runner and Drive folder link (so Alicia's team can review harness and the token trace)?
+- Alicia: if procurement can send the minimal allowlist + STS instructions I’ll coordinate the run.
+
+One small note: if you prefer we can show dedicated (reserved) pricing for sustained high-volume workloads — that drops model execution by ~20–30% in our committed plans. I can add a sketch in the sheet.
+
+Thanks — Ben
+Ben Carter
+Solutions Lead, Redwood Inference
+[Attachment: redwood_cost_model_v1.xlsx (xlsx, 120KB)]
+From: Alicia Ramos <alicia.ramos@hyperioncloud.com>
+To: Ben Carter <ben.carter@redwood.com>, Sofia Ivanova <sofia.ivanova@redwood.com>
+Cc: procurement@hyperioncloud.com, devops@hyperioncloud.com
+Date: Wed, 11 Nov 2026 12:45:00 -0800
+Subject: Re: Post-call: Hyperion discovery — unit-econ assumptions & next tests
+
+Thanks, Ben & Sofia — that all sounds reasonable. Procurement will follow with allowlist details by EOD and DevOps will confirm they can host the runner in our test VPC. We’ll start with the baseline 200k token run tomorrow morning and go full 1M after we validate the harness.
+
+Please include the dedicated pricing sketch in the same sheet if possible — procurement wants an estimate of committed vs on-demand economics.
+
+Alicia
+Head of Platform Engineering, Hyperion Cloud
+
+On Wed, Nov 11, 2026 at 9:10 AM Ben Carter <ben.carter@redwood.com> wrote:
+> Hi Alicia — quick answers and a short plan:...

@@ -1,0 +1,127 @@
+Observability & SLO measurement — procurement questionnaire
+
+From: Jae Lee <j.lee@brightharbor.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: procurement@brightharbor.com
+Date: Fri, 20 Feb 2026 16:12:00 +0000
+Subject: Observability & SLO measurement — procurement questionnaire
+
+Hi Karthik,
+
+Thanks for the quick intro last week. Procurement asked me to collect more detail on how Redwood defines and measures availability/latency SLOs before we finalise the contract. A few focused questions would be great — can you reply inline or send a short packet?
+
+1) SLO definitions: how is "availability" measured (which error classes count against it)? How do you measure P99 latency (client-side vs server-side)?
+2) Measurement window and sampling: rolling 30d/90d? Do you sample at request level or only aggregate stats? Any scrubbing for cold starts?
+3) Monitoring & retention: what stack do you use (Prom/Graphite/Grafana etc.), and how long are raw metrics and request traces retained?
+4) Alerting & escalation: what thresholds trigger a page and what is the escalation path? Can we request suppression windows for planned maintenance/events?
+5) Customer access: can BrightHarbor get a read-only dashboard, raw time series exports, or raw request logs for audits? Any restrictions on access or PII redaction?
+
+We also need examples of evidence you provide for procurement: sample uptime reports, daily P99 exports, and any SOC2 / monitoring attestations you can share.
+
+If you prefer a short call to walk through this, please propose times next week. Attaching our procurement form for context.
+
+Thanks,
+Jae
+Jae Lee
+Procurement Manager — BrightHarbor Analytics
+[attachment: BrightHarbor_procurement_form.docx (docx)]
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Jae Lee <j.lee@brightharbor.com>
+Cc: Grace O'Connor <grace_oconnor@redwood.com>, Markus Klein <markus_klein@redwood.com>
+Date: Fri, 20 Feb 2026 19:30:00 +0000
+Subject: Re: Observability & SLO measurement — procurement questionnaire
+
+Hi Jae — thanks for the clear list. Answering inline below and attaching a short evidence packet (SLO_evidence_packet_v1.pdf) and a read-only Grafana invite file.
+
+1) SLO definitions:
+- Availability: measured as percent of successful inference responses (HTTP 2xx/3xx) over total API requests, calculated as 1 - (5xx_count / total_requests). Client-side network failures are excluded if they don't reach our edge. 4xx are considered client errors and are excluded from availability SLOs unless caused by server misconfiguration.
+- Latency (P99): server-side end-to-end time from request ingress to final token emission for text-gen calls. P99 is computed on the distribution of successful responses (exclude requests that returned 5xx). We publish both P95 and P99 percentiles.
+
+2) Measurement window & sampling:
+- Default rolling window: 30-day rolling for SLO calculations; 90-day and 365-day aggregates for trend analysis.
+- Sampling: we compute per-request metrics at ingestion and roll up to minute-level aggregates in Prometheus. For extremely high-volume customers we use adaptive sampling for raw traces but keep accurate percentile stats via HDR histograms so percentiles remain stable.
+- Cold starts: we flag and exclude container cold-starts from latency SLOs when they are attributable to infra-scale events (documented in the incident metadata).
+
+3) Monitoring & retention:
+- Stack: Prometheus for metrics, Grafana for dashboards, Jaeger for traces.
+- Retention: minute-level metrics retained 365 days; high-resolution raw traces retained 30 days by default. Longer retention is available as an add-on. Audit logs (API request metadata) can be exported to a customer-controlled S3 bucket for 365 days.
+
+4) Alerting & escalation:
+- Default alerting: pages on availability drop >0.5 percentage points sustained for 5m (on high-sensitivity plan) or 1 percentage point for 10m (standard). P99 spike alerts: >2x baseline sustained for 10m.
+- Escalation: on-call -> on-call lead -> engineering manager -> platform reliability. For enterprise accounts we add a named TAM and a dedicated Slack channel.
+- Maintenance windows: we support scheduled maintenance windows where alerts are suppressed and SLO breaches can be marked as planned (requires documented maintenance window in the console).
+
+5) Customer access:
+- We provide read-only Grafana dashboards (link provided in attachment) and a filtered time-series export (CSV/Prometheus remote_read) for audit purposes.
+- Raw request logs (redacted for PII) can be delivered to your S3 for the agreed retention period. Access is role-based and audit-logged.
+
+Evidence: attached SLO_evidence_packet_v1.pdf with sample uptime reports, P99 exports and a monitoring architecture diagram. SOC2 report is available under NDA — we can route that to your security team.
+
+Next steps: if BrightHarbor expects a planned migration or maintenance that might impact latency, we can document a temporary SLO waiver (exception) with a fixed window and mitigation steps. If you send dates we can prepare the waiver and the required form.
+
+Happy to hop on a 30min call — I'm available Mon/Tue next week morning (PST).
+
+Best,
+Karthik Iyer
+Senior Solutions Engineer — Redwood Inference
+[attachment: SLO_evidence_packet_v1.pdf (pdf)]
+[attachment: Grafana_readonly_invite.txt (txt)]
+
+From: Jae Lee <j.lee@brightharbor.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: BrightHarbor Procurement <procurement@brightharbor.com>
+Date: Sat, 21 Feb 2026 08:05:00 +0000
+Subject: Re: Observability & SLO measurement — procurement questionnaire
+
+Thanks Karthik — that helps a lot. A quick follow-up: BrightHarbor will be migrating a portion of our production traffic to a new ingestion pipeline between 2026-03-01 and 2026-03-14. During that two-week window we expect higher than normal P99 latency (we project a 30-50% bump while caches warm and new routing rules are exercised).
+
+Because this is a customer-driven migration, procurement needs a temporary exception for SLO breach triggers (we don't want that window to automatically generate service credits). Can Redwood approve an SLO exception/waiver for that specific window and provide the process we should follow to request it?
+
+Also: would Redwood be able to run a synthetic test harness for a subset of requests during the migration to help us distinguish migration-induced latency from platform regressions? If so we would like to coordinate that.
+
+Attaching the completed procurement form for your records.
+
+-Jae
+[attachment: BrightHarbor_procurement_form.docx (docx)]
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Jae Lee <j.lee@brightharbor.com>
+Cc: Grace O'Connor <grace_oconnor@redwood.com>, Markus Klein <markus_klein@redwood.com>
+Date: Sun, 22 Feb 2026 13:40:00 +0000
+Subject: Re: Observability & SLO measurement — procurement questionnaire
+
+Hi Jae — understood and thanks for the heads up. We're able to support a targeted SLO waiver for the migration window you cited (2026-03-01 -> 2026-03-14) subject to a short approval workflow and a signed exception form. Summary of the process and mitigations: 
+
+- Approval path: customer submits the SLO exception request via the console link (see related_links). We review operational mitigation plan and sign off (TAM + Reliability). Legal/sales sign the final waiver if credits will be suspended.
+- Waiver scope: timeboxed window only; SLO calculations outside the window are unaffected. Any concurrent platform incidents will still be recorded for transparency but will not automatically trigger crediting if the waiver is approved.
+- Mitigations we recommend: schedule migration during a low-traffic slice, enable traffic shaping to limit burst load, and coordinate a synthetic traffic run we can provide. We can provision a synthetic harness that hits a small percentage of endpoints from multiple regions and tag those requests so you get a clean baseline.
+- Alerting: we can mark alerts as "suppressed for approved maintenance" in the console and will not page your on-call for expected migration degradation unless you request escalation.
+
+I've attached a draft waiver (SLO_waiver_proposed_20260301-14.pdf) and created the console request draft for you — submitting it from your account formally starts the workflow. If you sign the attached exception form we can fast-track the internal approvals.
+
+I'll also schedule a short coordination call with our reliability engineer to scope the synthetic harness. Proposed times: Tue 2026-02-24 16:00 UTC or Wed 2026-02-25 09:00 PST — which works?
+
+Thanks,
+Karthik
+Senior Solutions Engineer — Redwood Inference
+[attachment: SLO_waiver_proposed_20260301-14.pdf (pdf)]
+
+On Sat, 21 Feb 2026 08:05:00 +0000 Jae Lee <j.lee@brightharbor.com> wrote:
+> Thanks Karthik — that helps a lot. A quick follow-up: BrightHarbor will be migrating a portion of our production traffic to a new ingestion pipeline between 2026-03-01 and 2026-03-14....
+
+From: Jae Lee <j.lee@brightharbor.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: BrightHarbor Procurement <procurement@brightharbor.com>
+Date: Tue, 24 Feb 2026 15:03:00 +0000
+Subject: Re: Observability & SLO measurement — procurement questionnaire
+
+Karthik — all good, thanks. Procurement has reviewed the waiver and signed the exception form (attached). We'll submit the console request today and take you up on the synthetic harness.
+
+Confirming the coordination call at Tue 2026-02-24 16:00 UTC. Also we received the Grafana read-only invite link and were able to see the baseline dashboards — appreciate the quick turn.
+
+Attaching signed-exception-form.pdf for your records. See you on the call.
+
+Best,
+Jae
+[attachment: signed-exception-form.pdf (pdf)]

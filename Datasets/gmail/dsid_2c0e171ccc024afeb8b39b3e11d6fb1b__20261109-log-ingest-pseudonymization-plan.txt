@@ -1,0 +1,156 @@
+Request/response logging: pseudonymization plan & next steps
+
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Amy Tan <amy.tan@finbank.com>
+Cc: Mina Haddad <mina_haddad@redwood.com>, Dylan Brooks <dylan_brooks@redwood.com>
+Date: Mon, 09 Nov 2026 15:08:00 -0500
+Subject: Request/response logging: pseudonymization plan & next steps
+
+Hi Amy — great to meet today, thanks for taking the time. Quick written recap and proposed next steps so we have a single source of truth.
+
+Summary of FinBank asks from the call:
+- Do not persist full PII (names, SSNs, account numbers) in long-term request/response logs.
+- Retention for production logs: target 30–90 days depending on log type.
+- Keep correlation identifiers for debugging (trace IDs) but ensure they cannot be linked back to raw user IDs.
+- Provide evidence for procurement: logging controls, redaction controls, retention policies, SOC 2 artifacts.
+
+High-level technical options we discussed (R&D + recommended next steps):
+1) Edge redaction (recommended for highest assurance)
+   - SDK or sidecar that scrubs sensitive fields before they hit Redwood ingest. Works for request bodies, headers (X-Forwarded-For, Authorization), and custom fields.
+2) Cryptographic pseudonymization
+   - Compute an HMAC of the original trace ID / user ID using a customer-managed key (KMS). One-way unless key is compromised. Allows stable per-customer tokens for cross-request correlation.
+3) Ephemeral mapping service (VPC/private deployment)
+   - Map raw IDs to short-lived tokens in a customer-controlled store (TTL configurable, e.g., 24h). Provides correlation while minimizing long-term risk.
+4) Aggregation & sampling
+   - Store only aggregated telemetry for analytics and keep sampled payloads with redaction rules applied.
+
+Trade-offs to note:
+- HMAC/pseudonymization preserves correlation but requires KMS management and careful rotation policies.
+- Edge redaction prevents sensitive data from leaving customer boundary but requires integration effort on your side.
+- Full retention/archival needs can be configured per-bucket with lifecycle policies; audit logs can be kept separately with restricted access.
+
+Attachments: redwood-logging-capabilities.pdf (capabilities brief) and sample-sow.docx (PoC SOW template).
+
+Proposed immediate next steps:
+- Can you confirm the SecOps contact we should work with? (we'll include Mina on any technical deep-dive)
+- We can run a short PoC: choice of (A) SDK edge redaction or (B) pseudonymization in a private deployment. Which would you prefer for the initial trial?
+- I'll share a short architecture note and a checklist of headers/fields we recommend redacting by default.
+
+Happy to jump on a 30-min follow-up next week — I included a couple of time options below.
+
+Thanks,
+Rafael Mendes
+Account Exec — Redwood Inference
+rafael.mendes@redwood.com
++1 (415) 555-0189
+
+--
+Attachment: redwood-logging-capabilities.pdf (PDF, 1.2MB)
+Attachment: sample-sow.docx (DOCX, 48KB)
+From: Amy Tan <amy.tan@finbank.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>
+Cc: security@finbank.com
+Date: Mon, 09 Nov 2026 17:12:00 -0500
+Subject: Re: Request/response logging: pseudonymization plan & next steps
+
+Thanks for the recap, Rafael — that was very helpful. A couple quick clarifying questions before we route this to SecOps: 
+
+1) For the HMAC/pseudonymization option, can you guarantee that the original trace IDs cannot be reconstructed or correlated back to a user if someone gets access to Redwood logs but not our KMS key?
+2) Which headers do you recommend we always mask? We have several internal headers (X-User-Id, X-Account-ID, X-Request-ID, X-Forwarded-For) that we consider sensitive.
+3) Can retention be configured down to 30 days for request/response payloads and 90 days for aggregated telemetry? We need those knobs for compliance.
+
+Also attaching our security attachment with a few items we will definitely request as part of procurement.
+
+If possible, please include a one-page description of the PoC scope for the edge-redaction option so we can scope the internal resource commitment.
+
+Thanks — Amy
+Amy Tan
+Director, Product Security — FinBank
+amy.tan@finbank.com
+
+--
+Attachment: FinBank_Security_Appendix_A.pdf (PDF, 320KB)
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Amy Tan <amy.tan@finbank.com>, Rafael Mendes <rafael.mendes@redwood.com>
+Cc: Dylan Brooks <dylan_brooks@redwood.com>
+Date: Tue, 10 Nov 2026 09:42:00 -0500
+Subject: Re: Request/response logging: pseudonymization plan & next steps
+
+Hi Amy / Rafael — looping in a few technical details from the engineering side so we can be explicit for SecOps. Short answers up front: yes, both HMAC-based pseudonymization and edge redaction are practicable; they have different operational trade-offs.
+
+HMAC / KMS approach (one-way tokenization)
+- Mechanism: compute HMAC(key=customer_kms_key, message=raw_trace_id || customer_id) and store the HMAC value as the token in logs.
+- Security: the original trace ID cannot be reconstructed from the HMAC without the KMS key. If the key remains private to your KMS, logs alone are insufficient to reverse the mapping.
+- Considerations: key rotation -> token stability. If you rotate keys, tokens will change unless we maintain a key-rolling compatibility window.
+
+Edge redaction / SDK approach
+- Mechanism: a small SDK or sidecar inspects outgoing requests and removes or replaces configured fields before they leave your network.
+- Advantages: raw PII never reaches Redwood infrastructure. Simpler for audits but requires integration and testing.
+
+Ephemeral mapping (private deployment)
+- Mechanism: run a mapping service in your VPC that returns short-lived opaque IDs. Redwood only sees these opaque IDs. TTL configurable (e.g., 6h–24h).
+- Advantage: allow short-lived correlation without long-term risk.
+
+Logs & retention
+- We can configure per-bucket lifecycle policies in your account for 30/90-day windows. For Hosted customers, we provide tenant-scoped buckets with server-side encryption; for Dedicated/Private we recommend customer-managed buckets.
+
+Action items we need from FinBank to scope the PoC:
+- Network diagram showing where Redwood egress would sit (cloud region, VPC peering or public egress).
+- Canonical list of headers/fields you want redacted (e.g., X-User-Id, X-Account-ID, X-Request-ID, Authorization, Cookie, X-Forwarded-For).
+- Security contact and preferred encryption key model (Redwood-managed KMS vs your KMS).
+
+If you are open to it, we suggest starting with an edge-redaction PoC (smaller blast radius and fastest to demonstrate compliance). We can follow with a pseudonymization option for broader telemetry if you need cross-service correlation.
+
+Happy to walk SecOps through a short design doc; Rafael — I can draft the one-pager PoC scope and share it to the thread if you want.
+
+Thanks,
+Mina Haddad
+Sr. Security Engineer — Redwood Inference
+mina_haddad@redwood.com
+
+--
+Note: For the PoC we will also include a short checklist for integration testing (unit tests for scrubbing rules, perf test for SDK latency impact, sample logs showing redaction).
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Amy Tan <amy.tan@finbank.com>
+Cc: Mina Haddad <mina_haddad@redwood.com>, Dylan Brooks <dylan_brooks@redwood.com>
+Date: Tue, 10 Nov 2026 11:00:00 -0500
+Subject: Re: Request/response logging: pseudonymization plan & next steps
+
+Thanks Mina — that breakdown is perfect. Amy, sounds like starting with edge redaction is the fastest path to show compliance and should cover your immediate procurement ask.
+
+Proposed next steps and scheduling:
+- I will send a one-pager PoC scope (edge redaction) by tomorrow EOD.
+- Can we schedule a 30-min SecOps + Engineering session on Thursday 11/12 or Friday 11/13? Here are two times: Thu 11/12 10:00am ET or Fri 11/13 2:00pm ET.
+- I'll upload the PoC scope and the SOC2 artifacts to the HubSpot deal record and share a DocuSign for the mutual NDA.
+
+Links: HubSpot deal: https://app.hubspot.com/deal/FB-2026-09  |  NDA (DocuSign): https://www.docusign.com/ndas/FB-2026-09
+
+Action items assigned:
+- Rafael: send PoC one-pager + sample test cases (tomorrow EOD).
+- Mina: prepare the integration checklist and sample redaction rules.
+- Amy / FinBank: send network diagram and canonical header list before the SecOps call.
+
+Thanks,
+Rafael
+
+--
+Calendly (suggested): https://calendly.com/redwood/30min
+From: Amy Tan <amy.tan@finbank.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>
+Cc: Mina Haddad <mina_haddad@redwood.com>, security@finbank.com
+Date: Wed, 11 Nov 2026 11:20:00 -0500
+Subject: Re: Request/response logging: pseudonymization plan & next steps
+
+Rafael — thanks, Thu 11/12 10:00am ET works for SecOps.
+
+I've uploaded our SecOps workbook (FinBank_Sec_Questions.xlsx) and our network diagram to the procurement portal; I attached the workbook here for quick reference. We'll aim to send the canonical header list and network diagram by EOD Wednesday.
+
+See you on Thursday.
+
+Thanks,
+Amy
+Director, Product Security — FinBank
+amy.tan@finbank.com
+
+--
+Attachment: FinBank_Sec_Questions.xlsx (XLSX, 120KB)

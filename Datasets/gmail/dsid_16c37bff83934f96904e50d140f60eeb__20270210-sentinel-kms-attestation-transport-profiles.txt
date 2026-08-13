@@ -1,0 +1,123 @@
+Sentinel Inc. — KMS attestation and transport/TLS profiles
+
+From: Daniel Cho <daniel.cho@sentinel.io>
+To: aisha_rahman@redwood.com, dev_patel@redwood.com
+Cc: procurement@sentinel.io
+Date: 2027-02-10T09:12:00-08:00
+Subject: Request: KMS/HSM attestation, BYOK flow and TLS profile details
+
+Hi Aisha and Dev,
+
+Thanks for taking our call earlier — Sentinel is preparing the procurement package and we need a compact evidence bundle for the security review. Can you provide lightweight answers and any attestation artifacts for the following items?
+
+- High-level BYOK import/export flow for Redwood hosted vs private deployments (sequence diagram or step list).
+- HSM attestation details (vendor, FIPS level, remote attestation support).
+- Key wrapping / envelope encryption algorithms used (RSA-OAEP, AES-GCM, etc.) and where unwrapped keys may exist in memory or storage.
+- Rotation policy: supported rotation windows, whether rotation is automated or manual, and whether old-key ciphertext remains decryptable.
+- TLS termination profiles and minimum supported cipher suites. Do you support mTLS for private/Dedicated?
+- Evidence: audit log retention for key operations, sample HSM attestation blob if available, and any SOC2/KMS-specific addenda.
+
+We would appreciate an initial response by EOD PT tomorrow to keep our security committee on schedule.
+
+Also, attaching our procurement timeline (see procurement@sentinel.io) — happy to set a short follow-up if helpful.
+
+Best,
+Daniel
+Director, Security Engineering
+Sentinel Inc.
+
+From: aisha_rahman@redwood.com <aisha_rahman@redwood.com>
+To: Daniel Cho <daniel.cho@sentinel.io>, Maya Rinehart <maya.r@sentinel.io>
+Cc: dev_patel@redwood.com, procurement@sentinel.io
+Date: 2027-02-10T11:03:00-08:00
+Subject: Re: Request: KMS/HSM attestation, BYOK flow and TLS profile details
+
+Hi Daniel / Maya,
+
+Thanks — we can get you a concise package that covers the items below and a short technical playbook for your security committee. Planned deliverables (attached): redwood_kms-transport-profile.pdf (summary + architecture), redwood_key_rotation_playbook.pdf (operational steps + timelines), hsm_vendor_compat_matrix.xlsx (vendor compatibility).
+
+Proposed immediate plan:
+- Today: high-level answers and the three attachments (attached).
+- Tomorrow: a technical deep-dive call (30–45 min) with Dev to walk the BYOK import and attestation artifacts.
+- After call: we can produce a redacted HSM attestation blob and sample audit-export for your review.
+
+Quick answers inline:
+- BYOK flow: supported for Private and Dedicated via customer-supplied key import (PKCS#12 or wrapped key material). For Hosted, we offer envelope-wrapping with customer root entered via a secure import flow; no persistent unencrypted key material stored. See attachment page 3 for sequence flow.
+- HSMs: Redwood uses HSM modules from multiple vendors in our Dedicated and Private packages (AWS CloudHSM for cloud-hosted Dedicated; Thales nShield available for private/appliance options). FIPS 140-2 Level 3 where applicable; remote attestation available for private appliances.
+- TLS: We support TLS 1.2 (server min) and recommend TLS 1.3 for all customer traffic. mTLS is available for Private and Dedicated. Hosted API supports TLS with client-side certs for enterprise customers on request.
+
+We still need a couple of clarifications from you to tailor the artifacts: is Sentinel planning to import keys into your Dedicated tenant or will you prefer an on-prem BYOK appliance? Also, what retention window do you require for audit exports (e.g., 90/365 days)?
+
+If that timeline works, let's confirm a time for the technical call; Dev is available tomorrow 11:00–13:00 PT.
+
+Regards,
+Aisha Rahman
+Senior Account Executive, Enterprise Sales
+Redwood Inference
+
+Attachments: redwood_kms-transport-profile.pdf (summary), redwood_key_rotation_playbook.pdf (operational playbook), hsm_vendor_compat_matrix.xlsx (vendor matrix)
+
+From: Maya Rinehart <maya.r@sentinel.io>
+To: aisha_rahman@redwood.com, dev_patel@redwood.com
+Cc: procurement@sentinel.io, Daniel Cho <daniel.cho@sentinel.io>
+Date: 2027-02-10T13:26:00-08:00
+Subject: Re: Request: KMS/HSM attestation, BYOK flow and TLS profile details
+
+Thanks Aisha — the attachments arrived and the summary is helpful. A few clarifications before the call: 
+
+1) HSM vendor compatibility: can you confirm whether Redwood's BYOK appliance supports live key export to customer HSMs (e.g., Thales) or only import? We need to know if we can rotate keys in our own HSM and push to Redwood.
+2) Remote attestation: for private appliance, will you provide an attestation blob we can validate against vendor CA?
+3) Key lifecycle: for rotation, do you keep previous versions to allow historical decryption? If yes, for how long? Is there an automated key-schedule we can sync with?
+4) TLS cipher list: please provide exact cipher names and whether you disable RSA key exchange and older CBC ciphers. We must pass our network team's checklist.
+
+Also, procurement asked whether you can provide a signed attestation/statement of practice for KMS operations (short AUP) for inclusion in our package. If you have a DocuSign template for market-standard attestation, that would speed things.
+
+We can do the call tomorrow at 11:30 PT if that works for Dev.
+
+Thanks,
+Maya
+Security Architect, Sentinel Inc.
+
+From: dev_patel@redwood.com <dev_patel@redwood.com>
+To: Maya Rinehart <maya.r@sentinel.io>, Daniel Cho <daniel.cho@sentinel.io>
+Cc: aisha_rahman@redwood.com, neha_kapoor@redwood.com, procurement@sentinel.io
+Date: 2027-02-11T15:43:00-08:00
+Subject: Re: Request: KMS/HSM attestation, BYOK flow and TLS profile details
+
+Hi Maya / team — great questions. Below are concrete answers and pointers; I’ve included the operational playbook and vendor matrix as attachments for your security team to review.
+
+1) BYOK export/import behavior
+- Import: Customers can import key material (PKCS#12 or wrapped key) into Dedicated/Private via an administrative import workflow that leverages envelope wrapping with an HSM master key. For Private appliance installs, keys can be imported locally via the admin console or using our offline import tool.
+- Export: Live export of unwrapped private key material is not supported from Redwood-hosted services. For Private deployments where customers manage the appliance and HSM, you may export keys according to your appliance controls if your HSM vendor and policy allow it; Redwood will not perform unwrapped key exports for Hosted or Dedicated tenants.
+- Rotation: Keys are versioned. New keys are marked active; previous key versions are retained based on retention policy and can decrypt historic ciphertext until you trigger a purge. Default retention for rotated keys is 180 days; configurable per-customer up to 730 days for Dedicated/Private with corresponding audit controls.
+
+2) HSM attestation and vendor compatibility
+- Attestation: For Private appliances we can provide device attestation blobs signed by the HSM vendor (where supported) plus our local attestation summary. For cloud Dedicated (e.g., CloudHSM), we provide vendor attestation reports and the derived key identifiers; we can also provide a redacted attestation sample for your review under NDA.
+- Vendors: Supported vendors include AWS CloudHSM, Thales nShield, and selected FIPS-certified modules in on-prem racks. See hsm_vendor_compat_matrix.xlsx for details by model and firmware.
+
+3) Key wrapping and algorithms
+- Envelope encryption: We use customer data keys (CDK) wrapped by a master key held in HSMs. Supported wrapping algorithms: AES-KW (RFC 3394), RSA-OAEP (for legacy import flows), and AES-GCM wrapping for specific flows. Data encryption algorithms supported: AES-256-GCM by default.
+- Memory/storage: Unwrapped plaintext keys exist briefly in memory inside HSM or inside a tightly controlled encrypted process memory region during import/unwrapping. We do not persist unencrypted key material to disk.
+
+4) Audit and retention
+- Key operation logs: All key operations (import, rotate, wrap/unwrap, export attempts) are logged and immutable in our audit stream. Default retention for audit logs is 365 days for Hosted; Dedicated/Private can be configured per contract. Audit exports can be provided as CSV or via secure S3 transfer.
+
+5) TLS and cipher specifics
+- Minimum TLS version: TLS 1.2 (1.3 recommended).
+- Cipher suites (representative): TLS_AES_128_GCM_SHA256 (TLS1.3), TLS_AES_256_GCM_SHA384 (TLS1.3), TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 (TLS1.2), TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 (TLS1.2).
+- We disable RSA key exchange and legacy CBC ciphers by default for enterprise tenants. Perfect Forward Secrecy (ECDHE) is enforced.
+- mTLS: Supported for Private and Dedicated via customer-managed certificates; Hosted mTLS is available for enterprise customers on a per-account basis.
+
+6) Attestation / signed statements
+- We maintain a short KMS Statement of Practice (SOP) that covers roles and responsibilities, operational windows, and key handling procedures. We can sign a standard attestation via DocuSign; Aisha will follow up with the DocuSign link for your legal/procurement team.
+
+Next steps:
+- I can join the 11:30 PT call tomorrow (2027-02-11 11:30 PT) if that still works — confirm and I’ll send a calendar invite.
+- If you need a redacted HSM attestation sample in advance, we can provide an NDA-scoped artifact within 24 hours of NDA confirmation.
+
+Thanks,
+Dev Patel
+Principal Systems Engineer, Security & Platform
+Redwood Inference
+
+Attachments: redwood_key_rotation_playbook.pdf, hsm_vendor_compat_matrix.xlsx

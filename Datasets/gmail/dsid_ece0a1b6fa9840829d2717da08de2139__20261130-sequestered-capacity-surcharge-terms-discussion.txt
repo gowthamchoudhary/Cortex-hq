@@ -1,0 +1,134 @@
+Sequestered capacity pricing & compliance surcharge — Acme request
+
+From: Sarah Li <sarah.li@acme-logistics.com>
+To: Logan Wright <logan.wright@redwood.com>
+Cc: platform-ops@acme-logistics.com
+Date: Wed, 25 Nov 2026 23:03:00 -0800
+Subject: Sequestered capacity for sensitive workloads — initial ask
+
+Hi Logan,
+
+Thanks again for the call today. To follow up: Acme has a set of regulatory lanes that require single-tenant compute (we're calling it 'sequestered capacity') plus per-request audit streaming and our own KMS envelope support.
+
+High level questions to start pricing:
+- How do you price a fully sequestered GPU pool (4x A100 equiv nodes) with guaranteed 250 concurrent tokens/s throughput?
+- What are the incremental charges for audit-stream retention (90 days vs 365 days)?
+- KMS integration: do you charge a surcharge for HSM-backed keywrap / dedicated key namespace?
+
+We also wanted to understand reserved commit tiers and how burst credits work (we expect month-to-month spikes).
+
+Can you send a ballpark cost and any constraints (SLO tradeoffs) we should expect? I'll share this with procurement.
+
+Best,
+Sarah
+Sarah Li
+Head of Platform Security, Acme Logistics
+
+
+From: Logan Wright <logan.wright@redwood.com>
+To: Sarah Li <sarah.li@acme-logistics.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Thu, 26 Nov 2026 09:12:00 -0800
+Subject: Re: Sequestered capacity for sensitive workloads — initial ask
+
+Hi Sarah — thanks for the clear list.
+
+Short answer up front: we can support the sequestered pool you describe. High-level pricing levers are: reserved commit size, isolation premium, audit retention tier, and KMS/HSM per-tenant integration. I've attached a spreadsheet with a baseline quote and three commit scenarios (conservative, target, and aggressive).
+
+Key bullets from the attached:
+- Baseline dedicated pool (4x A100-equivalent): $68,000/month on a 12-month reserved commit.
+- Sequestration surcharge (single-tenant physical pool + logical tenancy + network isolation): +22%
+- Audit stream retention: 90 days included; 365 days is an incremental +$6,500/month (storage + ingestion indexing + replay SLOs).
+- KMS/HSM envelope support: one-time integration fee $12,000 + $1,200/month for dedicated KMS namespace and extra key-rotation audit hooks.
+- Throughput guarantee: we can commit to 250 concurrent tokens/s with a 99th percentile latency SLO of 120ms for standard sequence lengths — longer sequences increase kernel costs (we've line-itemed a per-100-token uplift).
+- Burst model: reserved commit includes monthly burst credits (20% of committed throughput) for spikes. Excess consumed beyond burst credits billed at pay-as-you-go rate.
+
+We left room for discounting depending on term length and ARR commitment. If you prefer a firm per-token effective rate instead of a flat pool price, we can convert the same numbers into per-request economics.
+
+Attached: acme_sequestered_pricing_v1.xlsx, RI_Dedicated_SLA_draft.pdf
+
+If helpful, Ben can add a short note on how the KMS envelope interacts with our GPU runtime (implications for cache warmup and cold-starts). Marissa will follow up on commercial terms and potential discount brackets.
+
+Cheers,
+Logan Wright
+VP, Solutions — Redwood Inference
+Redwood Inference | logan.wright@redwood.com
+
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Sarah Li <sarah.li@acme-logistics.com>, Logan Wright <logan.wright@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Fri, 27 Nov 2026 10:35:00 -0800
+Subject: Re: Sequestered capacity for sensitive workloads — KMS & throughput note
+
+Thanks — quick technical note from the runtime side:
+
+- KMS envelope support: when the customer supplies their own key namespace (HSM-backed), each model artifact signature and KV cache snapshot is encrypted under the customer key. That adds ~1–2s to cold-starts for large KV snapshots if we rehydrate from cold storage, but steady-state inference is unaffected. We account for that in the SLA for cache warming windows.
+
+- Audit streaming: we provide a separate durable stream to a customer-owned project (or our managed bucket) that records per-request headers, token counts, and a hashed output for verification. Retention cost scales primarily with token volume and index granularity (we include a row-level cost in the spreadsheet).
+
+- Throughput guarantees: the 250 concurrent tokens/s guarantee assumes a 512-token average context distribution. If your tails are heavier (2–4x longer), we'll need to provision more kernels and GPUs; that changes the pool sizing. Lab recommendation: run a 48-hour production-like trace to validate tail behavior.
+
+I'll flag the operational knobs in the spreadsheet and add a small section about recommended guardrails (circuit-breaker thresholds, fallback model variants for graceful degradation).
+
+—Ben
+Ben Carter
+Senior Sales Engineer, Redwood Inference
+
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Sarah Li <sarah.li@acme-logistics.com>, Logan Wright <logan.wright@redwood.com>
+Date: Sun, 29 Nov 2026 14:22:00 -0800
+Subject: Re: Sequestered capacity for sensitive workloads — commercial terms
+
+Hi Sarah — Marissa here on commercial. Appreciate the fast turn. A few clarifying items and a proposal on discounts: 
+
+Clarifying Qs:
+- Are you looking to sign a 12 or 24 month reserved commit? We put both in the sheet.
+- Do you need cross-region replication for audit streams (adds about 9% to retention costs)?
+
+Discount proposal (subject to standard enterprise T&Cs):
+- 12mo commit: list price with up to 10% volume discount depending on final monthly commit.
+- 24mo commit: up to 18% discount + waiver of integration fee for KMS/HSM (we can absorb the one-time $12k if you go 24mo and hit our FastStart threshold of $820k ARR commit).
+- Additional concessions: 30-day performance credits (not cash) for SLA misses; optional 60-day pilot at 50% list for the first two months to validate tail behavior.
+
+On audit retention: if you opt for our managed encrypted audit-stream storage and sign a 24mo commit, we can reduce the 365-day uplift to +$4,200/month instead of $6,500/month (we take the storage ops risk).
+
+Next steps: I can prepare a commercial summary and a DocuSign package if you tell me preferred term and whether Acme will keep KMS in-house or accept our managed KMS. If you'd like legal redlines, we'll need a separate routing (procurement will want to own that).
+
+Attached: audit-retention-diff.md
+
+Best,
+Marissa Cole
+Enterprise Account Executive, Redwood Inference
+marissa.cole@redwood.com
+
+
+From: Sarah Li <sarah.li@acme-logistics.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Logan Wright <logan.wright@redwood.com>
+Cc: platform-ops@acme-logistics.com
+Date: Mon, 30 Nov 2026 19:12:00 -0800
+Subject: Re: Sequestered capacity for sensitive workloads — commercial terms
+
+Marissa, Logan — this is very helpful. Procurement reviewed and asked for a couple of concessions to get to an internal approval: 
+
+- Reduce sequestration surcharge from 22% to 15% on a 24-month commit.
+- Waive the monthly managed-KMS fee if Acme provides proof of existing HSM (we'll absorb the integration work but not the monthly namespace fee).
+- Confirm the pilot (60-day at 50%) includes the full audit stream and KMS envelope path (we need production-like validation).
+
+If you can accept those three items we'll request a final commercial summary and route DocuSign. Otherwise we can take the 10–12 day review with procurement but it might push start into Q1.
+
+Also, please include the HubSpot deal link and the draft SLA in the package.
+
+Thanks —
+Sarah
+Sarah Li
+Head of Platform Security, Acme Logistics
+
+On Thu, Nov 26, 2026 at 09:12 AM Logan Wright <logan.wright@redwood.com> wrote:
+> Hi Sarah — thanks for the clear list.
+> 
+> Short answer up front: we can support the sequestered pool you describe. High-level pricing levers are: reserved commit size, isolation premium, audit retention tier, and KMS/HSM per-tenant integration. I've attached a spreadsheet with a baseline quote and three commit scenarios (conservative, target, and aggressive).
+> 
+> Attached: acme_sequestered_pricing_v1.xlsx, RI_Dedicated_SLA_draft.pdf
+>

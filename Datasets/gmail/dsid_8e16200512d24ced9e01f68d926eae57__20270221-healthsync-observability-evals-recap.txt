@@ -1,0 +1,127 @@
+Discovery recap: HealthSync observability & evals — dashboards, tracing, rollout
+
+From: Sofia Ivanova <sofia@redwood.com>
+To: Maya Patel <maya.patel@healthsync.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Sun, 21 Feb 2027 15:08:00 -0700
+Subject: Discovery recap: HealthSync observability & evals — dashboards, tracing, rollout
+
+Hi Maya — thanks again for taking the call today. Quick recap so we all have the same page and to make sure we captured the priority items correctly. Please reply with any corrections.
+
+High-level pain points you described:
+- Intermittent latency spikes on your public API that correlate with specific prompt templates (users see timeouts ~500ms+ above baseline).
+- No reliable way to detect semantic regressions after model updates — current health checks are token-level only.
+- Fragmented telemetry: inference logs live in S3, metrics in Datadog, and there is no end-to-end tracing from user query → model response.
+
+Current stack you shared:
+- In-house LLM proxy that fans out to multiple model variants; Redis for lightweight KV cache; Datadog APM for service metrics; Postgres for events.
+
+Success criteria you listed:
+- Latency: p50 <100ms, p95 <300ms for customer-facing endpoints under normal load.
+- Quality: measurable semantic regression <= 5% (embedding-based drift) after model changes.
+- Ops: single-pane dashboard for latency, error rates, KV cache hit rate, and prompt-level failure traces.
+
+Specific observability & eval asks we captured:
+1) Dashboards: error-rate (500/502/timeout) over time, prefix latency p50/p95, KV cache hit rate + TTL distribution, per-prompt success rate.
+2) Tracing hooks: request/span IDs passed through the LLM proxy, ability to attach prompt metadata (prompt_id, customer_id, flow) to spans.
+3) Golden prompt sets: 30 "golden" prompts across happy path + 15 edge cases that we can run on every model roll.
+4) Regression alerts: automatic alerts when embedding-cosine drop > 0.08 on golden set OR when per-route success rate drops >1.5% absolute.
+5) Rollout guardrails: canary at low traffic with automatic rollback if semantic regression exceeds threshold.
+
+Next steps (owners & ETA):
+- Sofia (me): share a short eval harness template + Drive link with sample prompts — by Tue, 2027-02-23. (attachment: healthsync-observability-checklist.xlsx)
+- Ben: provide a lightweight tracing snippet to drop into your proxy and example Datadog dashboard queries — by Wed, 2027-02-24.
+- HealthSync (Maya): share a representative set of 300 production prompts and confirm RBAC for log ingestion — by Fri, 2027-02-26.
+- Schedule tech deep-dive with your infra and security teams (45–60m) — propose Wed 02/24 or Thu 02/25.
+
+I captured a tentative guardrail we discussed: 5% canary for 24–48h with automated rollback on an absolute semantic regression >1.5% on the golden set. We can tighten thresholds during the eval.
+
+If that all looks right, I'll drop the eval harness and a short README into the Drive link so your engineers can start feeding a subset of prompts. Thanks again — looking forward to the deep-dive.
+
+Best,
+Sofia Ivanova
+Enterprise Account Executive
+Redwood Inference
+sofia@redwood.com
++1 (415) 555-0193
+
+--
+Attachment: healthsync-observability-checklist.xlsx (xlsx, 42KB)
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Sofia Ivanova <sofia@redwood.com>, Maya Patel <maya.patel@healthsync.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Sun, 21 Feb 2027 17:02:00 -07:00
+Subject: Re: Discovery recap: HealthSync observability & evals — dashboards, tracing, rollout
+
+Thanks Sofia — solid notes. A few technical clarifications / commitments from my side: 
+
+1) Tracing snippet: I'll prepare a 2–3 line middleware snippet for your LLM proxy that injects Trace-ID and Span-ID into the downstream model request header (X-Redwood-Trace-ID / X-Redwood-Span). This will let you correlate Datadog traces with token-level logs.
+
+2) Datadog queries / dashboards: we'll provide pre-built queries for p50/p95 over sliding windows, error-rate by prompt_tag, and a KV cache hit-rate panel (redis.metrics.hits / redis.metrics.calls).
+
+3) Rollout guardrails (recommended starting point):
+   - Canary at 10% traffic for 48 hours.
+   - Monitor golden-set embedding cosine similarity and per-prompt failure rate.
+   - Auto-rollback if embedding cosine drops by >0.06 average across the golden set OR per-route failure increases by >2% absolute.
+
+4) Caching suggestion: prefix-based cache with TTL per-flow; for short-lived conversation flows set TTL=30s, for FAQ flows TTL=600s. We'll include a recommended cache policy doc.
+
+I also uploaded an example eval harness to the Drive link Sofia shared and added a small README describing the data format we expect (one JSON line per prompt with metadata). Link: https://drive.redwood.com/share/healthsync-eval-harness (same, shared read-only).
+
+I'll have the tracing snippet + dashboard queries to you by EOD Wed (02/24). If you want the snippet in a proxy-specific flavor (node/python/go), tell me which languages your proxy supports.
+
+—Ben
+Ben Carter
+Principal Solutions Architect, Redwood Inference
+ben_carter@redwood.com
+
+On Sun, Feb 21, 2027 at 15:08, Sofia Ivanova <sofia@redwood.com> wrote:
+> Hi Maya — thanks again for taking the call today. Quick recap so we all have the same page...
+
+From: Maya Patel <maya.patel@healthsync.com>
+To: Sofia Ivanova <sofia@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Security Team <security@healthsync.com>
+Date: Mon, 22 Feb 2027 09:16:00 -07:00
+Subject: Re: Discovery recap: HealthSync observability & evals — dashboards, tracing, rollout
+
+Hi Sofia / Ben — thanks for the detailed recap. Confirming the notes look correct from our side. A few clarifications and commits from HealthSync: 
+
+- We'll pull an anonymized sample of ~300 prompts (mix of high-volume + edge cases) and drop them in the Drive folder by Thu (02/25).
+- Our infra stack is Node-based for the proxy; able to accept a Node example snippet is ideal.
+- Security will send a SOC2 package and our RFI to you separately (attachment: HealthSync_RFI_SecureOps.pdf). Expect a security contact (security@healthsync.com) to join the technical deep-dive.
+- Regarding rollout: we prefer a conservative canary (5% for 48h) and would like the option to manually force rollback if we observe any user-visible regressions.
+
+One ask from product: can Redwood share a short (1-page) in-app fallback playbook — e.g., degrade to cached responses for specific flows and surface a lightweight UI banner — so we can align on UX during outages?
+
+Available times for the tech deep-dive: Wed 02/24 10:00–11:00 PT or Thu 02/25 14:00–15:00 PT. Let us know which works.
+
+Thanks — Maya
+Maya Patel
+Head of Product, HealthSync
+maya.patel@healthsync.com
+
+--
+Attachment: HealthSync_RFI_SecureOps.pdf (pdf, 120KB)
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Maya Patel <maya.patel@healthsync.com>, Sofia Ivanova <sofia@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Mon, 22 Feb 2027 10:22:00 -07:00
+Subject: Re: Discovery recap: HealthSync observability & evals — dashboards, tracing, rollout
+
+Looping in a quick note on the evals side — following items I'll upload to the Drive by EOD today: 
+- Golden prompt set: 30 canonical prompts + 15 edge-cases (we'll mark them with prompt_id and expected-anchor embeddings).
+- Evaluation metrics doc: semantic-drift (avg embedding cosine drop), top-k token-shift (KLD-ish) for distributional shifts, per-prompt success rate with a configurable threshold.
+- Suggested regression alert thresholds: embedding cosine drop >0.06 (warn) / >0.10 (critical); per-route failure +1.5% (warn) / +3.0% (critical).
+
+I'll also include a short runbook for canary analysis (what charts to look at, sample queries, and rollback steps). If HealthSync prefers the conservative 5% canary, we can set that as default for the first rollout and iterate.
+
+Happy to cover these in the tech deep-dive — suggest we take 15–20 min to walk the golden prompts and then 25–30 min for integration/security questions.
+
+—Marissa
+Marissa Cole
+Product Manager, Redwood Inference
+marissa_cole@redwood.com
+
+On Mon, Feb 22, 2027 at 09:16, Maya Patel <maya.patel@healthsync.com> wrote:
+> Hi Sofia / Ben — thanks for the detailed recap. Confirming the notes look correct from our side...

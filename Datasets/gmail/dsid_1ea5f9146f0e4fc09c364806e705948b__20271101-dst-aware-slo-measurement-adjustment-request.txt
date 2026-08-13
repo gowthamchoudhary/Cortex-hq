@@ -1,0 +1,129 @@
+Latency SLOs — measurement windows & DST handling (Summit Bank)
+
+From: Samira Qureshi <samira@summitbank.com>
+To: laura_bennett <laura_bennett@redwood.ai>
+Cc: procurement@summitbank.com, Anand Verma <anand.verma@summitbank.com>
+Date: Mon, 1 Nov 2027 09:22:00 -0700
+Subject: Clarify p50/p95 measurement windows + DST handling for Hosted API SLA
+
+Hi Laura,
+
+Thanks for the walkthrough last week. Our legal and ops teams are reviewing the draft SLO language and have a couple of specific asks we need clarified before we move to signature:
+
+1) Measurement window anchor: are p50/p95 calculations anchored to UTC epochs, or to local timezone day boundaries? Summit operates heavy traffic in US regions where DST applies and we want to avoid ambiguity around which day a violation is recorded on transition days.
+
+2) DST transitions: if an SLO window spans a DST change (e.g., clocks move back and we get a 25-hour day), will Redwood normalize the epoch or provide a carveout? Our procurement team is concerned about unfairly attributing violations to a single day.
+
+3) Example calculations: can you provide a short worked example showing how p95 is computed across a 24-hour period that includes a DST change?
+
+We also attached our requirements summary (summit_msp_requirements_2027.pdf) for context.
+
+Appreciate a quick confirmation — legal would like to lock language in this week.
+
+Best,
+Samira
+Director, Cloud Ops
+Summit Bank
+
+[Attachment: summit_msp_requirements_2027.pdf (application/pdf)]
+From: laura_bennett <laura_bennett@redwood.ai>
+To: Samira Qureshi <samira@summitbank.com>
+Cc: procurement@summitbank.com, Anand Verma <anand.verma@summitbank.com>
+Date: Mon, 1 Nov 2027 11:03:00 -0700
+Subject: Re: Clarify p50/p95 measurement windows + DST handling for Hosted API SLA
+
+Hi Samira — thanks for the clear list. Short answers up front, then I9ll follow up with an internal ask to engineering for a worked example and a proposed contract snippet.
+
+- Anchor: Redwood measures p50/p95 using UTC-based measurement epochs by default (UTC 00:00-24:00), not local wall-clock time. This avoids ambiguity across regions.
+- DST transitions: by default we normalize to UTC so the epoch length remains 24 hours; for customers who require local-time semantics (or have strict regulatory needs), we can offer a temporary carveout policy for DST transition days as an addendum.
+- Example: we9ll provide a worked p95 example that shows how an extra hour (or missing hour) is treated under UTC normalization.
+
+I9ve attached an initial SLO table that maps our recommended language to option A/B (options we can present to legal). Will loop in product to validate edge-case math.
+
+Next steps: I9ll ping product and legal, then share a brief SLA addendum draft by EOD Wednesday.
+
+Cheers,
+Laura Bennett
+Account Executive, Redwood Inference
+
+[Attachment: laura_response_slo_table.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+From: laura_bennett <laura_bennett@redwood.ai>
+To: karthik_iyer <karthik_iyer@redwood.ai>, ben_carter <ben_carter@redwood.ai>
+Date: Tue, 2 Nov 2027 08:12:00 -0700
+Subject: Fwd: Clarify p50/p95 measurement windows + DST handling for Hosted API SLA
+
+Folks — forwarding Summit Bank9s questions (below). Quick asks:
+
+1) Confirm current implementation: we measure p50/p95 on UTC-day epochs by default. Any nuance here?
+2) Provide a worked example showing how p95 is calculated for a 24-hour window that includes a DST fall-back (25-hour day) and for a spring-forward (23-hour day).
+3) Draft two short contract snippets: Option A (UTC-anchored windows, no carveouts) and Option B (UTC + one-time DST carveout language). Legal wants plain language + an example calculation.
+
+I attached the SLO table I shared with Summit for your reference. Can you take a pass and I9ll combine into a single addendum draft? Need this by EOD Wednesday to keep the deal timeline.
+
+Thanks — laura
+
+---------- Forwarded message ----------
+From: Samira Qureshi <samira@summitbank.com>
+Date: Mon, 1 Nov 2027 09:22:00 -0700
+Subject: Clarify p50/p95 measurement windows + DST handling for Hosted API SLA
+To: laura_bennett <laura_bennett@redwood.ai>
+Cc: procurement@summitbank.com, Anand Verma <anand.verma@summitbank.com>
+
+[Attachment: summit_msp_requirements_2027.pdf]
+From: karthik_iyer <karthik_iyer@redwood.ai>
+To: laura_bennett <laura_bennett@redwood.ai>, ben_carter <ben_carter@redwood.ai>
+Date: Tue, 2 Nov 2027 12:45:00 -0700
+Subject: Re: Fwd: Clarify p50/p95 measurement windows + DST handling for Hosted API SLA
+
+Laura, Ben — quick technical proposal and example math. High level: we currently compute p50/p95 over calendar-day epochs defined in UTC (00:00:00 to 23:59:59 UTC). That keeps calculation deterministic across regions. For DST days:
+
+Proposal (what we can commit to):
+- Base behavior: UTC-anchored 24h epoch. Each epoch contains N requests where timestamps are normalized to UTC. Percentiles computed over per-request token latencies for that epoch.
+- DST handling: on days where local time changes, the UTC epoch still has 24h; the local wall clock may show 23h or 25h. Under UTC anchoring the p95 will be computed from the same 24h worth of events and there is no automatic carveout.
+- Optional carveout: we can include a one-day temporal carveout for customers that request local-time semantics. Implementation detail: mark the DST transition epoch as "excluded_epoch" for SLO calculations and provide an example remediation credit calculation (pro rata daily credit).
+
+Worked example (fall-back, 25-hour local day):
+- UTC epoch: 2027-11-06T00:00:00Z - 2027-11-06T23:59:59Z (24 hours).
+- Local PST: on fall-back the clocks repeat one hour; local requests that map to the repeated hour have distinct UTC timestamps and are included normally in the UTC epoch. p95 = 95th percentile over all requests in the UTC window. No double-counting occurs because all events are unique by UTC timestamp.
+
+Spring-forward (23-hour local day): similar logic — fewer local-wall-clock hours map into the UTC epoch, but the epoch length is unchanged. p95 computed over the observed request set for that UTC window.
+
+Suggested contract language snippets:
+- Option A (default): "Redwood measures latency SLOs over UTC calendar-day epochs (00:00:00 to 23:59:59 UTC). Percentiles (p50/p95) are calculated over all recorded requests in each UTC epoch."
+- Option B (DST carveout): "Notwithstanding the foregoing, for customers that elect local-wall-clock SLO semantics, Redwood will exclude the UTC epoch that overlaps a local DST transition day from SLO measurement for that customer for one (1) day, and the parties will apply a pro-rated credit mechanism for any eligible SLO violations."
+
+Operational note: the carveout requires a tagging mechanism per-customer and a small reporting pipeline change to mark excluded epochs — estimated dev effort: 1-2 sprints for a tested release. Billing/legal impact: credits would be calculated against daily SLO targets.
+
+Happy to draft a short addendum. Which option does Sales/legal prefer?
+
+- Karthik
+From: laura_bennett <laura_bennett@redwood.ai>
+To: Samira Qureshi <samira@summitbank.com>, Anand Verma <anand.verma@summitbank.com>, procurement@summitbank.com
+Cc: karthik_iyer <karthik_iyer@redwood.ai>, ben_carter <ben_carter@redwood.ai>
+Date: Thu, 4 Nov 2027 16:10:00 -0700
+Subject: Re: Clarify p50/p95 measurement windows + DST handling for Hosted API SLA
+
+Hi Samira — thanks for the patience. We've validated internally and prepared two contract-ready options your legal team can choose from. Short summary and example attached; calling out the practical tradeoffs below.
+
+Option A (Recommended, simpler):
+- Measurement anchor: UTC calendar-day epochs (00:00-24:00 UTC).
+- DST: no special carveouts. p95 is computed over the UTC epoch as observed; this is deterministic and lowest operational complexity.
+
+When to pick A: customers who prefer operational simplicity and deterministic billing; no engineering change needed.
+
+Option B (Optional local-time semantics with DST carveout):
+- Measurement anchor: UTC for primary calculations, but Redwood will exclude the UTC epoch that overlaps a local DST transition day for Summit9s designated production regions and treat it as a one-day carveout. Any violation credit tied to that day will be pro-rated per the daily SLO credit method in the addendum.
+- Impact: requires tagging and a minor reporting pipeline change (1-2 sprints).
+
+Example: imagine a fall-back day where local clocks repeat an hour. Under Option A that repeated hour results in additional recorded requests within the same UTC epoch and p95 is computed over the full set. Under Option B we would exclude that UTC epoch from SLO computations for Summit only.
+
+Attached: SLA addendum draft (sla_addendum_v1.docx) and the example calculation. If you9d like, we can flag Option B as a conditional clause that applies only to Summit production regions and include an implementation timeline in the addendum.
+
+Next steps: please confirm preferred option and we9ll route the addendum to your legal/procurement via DocuSign. If you want the worked numeric example inline before sign, say so and we9ll include the sample p95 calculation for a real traffic slice.
+
+Best regards,
+Laura Bennett
+Account Executive, Redwood Inference
+laura_bennett@redwood.ai | +1 415-555-0134
+
+[Attachment: sla_addendum_v1.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)]

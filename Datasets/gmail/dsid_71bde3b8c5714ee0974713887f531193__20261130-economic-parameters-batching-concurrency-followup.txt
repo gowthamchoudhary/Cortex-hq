@@ -1,0 +1,142 @@
+Economic parameters + batching / concurrency assumptions — follow-up and next steps
+
+From: Grace O'Connor <grace@redwo od.com>
+To: Selena Tran <selena@olmsted.ai>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: Mon, 30 Nov 2026 08:15:00 -0800
+Subject: Economic parameters + batching / concurrency assumptions — follow-up and next steps
+
+Hi Selena — thanks again for the call this morning. Quick recap and a few data points we still need to lock the economics for a scoped POC: 
+
+Summary of what we heard from Olmsted on the call:
+- Use case: customer-facing conversational assistant (multi-turn, contextual).
+- Typical prompt + context: 400–1,200 tokens per full request (including system/context).
+- Expected steady-state: ~600k requests/day to start (projected month 3), with daily peak spikes 2–3x.
+- Peak concurrency estimate you mentioned: ~80–110 concurrent requests (bursty windows during peak business hours).
+- Budget target: you referenced a target blended $/1M tokens of ~$200–250 as a target to keep CFO comfortable.
+
+What we need from you to make a firm pricing/throughput recommendation (small asks):
+1) Confirm average tokens per request (we heard ~700 but would like the 90th percentile if available).
+2) Share a sample of request length distribution (a few hundred rows or a .jsonl sample is fine).
+3) Confirm SLA needs: latency SLO at p95 (is 400–600ms acceptable?), or do you require sub-300ms for the assistant?
+4) Any hard requirements on data residency or on-prem components?
+
+Preliminary assumptions we'll use for an initial unit-econ sketch (we can revise once you share the sample):
+- Model variant: LlamaX-13B int8 (production-appropriate tradeoff)
+- Continuous batching: workload looks streamy (steady baseline with short spikes). We'll assume continuous batching with ~100ms batching window and adaptive batch sizing.
+- Expected effective batch size: 4–8 tokens/requests per device depending on sequence length and KV cache reuse.
+
+Next steps
+- If you can send the sample and confirm p95 latency requirement by EOD Wednesday PST, we'll produce a 2-page unit-econ estimate + recommended Dedicated config and an optional POC checklist.
+- We'll attach a short template for the request-sample (.jsonl) and our unit econ workbook for transparency.
+
+Thanks — looking forward to it.
+
+Best,
+Grace O'Connor
+Account Executive, Redwood Inference
+grace@redwood.com
+(415) 555-0132
+
+Attachment: redwood_unit_econ_estimate.xlsx (stub)
+
+From: Selena Tran <selena@olmsted.ai>
+To: Grace O'Connor <grace@redwood.com>
+Cc: Procurement <procurement@olmsted.ai>
+Date: Mon, 30 Nov 2026 10:02:00 -0800
+Subject: Re: Economic parameters + batching / concurrency assumptions — follow-up and next steps
+
+Grace — thanks, useful recap. Answers below and a few clarifying notes: 
+
+1) Token distribution (high-level):
+- Median tokens/request: ~650
+- 75th percentile: ~920
+- 90th percentile: ~1,300
+- We will send a 500-row sample (mix of chat logs and system prompts) — attaching separately.
+
+2) Concurrency / traffic pattern:
+- Steady baseline: ~700 RPS total across our cluster, which maps to ~60–75 concurrent active sessions typically.
+- Peak bursts: short 5–15 minute bursts where effective concurrency jumps to ~120–160 (holiday promo flows).
+- Traffic pattern: mostly conversational with long and short tails; many sessions use streaming tokens to client.
+
+3) Latency SLO: p95 end-to-end (model generation) target is 450ms. We can tolerate up to 800ms for long-context requests, but want sub-500ms for typical flows.
+
+4) Residency: US only for now; no on-prem. SOC2 evidence will be required for procurement.
+
+Budget / unit economics note: CFO asked for a target blended $/1M tokens ~ $200. We understand this is ambitious but want a concrete case showing how batching/quantization could get close.
+
+I'll upload the request-length sample later today and loop in our procurement lead for next steps.
+
+—Selena
+Selena Tran
+Head of Product, Olmsted.ai
+selena@olmsted.ai
+
+Attachment: olmsted_prefix_samples.jsonl (stub)
+
+From: Grace O'Connor <grace@redwood.com>
+To: Selena Tran <selena@olmsted.ai>
+Cc: Marissa Cole <marissa@redwood.com>, Sergio Alvarez <sergio@redwood.com>
+Date: Mon, 30 Nov 2026 12:35:00 -0800
+Subject: Re: Economic parameters + batching / concurrency assumptions — follow-up and next steps
+
+Thanks for the fast turnaround and the sample, Selena — this is exactly what we need. A few notes based on the sample and your targets, plus a back-of-envelope unit econ so you have something to show the CFO quickly.
+
+Key runtime assumptions (what Redwood will assume for the quote / POC):
+- Model: LlamaX-13B, int8, with KV-cache reuse for short-turn multi-turn chats.
+- Continuous batching: because your baseline is steady with frequent small requests and streaming enabled, the runtime will operate in continuous batching mode with adaptive windows. That yields better utilization vs naive single-request execution.
+- Batch window & expected effective batch size: 75–125ms adaptive window; effective batch size 5–7 on average for your token distribution (higher for shorter requests due to more aggregation).
+- Concurrency pools: recommend two pools — latency-sensitive pool (target p95 ~450ms) sized to handle ~120 concurrent requests, and a secondary cost-optimized pool for lower-priority background workloads. Autoscaling configured to handle 2.5x baseline on short spikes.
+
+Back-of-envelope unit econ (illustrative, not a formal quote):
+Inputs (from your sample & call):
+- Monthly tokens: assume 600M tokens/day * 30 = 18B tokens (we used 600k requests/day * avg 1k tokens/request as a conservative calc; please confirm).
+- Target: blended $/1M tokens = $200 (Olmsted target)
+
+Redwood illustrative estimate (using Dedicated-like reserved pricing with batching & quantization benefits):
+- Effective per-1M tokens cost estimate: $180–230 (range driven by achieved batch efficiency and percent of long-context requests).
+- For 18B tokens/month this maps to ~$3,240–$4,140 per month (per-million scale multiplied accordingly) — we will produce a line-by-line workbook showing GPU-hours, batch efficiency, and infra overhead.
+
+What improves the economics most (so you can prioritize):
+- Prefix caching: repeated system prompts and shared context between users reduces duplicate compute.
+- Aggressive batching in non-latency-critical paths (background summarization/analytics).
+- Quantization to int8 and kernel optimizations (we're assuming LlamaX int8 numbers above).
+
+Next steps (I suggest):
+1) Redwood will produce a 2-page unit econ and a provisional Dedicated configuration by EOD Thursday PST (we'll include 3 price bands: conservative, expected, optimistic).
+2) We need confirmation of monthly token volumes (your CFO may prefer to model both 6M and 18M tokens/day scenarios).
+3) Technical POC proposal: 2-week POC with a small sample of production traffic and 1–2 reserved GPU nodes; Redwood will provide a POC runbook and success criteria.
+
+If you're OK with the approach I'll: (a) create the HubSpot deal record with the estimate (link below), (b) schedule a technical sizing call with Sergio and our infra team this week, and (c) prepare a short compliance packet for procurement.
+
+Onwards — thanks again.
+
+Best,
+Grace O'Connor
+Account Executive, Redwood Inference
+grace@redwood.com
+
+On Mon, 30 Nov 2026 at 10:02 AM Selena Tran <selena@olmsted.ai> wrote:
+> Grace — thanks, useful recap. Answers below and a few clarifying notes:
+> ...
+
+From: Grace O'Connor <grace@redwood.com>
+To: Sergio Alvarez <sergio@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: Mon, 30 Nov 2026 16:45:00 -0800
+Subject: Fwd: Economic parameters + batching / concurrency assumptions — follow-up and next steps
+
+Sergio / Marissa — FYI and quick action items below after Olmsted's reply and our sketch:
+
+Context: Olmsted is a mid-stage startup building a conversational assistant. They provided a 500-row sample showing a heavy tail (median ~650, 90th ~1,300). They want to target ~$200/1M tokens blended. Traffic is steady with short 120–160 concurrency bursts. p95 latency target ~450ms.
+
+Please: 
+- Sergio: can you put together a short Dedicated config (GPU type, pool sizes, autoscale policy) and a conservative/expected/optimistic cost table based on batch efficiency assumptions (effective batch 4/6/8). Attach to HubSpot deal (OLM-2026-1072).
+- Marissa: please draft a 2-page unit-econ memo we can show procurement and the CFO that clearly explains how batching, quantization, and prefix caching impact $/1M tokens. Use the attached workbook as the starting point.
+
+I'll schedule a 30-minute technical sizing call for Thursday with Selena (their availability looks like Thu 10–12 PST). Please let me know blocks that work.
+
+Thanks — Grace
+
+Attachment: redwood_unit_econ_estimate.xlsx (stub)
+On Mon, 30 Nov 2026 at 12:35 PM Grace O'Connor <grace@redwood.com> wrote:
+> Thanks for the fast turnaround and the sample, Selena — this is exactly what we need. A few notes based on the sample and your targets...

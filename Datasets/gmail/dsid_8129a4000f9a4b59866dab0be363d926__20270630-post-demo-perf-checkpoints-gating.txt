@@ -1,0 +1,127 @@
+Post-demo performance checkpoints & gating checklist
+
+From: Rachel Kim <rachel.kim@redwood.com>
+To: Alex Turner <alex.turner@cloudscale.com>
+Cc: Sergio Alvarez <sergio.alvarez@redwood.com>, Dev Patel <dev.patel@redwood.com>
+Date: Wed, 30 Jun 2027 09:12:00 -0700
+Subject: Post-demo performance checkpoints & gating checklist
+
+Hi Alex —
+
+Thanks again for taking the demo this morning. I wanted to capture the performance items we covered and confirm the gating criteria for the next steps (pilot + baseline run). Summary below; please confirm anything that looks off.
+
+High-level targets (customer stated):
+- End-to-end 95th percentile latency: <= 220 ms
+- End-to-end 99th percentile latency: <= 450 ms
+- Sustained throughput: 180 requests/sec (payload mix: 60% short prompts, 30% medium, 10% long streaming)
+- Concurrency target: support 40 concurrent active sessions with streaming enabled
+- Streaming: chunked SSE/HTTP2 streaming; average per-chunk latency target < 120 ms; first-token latency <= 300 ms
+
+What Redwood will validate in pilot/baseline run:
+- Baseline throughput with single model variant (fp16 + caching) and expected token distribution
+- 95/99 latency at target concurrency with 95% traffic non-streaming, and 10–20% streaming bursts to measure tail behavior
+- Streaming behavior: per-chunk and first-token metrics, plus rebuffer/retry behavior under transient load
+- Fallback behavior: automatic rollback to smaller model variant if SLO breach detected for 30s
+
+Action items / next steps:
+1) Alex: confirm the latency/throughput numbers above and add any additional constraints from your infra (e.g., max request size, session TTL).
+2) Redwood (Sergio/Dev): produce a baseline test plan and schedule a 2-hour baseline run w/ CloudScale — target week of July 5.
+3) Legal/Procurement: we have a short pilot MSA draft (attached) — Alex, can your legal review start in parallel so we can sign before the pilot?
+
+Attachments: cloudscale-slo-checklist.xlsx (SLO checklist), demo-recording.mp4
+
+Thanks — I’ll follow up with a calendar invite once we have confirmation on dates.
+
+— Rachel Kim
+Account Exec, Redwood Inference
+rachel.kim@redwood.com
++1 (415) 555-0192
+
+
+From: Alex Turner <alex.turner@cloudscale.com>
+To: Rachel Kim <rachel.kim@redwood.com>
+Cc: legal@cloudscale.com
+Date: Wed, 30 Jun 2027 11:03:00 -0700
+Subject: Re: Post-demo performance checkpoints & gating checklist
+
+Thanks Rachel — appreciate the clear recap. A few clarifications from our side:
+
+- The latency/throughput numbers look right for our target workload. We do want a slightly tighter first-byte target for streaming: end-to-end first-token <= 300 ms is OK, but per-chunk RTT needs to be closer to <100 ms on average (we have an internal UX requirement to keep chunk updates snappy).
+- Concurrency: the 40 concurrent sessions is accurate, but note that during peak bursts we can spike to ~55 for short windows (1–2 minutes). Can Redwood’s routing handle short spikes without dropping sessions?
+- Data retention: we need confirmation of request/response retention windows during the pilot and whether logs include raw inputs. Our security team asked that request payloads older than 30 days be redacted in the shared logs.
+
+Legal here (cc’d) — we’ll start reviewing the MSA. If there are gating terms (SLA credits, data handling) let us know so we can flag them early.
+
+On Wed, Jun 30, 2027 at 09:12 AM Rachel Kim <rachel.kim@redwood.com> wrote:
+> Hi Alex —
+> 
+> Thanks again for taking the demo this morning. I wanted to capture the performance items we covered and confirm the gating criteria for the next steps (pilot + baseline run). Summary below; please confirm anything that looks off.
+> 
+> [snip]
+
+Best,
+Alex Turner
+Principal Product Manager — Real-time Services
+CloudScale Inc
+alex.turner@cloudscale.com
+
+From: Sergio Alvarez <sergio.alvarez@redwood.com>
+To: Alex Turner <alex.turner@cloudscale.com>, Rachel Kim <rachel.kim@redwood.com>
+Cc: Dev Patel <dev.patel@redwood.com>
+Date: Thu, 01 Jul 2027 08:40:00 -0700
+Subject: Re: Post-demo performance checkpoints & gating checklist
+
+Alex / Rachel —
+
+I sketched out a concrete acceptance matrix and a short test plan for the baseline run. High-level notes below, attaching the test plan (baseline-test-plan.md) with exact request mixes and sequence lengths.
+
+Acceptance matrix (pass criteria) — we will mark OK if all true:
+- 95th pctl latency <= 220 ms for non-streaming traffic at 40 concurrent sessions (PASS/FAIL)
+- 99th pctl latency <= 450 ms for non-streaming at 40 concurrent (PASS/FAIL)
+- Streaming: 90% of chunks < 120 ms; 99% of first-token < 320 ms during steady state (PASS/FAIL)
+- Burst behavior: maintain 80% of 95th pctl target during 2-minute 55-session spike (PASS/FAIL)
+- No unexpected errors >0.5% of requests; <0.1% dropped streaming sessions
+
+Technical mitigations we’ll use during the run:
+- Model variants: run with Standard-FT-7B (fp16 + KV cache) and have Quant-4 variant on standby for aggressive fallback if token cost or tail latency degrades.
+- Batching: dynamic batching target ~30ms window; we’ll experiment with backoff for streaming requests to keep first-byte low.
+- Prefix cache: enable short-term KV cache for repeated prompt prefixes to shave off tens of ms on common flows.
+
+Open items for CloudScale:
+- Confirm acceptable per-chunk latency target (Alex requested <100 ms avg) — we’ll aim for <120 ms as a starting point but need to know if <100 ms is a hard requirement.
+- Provide expected spike windows/dates so we can replicate in baseline.
+- Confirm whether logs must redact request content after 30 days; Redwood can configure retention & redaction for the pilot.
+
+Links: HubSpot deal: https://app.hubspot.com/contacts/12345/deal/CS-4721; Jira ticket for baseline: https://jira.redwood.com/browse/SUP-1987
+
+Attachment: baseline-test-plan.md
+
+— Sergio Alvarez
+Solutions Engineer, Redwood Inference
+sergio.alvarez@redwood.com
+
+
+From: Rachel Kim <rachel.kim@redwood.com>
+To: Alex Turner <alex.turner@cloudscale.com>
+Cc: Sergio Alvarez <sergio.alvarez@redwood.com>, Dev Patel <dev.patel@redwood.com>, legal@cloudscale.com
+Date: Thu, 01 Jul 2027 12:05:00 -0700
+Subject: Re: Post-demo performance checkpoints & gating checklist
+
+Alex — quick note to confirm next steps.
+
+- We’ll target the baseline run on July 7 (0900–1100 PT). Sergio/Dev will share the load scripts and invite.
+- Redwood will aim for the tighter streaming metric during the run; Sergio’s team will report both <120 ms and <100 ms buckets so you can pick which to sign off on.
+- Legal: Rachel attaching pilot-msa-draft.pdf for review; happy to jump on a short call if needed.
+
+If that all looks good from your side I’ll send the calendar invite and DocuSign link for the MSA.
+
+Thanks — Rachel
+
+On Thu, Jul 01, 2027 at 08:40 AM Sergio Alvarez <sergio.alvarez@redwood.com> wrote:
+> Alex / Rachel —
+> 
+> I sketched out a concrete acceptance matrix and a short test plan for the baseline run. High-level notes below, attaching the test plan (baseline-test-plan.md) with exact request mixes and sequence lengths.
+> 
+> [snip]
+
+

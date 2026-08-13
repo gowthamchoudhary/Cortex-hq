@@ -1,0 +1,150 @@
+MAP: Concurrency benchmarking plan + preliminary results
+
+--- Message 1 (2026-02-10 09:15 PST) ---
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Samantha Lee <samantha.lee@infraops.ai>, Carlos Mendez <carlos@acmeplatforms.com>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>
+Date: Tue, 10 Feb 2026 09:15:00 -0800
+Subject: MAP kickoff: performance benchmarking & concurrency plan
+
+Team — looping everyone in on the Mutual Action Plan (attached) and the perf evaluation we discussed. Goal: produce a concise benchmarking section in the MAP that answers the InfraOps questions on latency/throughput/TTFT and concurrency behavior so they can finalize capacity planning and sign the Dedicated contract by end-of-month.
+
+Key asks from InfraOps:
+- Required SLOs (TTFT target and P95 latency)
+- Concurrency envelope (steady vs burst) and expected token sizes per request
+- Traffic shape (uniform, spiky, or scheduled batches)
+
+Proposed test matrix (high level):
+1) Steady-state runs: 15-minute windows at target RPS (50%, 75%, 100% of expected steady RPS)
+2) Burst runs: short bursts (5–20s) at 3x and 5x steady RPS to observe queueing and service degradation
+3) Long-tail/soak test: 2-hour soak at nominal load to measure resource drift and latency tail growth
+4) TTFT profiling: instrument cold vs warmed KV-cache runs and measure first-token times
+
+Attachments: MAP_v3.pdf (MAP draft)
+
+Next steps: Vivek and Aditya will own the infra test harness. Samantha — appreciate if you can share a representative traffic profile (payload sizes, token distribution). I propose to run the first steady+burst pass next week (weds/thur).
+
+Thanks,
+Marissa
+Account Executive | Redwood Inference
+[attachment: MAP_v3.pdf (pdf, 320KB)]
+
+--- Message 2 (2026-02-11 10:10 PST) ---
+From: Samantha Lee <samantha.lee@infraops.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+Date: Wed, 11 Feb 2026 10:10:00 -0800
+Subject: Re: MAP kickoff: performance benchmarking & concurrency plan
+
+Marissa — thanks for the clear plan. Attached is a trimmed traffic profile: 75% of calls are short prompts (~30–60 tokens), 20% medium (150–300 tokens), 5% long (500+ tokens). Peak observed 1-min spikes historically ~2.4k RPS, steady-state around 600–750 RPS.
+
+Two priorities from InfraOps:
+- Ensure TTFT < 150ms median and P95 < 400ms for 90% of working set
+- Graceful degradation on sustained bursts: prioritization for interactive sessions over batch inference
+
+Please account for per-customer concurrency caps — we have internal rules to avoid noisy neighbor effects.
+
+Attachments: infraops_traffic_profile.json
+
+— Samantha
+Head of Platform — InfraOps
+[attachment: infraops_traffic_profile.json (json, 18KB)]
+
+--- Message 3 (2026-02-12 14:03 PST) ---
+From: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>
+Cc: Samantha Lee <samantha.lee@infraops.ai>
+Date: Thu, 12 Feb 2026 14:03:00 -0800
+Subject: Re: MAP kickoff: performance benchmarking & concurrency plan
+
+Quick note: Aditya and I sketched the harness. Plan to use our regulated load generator with two arrival modes: Poisson for steady-state and deterministic burst injection for short spikes. Key config:
+- Steady shapes: 600, 750, 900 RPS; run 15 minutes each
+- Burst shapes: 2.5k RPS 10s, 5k RPS 5s, 10k RPS 3s (observe queue length and drop rate)
+- Concurrency caps per instance: 64 concurrent requests; pool size auto-scaled for Dedicated trial
+- Metrics: TTFT (server-side), latency percentiles (P50/P95/P99), tokens/s, queue length, server-side queue wait time
+
+I added a small test script to coordinate runs (attaching).
+
+— Vivek
+Principal Infra Engineer | Redwood Inference
+[attachment: concurrency_test_script.sh (text, 6KB)]
+
+--- Message 4 (2026-02-16 11:20 PST) ---
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Vivek Kulkarni <vivek_kulkarni@redwood.ai>, Samantha Lee <samantha.lee@infraops.ai>
+Cc: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+Date: Mon, 16 Feb 2026 11:20:00 -0800
+Subject: Re: MAP kickoff: performance benchmarking & concurrency plan — preliminary run results
+
+Ran first pass on the Dedicated-like cluster (4x A100 equiv). Summary highlights:
+- Test payload: mixed token sizes per InfraOps profile.
+- Observed aggregate token throughput: ~1,800 tokens/sec at steady 750 RPS.
+- Median TTFT (warmed KV-cache): 82ms. Cold runs added ~120ms to TTFT.
+- Latency at steady 750 RPS: P50=95ms, P95=320ms, P99=580ms.
+- Burst 2.5k RPS (10s): queue growth observed ~120 requests after 3s; P95 spiked to ~1.4s and ~3% of requests experienced queue timeout/dropped by LB under default rate limits.
+- Soak 2-hour nominal: slight tail drift — P95 increased ~18% over 2 hours (likely GC or mem-pressure related on smaller worker shards).
+
+Immediate takeaways:
+1) TTFT targets are achievable for warmed caches; recommend a light pre-warm step for interactive sessions.
+2) The current default rate-limiter causes abrupt drops under very short bursts; rate limiter should use a token-bucket with short refill bursts (i.e., allow 3x burst for 5–10s) instead of hard RPS cap.
+3) Per-instance concurrency cap of 64 appears reasonable; however, we should scale pool sizes proactively when queued requests exceed 30% of active capacity.
+
+Attached: redwood_benchmark_results_q1.xlsx (raw numbers + charts).
+
+— Aditya
+Senior Systems Engineer | Redwood Inference
+[attachment: redwood_benchmark_results_q1.xlsx (spreadsheet, 1.2MB)]
+
+--- Message 5 (2026-02-18 09:12 PST) ---
+From: Samantha Lee <samantha.lee@infraops.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>, Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+Date: Wed, 18 Feb 2026 09:12:00 -0800
+Subject: Re: MAP kickoff: performance benchmarking & concurrency plan — preliminary run results
+
+Thanks for the data — useful. Two questions before we close out the MAP section:
+1) Can you produce a recommended operational policy for rate-limits (steady RPS, burst allowance, per-customer concurrency)? We need that written into the MAP so our procurement/compliance teams can sign off.
+2) For the soak/long-tail behavior — can you run a 4-hour soak with a larger worker profile? We want to understand whether tail-drift is a function of worker sizing or a software leak.
+
+Also: if you can show an example of graceful degradation (prioritizing interactive sessions) that will be a big plus. Proposed close timeline: sign Dedicated by 2026-02-28 if final MAP and proof points look good.
+
+— Samantha
+
+--- Message 6 (2026-02-18 17:42 PST) ---
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Samantha Lee <samantha.lee@infraops.ai>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>, Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+Date: Wed, 18 Feb 2026 17:42:00 -0800
+Subject: Re: MAP kickoff: performance benchmarking & concurrency plan — preliminary run results
+
+Samantha — appreciate the fast feedback. Below is an operational policy proposal and the MAP update (we'll push the PDF later today). This will be added to the MAP tasks with owners/due dates.
+
+Operational policy (recommended, to include in MAP):
+- Steady-state RPS: 650 RPS (matches InfraOps steady band)
+- Burst allowance: token-bucket allowing bursts up to 1,800 RPS for up to 10s; sustained bursts beyond that trigger graceful degradation policies
+- Per-customer concurrency cap: 64 concurrent requests (configurable per contract); soft queue for +30 requests before triggering scale-up
+- Rate-limiter behavior: token-bucket + leaky window. Refill rate = steady RPS; bucket depth tuned to allow 3x steady burst for short windows
+- Priority queueing: interactive sessions (via session flag) receive prioritized tokens when queue depth > 20%
+- TTFT mitigation: light pre-warm for interactive sessions (a 1–2 request warm-up) plus cached KV storage for frequently-hit prefixes
+- Observability: export queue-length, per-request queue-wait, per-customer concurrency and token-consumption metrics to MAP-run dashboard
+
+Results summary (to be embedded in MAP):
+- TTFT (warmed): median 82ms; cold adds ~120ms
+- Throughput: ~1,800 tokens/sec at 750 RPS steady mix
+- Latency (steady 750 RPS): P50=95ms, P95=320ms, P99=580ms
+- Burst behavior: at 2.5k RPS short burst we saw queue growth and P95 ~1.4s; ~3% drop under default hard limits
+- Long-tail: 2-hr soak showed P95 +18% tail drift; plan a 4-hr follow-up on a larger worker profile to isolate cause
+
+MAP action items (owner — due):
+- Update MAP with operational policy and add as an appendix (Marissa — 2026-02-20)
+- Run 4-hr soak on 2x worker profile & report (Vivek — 2026-02-22)
+- Implement token-bucket rate-limiter config and demo graceful degradation (Aditya — 2026-02-24)
+- Produce final MAP PDF with benchmarking section and executive summary (Marissa/Stefanie — 2026-02-25)
+
+Close timeline: Proposed sign date 2026-02-28 contingent on the soak run and the rate-limiter demo. If both pass, legal/procurement will complete final SOW.
+
+I'll attach the updated MAP+bench slides once the soak is scheduled. Any objections to the proposed policy? If not, we'll mark these MAP tasks as committed and schedule the next stitch-up call for Friday.
+
+Best,
+Marissa
+Account Executive | Redwood Inference
+[attachment: MAP_v3_updated.pdf (pdf, 410KB)]

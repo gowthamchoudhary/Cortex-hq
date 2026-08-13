@@ -1,0 +1,159 @@
+Midbrook discovery: performance requirements and technical next steps
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Samir Patel <samir@midbrook.ai>
+Cc: Elena Voss <elena.voss@midbrook.ai>
+Date: Sun, 05 Nov 2028 15:02:00 -0800
+Subject: Midbrook discovery: performance requirements and technical next steps
+
+Hi Samir / Elena —
+
+Thanks again for the call earlier. Quick write-up to capture what we heard and to align on technical next steps so we can scope a precise proposal. I pulled this together with Marissa.
+
+Pain points you raised
+- Latency spikes during peak checkout validation impacting UX.
+- Cost pressure on inference for high-volume enrichment (customer metadata).
+- Need deterministic fallbacks for heavier prompts during traffic surges.
+
+Primary goals
+- P95 latency goal for short prompts (~<128 tokens): target 350ms or better.
+- Throughput: sustain 250 TPS (short prompts) during promotional peaks; baseline ~40 TPS.
+- Data residency & audit logs for PII-related features.
+
+Clarifying asks we need from your side
+1) Peak TPS and average tokens per request (can be hourly breakdown).
+2) Example prompt set (5–10 canonical prompts) and token length distribution.
+3) Any firewall/VPC constraints for on-prem or VPC deployment.
+
+What we propose next (high level)
+- Schedule a 60-minute technical deep dive with Marissa + infra team to go over traffic traces and model options.
+- Share a short workload spreadsheet (if you can attach peak/avg numbers) — we’ll run capacity simulations and return a cost/latency tradeoff matrix.
+
+Proposed time for deep dive: Wed, Nov 8 or Thu, Nov 9 (I’ll follow up with a calendar link).
+
+Attachments: we can accept a simple CSV or Excel with a 24-hour timeline and token counts — we usually use a template; if you prefer, drop what you have and we’ll adapt.
+
+Thanks — looking forward to the deep dive.
+
+—
+Karthik Iyer
+Account Executive, Redwood Inference
+karthik.iyer@redwood.com
+
+
+From: Samir Patel <samir@midbrook.ai>
+To: Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Elena Voss <elena.voss@midbrook.ai>
+Date: Mon, 06 Nov 2028 09:24:00 -0800
+Subject: Re: Midbrook discovery: performance requirements and technical next steps
+
+Karthik — thanks for the summary, this captures it well.
+
+Quick responses:
+- Peak TPS: we see spikes up to ~270 TPS for the short-enrichment endpoint during promotions (usually 10–15 minute bursts). Baseline steady-state is ~35–50 TPS.
+- Token distribution: short prompts average 60 tokens, long form up to ~1,200 tokens but those are <1% of calls.
+- Data residency: US-only for now; procurement will require SOC2 evidence and basic audit logs.
+
+I attached our load estimate sheet (midbrook-loadestimates.xlsx) — it has a 24-hour timeline and expected burst windows.
+
+Two asks from us before the deep dive:
+1) Can Redwood support a private VPC deployment (we'd prefer VPC in our AWS account)?
+2) Ballpark monthly cost range for a dedicated pool that satisfies the peak numbers (we just need a rough order of magnitude for procurement).
+
+Procurement timeline: target decision by end of November. If you can get SOC2 evidence + an initial sizing in the next week that would help.
+
+Thanks — Samir
+Samir Patel
+Head of Engineering, Midbrook AI
+samir@midbrook.ai
+
+Attachment: midbrook-loadestimates.xlsx (spreadsheet)
+
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Samir Patel <samir@midbrook.ai>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 07 Nov 2028 10:41:00 -0800
+Subject: Re: Midbrook discovery: performance requirements and technical next steps
+
+Hi Samir / Karthik — looping in the technical plan and an initial SLO proposal. I reviewed the load sheet you sent; below are concrete recommendations and follow-up asks so we can produce a scoped Dedicated + VPC estimate.
+
+High-level recommendation (for your peak pattern)
+- Deployment: Redwood Dedicated in your AWS VPC (customer-managed subnets) — this gives predictable throughput and private networking.
+- Pool sizing: start with 3 x NVIDIA H100-style nodes (for heavy model variants) + 2 x A100-style nodes for cost-effective short-prompt inference. This gives horizontal headroom for 270 TPS peaks with room for KV cache efficiency.
+- Autoscale & burst: configure autoscale to add 1 node after sustained 60s above 200 TPS, with a burst pool up to +2 nodes for sudden spikes.
+
+Latency & throughput guidance (anticipated after optimization)
+- Short prompts (<128 tokens): expected P95 ~220–340ms depending on model quantization and KV cache hit rate.
+- Mid prompts (128–512 tokens): P95 ~500–850ms (streaming recommended for UI).
+- Long prompts (>512 tokens): prioritize throughput and streaming; tail latency will vary — route to a lower-cost variant if burst capacity is constrained.
+
+Model & runtime notes
+- Model choices: recommend starting with a quantized 13B–34B family for short prompts and keep a 70B-compatible variant for generative long-form tasks.
+- KV cache: enable prefix caching for your common enrichment prompts — we saw 30–60% fewer compute tokens in similar workloads.
+- Batching strategy: micro-batching at 16–64 requests depending on latency targets; dynamic batching policy per-route is best.
+
+Security/compliance
+- SOC2: we can provide our SOC2 report and an audit log export option.
+- VPC: we support Private deployments with customer-managed routing + KMS integrations (bring-your-own-key supported).
+
+What we need from you to finalize sizing + pricing
+1) Sample prompt set (canonical 10 prompts) and a 3–6 hour traffic trace if possible.
+2) Expected percent of calls that require the long-form model variant.
+3) Any blackout windows / scheduled maintenance windows we should be aware of.
+
+Deliverables we’ll produce after the deep dive
+- SLO mapping + proposed topology (1–2 page PDF) — attached as redwood-slo-proposal.pdf.
+- Cost/latency tradeoff matrix with 3 configurations (minimal, balanced, high-availability).
+- Mutual action plan for procurement (timeline + owners).
+
+Proposed agenda for the deep dive (60 min)
+1) Review traffic trace & key prompts (10m)
+2) Walk through SLOs & routing policy (15m)
+3) Topology and autoscale tuning (20m)
+4) Security / procurement checklist (10m)
+
+I can run the deep dive Wed Nov 8 at 11:00 AM PST or Thu Nov 9 at 9:00 AM PST — Karthik, feel free to pick best for Samir.
+
+—
+Marissa Cole
+Solutions Engineer, Redwood Inference
+marissa.cole@redwood.com
+
+Attachment: redwood-slo-proposal.pdf (pdf)
+
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Samir Patel <samir@midbrook.ai>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Elena Voss <elena.voss@midbrook.ai>, procurement@midbrook.ai
+Date: Fri, 09 Nov 2028 11:32:00 -0800
+Subject: Re: Midbrook discovery: performance requirements and technical next steps
+
+Thanks Samir — and thanks Marissa for the detailed SLO mapping. Confirming next steps and who’s doing what so procurement and engineering can keep momentum: 
+
+Mutual action plan
+- Midbrook: share the 10 canonical prompts + 3–6 hour traffic trace (Samir / Elena) — due Tue Nov 14.
+- Redwood: deliver a final sizing + cost/latency matrix and SOC2 evidence (Marissa / Karthik) — target Fri Nov 17.
+- Procurement: review draft commercial summary once sizing is agreed and highlight any PO / legal constraints (procurement@midbrook.ai).
+
+Deep dive scheduled
+- Date/time: Thu, Nov 9 at 09:00 AM PST. Calendar invite: https://calendar.redwood.com/meet/karthik-midbrook-tech-dive
+- Attendees: Samir, Elena, Marissa (solutions), Karthik (AE), plus one infra engineer from Midbrook.
+
+Immediate asks from our side (so the call is productive)
+1) Upload the load spreadsheet to the shared HubSpot deal record: https://app.hubspot.com/deal/DB-2028-046 (I’ll mirror it to our infra team).
+2) Confirm whether VPC will be in your AWS account or if you prefer Redwood-managed private runtime.
+
+If the timeline looks tight for procurement, we can provide an interim PO-friendly cost estimate once Marissa confirms the balanced configuration numbers.
+
+Thanks — we’ll see you on Thursday.
+
+—
+Karthik
+Account Executive, Redwood Inference
+karthik.iyer@redwood.com
+
+On Tue, Nov 7, 2028 at 10:41 AM Marissa Cole <marissa.cole@redwood.com> wrote:
+> Hi Samir / Karthik — looping in the technical plan and an initial SLO proposal. I reviewed the load sheet you sent; below are concrete recommendations and follow-up asks so we can produce a scoped Dedicated + VPC estimate.
+>
+> [message excerpted above]
+

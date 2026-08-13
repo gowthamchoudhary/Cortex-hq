@@ -1,0 +1,101 @@
+Territory attestation and transient-sync operational ask
+
+From: Samir Patel <samir.patel@atlashealth.com>
+To: Priya Natarajan <priya.natarajan@redwood.com>
+Cc: Laura Greene <laura.greene@atlashealth.com>
+Date: 2027-01-14T09:12:00-08:00
+Subject: Quick clarifications on territorial processing and transient syncs
+
+Hi Priya —
+
+Thanks for the product walkthrough yesterday. Two compliance items popped up while we were doing an internal write-up and I wanted to confirm before we progress to legal:
+
+1) Territory attestation: We need a short written attestation on whether customer data may be written to or temporarily processed in regions outside the primary pin (US-East) during system maintenance, cache rehydration, or automated scaling. If so, what are the maximum duration and typical triggers?
+
+2) Transient-sync behavior: Your docs mention ephemeral KV-syncs between regions for cold-cache misses. Can you outline which subprocessor/cloud regions might ever receive ephemeral copies and whether those copies are logged/auditable?
+
+We've attached our questionnaire (partial) — short answers would be great. If helpful we can do a 30-minute follow-up.
+
+Thanks,
+Samir
+Senior Security Program Manager
+Atlas Health
+[Attachment: Atlas_Tech_Questionnaire_v2.pdf (pdf)]
+From: Priya Natarajan <priya.natarajan@redwood.com>
+To: Samir Patel <samir.patel@atlashealth.com>
+Cc: Laura Greene <laura.greene@atlashealth.com>, Karthik Iyer <karthik_iyer@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: 2027-01-14T11:03:00-08:00
+Subject: Re: Quick clarifications on territorial processing and transient syncs
+
+Hi Samir —
+
+Appreciate the clear questions. Short answers up front, then a brief operational note:
+
+1) Territory attestation: Redwood will not perform permanent writes outside of the pinned region (US-East) for data marked under the pin. We do allow temporary, time-bounded transient processing in nearby regions only for a narrow set of operational events (scale-up cache rehydration, urgent node failover). Maximum controlled window is typically 30 minutes for rehydration and up to 4 hours in extreme failover cases; we can agree to a contract bound (e.g., 4 hours) in the DPA addendum.
+
+2) Transient-sync behavior: Ephemeral KV-syncs may touch our cloud provider's adjacent-region networks (e.g., us-east-2) or a vendor-managed caching layer in the same cloud region family. All ephemeral copies are flagged as transient and are not persisted to long-term storage. We capture operational telemetry (start/stop timestamps, host IP range, trigger reason) which we can surface as auditable logs for up to 90 days under a paid evidence package.
+
+Operational note: There are two paths customers typically choose — strict pinning with agreed failover windows (preferred for regulated workloads) or affinity-with-failover which allows faster recovery with transient hops. If you want, Karthik can give a short ops breakdown of triggers and logging, and Kimberly can list what we'd include in a DPA addendum (contract language and evidence scope).
+
+Would you like us to draft the two-line attestation and a short-runbook excerpt for your legal team?
+
+Best,
+Priya Natarajan
+Senior Manager, Security & Privacy Operations
+Redwood Inference
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Samir Patel <samir.patel@atlashealth.com>, Priya Natarajan <priya.natarajan@redwood.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>
+Date: 2027-01-15T08:44:00-08:00
+Subject: Re: Quick clarifications on territorial processing and transient syncs
+
+Hey Samir —
+
+Following Priya's overview, a few operational specifics so your infra team can evaluate risk:
+
+- Triggers:
+  * Autoscale cold-starts for model shards (typical)
+  * Rolling kernel/OS patch on pinned-hosts requiring live cache pull
+  * Emergency failover (rare; when >1 host in pinned AZ becomes unusable)
+
+- Typical duration: 10–30 minutes for cache population; we observe median 12 minutes in normal conditions. We surface the full duration per event in logs.
+
+- Where ephemeral copies may appear:
+  * Within same cloud provider family: US-East (primary) -> US-East-2 as transient hop only
+  * Vendor-managed caching nodes hosted under contract (we can share subprocessor names in the DPA schedule)
+
+- Auditing:
+  * Events include trigger reason, source shard id, involved host IP ranges, and start/stop timestamps.
+  * We can provide CSV extracts for a 90-day window on request; longer retention is available as a billed add-on.
+
+- Encryption: All in-flight and at-rest crypto keys remain customer-controlled for Dedicated/Private customers; for hosted we use envelope encryption with KMS and can provide key access logs on request for attestation purposes.
+
+Attachment: a simple diagram of the transient-sync flow (attached).
+
+If Atlas needs hard limits (e.g., no hops at all) we can do a strict pining config for an additional ops SLA and capacity reservation — that requires an advance commitment. Happy to run a short call to go over the diagram.
+
+— Karthik
+Director, Runtime Ops
+Redwood Inference
+[Attachment: transient-sync-diagram.png (png)]
+From: Laura Greene <laura.greene@atlashealth.com>
+To: Priya Natarajan <priya.natarajan@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Samir Patel <samir.patel@atlashealth.com>
+Date: 2027-01-16T16:40:00-08:00
+Subject: Re: Quick clarifications on territorial processing and transient syncs
+
+Thanks — that was helpful. A couple of follow ups from legal:
+
+1) Please send a short written attestation we can include in our file: a one-paragraph statement that Redwood will not write customer data outside the pinned US-East region except for transient, time-bounded processing as described and that such events will be logged with timestamps and host identifiers.
+
+2) We also need subprocessor names for any vendor-managed caching nodes that could receive ephemeral copies. A high-level roster (company name + country) is fine.
+
+3) DPA addendum: We expect the temporary window to be contractually capped (we're proposing 4 hours) and the audit extract for transient events to be deliverable within 10 business days when requested. Are those acceptable?
+
+If you can send the attestation and the subprocessor roster by EOD Friday we will push the DPA through.
+
+Regards,
+Laura Greene
+Counsel, Privacy & Compliance
+Atlas Health
+

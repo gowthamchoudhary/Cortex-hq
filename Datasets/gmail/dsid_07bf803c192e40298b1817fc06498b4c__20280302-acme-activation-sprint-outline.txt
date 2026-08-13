@@ -1,0 +1,135 @@
+Activation sprint: Dedicated GPU pool for Acme Health
+
+From: Priyom Das <priyom_das@redwood.com>
+To: Samantha Lee <samantha@acmehealth.com>, Tom Alvarez <tom.alvarez@acmehealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: 2028-03-02T16:10:00Z
+Subject: Activation sprint: Dedicated GPU pool for Acme Health
+
+Hi Samantha / Tom,
+
+Thanks again for committing to Redwood Dedicated for Acme Health. Attached is a first-pass activation sprint outline that covers GPU pool provisioning, autoscaling/burst policy proposals, and recommended regional selection based on your latency targets and DR requirements. This is intentionally prescriptive so the CS + infra teams have clear checkpoints.
+
+Key asks from you to finalize schedule:
+- Confirm preferred primary region (we recommended us-west-2 based on your user base).
+- Confirm 99th pct latency target and acceptable warmup window for autoscale.
+- Flag any procurement constraints (PO timing / vendor approvals).
+
+Attachments: acme-activation-sprint-v1.pdf, acme-infra-questions.xlsx
+
+Proposed kickoff: T+5 business days from sign (we can move earlier if procurement is fast).
+
+Happy to hop on a quick call tomorrow to walk through.
+
+Thanks,
+Priyom
+Customer Implementation Lead
+Redwood Inference
+[Attachment: acme-activation-sprint-v1.pdf (PDF)]
+[Attachment: acme-infra-questions.xlsx (XLSX)]
+From: Samantha Lee <samantha@acmehealth.com>
+To: Priyom Das <priyom_das@redwood.com>
+Cc: Tom Alvarez <tom.alvarez@acmehealth.com>
+Date: 2028-03-03T09:05:00Z
+Subject: Re: Activation sprint: Dedicated GPU pool for Acme Health
+
+Priyom — thanks for the doc, looks thorough. A few quick points: 
+
+1) Region: we prefer us-east-1 as our primary for now (most traffic and our analytics infra live there).
+2) Latency target: 95th < 120ms for interactive flows; we can tolerate up to 500ms for batch jobs. Warmup window: 90s is probably acceptable.
+3) Procurement: PO is signed but legal needs a brief review of the SLA section — should be wrapped by EOD Friday.
+
+One question on autoscale/burst: can you enumerate the failure modes in the plan (e.g., if the pool is exhausted in us-east-1, what gets routed and what are the cost implications)? Tom — looped in for infra questions.
+
+Thanks,
+Samantha
+VP Product
+Acme Health
+
+On Fri, Mar 2, 2028 at 16:10, Priyom Das <priyom_das@redwood.com> wrote:
+> (original message attached)
+
+From: Priyom Das <priyom_das@redwood.com>
+To: Samantha Lee <samantha@acmehealth.com>, Tom Alvarez <tom.alvarez@acmehealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2028-03-04T11:30:00Z
+Subject: Re: Activation sprint: Dedicated GPU pool for Acme Health
+
+Samantha — thanks for the quick read and the region preference. Updated notes below and an action-oriented implementation plan (attached): acme-activation-sprint-v1.1.pdf.
+
+Summary of changes based on your feedback:
+- Primary region switched to us-east-1; secondary (failover) = us-west-2. We will provision a small warm standby in the secondary region for regional failover.
+- Autoscale policy proposal: target concurrency-based scaling with the following knobs: min_pool = 4 VMs (each with 8 x A100-equivalent GPUs), scale_step = +2 VMs, cooldown = 45s, max_pool = 20 VMs. Burst policy: allow short-term burst up to +30% above max_pool for up to 120s using preemptible capacity where available.
+- Routing & fallbacks: primary-routing to us-east-1; if queue depth > 200 and estimated wait > 200ms, requests will be routed to the secondary region. Where models are not pinned between regions, we will route to a compatible quantized variant (cost delta ~ 20%).
+- Failure modes: 1) capacity exhaustion — automatic cross-region failover to secondary region, 2) degraded model variant — fall back to quantized variant with monitoring and alerting on quality drift, 3) control-plane outage — local cached policy allows continued serving for short intervals, 4) billing/overage control — automated throttle and notify.
+
+Action items (owners / ETA):
+- Redwood: finalize pool sizing & IAM roles (Priyom) — T+2 business days.
+- Acme: confirm warm standby budget & approve burst policy (Samantha) — T+3 business days.
+- Legal: review SLA redlines (Acme legal) — EOD Friday.
+- Infra sync: deep-dive on model sync between regions (Ben) — schedule this week.
+
+Attachments: acme-activation-sprint-v1.1.pdf, pool-sizing-estimates.csv
+
+Would you like a 30m walkthrough tomorrow at 10am ET?
+
+Thanks,
+Priyom
+[Attachment: acme-activation-sprint-v1.1.pdf (PDF)]
+[Attachment: pool-sizing-estimates.csv (CSV)]
+From: Ben Carter <ben_carter@redwood.com>
+To: Priyom Das <priyom_das@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Samantha Lee <samantha@acmehealth.com>, Tom Alvarez <tom.alvarez@acmehealth.com>, Monica Patel <monica_patel@redwood.com>
+Date: 2028-03-05T15:40:00Z
+Subject: Re: Activation sprint: Dedicated GPU pool for Acme Health
+
+Quick infra notes from my end (summary for the walkthrough):
+
+- Cross-region model sync: We'll surface two options — active sync (near real-time replication) vs periodic snapshot sync. Active sync has higher bandwidth and storage cost but reduces cold-starts on failover. Recommend periodic snapshots + on-demand pre-warm for the first 15 minutes after failover.
+- Burst economics: preemptible instances for bursts save ~45% cost but come with preemption risk. For critical queries (clinical decisioning) we should reserve non-preemptible capacity. Suggest policy tags so requests can opt into lower-cost burst paths.
+- Quotas & throttles: we'll expose a per-route concurrency quota and a global account throttle. We'll preconfigure a conservative throttle at launch and ramp after week 1 based on observed p95.
+
+I'll prepare a short slide (5-6 bullets) for the 30m walkthrough covering: sync options, burst tradeoffs, throttles, monitoring hooks.
+
+-ben
+From: Monica Patel <monica_patel@redwood.com>
+To: Samantha Lee <samantha@acmehealth.com>, Priyom Das <priyom_das@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: 2028-03-06T10:12:00Z
+Subject: Re: Activation sprint: Dedicated GPU pool for Acme Health — security checklist
+
+Samantha / team — a few security/compliance items to confirm before go-live: 
+
+1) KMS integration: will Acme provide a customer-managed key (CMK) in us-east-1? If yes, we need key ARN and a deployment window to validate.
+2) Audit logs: we will enable request-level audit logging for 90 days by default; confirm retention policy and any SOC 2 evidence you require.
+3) Network: private VPC peering or transit gateway? Peering is simplest for the initial rollout.
+
+If you can share the CMK ARN and a network contact, we will add these to the implementation checklist.
+
+Thanks,
+Monica
+Security & Compliance
+Redwood Inference
+From: Samantha Lee <samantha@acmehealth.com>
+To: Priyom Das <priyom_das@redwood.com>, Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2028-03-09T09:25:00Z
+Subject: Re: Activation sprint: Dedicated GPU pool for Acme Health
+
+Team — all good from Acme's side.
+
+Summary / confirmations: 
+- Primary region: us-east-1 (confirmed). Secondary: us-west-2.
+- Warm standby budget approved (Tom signed off).
+- Burst policy approved with tags to opt-in for non-critical jobs. We will mark clinical routes as non-burst.
+- Legal finished SLA review this morning — no further redlines. PO is signed and routing to procurement.
+- Security: CMK ARN will be shared by EOD Monday; network contact is Tom (cc'ed).
+
+Please send calendar invite for the T+2 kickoff (walkthrough + pool provisioning checklist). Looking forward to the walk-through.
+
+Best,
+Samantha
+VP Product
+Acme Health
+
+On Tue, Mar 6, 2028 at 10:12, Monica Patel <monica_patel@redwood.com> wrote:
+> (security checklist above)

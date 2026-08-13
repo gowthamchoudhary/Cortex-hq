@@ -1,0 +1,145 @@
+Private VPC: Tenant Interface Index & Control/Data Plane Annotations
+
+From: Elliot Price <elliot@redwood.com>
+To: Carlos Reyes <carlos@nimbusedge.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Mina Haddad <mina@redwood.com>
+Date: 2026-11-01T09:15:00-08:00
+Subject: Private VPC: Tenant Interface Index & Control/Data Plane Annotations
+
+Carlos — attaching a first-pass "tenant interface index" and an annotated control/data-plane diagram for the on-prem VPC handoff. Goal is to clarify responsibilities across the attachment boundary so your infra and our ops teams have an unambiguous index for staging -> prod cutover.
+
+Key asks from our side:
+- Confirm which side will own SNAT/eDNA for tenant outbound (we've tentatively put this on your edge routers in the spreadsheet).
+- Verify whether you can accept MTU 9000 on the tenant-facing VLAN or if we should constrain to 1500 for now.
+- Point us to any internal runbook or change freeze windows we should schedule against.
+
+Attachments: tenant-interface-index.xlsx (tabbed: interfaces, ingress-egress-responsibility, notes) and control-data-annotated-diagram.pdf (control-plane hooks, cert rotation/propagation callouts).
+
+I'll coordinate a short 30m sync after you've had a look; Karthik/Mina are listed to capture the technical mapping and operational ownership.
+
+Thanks,
+Elliot
+Elliot Price
+Senior Solutions Architect, Redwood Inference
+elliot@redwood.com
+Redwood Inference
+
+
+From: Carlos Reyes <carlos@nimbusedge.com>
+To: Elliot Price <elliot@redwood.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Mina Haddad <mina@redwood.com>
+Date: 2026-11-02T10:22:00-08:00
+Subject: Re: Private VPC: Tenant Interface Index & Control/Data Plane Annotations
+
+Thanks Elliot — received both attachments and initial read looks good. A couple of clarifications from our networking team:
+
+- SNAT/egress: We prefer to own SNAT at the tenant edge (egress gateway) to preserve source IP for internal telemetry. If Redwood needs stable source IPs for callbacks, we can reserve a small set of public IPs and NAT there — would that work?
+- MTU: We run mixed hardware at the edge. MTU 9000 is supported for colocated racks but not across our peering fabrics; if you can keep path MTU at 1500 for control-plane probes and the first cut of data-plane traffic, we can pilot jumbo frames in the colo pockets later.
+- Cert propagation: we need explicit TTLs for the control-plane cert exchange window — ops wants a 48-hour window documented so cert rotations don't overlap.
+
+I attached our short notes (nimbusedge-egress-notes.docx) with a tentative public IP block and constraints. Two follow-ups: can you confirm which control-plane endpoints Redwood will present for readiness probes (hostnames + expected ports)? Also looping in our networking lead (we'll add them to the meeting invite if needed).
+
+Carlos Reyes
+Head of Partnerships & Network Operations
+NimbusEdge
+carlos@nimbusedge.com
+
+
+From: Karthik Iyer <karthik@redwood.com>
+To: Carlos Reyes <carlos@nimbusedge.com>, Elliot Price <elliot@redwood.com>
+Cc: Mina Haddad <mina@redwood.com>
+Date: 2026-11-03T14:05:00-08:00
+Subject: Re: Private VPC: Tenant Interface Index & Control/Data Plane Annotations
+
+Carlos — thanks for the quick read and the egress notes. Some technical replies below (pulling from the tenant-interface-index.xlsx).
+
+1) SNAT / Source preservation
+- We can support either approach. If NimbusEdge owns SNAT at the edge, Redwood will rely on client-provided X-Forwarded-For for application-layer telemetry. For control-plane callbacks (webhooks, KMS attestation calls) we need a stable egress IP range. Proposed compromise:
+  - Reserve 3 static IPs on your egress gateway for control-plane callbacks (listed in your attachment).
+  - All other tenant data egress can be owner-by-tenant-edge, no SNAT on our side.
+
+2) MTU handling
+- We'll set control-plane probes at 1500. For data-plane we will mark the interface with MTU=1500 in the initial config and expose a readiness flag that allows you to flip to 9000 once colo pockets confirm. Our runtime will handle fragmentation and will prefer smaller segments when the path MTU is unknown.
+
+3) Control-plane endpoints
+- Readiness/probe endpoints (for your firewall allow-lists):
+  - control-1.redwood-inference.com:443 (TLS)
+  - control-2.redwood-inference.com:443 (TLS)
+  - metrics-push.redwood-inference.com:9200 (TLS) -- only from the reserved IPs
+
+4) Cert propagation window
+- 48-hour overlap is fine. We'll publish a cert-rotation schedule and a simple rollback playbook.
+
+Action items I've taken: updated the tenant-interface-index.xlsx (sheet: ingress-egress-responsibility) with the reserved control-plane IPs and MTU notes. Attaching a quick snippet of the mapping we plan to push to the orchestration templates:
+
+# sample snippet (conceptual)
+- interface: tenant-vlan-200
+  mtu: 1500
+  ingress_handled_by: nimbusedge
+  egress_snat: nimbusedge
+  control_probe_ips: [control-1.redwood-inference.com, control-2.redwood-inference.com]
+
+I'll sync with Mina on the rollout window and with our networking team to add the specific ACLs.
+
+-Karthik
+Karthik Iyer
+Principal Network Engineer, Redwood Inference
+karthik@redwood.com
+
+
+From: Mina Haddad <mina@redwood.com>
+To: Carlos Reyes <carlos@nimbusedge.com>, Elliot Price <elliot@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Cc: Logan Wright <logan@redwood.com>
+Date: 2026-11-05T16:42:00-08:00
+Subject: Re: Private VPC: Tenant Interface Index & Control/Data Plane Annotations — consolidated readout & next steps
+
+Carlos / Team — thanks for the notes and the IP block. Consolidated readout below, plus owners and timelines. I've also attached tenant-interface-index-v2.xlsx which includes the reserved IPs and a simple turn-up checklist.
+
+Summary decisions (agreed):
+- NimbusEdge will own tenant egress SNAT for data-plane. Redwood will consume X-Forwarded-For for telemetry and reserve 3 public IPs for control-plane callbacks. (Owner: NimbusEdge networking; ETA: 2026-11-20 for IP reservation)
+- Initial MTU for both control and data plane will be 1500. Jumbo frames can be enabled later inside colo pockets per pocket readiness flag. (Owner: Redwood Ops + NimbusEdge colo ops; ETA: pilot by 2026-12-01)
+- Cert rotations: 48-hour overlapping window, Redwood will publish rotation schedule and rollback playbook to the Drive folder. (Owner: Redwood Security; ETA: schedule by 2026-11-08)
+
+Rollout / cutover plan (brief):
+1) Pre-cutover validation (config pushed to staging tenant slice) — Redwood to run control-probe smoke tests against reserved IPs. (Owner: Karthik / Redwood NetOps)
+2) Tenant traffic shadowing window (48h) — mirror traffic to the new attachment and validate telemetry. (Owner: Logan / Redwood SRE)
+3) Production flip (scheduled change window) — coordinate with NimbusEdge change freeze window and confirm ACLs. (Owner: Elliot + NimbusEdge network ops)
+
+Open items for next sync:
+- Carlos: confirm exact WAN ACLs and the contact for colo pocket readiness confirmation.
+- NimbusEdge: share the change freeze blackout periods for November.
+- Redwood: publish the cert rotation doc to the Drive link below.
+
+Drive link: https://drive.google.com/drive/folders/1zX_example_designs
+Jira: NETOPS-4823 (follow the checklist in the new spreadsheet)
+
+If there are no objections, I'll schedule the 30m cutover planning call next week (suggested: 2026-11-10 10:00–10:30 PT).
+
+Thanks — Mina
+Mina Haddad
+Engineering Manager, Production Delivery, Redwood Inference
+mina@redwood.com
+
+--
+On Mon, Nov 3, 2026 at 2:05 PM Karthik Iyer <karthik@redwood.com> wrote:
+> Carlos — thanks for the quick read and the egress notes. Some technical replies below (pulling from the tenant-interface-index.xlsx).
+>
+> 1) SNAT / Source preservation
+> - We can support either approach. If NimbusEdge owns SNAT at the edge, Redwood will rely on client-provided X-Forwarded-For for application-layer telemetry. For control-plane callbacks (webhooks, KMS attestation calls) we need a stable egress IP range. Proposed compromise:
+>   - Reserve 3 static IPs on your egress gateway for control-plane callbacks (listed in your attachment).
+>   - All other tenant data egress can be owner-by-tenant-edge, no SNAT on our side.
+>
+> 2) MTU handling
+> - We'll set control-plane probes at 1500. For data-plane we will mark the interface with MTU=1500 in the initial config and expose a readiness flag that allows you to flip to 9000 once colo pockets confirm. Our runtime will handle fragmentation and will prefer smaller segments when the path MTU is unknown.
+>
+> 3) Control-plane endpoints
+> - Readiness/probe endpoints (for your firewall allow-lists):
+>   - control-1.redwood-inference.com:443 (TLS)
+>   - control-2.redwood-inference.com:443 (TLS)
+>   - metrics-push.redwood-inference.com:9200 (TLS) -- only from the reserved IPs
+>
+> 4) Cert propagation window
+> - 48-hour overlap is fine. We'll publish a cert-rotation schedule and a simple rollback playbook.
+>
+> -Karthik
+>

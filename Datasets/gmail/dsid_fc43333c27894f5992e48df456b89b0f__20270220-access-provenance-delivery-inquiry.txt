@@ -1,0 +1,134 @@
+Access provenance deliverable & next steps
+
+From: Rachel Kim <rachel.kim@redwood.ai>
+To: Sam Brooks <samuel.brooks@finlayer.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Sat, 20 Feb 2027 09:12:00 -0800
+Subject: Access provenance deliverable & next steps
+
+Hi Sam —
+
+Thanks again for the call this morning. Quick recap and proposed next steps so we stay aligned before the compliance window next month.
+
+Summary of ask (from your team):
+- Export of access provenance for the LLM serving project (project id: production.llm-serving) covering who accessed model endpoints, which resource/route was hit, request id, timestamp, and any session-affiliated metadata.
+- Time window requested: last 6 months (Aug 1 2026 — Feb 20 2027) as a first tranche.
+- Redaction/pseudonymization: prefer removal of raw IPs and redaction of any cleartext PII.
+- File format: CSV or compressed CSV preferred; include ISO8601 timestamps and timezone offset.
+- Delivery: secure transfer (S3 pre-signed or encrypted Drive).
+
+Open questions for you:
+1) Is there a minimum/maximum row limit you want for the initial sample? We typically provide a 5k-row sample for schema review.
+2) Do you need IPs replaced with deterministic pseudonyms (salted hash) or removed entirely? If salted hashing is required, will FinLayer provide a salt or do you want Redwood to apply one (we can provide HSM-backed salts if needed)?
+3) Any jurisdictional constraints we should be aware of for the exported data (e.g., EU residency requirement)?
+
+Proposed next steps / timeline:
+- Marissa (cc) will prepare a schema + 5k-row sample and a short transfer plan by EOD Mon 2/22.
+- You review and confirm redaction/hashing preference and sample size.
+- On approval, Redwood will schedule the full extract (we estimate 2–3 business days to generate and QA a 6-month extract).
+
+I attached a brief log schema doc (redwood-log-schema-v1.pdf) to show the fields we typically include. If you want, we can run a short call to walk through the sample before full delivery.
+
+Thanks — want to make this as painless as possible for your audit team.
+
+Rachel Kim
+Account Executive, Redwood Inference
+rachel.kim@redwood.ai
++1 415-555-0142
+
+Attachments: redwood-log-schema-v1.pdf
+
+From: Samuel Brooks <samuel.brooks@finlayer.com>
+To: Rachel Kim <rachel.kim@redwood.ai>
+Cc: legal@finlayer.com
+Date: Mon, 22 Feb 2027 08:03:00 -05:00
+Subject: Re: Access provenance deliverable & next steps
+
+Rachel —
+
+Appreciate the recap. A few clarifications from our side:
+- Confirming scope: production.llm-serving only (we do NOT need staging).
+- Time window: yes — last 6 months is correct for the initial tranche. If the extraction is chunked, we can accept monthly files.
+- Sample: 5k rows sounds fine for schema validation.
+- Pseudonymization: we prefer deterministic salted hashing of IPs and user identifiers so our internal SIEM can correlate without revealing raw values. FinLayer will provide the salt via our legal channel (legal@finlayer.com) under an NDA.
+- IP addresses: keep as hashed values, do not include raw IPs.
+- Timestamps: ISO8601 with timezone offset (UTC preferred).
+- Fields required: request_id, endpoint, internal_user_id (hashed), timestamp, action (read/generate/update), response_size_bytes, geo_country (optional), and an attribution token if available.
+
+Delivery mechanism: secure S3 upload is preferred. Please provide an encrypted tarball and an MD5/SHA256 checksum. We will provide an S3 bucket + write credentials once the NDA is in place.
+
+Attached: compliance-questionnaire.docx (answers will come from our security team if needed).
+
+Deadline: our audit window opens Mar 8; we need the initial sample by Feb 25 to get internal review. Can your team meet that?
+
+Thanks,
+Sam
+Head of Security, FinLayer
+samuel.brooks@finlayer.com
+
+Attachments: compliance-questionnaire.docx
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Samuel Brooks <samuel.brooks@finlayer.com>, Rachel Kim <rachel.kim@redwood.ai>
+Cc: Dev Patel <dev_patel@redwood.ai>
+Date: Mon, 22 Feb 2027 09:22:00 -08:00
+Subject: Re: Access provenance deliverable & next steps
+
+Hi Sam —
+
+Marissa here on the solutions side, looping in Dev for the extraction plan. We can meet the Feb 25 sample deadline if we get confirmation on the salt delivery method and whether FinLayer wants Redwood-managed HSM salts or customer-provided salts. Action items and technical notes below.
+
+Planned sample deliverables (for Feb 25):
+- access_provenance_sample.csv.gz (5,000 rows, gzip compressed)
+- schema_sample.csv (first 10 rows expanded for human review)
+- transfer_instructions.txt (how we will upload and verification steps)
+
+Proposed schema fields we will include in the sample: request_id, endpoint, internal_user_id_hashed, timestamp_utc, action, response_size_bytes, request_payload_digest, session_id, region, service_node_id. We will omit raw IPs unless you instruct otherwise.
+
+Hashing/pseudonymization approach:
+- Option A (preferred for audit reproducibility): deterministic SHA256(salt + value) using a provided salt. Redwood can accept the salt via an encrypted envelope to legal@finlayer.com and use it only for this export.
+- Option B: Redwood generates a salt in our KMS/HSM and provides mapping material under an encrypted transfer.
+
+Delivery options (choose one):
+1) S3 PUT to your bucket using temporary credentials/photos; we will provide an S3 path and checksum.
+2) Encrypted tarball on a pre-signed S3 object owned by Redwood (we provide URL).
+3) Encrypted SFTP push to a FinLayer endpoint (requires host + creds).
+
+Dev: we will implement a dry run extract today to validate column types and encoding. Question for you Sam — do you want timezone converted to UTC or preserved with offsets? We default to UTC in the extract file (timestamp_utc).
+
+Security note: logs may contain short-lived tokens in payload digests; we will drop any full payloads and only keep payload digests (sha256) to avoid storing raw PII.
+
+If you can confirm salt option and delivery choice by EOD today we will proceed and aim to upload the sample by Feb 25 PST.
+
+Thanks,
+Marissa Cole
+Solutions Engineer, Redwood Inference
+marissa_cole@redwood.ai
++1 415-555-0199
+
+Attachments: schema_sample.csv, transfer_instructions.txt
+
+From: Samuel Brooks <samuel.brooks@finlayer.com>
+To: Marissa Cole <marissa_cole@redwood.ai>, Rachel Kim <rachel.kim@redwood.ai>
+Cc: legal@finlayer.com
+Date: Mon, 22 Feb 2027 11:05:00 -05:00
+Subject: Re: Access provenance deliverable & next steps
+
+Marissa / Rachel —
+
+Confirmed. FinLayer will provide the salt to legal@finlayer.com by EOD — they will include a short note authorizing Redwood to use the salt for the export only.
+
+Delivery: we choose option 1 (S3 PUT to our bucket). I will ask procurement to provision a writeable prefix and temporary creds and send to you by Feb 24.
+
+Timezone: please convert to UTC in the files.
+
+Sample deadline acknowledged: get the 5k-row sample to s3://finlayer-compliance/FL-5542/samples/ by Feb 25 23:59 UTC. We will confirm receipt and provide feedback in 24 hours.
+
+I'll schedule a 30-min working session on Feb 26 to review the sample and run through verification steps with our SIEM engineer. Invite forthcoming.
+
+Thanks for the quick response team — this is exactly what we needed to keep the audit runway intact.
+
+Sam
+Head of Security, FinLayer
+
+Attachments: delivery_manifest.txt

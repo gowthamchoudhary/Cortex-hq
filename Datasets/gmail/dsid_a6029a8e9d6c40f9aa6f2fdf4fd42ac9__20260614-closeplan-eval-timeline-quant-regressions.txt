@@ -1,0 +1,132 @@
+MAP & Eval: Performance testing, quant kernels, and close timeline for CloudWave
+
+Mutual action plan for CloudWave focused on performance benchmarking (latency, throughput, TTFT, concurrency) across FP16/BF16 and INT8/INT4 kernels. Tests surfaced an INT4 kernel regression at high concurrency; proposal to run follow-up kernel tweak and fall back to INT8 for SLA routes. Agreed close timeline: final PO in two weeks pending DocuSign.
+From: Ben Carter <ben.carter@redwood.inference>
+To: Olivia Chen <olivia.chen@cloudwave.ai>
+Cc: Marissa Cole <marissa_cole@redwood.inference>, Rishi Malhotra <rishi_malhotra@redwood.inference>
+Date: 2026-06-01T09:15:00-07:00
+Subject: MAP & Eval: Performance testing, quant kernels, and close timeline for CloudWave
+
+Olivia — thanks again for the demo last week. As discussed, attached is a proposed Mutual Action Plan (MAP) and the eval plan we'll run during the PoC window. High level:
+
+- Objective: validate inference economics and latency SLOs for your search assistant (typical prompt length ~120 tokens, up to 512 for long-form).
+- Metrics: P50/P95 token latency, TTFT (time-to-first-token), sustained throughput (tokens/s), and behavior under concurrent sessions (up to 50 concurrent sessions).
+- Kernel matrix: FP16/BF16 baseline vs INT8 and INT4 quant profiles. We'll capture kernel hotspots (attention, KV cache ops) and a regression checklist tied to source prompts.
+- Timeline: test run June 7–10, results summary June 11, decision/PO by June 21 per your procurement cadence.
+
+Attachments: MAP-CW-Performance-Plan.xlsx (plan + test harness), CW-kernel_profiles-INT8-INT4.pdf (kernel/profile hypotheses).
+
+Please confirm the target test window and whether we should include a shadowed production replay or synthetic load.
+
+Thanks,
+Ben
+Ben Carter
+Senior Solutions Engineer | Redwood Inference
+ben.carter@redwood.inference
++1 (415) 555-0127
+
+--
+Attachment stubs: MAP-CW-Performance-Plan.xlsx (xlsx), CW-kernel_profiles-INT8-INT4.pdf (pdf)
+
+From: Olivia Chen <olivia.chen@cloudwave.ai>
+To: Ben Carter <ben.carter@redwood.inference>
+Cc: salesops@cloudwave.ai
+Date: 2026-06-03T11:02:00-07:00
+Subject: Re: MAP & Eval: Performance testing, quant kernels, and close timeline for CloudWave
+
+Ben — confirmed. June 7–10 works. We'll provide a 24-hour replay dump from our staging search traffic (anonymized) and a short list of 12 canonical prompts to check quality regressions. A couple of clarifications:
+
+- Target SLOs: P95 token latency <= 300ms, TTFT <= 120ms for interactive flows.
+- Critical routes: session-based chat (high concurrency) and batch generation for weekly report jobs (throughput-bound).
+
+We'll share the replay link and the canonical prompts by EOD June 5. Looking forward to the kernel comparisons — we've seen claims about INT4 cost wins but concerned about tail latency/regressions.
+
+Olivia Chen
+Director, Product — CloudWave AI
+olivia.chen@cloudwave.ai
+
+From: Marissa Cole <marissa_cole@redwood.inference>
+To: Ben Carter <ben.carter@redwood.inference>, Rishi Malhotra <rishi_malhotra@redwood.inference>
+Date: 2026-06-11T08:30:00-07:00
+Subject: Fwd: MAP test window results & quick internal readout
+
+Ben / Rishi — forwarding initial notes from the test run. Key findings we should be ready to present to CloudWave:
+
+- Workload: replayed 24h staging traffic + canonical prompts. Median seq len ~110 tokens, 95th ~420 tokens.
+- Throughput: baseline FP16 (A100) sustained ~22k tokens/s across the pool at 16 concurrent sessions; INT8 increased tokens/s by ~1.9x at low concurrency.
+- Latency: P50/P95 for short prompts (<=128 tokens): FP16 P50 85ms / P95 210ms; INT8 P50 60ms / P95 240ms.
+- TTFT: FP16 95ms, INT8 70ms; INT4 TTFT 60ms but unstable under concurrency.
+- Regression observed: INT4 profile shows P95 spikes under >8 concurrent sessions — kernel trace shows attention kernel switching to a fallback codepath causing 2x latency blips. See attached CSV for per-kernel timing.
+
+Recommendations before steering to customer: run kernel tweak (reduce INT4 fused-attn micro-batch size, re-evaluate quant-matmul scheduling) + re-test. For SLA sensitive routes we should propose INT8 fallback for concurrency >= 8. Also capture quality regression checks for the 12 canonical prompts (we have per-prompt BLEU / token edit deltas).
+
+I'll let you draft customer-facing language. We should be explicit about the safety fallback (INT8) and a short plan for a quick kernel patch and re-run within 72 hours.
+
+-Marissa
+
+--
+Attachment referenced: MAP-results-summary.csv (CSV)
+
+From: Ben Carter <ben.carter@redwood.inference>
+To: Olivia Chen <olivia.chen@cloudwave.ai>
+Cc: Marissa Cole <marissa_cole@redwood.inference>, Rishi Malhotra <rishi_malhotra@redwood.inference>
+Date: 2026-06-12T10:45:00-07:00
+Subject: MAP test results: summary, INT4 regression, and proposed mitigations
+
+Olivia — thanks for the replay data and prompts. We completed the initial eval and wanted to share a concise summary and proposed next steps so procurement has what it needs. Short version first, then data: 
+
+Summary:
+- FP16/BF16 baseline meets interactive SLOs for P95 and TTFT.
+- INT8 gives meaningful cost/throughput uplift and generally preserves P95 for <8 concurrent sessions.
+- INT4 shows best single-session TTFT but exhibits P95 spikes when concurrency increases (kernel fallback in attention). Not safe to enable for SLA routes without fixes.
+
+Key numbers (canonical interactive workload):
+- FP16: P50 85ms / P95 210ms, TTFT 95ms, sustained throughput 22k tokens/s at 16 concurrent sessions.
+- INT8: P50 60ms / P95 240ms, TTFT 70ms, sustained throughput ~42k tokens/s at 16 concurrent sessions (note slightly higher P95).
+- INT4: P50 55ms / P95 600ms (under >8 concurrency), TTFT 60ms, throughput up to 58k tokens/s single-threaded but unstable.
+
+Kernel findings (high level):
+- Attention kernel: INT4 path triggers a slow scalar fallback when micro-batch alignments exceed 128 tokens; the fallback shows up as isolated P95 spikes.
+- KV-cache writes are slightly more expensive in INT4 due to packing/unpacking overhead on our runtime.
+
+Proposed mitigations / MAP updates:
+1) Short kernel patch (runtime scheduling and micro-batch clamp) — Redwood engineering can roll to the dedicated eval pool within 48–72 hours, then re-run the concurrency sweep.
+2) MAP routing policy: enable INT8 as standard for concurrency >=8; enable INT4 as opt-in for non-SLA batch jobs where cost is primary.
+3) Quality checks: run canonical-prompt diff for every quant profile and include automated regression alerts in the MAP acceptance criteria (max token-level edit distance threshold per prompt).
+
+Timeline & close asks (updated MAP):
+- June 12: share initial results (this email).
+- June 13–15: engineering runs kernel patch and concurrency re-test.
+- June 16: updated results and proposed DocuSign for MAP addendum.
+- June 21: target PO and contract signature (matches your procurement window).
+
+Attachments: MAP-results-summary.csv (per-kernel timings and per-prompt diffs), CW-kernel_profiles-INT8-INT4.pdf (engineer notes).
+
+Next steps: can we pencil in a 30-min sync June 16 at 10:00am PT for the re-test readout and to get procurement contacts on the DocuSign? If that works I'll send an invite and the DocuSign pre-fill.
+
+Thanks,
+Ben
+Senior Solutions Engineer | Redwood Inference
+ben.carter@redwood.inference
++1 (415) 555-0127
+
+--
+Attachment stubs: MAP-results-summary.csv, CW-kernel_profiles-INT8-INT4.pdf
+
+From: Olivia Chen <olivia.chen@cloudwave.ai>
+To: Ben Carter <ben.carter@redwood.inference>
+Cc: salesops@cloudwave.ai
+Date: 2026-06-14T16:20:00-07:00
+Subject: Re: MAP test results: summary, INT4 regression, and proposed mitigations
+
+Ben / Marissa / Rishi — appreciate the quick turn and clear plan. The proposed mitigations and MAP routing policy sound good to us. Confirming:
+
+- We agree to the INT8 fallback for concurrent interactive flows and INT4 as opt-in for nightly batch jobs.
+- Please proceed with the kernel patch and re-test; we'll join the June 16 readout.
+- Salesops will accept the DocuSign addendum once we see the updated results; target to route PO by June 21.
+
+Please send the calendar invite for June 16 10:00am PT and the DocuSign pre-fill as you suggested. Looking forward to closing this out.
+
+Olivia
+Director, Product — CloudWave AI
+olivia.chen@cloudwave.ai

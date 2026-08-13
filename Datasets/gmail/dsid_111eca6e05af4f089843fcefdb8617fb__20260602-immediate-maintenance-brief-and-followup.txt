@@ -1,0 +1,126 @@
+Immediate maintenance notice and follow-up: runtime instability observed
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Alex Kim <alex.kim@acme-analytics.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Dylan Brooks <dylan.brooks@redwood.com>
+Date: Tue, 2 Jun 2026 09:12:00 -0700
+Subject: Immediate maintenance notice and follow-up: runtime instability observed
+
+Hi Alex / Sophie,
+
+Quick heads-up — we just observed a memory growth pattern in the inference runtime that can lead to elevated request latencies and, in rare cases, worker restarts. Our on-call infra team is deploying a targeted emergency patch now to correct the KV-cache eviction regression. We will perform a rolling restart of a small subset of nodes (canary) at 09:30 PT, then expand depending on signals.
+
+What to expect for Acme Analytics:
+- Brief window of increased tail latency (up to ~2x) for 5–10 minutes during canary.
+- If canary looks good, full rollout over ~20–30 minutes.
+- No data deletion is expected; requests may be retried silently by the platform for in-flight completion.
+
+Immediate ask from you: please don’t run any large bulk ingestion jobs for the next 45 minutes while we complete the rollout.
+
+We’ll send a follow-up with confirmation and a short postmortem within 24 hours. I know this is short notice — apologies for the disruption. If you need us to delay the larger rollout for your production namespace, say the word and we’ll pause after canary.
+
+Attachments: fix-notes.txt (brief diff of change)
+
+Thanks,
+Jonas Weber
+Account Lead, Redwood Inference
+jonas.weber@redwood.com
++1 (415) 555-0122
+
+
+From: Alex Kim <alex.kim@acme-analytics.com>
+To: Jonas Weber <jonas.weber@redwood.com>
+Date: Tue, 2 Jun 2026 09:18:34 -0700
+Subject: Re: Immediate maintenance notice and follow-up: runtime instability observed
+
+Thanks for the heads-up, Jonas. Quick questions: will any requests be dropped or require manual reconciliation? Also, can you confirm exactly which namespaces will be canaried first — our staging and one prod cluster are both live.
+
+Appreciate the rapid response. Sophie and I are on standby.
+
+On Tue, Jun 2, 2026 at 09:12 AM Jonas Weber <jonas.weber@redwood.com> wrote:
+> Quick heads-up — we just observed a memory growth pattern in the inference runtime that can lead to elevated request latencies and, in rare cases, worker restarts. Our on-call infra team is deploying a targeted emergency patch now to correct the KV-cache eviction regression. We will perform a rolling restart of a small subset of nodes (canary) at 09:30 PT, then expand depending on signals.
+>
+> What to expect for Acme Analytics:
+> - Brief window of increased tail latency (up to ~2x) for 5–10 minutes during canary.
+> - If canary looks good, full rollout over ~20–30 minutes.
+> - No data deletion is expected; requests may be retried silently by the platform for in-flight completion.
+>
+> Immediate ask from you: please don’t run any large bulk ingestion jobs for the next 45 minutes while we complete the rollout.
+>
+> We’ll send a follow-up with confirmation and a short postmortem within 24 hours. I know this is short notice — apologies for the disruption. If you need us to delay the larger rollout for your production namespace, say the word and we’ll pause after canary.
+>
+> Attachments: fix-notes.txt (brief diff of change)
+>
+> Thanks,
+> Jonas Weber
+> Account Lead, Redwood Inference
+
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Dylan Brooks <dylan.brooks@redwood.com>
+Date: Tue, 2 Jun 2026 09:25:05 -0700
+Subject: Re: Immediate maintenance notice and follow-up: runtime instability observed
+
+Jonas / Dylan — quick internal coordination thread (do not forward to customer).
+
+Summary of actions so far:
+- 09:14: rolled a canary to 3 nodes in eu-west for internal tests — passed basic health checks.
+- 09:20: started canary in us-west-2 on a small pool that includes Acme routing.
+
+Immediate items:
+1) Dylan: validate that retries are enabled for Acme namespace (policy: auto-retry x2, backoff 2s). If not, enable during rollout.
+2) Jonas: ask Acme to pause ingest (done). Confirm whether they want us to halt full rollout post-canary.
+3) Marissa: prepare short postmortem skeleton and collect logs for 09:00–09:30 window.
+
+Observed preliminary cause: a recent change to the KV cache eviction heuristic introduced a corner-case where long-lived sessions prevented eviction under particular prompt length distributions. Patch increments eviction frequency and fixes leak.
+
+I’ll attach the preliminary logs to the PM drive once the collection completes. Will update in 20–30 minutes.
+
+— Marissa
+Director, Customer Reliability
+marissa.cole@redwood.com
+
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Alex Kim <alex.kim@acme-analytics.com>, Sophie Lane <sophie.lane@acme-analytics.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Dylan Brooks <dylan.brooks@redwood.com>
+Date: Wed, 3 Jun 2026 14:05:00 -0700
+Subject: Post-deployment summary and follow-up: 2026-06-02 emergency maintenance
+
+Hi Alex / Sophie —
+
+Thanks again for your patience yesterday. Summary and next steps from the emergency maintenance we performed on 2026-06-02:
+
+What happened
+- At ~09:00 PT we observed a steady memory increase on the serving pool handling some high-concurrency workloads. The root cause was a regression in the KV-cache eviction heuristic deployed on 2026-05-31 (change set r3184). Under certain prompt-length distributions, entries were not being evicted promptly, causing memory to grow and, in some cases, worker restarts.
+
+What we did
+- 09:30 PT: deployed patch (v1.2.9) to canary subset; monitored latency, memory, and error rates.
+- 09:40 PT: canary passed acceptance (no elevation in request errors, memory growth stabilized).
+- 10:05 PT: rolled to full serving pool for Acme traffic; completed rollout by ~10:40 PT.
+- No customer requests were intentionally dropped. A small percentage (<0.5%) of in-flight requests were retried automatically by the platform; retry logic completed without manual intervention.
+
+Impact to Acme Analytics
+- Brief latency spikes during canary (5–12 minutes) for a subset of requests routed to canary nodes.
+- No data loss and no requirement for manual reconciliation.
+
+Technical fix and artifacts
+- The patch increments eviction aggressiveness for large-session keys and adds a guard for long-lived sessions (see attached fix-notes.txt).
+- Attached: patch-v1.2.9.tar.gz (release artifact) and postmortem-20260602.pdf (non-sensitive summary).
+
+Preventive measures
+- We’ve added a synthetic workload test that reproduces the prompt-length distribution, gated into pre-deploy checks.
+- We’re adding an alert that triggers at lower memory growth thresholds for affected pools.
+- We will run a two-week monitoring sweep to ensure no regressions.
+
+If you’d like, we can schedule a 30-minute technical debrief with our reliability engineers and your SREs to walk the postmortem and the new guardrails.
+
+Apologies again for the disruption. If there’s any customer-visible behavior you still see, reply to this thread and I’ll escalate immediately.
+
+Thanks,
+Jonas Weber
+Account Lead, Redwood Inference
+jonas.weber@redwood.com
++1 (415) 555-0122
+
+Attachments: patch-v1.2.9.tar.gz, postmortem-20260602.pdf, fix-notes.txt

@@ -1,0 +1,86 @@
+Quantiva - hardware anchoring & hedging framework for Dedicated capacity
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Raj Patel <raj@quantiva.ai>, Sean Gallagher <sean_gallagher@redwood.ai>
+Cc: 
+Date: Thu, 03 Jun 2027 15:12:00 -0700
+Subject: RE: initial perf numbers and memory profiles for Quantiva POC
+
+Raj / Sean — attaching the quick pass analysis from our bench runs. High-level observations: 
+
+- Workload: streaming summarization + reranker p99 latency target ~120ms, 1k qps steady (peaks 2.5k). Context windows mostly 1k tokens, occasional 6k.
+- H100 (80GB): best headroom for >4k context with mixed precision; strong for concurrency and long-context caching.
+- A100 (40GB): solid latency for 1k contexts, cheaper per-hour, but memory-bound when context > 4k; we see OOMs without KV-tiling.
+- L4 (48GB total, optimized for inference shards): lowest cost per token for short contexts (<2k) but higher p99 tail under bursty concurrency.
+
+Recommendation draft: Dedicated mix with majority A100 for baseline throughput, small H100 pool for long-context and heavy-concurrency fallthrough, and L4 as a burst spot for batch embedding-like workloads.
+
+I'll leave the cost / ops implications to Sean and Irene — attached the raw latency_profile.csv and the short worksheet.
+
+--
+Karthik Iyer
+Senior Solutions Architect, Redwood Inference
+attachment: quantiva_latency_profile.csv
+
+From: Raj Patel <raj@quantiva.ai>
+To: Sean Gallagher <sean_gallagher@redwood.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Maya Lopez <maya.procurement@quantiva.ai>
+Date: Fri, 04 Jun 2027 09:27:00 -0700
+Subject: Re: initial perf numbers and memory profiles for Quantiva POC
+
+Thanks Karthik — helpful. A couple of clarifying Qs before we lock: 
+
+1) For the parts where you recommend A100 vs H100, can you quantify expected token cost impact vs latency benefit? 2) How disruptive is a model swap fallback at runtime if H100 capacity is saturated? 3) Our procurement lead (Maya) needs a simple capacity/price table to evaluate reserve vs burst.
+
+We are targeting a pilot starting Aug 1 so would like a canary plan and an ops playbook for the first 6 weeks.
+
+Thanks,
+Raj
+Head of Infra, Quantiva AI
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Raj Patel <raj@quantiva.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Irene Choi <irene_choi@redwood.ai>, Maya Lopez <maya.procurement@quantiva.ai>
+Date: Fri, 04 Jun 2027 13:18:00 -0700
+Subject: Re: initial perf numbers and memory profiles for Quantiva POC
+
+Raj / Maya — quick answers and proposed next steps below. I've also attached a compact spreadsheet with three capacity scenarios (Baseline / Hedged / Performance).
+
+Answers: 
+- Token cost vs latency: relative to A100 baseline, H100 reduces per-token CPU time on long-context workloads by ~18-25% for your 6k windows due to larger KV cache and higher memory bandwidth; cost delta is ~+30% per GPU-hour for H100 vs A100 but tokens/hour increases so net tokens/$ improves in long-context-heavy runs. L4 is ~40-55% cheaper per GPU-hour vs A100 for short-context inference but shows higher p99 tail under burst.
+- Model swap fallback: supported. Our routing policy can transparently fall back from H100->A100->L4 when capacity constrained; fallbacks with quantized variants may increase hallucination risk slightly — we recommend canarying outputs and keeping eval hooks (we'll surface quality regression alerts). 
+- Procurement table: see attachment. Baseline scenario = 60% A100, 25% H100, 15% L4 (reserve + burst mix). Hedged = 40% A100, 40% H100, 20% L4. Performance = 30% A100, 60% H100, 10% L4.
+
+Ops canary plan (6 weeks): 
+1) Week 0: reserve baseline mix, enable prefix caching for frequent prompt patterns.
+2) Week 1-2: route 10% of requests to hedged H100 pool (metric: p99 latency, token cost, quality via eval set).
+3) Week 3-4: expand to 30% if quality stable; keep automated rollback on quality regression >2% of eval failures.
+4) Week 5-6: readiness review, adjust reserve commitments.
+
+Irene — can you add runbook language on SLA exceptions and contract-level hedging for this customer? Maya — we'll send a simple procurement-ready cost breakdown. Raj — if that plan looks ok, we'll schedule a 45-min ops walkthrough next Wed.
+
+Best,
+Sean
+Account Executive, Redwood Inference
+attachment: quantiva_proposed_capacity.xlsx
+
+From: Irene Choi <irene_choi@redwood.ai>
+To: Sean Gallagher <sean_gallagher@redwood.ai>, Raj Patel <raj@quantiva.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Maya Lopez <maya.procurement@quantiva.ai>
+Date: Sat, 05 Jun 2027 09:03:00 -0700
+Subject: Re: initial perf numbers and memory profiles for Quantiva POC
+
+Looping in ops/finance guidance for the reserve vs burst tradeoffs so procurement has what they need. Key notes: 
+
+- Reserve commitments: we can offer a 12-month reserve at discounted rates with quarterly review windows. For the Baseline scenario (60/25/15) finance expects a ~22% discount vs on-demand.
+- SLA exceptions: We'll include a fallback clause that allows transient use of A100/L4 for up to 8% of requests during capacity incidents without penalty; persistent fallbacks >8% will trigger remediation/credits per the contract.
+- Implementation checklist (ops): 
+  * Pin model versions per pool (no cross-pool hot swaps without testing).
+  * Enable KV prefix caching and per-route batching heuristics.
+  * Set alerting: p95 > 2x baseline, p99 > 1.5x baseline, quality eval drift > 2% -> auto rollback traffic.
+
+Deliverables I'll push to the Drive link Sean shared: procurement-ready cost table (sheet 1), operational runbook (sheet 2), sample canary dashboards (sheet 3). Raj / Maya — expect a pulled-together packet by EOD Monday.
+
+Cheers,
+Irene Choi
+VP, Customer Operations, Redwood Inference
+attachment: redwood_h100_a100_l4_tradeoffs.pdf

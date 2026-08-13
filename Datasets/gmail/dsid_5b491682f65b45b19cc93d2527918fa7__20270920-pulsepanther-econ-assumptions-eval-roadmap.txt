@@ -1,0 +1,123 @@
+Finalizing MAP econ assumptions & evaluation timeline — PulsePanther
+
+From: Jordan Blake <jordan_blake@redwood.ai>
+To: Joanna Lewis <joanna@pulsepanther.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Irene Choi <irene_choi@redwood.ai>
+Date: Mon, 20 Sep 2027 09:12:00 -0700
+Subject: Finalizing MAP econ assumptions & evaluation timeline — PulsePanther
+
+Joanna —
+
+Thanks for the productive call this morning. Per our discussion I attached an updated MAP workbook and a short token-modeling snapshot that lays out the unit economics with two scenarios (opt-in KV caching + standard batching vs aggressive prefetch + larger batch windows). High level: both scenarios target the pilot SLA (95th pct token latency < 120ms) but trade off tokens/$ by ~12-18%.
+
+Ask from our side: can you confirm which traffic profile you expect for the pilot (burstiness and average prompt length)? We used the sample traffic you shared (median prompt ~220 tokens; peak concurrency 220 RPS) but we want to lock the MAP assumptions before we run the evaluation.
+
+Proposed evaluation timeline (draft):
+- Week 0 (Sep 27): Final MAP sign-off (commercials + tokens/$ assumptions)
+- Week 1–2 (Oct 4–15): Pilot eval — 2 workload scenarios, automated evals on fidelity and latency
+- Week 3 (Oct 18–22): Results review; gap remediation plan if token costs exceed MAP thresholds
+
+Immediate next steps: please review the attached MAP_PulsePanther_v2.xlsx and the csv with the per-request token breakdown. If you’re comfortable, approve the assumptions in the green sheet and procurement can start paperwork.
+
+Thanks —
+Jordan Blake
+Senior Solutions, Redwood Inference
+jordan_blake@redwood.ai
++1 415-555-0172
+
+Attachments: MAP_PulsePanther_v2.xlsx (spreadsheet), pp_token_modeling_snapshot.csv (csv)
+
+From: Joanna Lewis <joanna@pulsepanther.ai>
+To: Jordan Blake <jordan_blake@redwood.ai>
+Cc: Procurement <procurement@pulsepanther.ai>
+Date: Tue, 21 Sep 2027 08:04:00 -0700
+Subject: Re: Finalizing MAP econ assumptions & evaluation timeline — PulsePanther
+
+Jordan —
+
+Thanks, received. A few clarifying questions before we sign the MAP:
+1) Tokens/$ baseline: your green-sheet shows $0.0009/token for scenario A and $0.00075/token for scenario B. Are those net of caching benefits?
+2) Caching assumptions: what fraction of requests are you treating as cacheable? Our ML infra team estimates 30–35% reusable prefixes for search queries but only ~5% for ticket summaries.
+3) Batching latency impact: if we increase batch windows to get lower tokens/$, what is the expected tail latency increase for short prompts? We have a strict 99th pct latency target for live queries.
+
+Also — procurement wants a simple mutual-action checklist showing the sign-off owners and acceptance criteria for the pilot. Can you send a one-page with those items?
+
+Best,
+Joanna
+Head of Product, PulsePanther
+
+On Mon, Sep 20, 2027 at 09:12 AM Jordan Blake <jordan_blake@redwood.ai> wrote:
+> Jordan’s original message and attachments
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Jordan Blake <jordan_blake@redwood.ai>, Joanna Lewis <joanna@pulsepanther.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Irene Choi <irene_choi@redwood.ai>
+Date: Wed, 22 Sep 2027 11:20:00 -0700
+Subject: RE: Finalizing MAP econ assumptions & evaluation timeline — PulsePanther
+
+Joanna / Jordan —
+
+Quick answers to the commercial items so procurement can move: the tokens/$ rows are net of the modeled caching benefit. The snapshot assumes two cache layers: prefix-level KV caching (helps multi-turn and repeated prompts) and short-term response cache (helps FAQ/search). For the scenarios in the workbook:
+
+Scenario A (conservative) — caching benefit applied: 18% effective token reduction; effective tokens/$ = $0.00090
+Scenario B (aggressive) — caching + prefetch assumptions: 28% effective token reduction; effective tokens/$ = $0.00074
+
+Notes: these are modeled with standard 30ms additional scheduling overhead for batching windows up to 60ms. We flagged tail latency risk if batch windows go beyond 120ms or if concurrency exceeds 600 RPS without autoscale headroom.
+
+Irene and Karthik — can you validate tolerable batch windows for PulsePanther's short-prompt traffic? Jordan, I'll prepare the one-page MAP checklist and attach it to the workbook by EOD tomorrow.
+
+Ben Carter
+Director, Solutions Finance
+ben_carter@redwood.ai
+
+Attachment: pp_token_modeling_snapshot.csv
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Jordan Blake <jordan_blake@redwood.ai>, Joanna Lewis <joanna@pulsepanther.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Irene Choi <irene_choi@redwood.ai>
+Date: Thu, 23 Sep 2027 09:37:00 -0700
+Subject: RE: Finalizing MAP econ assumptions & evaluation timeline — PulsePanther
+
+Joanna —
+
+Technical context on batching/caching trade-offs (high level):
+- Cacheable fraction: based on the sample logs you provided, we confirm ~32% average cacheable prefixes if you enable lightweight canonicalization and session-based prefix keys. That aligns with the workbook’s conservative line.
+- Prefetch strategy: for interactive workflows we can prefetch likely continuations which increases cacheable fraction but requires predictable prompt patterns; benefit varies by use case (search gains most).
+- Batching windows: 40–60ms windows give ~8–12% token cost improvement with negligible 95th pct latency impact for median prompt lengths (~220 tokens). Once windows exceed ~120ms you start to see tail latency degradation for sub-50-token prompts.
+
+Risk callouts:
+- If PulsePanther’s live traffic has higher short-prompt volume than your sample, the batch/window trade will hit 99th pct targets unless we keep smaller windows and rely more on KV caching.
+- Quantization: switching to int8 inference in Dedicated reduces servo costs by ~20% but may increase hallucination risk for some sequence-completion prompts; we recommend adding a small eval bucket to capture LM quality if you push aggressive quantization.
+
+Irene — can you add the small eval buckets (10k tokens) and fidelity tests to the evaluation plan? I'll update the MAP workbook with the batching window sensitivity table.
+
+—Karthik
+Senior ML Engineer, Serving Runtime
+
+From: Jordan Blake <jordan_blake@redwood.ai>
+To: Joanna Lewis <joanna@pulsepanther.ai>, Procurement <procurement@pulsepanther.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Irene Choi <irene_choi@redwood.ai>
+Date: Tue, 28 Sep 2027 16:45:00 -0700
+Subject: Re: Finalizing MAP econ assumptions & evaluation timeline — PulsePanther
+
+Joanna / Procurement —
+
+Thanks for the great questions and flags. Attached is a one-page MAP checklist embedded in the workbook (sheet "MAP_Checklist") and an updated evaluation plan with the small fidelity buckets Karthik suggested. Summary of the agreed assumptions to sign off:
+- Pilot traffic profile: median prompt 220 tokens; baseline concurrency 220 RPS; peak bursts to 600 RPS (customer confirmed)
+- Caching: conservative baseline 32% cacheable; optional prefetch + canonicalization path for search increasing cacheable to ~45%
+- Batching: default window 50ms (expected 8–10% token savings); hard cap window at 120ms to protect 99th pct latency
+- Tokens/$ (net): scenario A (conservative) = $0.00090; scenario B (prefetch/aggressive) = $0.00074
+- Eval acceptance: fidelity (ROUGE + human spot-check on 1k samples), latency SLOs (95th < 120ms, 99th < 350ms), cost target: tokens/$ must remain within agreed scenario tolerance (+/- 8%)
+- Deliverables & owners:
+  * PulsePanther: provide final traffic sample and procurement PO by Sep 30 — Joanna / Procurement
+  * Redwood: run 2-scenario pilot, deliver eval report and cost sensitivity table by Oct 22 — Jordan / Solutions Engineering
+  * Joint review: Oct 25 meeting to accept pilot results or sign remediation plan — Jordan + Joanna
+
+If the above looks good, please reply with a short approval ("MAP assumptions approved") and procurement can raise the PO against deal PP-2027-091.
+
+Jordan Blake
+Senior Solutions, Redwood Inference
+jordan_blake@redwood.ai
+
+On Thu, Sep 23, 2027 at 09:37 AM Karthik Iyer <karthik_iyer@redwood.ai> wrote:
+> Karthik’s batching/caching notes

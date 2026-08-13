@@ -1,0 +1,142 @@
+Clarifying bespoke residency & deletion windows — Order Form amendment
+
+From: Emma Reid <emma.reid@clearlakebio.com>
+To: marissa.cole@redwood.inference.com
+Cc: procurement@clearlakebio.com
+Date: 2026-07-06T09:12:00-04:00
+Subject: Residency / retention Qs for Redwood order form
+
+Hi Marissa —
+
+Thanks again for the walkthrough this morning. Procurement and security asked us to confirm a couple of bespoke items we want reflected in the order form before we can route for signature:
+
+1) Residency: EU-sourced patient data must be resident in EU-only regions (no cross-region replication outside EU). We need explicit confirmation of the region(s) and a clause that data will not be transferred outside the EU for servicing or backups without prior written consent.
+
+2) Retention windows: we need a bespoke schedule — specifically: primary input logs and inference traces retained for 180 days (EU), 90 days (US); ephemeral KV / cache entries TTL = 7 days; and backups/snapshots to be retained no longer than 120 days unless we opt-in.
+
+3) Deletion proof: after a purge request we require a certificate of deletion (signed statement + system audit id) within 5 business days and a description of the pipeline steps that guarantee deletion from active storage, caches, and backups.
+
+Attached is a short spreadsheet with our proposed wording. Can you confirm whether Redwood can accommodate these windows and the deletion certificate SLA? Also please confirm any exceptions for legal holds or forensic requests.
+
+Best,
+Emma Reid
+Head of Procurement — ClearLake Biotech
+[Attachment: CLB_Retention_Proposals.xlsx]
+From: marissa.cole@redwood.inference.com <marissa.cole@redwood.inference.com>
+To: Emma Reid <emma.reid@clearlakebio.com>
+Cc: ben.carter@redwood.inference.com, vivek.kulkarni@redwood.inference.com
+Date: 2026-07-06T11:03:00-04:00
+Subject: Re: Residency / retention Qs for Redwood order form
+
+Emma —
+
+Thanks for laying this out and for the spreadsheet — very clear. High-level: we can support EU-only residency for customer data (we run private-region tenancy in eu-west-1 and eu-central-1) and we can propose bespoke retention windows in the order form. Caveats and items we should align on before legal redlines:
+
+- Backups: our standard backup replication is region-scoped; we can keep backups within EU by default for EU-resident customers. For the 120-day snapshot cap you requested, we need to clarify whether you want automated snapshot deletion or a manual retention override.
+
+- Deletion proof/cert: we generate an internal purge ticket id and can provide an attestation plus audit ids. Evelyn (cc'd) will confirm the timing and the exact content of the certificate.
+
+- Legal holds: requests for e-discovery or regulatory holds will pause automated deletion; we will surface holds to your security contact and provide expected timelines for release.
+
+I attached an initial draft of the order form with proposed language (Order_Form_Draft_CLB.pdf) and a short spec for retention mapping. If this looks good, can you send the procurement team's redlines and I'll loop in our legal ops for the formal amendment?
+
+Next steps suggested: procurement shares redlines -> we return final tracked order form -> DocuSign execution.
+
+Regards,
+Marissa Cole
+Account Executive, Redwood Inference
+[Attachment: Order_Form_Draft_CLB.pdf]
+[Attachment: Clearlake_Retention_Specs_v1.xlsx]
+From: Procurement Team <procurement@clearlakebio.com>
+To: marissa.cole@redwood.inference.com
+Cc: Rajiv Singh <rajiv.singh@clearlakebio.com>, emma.reid@clearlakebio.com
+Date: 2026-07-07T08:26:00-04:00
+Subject: Re: Residency / retention Qs for Redwood order form
+
+Marissa —
+
+Attaching procurement's redlines; two clarifications in particular: please confirm (A) the SLA for the deletion certificate (we proposed 5 business days after purge completion) and (B) detailed behavior for backups and immutable snapshots — we need the ability to request accelerated snapshot purge within 10 business days (with a fee if required).
+
+Also we require an explicit statement around how key material is handled for deletion (are encryption keys revoked, how do you ensure data becomes unrecoverable?), and an explicit contact for the deletion certificate delivery.
+
+Thanks,
+Procurement — ClearLake Biotech
+[Attachment: Procurement_Redlines_CLB.pdf]
+
+On Tue, Jul 6, 2026 at 11:03 AM marissa.cole@redwood.inference.com wrote:
+> Emma —
+>
+> Thanks for laying this out...
+>
+From: evelyn_hart@redwood.inference.com <evelyn_hart@redwood.inference.com>
+To: procurement@clearlakebio.com, emma.reid@clearlakebio.com
+Cc: marissa.cole@redwood.inference.com, ben.carter@redwood.inference.com, vivek.kulkarni@redwood.inference.com
+Date: 2026-07-07T14:48:00-07:00
+Subject: Re: Residency / retention Qs for Redwood order form
+
+Hi Emma / Procurement team —
+
+Thanks for the redlines. I'm Redwood Legal Ops; below is a concise explanation of how we implement bespoke retention and deletion, and proposed contract language we can add to the Order Form Amendment (tracked changes to follow):
+
+1) Residency and storage
+- We operate customer-dedicated storage namespaces which can be constrained to EU regions (we currently support eu-west-1 and eu-central-1 for EU-only residency).
+- By default, backups and snapshots are retained within the same region; we will include a EU-only data-at-rest guarantee for your tenant in the amendment.
+
+2) Retention windows (proposed to mirror your ask, with technical notes)
+- Inference logs & model input traces: EU = 180 days; US = 90 days.
+- Ephemeral KV/cache TTL: 7 days (best-effort continuous eviction; critical caches may be pinned by application request and would require explicit opt-in).
+- Backups/snapshots: maximum retention 120 days unless you elect a longer retention in writing. Note: snapshot purge is asynchronous and subject to replication/GC windows (see deletion timeline below).
+
+3) Deletion pipeline & certificate (how we operationalize the SLA)
+- Step A (mark): Customer-initiated purge request marks objects for deletion in our metadata catalog (t=0).
+- Step B (active purge): Data is removed from active serving stores and caches within 48 hours of t=0 (subject to no legal hold).
+- Step C (asynchronous background GC): Underlying object storage and replicas are queued for background garbage collection; completion depends on snapshot/replication windows but we commit to completing the GC for non-archival objects within 30 calendar days of t=0.
+- Step D (backups/snapshots): For snapshots, we will schedule deletion and complete physical removal within 90 calendar days, unless an accelerated snapshot purge is requested (accelerated purge window: 10 business days for an additional operational fee; we can include this as an optional line item).
+
+Certificate timing: we will provide an attestation that includes the purge ticket id, affected object ids, and internal audit ids within 5 business days of the final GC completion for the affected namespace. If you need an interim attestation at Step B, we can provide a preliminary confirmation within 48 hours of the active purge step.
+
+4) Key management and unrecoverability
+- We use customer-scoped encryption keys for private deployments; for hosted customers we maintain KMS-managed keys per-tenant. A deletion request triggers key material rotation/revocation for the affected tenant objects where EKM/KMS is applicable; revocation plus completed GC renders data cryptographically inaccessible. We will add language describing key revocation steps and timing.
+
+5) Legal holds and e-discovery
+- Documented legal holds will pause automated deletion. Redwood will provide notification and an estimated timeframe for hold release. We suggest adding a clause that legal holds must be accompanied by a named requestor and scope.
+
+6) Proposed order form language (summary):
+- Section X: Customer may specify per-region retention windows; Redwood will implement regionally-scoped namespaces and adhere to the retention windows in the amendment.
+- Section Y: Deletion certificate: Redwood will provide a deletion attestation within 5 business days of completion of internal GC; interim attestation available within 48 hours of active purge.
+- Section Z: Snapshot purge: default 90-day physical removal; accelerated purge within 10 business days available as an optional paid service.
+
+Next steps: I'll upload tracked changes to the order form. Marissa / Ben — please confirm whether the accelerated purge fee is acceptable to include as an optional line item. Emma / Procurement — if you accept the 10-business-day accelerated purge at fee X, we'll add formal wording and circulate for signature.
+
+Evelyn Hart
+Legal Ops — Redwood Inference
+[Attachment: Order_Form_Amendment_Notes.txt]
+
+From: marissa.cole@redwood.inference.com <marissa.cole@redwood.inference.com>
+To: Procurement Team <procurement@clearlakebio.com>
+Cc: emma.reid@clearlakebio.com, ben.carter@redwood.inference.com, evelyn.hart@redwood.inference.com, vivek.kulkarni@redwood.inference.com
+Date: 2026-07-08T15:05:00-07:00
+Subject: Re: Residency / retention Qs for Redwood order form
+
+Emma / Procurement —
+
+Great, thanks for the quick turnaround. Summary & proposed next steps from our side:
+
+- Redwood confirms EU-only residency for your tenant and will include region-scoped namespace language in the amendment.
+- We agree to the retention windows proposed; specifics will appear in the tracked order form.
+- Deletion procedure: we will provide a preliminary purge confirmation within 48 hours and a final deletion attestation within 5 business days of GC completion; accelerated snapshot purge (10 business days) can be added as an optional paid service.
+
+Action items: 
+1) ClearLake Procurement: confirm acceptance of accelerated snapshot purge fee or request we remove that option (reply by 2026-07-12).
+2) Redwood: we will send tracked changes to the Order Form and open a DocuSign envelope (link below) once procurement confirms.
+3) Legal ops (Evelyn): finalize tracked language on key revocation and certificate format.
+
+DocuSign link (placeholder): https://docusign.com/CLB-045-orderform
+Drive (retention spec): https://drive.google.com/clearlake/retention-specs
+
+If there are no further redlines, we'll aim to have the amendment ready for signature the week of 2026-07-13.
+
+Thanks,
+Marissa Cole
+Account Executive, Redwood Inference
+[Sent from my mobile — short replies welcome]

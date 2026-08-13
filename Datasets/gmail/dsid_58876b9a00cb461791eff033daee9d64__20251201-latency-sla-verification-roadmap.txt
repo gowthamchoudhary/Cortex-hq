@@ -1,0 +1,125 @@
+Latency SLA verification roadmap and test windows
+
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Marcus Lee <marcus.lee@helixpay.com>, ops@helixpay.com
+Cc: Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2025-12-01T09:12:00-08:00
+Subject: Latency SLA verification roadmap and test windows
+
+Hi Marcus / Helix ops,
+
+Thanks again for the call earlier — this thread is to lock the roadmap for the latency/throughput verification that will sit behind onboarding signoff. Goal: verify the production routing and the 99.9th-tail latency SLA across your expected traffic profiles so we can finalize the Dedicated capacity config.
+
+Proposed test matrix (high level):
+- Steady-state: 100 rps sustained for 30 minutes (baseline)
+- Mixed load: 100 rps + 30% random spikes to 300 rps for 5m every 10m (2 hr run)
+- Burst stress: ramp from 50 -> 500 rps over 10 minutes, hold 5 minutes
+- Tail-latency window: 99.0/99.9/99.99 percentiles captured across all runs
+
+Telemetry we need collected from your side (we'll also collect at the edge):
+- per-request p50/p95/p99/p999 latency, and token-per-request distributions
+- GPU util, host CPU, net I/O, and queue length sampled at 10s
+- KV cache hit-rate and cold-start counts
+- Request/response sizes and model variant used
+
+Run windows we prefer (PST):
+- Dec 3, 01:00–04:00 (primary)
+- Dec 4, 22:00–01:00 (fallback)
+
+Attached: load_profile_v1.yaml (RPS profiles) and redwood_sla_telemetry_schema.md (required metrics).
+
+Please confirm the primary window and whether you can surface GPU-level telemetry (driver-level metrics or Datadog export). If you prefer a nightly-run approach instead of a 2–3 hour contiguous window, say so and we'll adapt.
+
+Next steps after confirmation: we share the runbook and a signed mutual action plan that triggers the run.
+
+Thanks,
+Naomi
+Naomi Feldman
+Customer Success Manager, Redwood Inference
+
+
+From: Marcus Lee <marcus.lee@helixpay.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: ops@helixpay.com, Jill Raymond <jill.raymond@helixpay.com>
+Date: 2025-12-01T11:03:00-08:00
+Subject: Re: Latency SLA verification roadmap and test windows
+
+On Mon, Dec 1, 2025 at 09:12 Naomi Feldman <naomi.feldman@redwood.com> wrote:
+> Thanks again for the call earlier — this thread is to lock the roadmap for the latency/throughput verification that will sit behind onboarding signoff.
+
+Thanks Naomi — this looks good. Quick notes from ops: we can export GPU metrics to Datadog (NVIDIA DCGM) and we have the ability to tag traces with request IDs. Two asks from our side:
+
+1) Can we lower the steady-state to 80 rps? Our staging cluster has different baseline resources and we'd prefer to run the 100 rps first on a short smoke run before the full steady-state.
+2) For the burst stress, can you add a cache-warmup step (5 minutes at low concurrency) so the KV hit-rate baseline is recorded?
+
+Primary window of Dec 3 01:00–04:00 works for us, Marcus and Jill will be on-call. We'll also want the shared drive link to upload artifacts and the runbook before the run.
+
+Marcus
+Marcus Lee
+Head of Site Reliability, HelixPay
+marcus.lee@helixpay.com
+
+
+From: Naomi Feldman <naomi.feldman@redwood.com>
+To: Marcus Lee <marcus.lee@helixpay.com>, ops@helixpay.com
+Cc: Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: 2025-12-02T10:00:00-08:00
+Subject: Re: Latency SLA verification roadmap and test windows — runbook and checklist
+
+Thanks — confirmed. Adjusted plan below and attached the runbook (runbook_v1.md) and updated load profile (load_profile_v1.yaml). Key changes per Marcus: steady-state = 80 rps (with a 10-min 100 rps smoke at start), and a 5-minute cache warmup prior to each burst.
+
+Condensed runbook steps (we'll paste links in Drive as well):
+1) Pre-run checklist (30–60m before): verify data set, rotate keys, confirm Datadog export, and validate synthetic request samples.
+2) Warmup: 5m at 10 rps to populate caches, then 5m at 40 rps, then 10m at 80 rps (smoke up to 100 rps for 10m).
+3) Steady-state capture: 80 rps steady 30m (capture metrics every 10s).
+4) Mixed-load cadence: run the 2-hr mixed profile from attachment.
+5) Burst stress: ramp 50 -> 500 rps with a 5m cache warmup before each ramp.
+6) Post-run: collect artifacts (Datadog dashboard export, request logs, token histograms), and upload to the Drive link.
+
+Pass/fail criteria (high level):
+- 99.9th latency <= 350ms for model variant A over steady-state runs
+- No unhandled 5xx spikes >0.5% sustained over any 1m window
+- KV cache hit-rate >= 85% for steady-state after warmup
+
+Upload link: https://drive.redwood.com/s/helixpay/onboard/runbook_v1
+Doc: redwood_sla_telemetry_schema.md (attached)
+
+Can Ben and Karthik confirm the artifact names we need from their side and whether we should rotate any test API keys immediately after the run? Monica — can you confirm Redwood's on-call rotation for the run window?
+
+- Naomi
+
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Ben Carter <ben.carter@redwood.com>, Marcus Lee <marcus.lee@helixpay.com>
+Cc: Monica Patel <monica.patel@redwood.com>
+Date: 2025-12-03T13:45:00-08:00
+Subject: Re: Latency SLA verification roadmap and test windows — runbook and checklist
+
+Quick internal note and one tweak:
+- We'll provide a small client-side harness (node-based) that tags requests with sanity markers — Ben will push the harness to the Drive by EOD tomorrow. Please use those markers when correlating DB/trace logs.
+- Suggestion: add an explicit 'model-variant switch' step in the runbook between mixed-load and burst stress so we can validate fallback behavior. It will add ~10m but avoids ambiguous tail-latency attribution.
+
+Ben/Naomi, do you want me to add the switch steps to runbook_v1.md or should I drop a diff to the Drive link?
+
+Thanks,
+Karthik
+Staff SW Engineer, Redwood Inference
+
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Naomi Feldman <naomi.feldman@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Ben Carter <ben.carter@redwood.com>, Marcus Lee <marcus.lee@helixpay.com>
+Date: 2025-12-03T16:05:00-08:00
+Subject: Re: Latency SLA verification roadmap and test windows — final signoff
+
+All — thanks for the quick iterations. Confirming Redwood will be on-call during Dec 3 01:00–04:00 PST (Naomi primary, Karthik secondary, Ben tooling). We accept the adjusted steady-state of 80 rps with the 10-min 100 rps smoke, and the cache warmup steps.
+
+Actions assigned:
+- Marcus/Jill (Helix): enable Datadog DCGM export and drop credentials to the Drive by 12/2 EOD
+- Naomi: post final runbook with Karthik's model-variant switch added by 12/2 10:30 PST
+- Ben: upload client harness and a quick run script to Drive by 12/2 17:00 PST
+- Monica: verify & rotate test keys after run, and confirm artifact receipt inside 24h
+
+We'll treat completion as the milestone to finalize the Dedicated capacity sizing and issue the onboarding certificate. If anything blocks, escalate on this thread or page me directly.
+
+- Monica
+Director, Customer Success, Redwood Inference

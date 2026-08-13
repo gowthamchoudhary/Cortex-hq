@@ -1,0 +1,153 @@
+Term amendment: add reserved GPUs + soft overflow protocol
+
+From: Emma Carter <emma@novadrive.ai>
+To: Markus Klein <markus_klein@redwoodinference.com>
+Date: 2027-10-01T09:12:00-07:00
+Subject: Renewal and capacity: surge last quarter, need guidance
+
+Hi Markus,
+
+Quick note as we prepare for our Oct renewal — Q3 saw two unexpected surge events that pushed our hosted inference traffic well beyond our current reserved pool. We expect continued growth and want to add capacity at renewal: +40 GPUs reserved (NVIDIA A100 equivalent) and clearer handling for spikes.
+
+Key asks:
+- Can Redwood commit to a minimum sustained throughput (p50/p95) per reserved GPU?
+- How does on-demand spillover work vs a hard cap? We need predictable failover behavior for critical flows.
+- Any warmup/provisioning lead times if we want to scale further mid-quarter?
+
+Attaching a short traffic dump (anonymized) from Aug–Sep to illustrate the spikes. Procurement will need pricing and contract language to start approvals.
+
+Thanks,
+Emma Carter
+Head of Platform, NovaDrive
+Attachments: traffic_report_q3.csv (CSV, 128KB)
+
+From: Markus Klein <markus_klein@redwoodinference.com>
+To: Emma Carter <emma@novadrive.ai>
+Cc: Laura Bennett <laura_bennett@redwoodinference.com>, Dev Patel <dev_patel@redwoodinference.com>
+Date: 2027-10-01T10:03:00-07:00
+Subject: Re: Renewal and capacity: surge last quarter, need guidance
+
+Hi Emma — thanks for the context and the file, that helps.
+
+Short answers up front: yes, we can increase reserved capacity at renewal and provide SLOs tied to reserved throughput. For spike handling we offer two approaches:
+
+Option 1 (soft overflow): Reserved pool + on-demand spill. When reserved utilization passes threshold, traffic flows to on-demand nodes; you keep latency SLOs for priority routes, and we bill spill tokens (per-token). We can include a bursting credit buffer to smooth cost.
+
+Option 2 (hard cap): Strict limit at reserved pool. Excess requests return 429s or failover to a lower-cost model variant. Lower risk of bill surprises, but possible availability impact during spikes.
+
+Can you share target QPS and percentile latency requirements? I’ll loop in Laura for pricing and Dev for ops lead time. I’ve attached a draft amendment we can adapt.
+
+Cheers,
+Markus Klein
+Account Executive, Redwood Inference
+Attachments: amendment_draft_v2.docx
+
+From: Laura Bennett <laura_bennett@redwoodinference.com>
+To: Markus Klein <markus_klein@redwoodinference.com>, Emma Carter <emma@novadrive.ai>
+Cc: Dev Patel <dev_patel@redwoodinference.com>
+Date: 2027-10-01T14:20:00-07:00
+Subject: Re: Renewal and capacity: surge last quarter, need guidance
+
+Emma / Markus —
+
+Following up with concrete options and the commercial delta. High-level:
+
+- Baseline increase: +40 reserved GPUs (A100 equiv). We recommend a staged ramp: +20 on day 1 of the term, +20 after 60 days to account for cluster warming and scheduling.
+- Throughput guarantee: we can commit to a baseline of X tokens/sec per GPU (measured p50/p95) — final numbers depend on model/seq length; Dev, please confirm with their sample workload.
+- Overflow approach (pricing impact):
+  * Soft overflow (preferred): On-demand spill charged at 1.9x reserved per-token rate; includes a 5% monthly spill credit pool that offsets first bursts each billing period.
+  * Hard cap: No spill; excess traffic rejected or routed to a lower-cost model variant. No additional per-token charges, but availability risk.
+
+I’ve attached a short SOW and updated amendment language that spells out reporting cadence (daily usage for first 30 days, weekly thereafter). If procurement wants an explicit credit mechanism and SLAs for spike-induced latencies, we can draft that into the MSA appendix.
+
+Thanks,
+Laura Bennett
+Director, Customer Success — Redwood Inference
+Attachments: sow_reserved_pool.pdf, amendment_draft_v2.docx
+
+From: Dev Patel <dev_patel@redwoodinference.com>
+To: Laura Bennett <laura_bennett@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>
+Cc: Priyom Das <priyom_das@redwoodinference.com>
+Date: 2027-10-02T08:45:00-07:00
+Subject: Re: Renewal and capacity: surge last quarter, need guidance
+
+Laura/Markus — ops notes on warmup and guarantees:
+
+- Warmup: A staged 60-day warmup is realistic for full KV cache “hotness” and autoscaler smoothing on dedicated pools. We can front-load a partial warmup if NovaDrive front-loads 50% of the commit.
+- Measurement: We’ll instrument per-route token throughput and p95 tail latency; baseline established during a 14-day post-commit observability window.
+- Failover behavior: For soft overflow we keep VIP routing to reserved first; when spill threshold reached we route overflow traffic to on-demand fleet with identical model family. Routing preserves session affinity for prioritized routes.
+- Ops contacts and runbook: I’ll provide a runbook and a one-page escalation ladder as part of the SOW.
+
+I’ve copied Priyom for legal/contract wording on credits and SLOs.
+
+—Dev
+Senior Systems Engineer, Redwood Inference
+
+From: Priyom Das <priyom_das@redwoodinference.com>
+To: Dev Patel <dev_patel@redwoodinference.com>, Laura Bennett <laura_bennett@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>
+Date: 2027-10-02T11:15:00-07:00
+Subject: Draft contract language for overflow credits
+
+Team — suggested amendment language for the MSA appendix:
+
+1) Baseline throughput: "Redwood will provide dedicated capacity corresponding to the committed GPUs and will target p50/p95 latencies as specified in the SOW. Baseline throughput will be measured during the 14-day observability window following deployment."
+
+2) Soft overflow credit mechanism: "Customer will receive a monthly spill credit equal to 5% of committed capacity tokens; billed on top-of-commit for overflow usage above the credit. Overflow per-token charges capped at 1.9x the committed rate. Redwood will notify Customer at 80% and 95% of committed utilization."
+
+3) Hard cap alternative: "If Customer elects hard cap, Redwood will not accept overflow traffic; Redwood will provide a model-fallback configuration. No overflow billing applies. Customer accepts possible increased error/latency for excess requests."
+
+This preserves predictable economics while giving NovaDrive operational continuity.
+
+—Priyom Das
+Senior Counsel, Redwood Inference
+
+From: Markus Klein <markus_klein@redwoodinference.com>
+To: Emma Carter <emma@novadrive.ai>, procurement <procurement@novadrive.ai>
+Cc: Laura Bennett <laura_bennett@redwoodinference.com>, Dev Patel <dev_patel@redwoodinference.com>, Priyom Das <priyom_das@redwoodinference.com>, Stratus Partners <cloud-reseller@stratuspartners.com>
+Date: 2027-10-02T11:30:00-07:00
+Subject: Proposal: reserved + soft overflow (Option A) — next steps and DocuSign
+
+Emma / NovaDrive procurement team —
+
+Thanks again for the traffic snapshot. Based on our ops and legal review we recommend Option A (Reserved increase + Soft Overflow) as the pragmatic path:
+
+Summary (Option A — our recommendation):
+- Add 40 reserved GPUs (A100 equiv) to the new term. Staged deployment: +20 day 1, +20 after 60 days.
+- Baseline throughput SLOs to be captured in SOW; 14-day observability window to validate.
+- Soft overflow: 5% monthly spill credit; overflow billed at up to 1.9x reserved rate; notifications at 80/95%.
+- Daily usage reporting for first 30 days, weekly thereafter.
+
+If procurement prefers a hard cap, we can provide Option B language (no spill, model-fallback). That will lower the risk of surprise bills but could affect request availability under extreme spikes.
+
+Next steps:
+1) Please confirm Option A or B by EOD 2027-10-04.
+2) If Option A, sign the attached amendment via DocuSign (link below).
+3) We’ll schedule a kickoff with DevOps within 5 business days of signature.
+
+DocuSign: https://docusign.com/link/ND-2027-05-amendment
+HubSpot: https://app.hubspot.com/deals/ND-2027-05
+
+Happy to hop on a quick call if you want to walk the pricing delta.
+
+Best,
+Markus Klein
+Account Executive — Redwood Inference
+
+From: Emma Carter <emma@novadrive.ai>
+To: Markus Klein <markus_klein@redwoodinference.com>
+Cc: procurement <procurement@novadrive.ai>, Laura Bennett <laura_bennett@redwoodinference.com>
+Date: 2027-10-02T16:05:00-07:00
+Subject: Re: Proposal: reserved + soft overflow (Option A) — next steps and DocuSign
+
+Markus / team —
+
+Thanks — Option A looks good to us. Two small asks before we route to procurement:
+1) Add a weekly short-form report (CSV) summarizing reserved utilization and spill usage for the first 60 days (we want more granularity during ramp).
+2) Can the 5% spill credit be front-loaded for month 1 to help with the initial warmup bursts?
+
+If you can accept those two items we’ll push to procurement and return signature this week.
+
+—Emma
+Head of Platform, NovaDrive
+
+(end of thread)

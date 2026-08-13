@@ -1,0 +1,114 @@
+Post-demo recap: connection pooling & quota alignment (BoltAI)
+
+From: Camila Reyes <camila.reyes@redwood.ai>
+To: Eric Tan <eric.tan@boltai.com>, Sofia Morales <sofia.morales@boltai.com>
+Cc: Aditya Rao <aditya.rao@redwood.ai>
+Date: Wed, 10 Jun 2026 13:12:00 -0700
+Subject: Post-demo recap: connection pooling & quota alignment (BoltAI)
+
+Thanks again for the demo today — appreciated the clear perf targets. Quick recap and proposed next steps so we're aligned: 
+
+Summary of what we heard from BoltAI:
+- Streaming-first integration for inference responses (partial tokens delivered as they generate).
+- Target first-token p95: ~150ms (for typical prompts, 512 token frontier).
+- Sustained throughput anticipated during alpha: ~8k tokens/s, peak bursts up to ~20k tokens/s.
+- Concurrency model: ~250 concurrent requests from the service side; per-endpoint concurrency per user expected 2–4.
+
+Open questions we promised to follow up on:
+1) How Redwood enforces rate limits vs connection-based concurrency (how quotas are counted: connections vs concurrent requests vs tokens).
+2) Whether connection pooling / keepalive reduces quota consumption for streaming.
+3) Temporary quota bump for alpha + how to dial Dedicated pool sizing for spikes.
+
+Proposed next steps:
+- Eric to share a simple load/profile CSV (format attached) with expected request size distribution and burst cadence.
+- Redwood to respond with: a) recommended rate-limiting model, b) a pilot quota proposal (timeboxed bump), and c) Technical notes for streaming clients (keepalive, gRPC vs HTTP SSE).
+
+Attachments: Bolt_load_profile.csv (you mentioned you'll confirm the numbers/content)
+
+Thanks — looping in Aditya for the technical sizing.
+
+—
+Camila Reyes
+Senior Sales Manager, Redwood Inference
+camila.reyes@redwood.ai
++1 (415) 555-0124
+
+Attachment: SLA-rate-limits-proposal.xlsx (stub)
+From: Eric Tan <eric.tan@boltai.com>
+To: Camila Reyes <camila.reyes@redwood.ai>
+Cc: Sofia Morales <sofia.morales@boltai.com>
+Date: Thu, 11 Jun 2026 09:47:00 -07:00
+Subject: Re: Post-demo recap: connection pooling & quota alignment (BoltAI)
+
+Thanks Camila — attaching our load profile and a short note on how our clients behave. See Bolt_load_profile.csv. Key clarifications: 
+
+- Concurrency: 250 concurrent requests is our median expectation for the alpha environment; in peak scenarios (promo events) we could see short spikes to ~600 concurrent requests for a few minutes.
+- Per-session concurrency: bots typically maintain 3 open streams per user for multi-turn interactions.
+- Streaming: we need chunked streaming so UI can show partial answers. Latency to first chunk is the most important metric.
+- Rate limits: we prefer not to have per-connection throttles that penalize long-lived streaming connections; ideally limits are token-based or request-based with exception handling for streaming sessions.
+
+Request: Can Redwood provide a short pilot quota (30 days) that allows: 1) 350 nominal concurrent request quota, 2) token-rate limit of 25k tokens/s, plus graceful 429 behavior and documented retry windows?
+
+Also, please confirm whether connection pooling/keepalives will reduce quota usage on your side if we reuse sockets (we use a shared HTTP/2 pool in front of our streaming clients).
+
+Thanks — Eric
+Eric Tan
+Lead Infra Engineer, BoltAI
+eric.tan@boltai.com
++1 (510) 555-4099
+
+Attachment: Bolt_load_profile.csv (stub)
+From: Camila Reyes <camila.reyes@redwood.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Eric Tan <eric.tan@boltai.com>, Sofia Morales <sofia.morales@boltai.com>
+Date: Thu, 11 Jun 2026 11:03:00 -07:00
+Subject: Fwd: Post-demo recap: connection pooling & quota alignment (BoltAI)
+
+Forwarding Bolt's load profile and ask. Please see the highlighted bullets from Eric below — they want a pilot bump (350 concurrent, 25k tokens/s) and confirmation that long-lived streaming sockets won't be double-counted against quotas if they reuse sockets.
+
+Aditya / Ben — can you: 
+1) Confirm feasibility for Hosted API vs Dedicated for Bolt's alpha and peak patterns. 
+2) Draft a short pilot quota proposal (time-limited) and an ops play for graceful 429s and retry guidance for streaming.
+3) Call out client-side settings (HTTP/2 keepalive, max concurrent streams per connection) that will best reduce pressure on our pool.
+
+I've attached a quick demo log from today where we saw steady p95 first-token ~210ms on the shared demo pool; that should help framing.
+
+—
+Camila
+
+Attachment: demo-logs.txt (stub)
+From: Aditya Rao <aditya.rao@redwood.ai>
+To: Camila Reyes <camila.reyes@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Eric Tan <eric.tan@boltai.com>
+Date: Fri, 12 Jun 2026 09:07:00 -07:00
+Subject: Re: Fwd: Post-demo recap: connection pooling & quota alignment (BoltAI)
+
+Thanks for the context — quick technical proposal below. High level: Bolt's pattern (streaming + bursts) fits two options: Hosted with a measured pilot bump, or Redwood Dedicated pool for predictable SLOs.
+
+Option A — Hosted (short pilot):
+- Pilot bump (30 days): Increase concurrent request quota to 350, token-rate bump to 25k tokens/s. We can do this as a time-bound quota adjustment scoped to the Bolt API key(s).
+- Rate-limit model: primary shaping on token-rate (tokens/s) + soft concurrent request cap. Streaming sessions are token-accounted as they emit tokens; long-lived sockets are not penalized unless they continuously emit tokens.
+- Connection pooling: reusing HTTP/2 or gRPC connections reduces TCP/TLS overhead and helps our front-end node reuse runtime resources. However, quota accounting remains per-request/token emission — keepalives alone won't bypass token accounting but do reduce connection churn.
+- 429 behavior: 429s will include a Retry-After header and an explicit JSON reason. For streaming, recommend exponential backoff with jitter and a linear fallback to short polling for degraded periods.
+
+Option B — Dedicated pool (recommended for predictable p95/p99):
+- Dedicated GPU pool sized for Bolt's sustained 8k tokens/s with headroom for 20k token/s bursts (autoscale policy). We can guarantee tighter p95 first-token latency by isolating capacity.
+- Concurrency model: Capacity is defined in concurrent request slots per model variant + tokens/s shaping at the pool level. This avoids noisy-neighbor tail effects.
+
+Client guidance (will send as a one-pager):
+- Use HTTP/2 or gRPC with max concurrent streams per connection set to 16 (client-side) and a connection pool of N workers (depends on instance count).
+- Keepalive: 60s ping interval is fine. Ensure idle connection timeouts align with your LB (recommended 120s).
+- Streaming: request first-token timeout of 500ms client-side; if not met, surface partial fallback and allow server to complete when ready.
+
+Next steps I propose:
+1) Camila, confirm Bolt wants Hosted pilot or Dedicated evaluation.
+2) If pilot: Ben/Finance to prepare a short-term pricing addendum (I can provide estimated committed units and expected uplift).
+3) Technical: I'll draft the pilot quota doc (inc. exact 429 semantics, metrics to monitor, and rollback plan) and share by EOD Monday.
+
+Happy to jump on a short call with Bolt infra if you want to walk through the streaming retry semantics.
+
+—
+Aditya Rao
+Solutions Engineer, Redwood Inference
+aditya.rao@redwood.ai
+

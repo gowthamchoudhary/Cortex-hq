@@ -1,0 +1,61 @@
+Stability & stress test: kernel-swap behavior TRT-LLM vs vLLM on private deploy
+
+Meeting header:
+Date/Time: 2026-12-10 15:00 UTC | Duration: 62m | Zoom call
+Attendees: Alex Morgan (Redwood AE), Priya Natarajan (Redwood SE), Marcus Lee (Helix), Sana Patel (Helix SRE), Diego Ramos (Helix CTO)
+Recording: zoom.us/rec/abcdefg (internal)
+
+Summary: technical deep dive into kernel-swapping and cudagraph replay instability observed on Helix on-prem private deployment. Focus on TRT-LLM vs vLLM behavior, KV cache persistence, batching policy interactions and fallback heuristics.
+
+[00:00] Alex: hey everyone, thanks for carving out time, quick roll call?
+[00:07] Marcus: Marcus here, we hit some instability in our private cluster during long chat sessions, curious if it's TRT-LLM cudagraph replay or our NV link setup.
+[00:14] Sana: Sana, SRE, here. we've got 8xA100 nodes with NV link, patched to 510 drivers, and we've seen intermittent out-of-memory errors and some latency spikes.
+[00:22] Priya: hey hi, Priya from Redwood infra, I went through the trace Marcus sent, there are a few signatures that look like cudagraph replay mismatches and persistent K V cache evictions in the middle of large-batch sequences.
+[00:34] Diego: Diego here, CTO. stepping back, we need to understand tradeoffs — TRT-LLM gives us lower p50 but seen more jitter; vLLM is stable but costs more. want to pick a path for our pilot.
+
+[00:48] Alex: quick framing — TRT-LLM uses TensorRT kernels + cudagraph replay for hot paths; that gives great throughput but can be brittle if sequence length distribution changes or if there's eviction of cached KV states. vLLM keeps a more general scheduler, less replay, more deterministic but slightly higher avg latency.
+[01:05] Marcus: correct, our long-chat workload has very variable sequence lengths, lots of switching between short queries and long context expansions. We instrumented a 24h window and saw kernel swap events correlate with NV link traffic bursts.
+[01:22] Priya: one important detail — cudagraphs are recorded for specific execution paths (seq len, batch shape); when a record is replayed but the KV cache layout changed (evictions or shifted offsets), the GPU can hit protective checks or suboptimal kernels, producing slower kernels or OOMs. The runtime should fallback but sometimes fallback triggers late.
+[01:40] Sana: yes, and our current fallback threshold is quite conservative, we only swap after a few failed replays which is why you're seeing spikes.
+
+[02:01] Alex: couple of concrete suggestions: 1) warmup with representative sampled traces to prime cudagraphs, 2) enable prefix-aware recording (so the graph covers typical variations), 3) relax persistent KV eviction or increase K V cache size to avoid mid-dialog evictions.
+[02:18] Marcus: Warmup sounds doable, but our on-prem memory is tight. can quantization help? we tried int8 profile and saw quality degradation on generative tasks.
+[02:29] Priya: quantization is a tool — INT8 reduces memory but can change kernel selection too. TRT-LLM's int8 kernels may pick different execution paths; important to run quality evals. Also mixed precision FP16 + selective int8 for attention can be a middle ground.
+[02:46] Diego: are we seeing deterministic reproducibility? i mean, if you rerun the same trace, do you get the same kernel-swap points?
+[02:53] Priya: not always. small nondeterministic timing can change batching boundaries which changes the recorded graph. Also background GC/eviction events cause offsets to shift. We need a more stable batching policy; continuous batching is great for throughput but exacerbates this variability.
+
+[03:18] Marcus: what's Redwood's fallback policy by default?
+[03:21] Alex: we try cudagraph replay, then line up a soft fallback to non-replayed kernel with a short warmup period. There's also a more aggressive policy that disables cudagraphs for endpoints with very high sequence variability.
+[03:36] Sana: could that be per-route? we'd like chat endpoints to be stable but analytics batch jobs to use cudagraphs.
+[03:41] Priya: yes it's per-route — you can pin routing policy per model route. For Helix we'd recommend chat-route: conservative cudagraph policy + larger KV cache quota; analytical-route: aggressive cudagraph + batching.
+
+[04:02] Diego: NVLink config — we saw cross-GPU memory copies spike after a kernel swap. Could that be the kernel change itself, or are we hitting PCIe fallback?
+[04:10] Priya: depends. TensorRT kernels sometimes choose different memory layouts requiring extra cross-device synchronization. Also cudagraph replay may skip certain async memcpy optimizations and force synchronous copies if replay path differs. We should capture nvprof / NSIGHT traces around swap events.
+[04:28] Marcus: we have some nvprof dumps. I'll upload them. they show sudden sync points that match the timestamp of the spikes.
+
+[04:45] Alex: on the software side, recommended next steps: 1) Priya will run a repro with two scenarios: persistent KV cache enabled vs disabled, and with/without cudagraph replay. 2) collect cuda graf record IDs, kernel names, and time series of NCCL/ memcpy syncs.
+
+[05:02] Priya: also want to test a deterministic warmup — replay sampled 30m of traffic 3x before opening to production to stabilize recorded graphs. That reduces cold-start graph variance.
+[05:13] Sana: question — what about quantization + cudagraph? Does quantized cudagraph exacerbate instability?
+[05:19] Priya: quantization can change kernel selection and memory layout; TRT-LLM's int8 kernels are often different code paths. If you change precision post-record, replay may mismatch. So record graphs using the target precision.
+
+[05:36] Marcus: any config knobs for delaying fallback so we don't get OOM but also not degrade p50?
+[05:41] Alex: yes — two knobs: a) early-detect policy that pre-validates graph compatibility on warmup, b) soft-fallback that serves from a warm non-cudagraph kernel that is already primed. Both reduce oscillation.
+[05:56] Diego: cost question — if we disable cudagraphs for chat route, what's the expected cost hit?
+[06:01] Priya: rough estimate — 8–15% higher per-token compute cost for smaller batch-size patterns; but much less variability so SLA could be better. We should run targeted econ tests.
+
+[06:18] Sana: on the networking side, we might be able to isolate chat traffic to nodes with strong NVLink topology (full mesh) vs nodes with partial NVLink. That should reduce cross-node memcpy.
+[06:27] Priya: good call. Also pinning model shards to NVLink-connected devices reduces NCCL traffic. That's a deployment-level config.
+
+[06:42] Alex: open questions we captured: how often do graph-recorded shapes diverge in your workload? Marcus said about 12% of sessions have >3 lengths changes; we need the raw distribution.
+[06:55] Marcus: I'll drop the session histogram into the shared folder.
+[07:00] Priya: last operational note — ensure driver/ CUDA runtime matches what TRT-LLM expects; mismatches cause subtle kernel fallbacks. You said you are on 510 drivers, we recommend 515+ for our latest TRT kernels.
+[07:14] Sana: noted, we'll test 515 in staging.
+
+[07:22] Alex: recap: shared artifact (bench template + current TRT docker) from Alex, Priya to run 48h controlled replay tests on Helix staging, Helix to provide traces and nvprof logs, followup 2026-12-20.
+[07:37] Diego: sounds good, thank you.
+[07:40] Marcus: thank you all, appreciate the pragmatic plan.
+[07:44] Alex: great, we'll send the sheet and security checklist after the call.
+[07:49] Priya: talk soon — bye.
+
+End of transcript.

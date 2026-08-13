@@ -1,0 +1,154 @@
+Post-demo: isolation priorities, procurement readiness, and next steps
+
+From: lauren_bishop
+To: Samira Khan <samira.khan@healix.ai>, Arjun Patel <arjun.patel@healix.ai>
+Cc: ben_carter, karthik_iyer
+Date: Tue, 20 Apr 2027 16:12:00 -0700
+Subject: Post-demo: isolation priorities, procurement readiness, and next steps
+
+Hi Samira / Arjun —
+
+Thanks again for taking the demo earlier. Quick recap and proposed next steps so we keep momentum while you evaluate hosting options. High-level notes from our call:
+
+- Primary goal: support a query-heavy enterprise search product for healthcare documents with predictable latency at peak (90th p95 target ~120ms for short responses, longer batches ok).
+- Data sensitivity: PHI in subset of routes; you indicated security/segmentation is a must for those routes.
+- Procurement timeline: Healix hopes to finalize vendor list within 4–6 weeks.
+
+Open qualification items we promised to surface:
+1) Isolation priority: which routes need strict isolation (dedicated GPUs / Private VPC) vs which can tolerate hosted multi-tenant with elevated SLOs? Please complete the attached two-column matrix with route names and isolation priority.
+2) Failover needs: do you need cross-region fallbacks or is single-region with warm standby acceptable?
+3) Compliance artifacts: SOC2 + data residency evidence required for procurement packet — we'll attach our SOC2 report and a dedicated SLA draft.
+
+Attachments: isolation-priority-matrix.xlsx (blank template), redwood-dedicated-sla.pdf (draft).
+
+Proposed next steps:
+- You fill the matrix and send back (this will help us recommend hosted vs dedicated vs private per-route).
+- If you mark 2+ critical routes as "isolate", we propose a short tech workshop (30–45m) with our infra engineer to scope Dedicated or Private setup.
+- Ben will follow up on procurement terms and potential pre-approved discounts for annual commitments.
+
+Can you aim to return the matrix by next Wed (2027-04-28)? Happy to adjust based on your timeline.
+
+—Lauren
+Lauren Bishop
+Account Executive, Redwood Inference
+lauren.bishop@redwood.ai
++1 (415) 555-0189
+
+Attachment: isolation-priority-matrix.xlsx (spreadsheet stub)
+Attachment: redwood-dedicated-sla.pdf (PDF stub)
+From: Samira Khan <samira.khan@healix.ai>
+To: lauren_bishop
+Cc: Arjun Patel <arjun.patel@healix.ai>, karthik_iyer
+Date: Wed, 21 Apr 2027 09:35:00 -0700
+Subject: Re: Post-demo: isolation priorities, procurement readiness, and next steps
+
+Thanks Lauren — useful summary. A few clarifications from our side before we complete the matrix:
+
+1) When you say "isolate", what are the operational guarantees for Dedicated vs Private? Specifically: noisy neighbor protections (CPU/GPU preemption), KV cache separation, and guarantees on tail latency for ephemeral spikes.
+
+2) For the hosted option, can we pin model variants or do you only offer versioned rollouts on Dedicated/Private?
+
+3) Our compliance team will require a statement of data flow for PHI routes (whether any data touches multi-tenant systems or logs are retained centrally).
+
+We can fill the matrix but want to be sure we interpret terms correctly. If it's helpful, Arjun can do the tech workshop on our side (he's cc'd).
+
+—Samira
+Director of Product, Healix AI
+samira.khan@healix.ai
+
+On Tue, Apr 20, 2027 at 4:12 PM lauren_bishop wrote:
+> Hi Samira / Arjun —
+> 
+> Thanks again for taking the demo earlier. Quick recap and proposed next steps so we keep momentum while you evaluate hosting options. High-level notes from our call:
+> 
+> - Primary goal: support a query-heavy enterprise search product for healthcare documents with predictable latency at peak (90th p95 target ~120ms for short responses, longer batches ok).
+> - Data sensitivity: PHI in subset of routes; you indicated security/segmentation is a must for those routes.
+> - Procurement timeline: Healix hopes to finalize vendor list within 4–6 weeks.
+> 
+> Open qualification items we promised to surface:
+> 1) Isolation priority: which routes need strict isolation (dedicated GPUs / Private VPC) vs which can tolerate hosted multi-tenant with elevated SLOs?
+> 2) Failover needs: do you need cross-region fallbacks or is single-region with warm standby acceptable?
+> 3) Compliance artifacts: SOC2 + data residency evidence required for procurement packet — we'll attach our SOC2 report and a dedicated SLA draft.
+> 
+> Attachments: isolation-priority-matrix.xlsx (blank template), redwood-dedicated-sla.pdf (draft).
+> 
+> Proposed next steps:
+> - You fill the matrix and send back (this will help us recommend hosted vs dedicated vs private per-route).
+> - If you mark 2+ critical routes as "isolate", we propose a short tech workshop (30–45m) with our infra engineer to scope Dedicated or Private setup.
+> - Ben will follow up on procurement terms and potential pre-approved discounts for annual commitments.
+> 
+> Can you aim to return the matrix by next Wed (2027-04-28)? Happy to adjust based on your timeline.
+> 
+> —Lauren
+> Attachment: isolation-priority-matrix.xlsx (spreadsheet stub)
+> Attachment: redwood-dedicated-sla.pdf (PDF stub)
+From: lauren_bishop
+To: Samira Khan <samira.khan@healix.ai>
+Cc: Arjun Patel <arjun.patel@healix.ai>, karthik_iyer, ben_carter
+Date: Wed, 21 Apr 2027 11:02:00 -0700
+Subject: Re: Post-demo: isolation priorities, procurement readiness, and next steps
+
+Samira —
+
+Good questions. I pulled in Karthik (cc) from our infra team and summarized below to make the distinctions concrete. We'll follow up with a short tech workshop if you want deeper verification.
+
+Short answers first:
+- Hosted (multi-tenant): best for non-PHI, high-volume routes where cost and time-to-market matter. We offer elevated SLOs and configurable batching but no hardware reservation — noisy-neighbor scenarios are mitigated by autoscaling and request-level throttles, not physical GPU isolation.
+- Dedicated: reserved GPU pools for your tenancy. Guarantees on GPU capacity, no neighbor interference at the GPU level, isolated KV caches, and your routes get predictable tail latency because you own the capacity. Recommended if more than ~30% of peak throughput needs guaranteed p95.
+- Private (VPC / on-prem): full control over networking and data plane; you manage provisioning or we deploy into your cloud account. Best for PHI routes that must not touch any shared control plane resources.
+
+Karthik's notes (high level):
+- Noisy neighbor protections: Dedicated = physical reservation; Hosted = QoS but shared hardware; Private = fully within your environment.
+- KV cache and model state: KV cache can be per-customer on Dedicated and Private. On Hosted we use per-request token isolation with shared cache layers (configurable TTLs, but not physically isolated).
+- SLO enforcement and rollback: we can attach model-level p95 SLOs to Dedicated capacity and run active latency alarms with automatic fallbacks to lower-cost variants. For Hosted we provide monitoring and retry policies but weaker hard guarantees.
+
+Suggested next actions:
+1) If you have 1–3 PHI-critical routes: mark them "private" in the matrix and we'll scope a Private/VPC engagement.
+2) If ~3–8 high-priority routes need strong latency predictability: mark those as "dedicated" and we'll propose a capacity profile and SLA.
+3) For everything else, mark as "hosted" and we'll provide guidance on batching, caching, and rate limiting to keep cost low.
+
+Workshop offer: Karthik can host a 45m session Thu/Fri this week to walk through isolation boundaries and an initial capacity sketch. Would Thu 4/22 10:30am PT work for you?
+
+—Lauren
+
+On Wed, Apr 21, 2027 at 9:35 AM Samira Khan wrote:
+> Thanks Lauren — useful summary. A few clarifications from our side before we complete the matrix:
+> 
+> 1) When you say "isolate", what are the operational guarantees for Dedicated vs Private? Specifically: noisy neighbor protections (CPU/GPU preemption), KV cache separation, and guarantees on tail latency for ephemeral spikes.
+> 
+> 2) For the hosted option, can we pin model variants or do you only offer versioned rollouts on Dedicated/Private?
+> 
+> 3) Our compliance team will require a statement of data flow for PHI routes (whether any data touches multi-tenant systems or logs are retained centrally).
+
+Attachment(s): isolation-priority-matrix.xlsx
+
+From: ben_carter
+To: Samira Khan <samira.khan@healix.ai>, lauren_bishop
+Cc: karthik_iyer
+Date: Fri, 22 Apr 2027 09:08:00 -0700
+Subject: Re: Post-demo: isolation priorities, procurement readiness, and next steps
+
+Samira / Lauren —
+
+Quick procurement note from my side: once you confirm isolation choices we can fast-track pricing and a procurement packet. A couple of practical items to speed review:
+
+- We can prepare a two-page TCO summary (Hosted vs Dedicated vs Private) scoped to the routes you mark as critical.
+- For Dedicated, we have a standard 12-month reservation with optional burst credits; if Healix commits to annual capacity we can extend a one-time onboarding credit and a 5% discount off list for the first year.
+- I can share our standard security attestations (SOC2, DPA) to include with your procurement packet — Lauren already attached the SLA draft.
+
+If Friday works for a 15m call to align procurement milestones, I'm available 1:00–3:00pm PT.
+
+—Ben
+Senior Sales Manager, Redwood Inference
+ben.carter@redwood.ai
+
+> On Wed, Apr 21, 2027 at 11:02 AM lauren_bishop wrote:
+> > Samira —
+> > 
+> > Good questions. I pulled in Karthik (cc) from our infra team and summarized below to make the distinctions concrete. We'll follow up with a short tech workshop if you want deeper verification.
+> > 
+> > Workshop offer: Karthik can host a 45m session Thu/Fri this week to walk through isolation boundaries and an initial capacity sketch. Would Thu 4/22 10:30am PT work for you?
+> > 
+> > —Lauren
+>
+Attachment: redwood-dedicated-sla.pdf

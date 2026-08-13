@@ -1,0 +1,153 @@
+Request: carveout for customer-managed edge (Centurion Health)
+
+From: Elena Park <elena.park@centurionhealth.com>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Cc: Procurement <procurement@centurionhealth.com>, ops+infra@centurionhealth.com
+Date: Fri, 4 Oct 2029 09:12:00 -0700
+Subject: Request: carveout for customer-managed edge (Centurion Health)
+
+Hi Kimberly,
+
+Thanks again for the product walkthrough yesterday. As we described, Centurion will run the edge NAT, our private WAN peering, and the TLS termination in our VPC for PHI-processing workloads. The security and compliance teams want the production SLA to reflect that the customer controls the ingress/egress edge plane. Practically that means Centurion is requesting an operational exclusion for availability and tail-latency events attributable to our managed edge devices and upstream transit (including our IX peering).
+
+Can Redwood put together the specific evidence you’ll need so we can sign the exception/attestation? Our procurement team has asked for the proposed carveout wording and any monitoring/alerting obligations on both sides.
+
+I’m attaching a simple network diagram and a preliminary evidence checklist.
+
+Best,
+Elena
+Elena Park
+Director, Cloud Operations | Centurion Health
+elena.park@centurionhealth.com
++1 (617) 555-0184
+
+--
+Attachment: centurion_network_diagram.pdf
+Attachment: requested_evidence_list.xlsx
+
+----
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Elena Park <elena.park@centurionhealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Vivek Kulkarni <vivek_kulkarni@redwood.ai>, Naomi Feldman <naomi_feldman@redwood.ai>
+Date: Fri, 4 Oct 2029 12:03:00 -0700
+Subject: Re: Request: carveout for customer-managed edge (Centurion Health)
+
+Elena —
+
+Thanks for the diagram and the checklist. We can accept a scoped SLA exclusion for customer-managed edge components, but we need a binding attestation and periodic evidence to operationalize it. To make progress, here’s what Redwood will require to approve the exclusion and how we intend to reflect it in the agreement: 
+
+1) Scope: explicit list of components under customer control (edge NAT, TLS termination IPs, IX peers, transit ASN ranges). Exclusion applies only to incidents where the root cause is within that list.
+
+2) Evidence & cadence: monthly uptime/synthetic probe reports (3 regional vantage points), BGP session uptime logs for customer ASNs, and NetFlow/traceroute captures for incidents >5 minutes that align with our incident window.
+
+3) Contacting & escalation: a 24/7 reachable escalation contact (phone + PagerDuty URL) for emergency RTO coordination.
+
+4) Fallback & mitigation: Redwood requires a plan to enable temporary read-only or degraded-mode access routed to our hosted edge for critical flows if customer edge remains down for >30 minutes for production traffic. If Centurion declines fallback routing, the SLA credit schedule changes (reduced credits) — we will provide the exact credit table.
+
+5) Security audit: a quarterly attestation that edge devices are running supported firmware with TLS profiles meeting our minimums (TLS1.3 preferred) and that there is a documented key custody model.
+
+Marissa — can Legal draft the exclusion language and the attestation template? Vivek/Naomi — can you confirm technical evidence types Redwood will rely on and any minimal synthetic checks we should configure on our side?
+
+I’ll coordinate with Procurement for the paperwork once we have the draft.
+
+Regards,
+Kimberly Park
+Head of Sales, Enterprise | Redwood Inference
+kimberly_park@redwood.ai
++1 (415) 555-0123
+
+----
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Cc: Elena Park <elena.park@centurionhealth.com>, Procurement <procurement@centurionhealth.com>
+Date: Fri, 4 Oct 2029 15:10:00 -0700
+Subject: Re: Request: carveout for customer-managed edge (Centurion Health)
+
+Kimberly, Elena —
+
+Draft language attached (I’ve kept it tight to the operational facts to avoid broad indemnities). Key items Legal wants to confirm before we finalize:
+
+- Whether Centurion will provide signed monthly attestation or a SOC-like report for edge controls. Attestation is usually sufficient but we’ll accept a 3rd-party scan/assessment if repeatedly requested.
+- Emergency remediation rights: Redwood should be granted a temporary, narrowly-scoped right to re-route traffic to a Redwood-managed endpoint for critical incidents if explicit permission is provided by the customer’s escalation contact.
+- Performance credits: propose a sliding-credit schedule where full credit applies unless the outage is attributable to customer edge AND customer declines to enable Redwood fallback routing.
+
+I’ll attach the exclusion draft and a short attestation template. Procurement — happy to sync to nail down exec signers and Docusign flow.
+
+Best,
+Marissa Cole
+Sr. Counsel, Commercial Transactions | Redwood Inference
+marissa_cole@redwood.ai
+
+--
+Attachment: sla_exclusion_draft.docx
+Attachment: attestation_template.docx
+
+----
+From: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Elena Park <elena.park@centurionhealth.com>
+Cc: Naomi Feldman <naomi_feldman@redwood.ai>
+Date: Mon, 7 Oct 2029 09:06:00 -0700
+Subject: Re: Request: carveout for customer-managed edge (Centurion Health)
+
+Elena / team —
+
+Technically this is straightforward to support with the caveat that some telemetry is required. Here’s the operational checklist Redwood needs for the exclusion to be actionable: 
+
+- BGP session uptime exports (plain text MRT or CSV) with timestamps at 5m granularity for the announced prefixes.
+- Flow/NetFlow or sFlow samples for a 30-minute window around any incident we attribute to the customer edge.
+- Router config snapshot (sha256) with a short description of ACLs/NAT rules that affect our service endpoints.
+- SNMP or Prometheus metrics for interface errors leading up to an incident.
+- For latency tail attribution: traceroute from 3 Redwood vantage points to the customer ingress IPs captured during the event.
+
+If Centurion cannot provide the above in near-real-time, we’ll require an extended incident response SLA (longer mean time to attribution) and reduced availability credits. Regarding the fallback: we can provision temporary inbound tunnels to a Redwood-managed edge, but that requires a pre-authorized maintenance window or a signed emergent access permission (we cannot unilaterally terminate the customer-managed BGP sessions).
+
+Naomi — I think we should pre-configure 3 synthetic probes from our us-west/us-east/us-central PoPs and agree on thresholds (95th percentile latency, packet loss >2% triggers). Naomi, can you also propose a minimal probe config and the dashboard link we can share?
+
+Thanks,
+Vivek
+Director, Platform Reliability | Redwood Inference
+vivek_kulkarni@redwood.ai
+
+----
+From: Elena Park <elena.park@centurionhealth.com>
+To: Kimberly Park <kimberly_park@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+Date: Mon, 7 Oct 2029 12:22:00 -0700
+Subject: Re: Request: carveout for customer-managed edge (Centurion Health)
+
+Thanks — this is helpful. We can provide BGP MRT dumps and NetFlow windows on request and we already have a PagerDuty escalation rota. I’ve attached the operational contacts CSV and we can share a weekly automated MRT snapshot feed if that helps.
+
+Two quick asks from Centurion:
+1) Can Redwood publish the exact fallback API endpoints and the TLS SNI values we must route for the temporary tunnel? That will let our network team script the fail-open.
+2) For regulatory reasons we need the attestation to include the statement that Redwood will not proactively ingest any customer-managed private keys or rotate KMS keys in our edge. We want explicit language that key custody remains with Centurion.
+
+We’ll review Marissa’s draft and return comments.
+
+Elena
+
+--
+Attachment: operational-contacts.csv
+
+----
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Elena Park <elena.park@centurionhealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Vivek Kulkarni <vivek_kulkarni@redwood.ai>, Naomi Feldman <naomi_feldman@redwood.ai>, Procurement <procurement@centurionhealth.com>
+Date: Mon, 7 Oct 2029 16:30:00 -0700
+Subject: Re: Request: carveout for customer-managed edge (Centurion Health)
+
+Elena —
+
+Appreciate the quick turnaround. Next steps agreed:
+- Marissa will circulate a redline of the exclusion language by EOD Wed (we’ll add the explicit key custody sentence you requested).
+- Vivek/Naomi will publish the synthetic probe config and the fallback endpoint details (TLS SNI + ingress IP ranges) in a separate internal note; we’ll share the read-only link with your network team.
+- Centurion will provide a 30-day sample MRT + NetFlow window and the escalation CSV so we can validate ingestion and parsing.
+- We’ll include the agreed monthly attestation as an appendix and an option for a 3rd-party scan in lieu of attestation if required by your auditors.
+
+Once we have the redlined exclusion and the sample telemetry, Procurement and Legal can execute the DocuSign flow (DocuSign link above). If all good, we can aim to finalize by Oct 18 and include the exclusion as an addendum to the deal.
+
+Thanks — looking forward to closing this out.
+
+Best,
+Kimberly Park
+Head of Sales, Enterprise | Redwood Inference
+kimberly_park@redwood.ai
++1 (415) 555-0123

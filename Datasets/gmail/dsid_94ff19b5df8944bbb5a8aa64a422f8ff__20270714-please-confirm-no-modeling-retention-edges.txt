@@ -1,0 +1,106 @@
+Confirming: No model training on customer data + retention edge cases
+
+From: Liam O'Connor <liam.oconnor@finhealth.io>
+To: Markus Klein <markus.klein@redwood.ai>
+Cc: procurement@finhealth.io
+Date: Wed, 14 Jul 2027 09:12:00 -0700
+Subject: Quick confirmation: 'no training' promise + what retention covers
+
+Hi Markus,
+
+Quick question as we're finalizing the SOW: your security deck says Redwood does not train models on customer data. That's great, but our legal team has a couple of very specific follow-ups they want spelled out so they can sign off:
+
+1) When you say "we do not train on your data," can you confirm whether that covers all internal telemetry (request logs, traces) and debug snapshots?
+2) Do backups, disaster recovery snapshots, or core dumps ever get used for model tuning or research?
+3) What is your retention timeline for ephemeral artifacts (KV cache, token cache) versus long-term logs? We need concrete windows.
+4) If we ask for deletion of data under the contract, what processes touch archived/backup copies and what's the RTO for tombstoning?
+
+Can you point me to a short FAQ or legal wording we can include in the procurement packet? I attached a spreadsheet with the questions the legal team added.
+
+Thanks —
+Liam
+Head of Partnerships, FinHealth
+liam.oconnor@finhealth.io
+
+Attachment: finhealth-map-questions.xlsx (spreadsheet)
+From: Markus Klein <markus.klein@redwood.ai>
+To: Liam O'Connor <liam.oconnor@finhealth.io>
+Cc: Neha Kapoor <neha.kapoor@redwood.ai>, Monica Patel <monica.patel@redwood.ai>
+Date: Wed, 14 Jul 2027 10:03:00 -07:00
+Subject: Re: Quick confirmation: 'no training' promise + what retention covers
+
+Hi Liam — thanks for the clear list. Looping in Neha (privacy/legal) and Monica (Customer Success) to provide the exact contract wording and retention windows.
+
+Short answers up front so your team can proceed:
+- "We do not train on your customer data" applies to model training, research experiments, and external model releases.
+- Operational telemetry (metrics-only) used for platform stability is aggregated and does not contain user payloads; it is never included in a training corpus.
+- Short-lived artifacts like KV cache and per-request token buffers are ephemeral by design and flushed according to the session TTLs — typical TTL is 48 hours for ephemeral caches unless you opt into longer retention.
+- Backups and DR snapshots are treated separately: they are encrypted and retained per configured retention policy; they are not used for model tuning. Deletion requests trigger a tombstone workflow across active stores; recovery from immutable cold archives is handled case-by-case (see Neha's follow-up).
+
+We'll attach the formal clause and the FAQ PDF.
+
+—Markus
+VP, Sales Engineering
+Redwood Inference
+
+Attachment: redwood-security-faq.pdf
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Liam O'Connor <liam.oconnor@finhealth.io>, Markus Klein <markus.klein@redwood.ai>
+Cc: Monica Patel <monica.patel@redwood.ai>
+Date: Wed, 14 Jul 2027 13:18:00 -07:00
+Subject: Re: Quick confirmation: 'no training' promise + what retention covers
+
+Hi Liam — thanks for the spreadsheet. I pulled the legal/ops position together below and included the exact wording we recommend you include in the SOW so procurement can close quickly.
+
+Quoted clause (recommended SOW language):
+"Redwood Inference represents and warrants that Customer Data (as defined in this Agreement) will not be used to train or improve Redwood's publicly or privately released machine learning models, model families, or research datasets. Operational telemetry that does not contain Customer Data payloads (e.g., anonymized platform metrics) may be retained for platform monitoring and capacity planning, but such telemetry will not be ingested into model training datasets. Backup images, disaster recovery snapshots, or crash dumps are maintained solely for resilience and will not be used for model training or research.
+
+Upon Customer request for deletion of Customer Data, Redwood shall: (a) delete active copies from primary and replication stores within 30 calendar days where deletion does not compromise availability under the agreed SLA; (b) mark backups and archives containing Customer Data as tombstoned and exclude them from restore operations going forward; (c) provide Customer a certificate of deletion for active stores and for tombstoned archival items within 60 calendar days, to the extent allowed by immutable-retention legal holds.
+"
+
+Retention windows (typical defaults — configurable per-customer):
+- KV/Token caches (ephemeral): automatic eviction within 48 hours by default.
+- Short-term request logs (for debugging/trace): 30 days (can be shortened to 7 days on request).
+- Aggregated telemetry (metrics, not payloads): 365 days for capacity and anomaly analysis.
+- Backups/DR snapshots: default 90 days; long-term cold archives may persist longer depending on the account's chosen policy.
+
+Edge cases & notes:
+- Snapshots taken for regulatory e-discovery or legal hold are handled per the legal hold scope and cannot be auto-deleted until release.
+- Debug snapshots that contain customer payloads are rotated and access-controlled; they are not used for model training.
+- If you require a contractual "no-derivative-models" clause (i.e., not only no training but no derived artifacts), we can add explicit language and an audit appendix.
+
+I'll attach the FAQ and a short statement of proof we can sign off for procurement. Monica — can you confirm the operational runbook for deletion requests?
+
+Regards,
+Neha Kapoor
+Director, Privacy & Compliance
+Redwood Inference
+From: Monica Patel <monica.patel@redwood.ai>
+To: Liam O'Connor <liam.oconnor@redwood.io>, Neha Kapoor <neha.kapoor@redwood.ai>, Markus Klein <markus.klein@redwood.ai>
+Date: Wed, 14 Jul 2027 15:45:00 -07:00
+Subject: Re: Quick confirmation: 'no training' promise + what retention covers
+
+On Wed, Jul 14, 2027 at 13:18, Neha Kapoor <neha.kapoor@redwood.ai> wrote:
+> I'll attach the FAQ and a short statement of proof we can sign off for procurement. Monica — can you confirm the operational runbook for deletion requests?
+
+Hi all — operational runbook below (short form):
+
+1) Receive formal deletion request via contract portal or support ticket (we log request id).
+2) Validate scope with customer (data ranges, endpoints, and affected resources).
+3) Execute deletion in primary stores immediately; replicate deletion commands to secondaries.
+4) Initiate tombstone flagging for backups/archives and add to queue for immutable-store review.
+4a) For typical backups, the tombstone and exclusion from restores completes within 10 business days.
+5) Issue deletion certificate for primary stores within 30 days. Archive/tombstone certificate delivered within 60 days, subject to immutable retention holds.
+6) If FinHealth requests confirmation that deleted data never entered any training pipelines, we provide a signed attestation and (if needed) a 3rd-party audit summary.
+
+We'll include the attestation template in the packet and add one-line bullets to the FAQ PDF that explicitly call out KV/cache eviction and backup tombstoning. Liam — if you need the contract wording to include specific TTLs (e.g., 7-day log retention), we can accept that as a configurable term in the SOW.
+
+Best,
+Monica Patel
+Customer Success Manager
+Redwood Inference
+
+Attachment: None
+
+---
+Note: redwood-security-faq.pdf added by Markus includes the short bullets and the attestation template referenced above.

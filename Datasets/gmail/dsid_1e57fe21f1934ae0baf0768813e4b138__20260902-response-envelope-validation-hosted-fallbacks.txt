@@ -1,0 +1,132 @@
+Response-envelope validation & hosted fallback plan
+
+From: Megan Lowe <megan.lowe@arcadianhealth.com>
+To: Logan Wright <logan.wright@redwood.com>
+Cc: Procurement Team <procurement@arcadianhealth.com>
+Date: Thu, 2 Sep 2026 09:14:00 -0700
+Subject: Follow-up from demo — latency targets and streaming Qs
+
+Hi Logan,
+
+Thanks again for the demo this morning — the hosted API flow and the streaming example were helpful. A few follow-ups from our engineering and procurement teams so we can evaluate fit against our current provider:
+
+1) End-to-end p95/p99 targets we should validate. Our SLOs today are p95 = 180ms, p99 = 420ms (tail includes client-side TLS + network). Can Redwood’s hosted offering show consistent p95 <= 120ms and p99 <= 350ms for conversational calls with 512-token responses?
+
+2) Concurrency and throughput profile. Typical steady-state concurrency per shard is ~160 concurrent open streams from our front-end, burst to 800 for short windows. Peak sustained throughput is ~3.2k RPS (small requests), peaked to ~6k for short promos.
+
+3) Streaming behavior. We use persistent HTTP/2 streams and rely on mid-request prefix cache on the server side. Is there guidance on connection pools, keepalive, and expected degradation patterns when connections are saturated?
+
+4) Fallbacks and routing. If hosted can't meet tail during a promo, we need an automated fallback plan (preferably to a cached-lite variant or incumbent provider) with no more than 400ms added latency to p95 for affected requests.
+
+I've attached a traffic matrix (arcadian_traffic_matrix.csv) and a short doc with our regional distribution. Procurement also asked for a sample term sheet and timeline for a PoC.
+
+Can you confirm the right next steps? Ideally we want a short test window this month and a PoC plan before procurement signs off.
+
+Thanks,
+Megan
+Megan Lowe
+Director, Platform Operations
+Arcadian Health
+
+-----
+
+From: Logan Wright <logan.wright@redwood.com>
+To: Megan Lowe <megan.lowe@arcadianhealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Thu, 2 Sep 2026 10:26:00 -0700
+Subject: Re: Follow-up from demo — latency targets and streaming Qs
+
+Megan — thanks for the clear summary and for sharing the traffic matrix. Quick recap and proposal below so we have an aligned plan: 
+
+Recap of ask:
+- Target validation: verify p95 <= 120ms and p99 <= 350ms for 512-token conversational responses on our hosted API in your traffic profile.
+- Concurrency: support steady 160 concurrent streams, bursts to 800, and peak RPS noted.
+- Streaming: confirm recommended HTTP/2 connection pool sizing and behavior under saturation.
+- Fallbacks: automated routing to cached-lite variant or third-party with <400ms p95 uplift for routed requests.
+
+Proposed next steps (short-term):
+1) Measurement PoC (7–10 days): Redwood will run an instrumented test harness against a hosted sandbox with your traffic matrix. We'll collect p95/p99 under:
+   - steady-state (160 concurrent)
+   - burst windows (800 concurrent)
+   - peak RPS profile (3.2k sustained / 6k spike)
+2) Streaming test notes: Ben will provide connection pool recommendations and a lightweight client test for persistent HTTP/2.
+3) Fallback policy: Marissa will propose a routing policy that falls back to a cached-lite variant automatically when per-worker queue depth or token latency exceeds configured thresholds.
+4) Procurement asks: we’ll provide a sample term sheet and DocuSign link for a limited PoC agreement.
+
+Action owners & timeline:
+- Redwood: Ben to deliver connection/streaming checklist by EOD Fri (Sep 3).
+- Redwood: Marissa to circulate PoC plan and routing policy draft by Mon (Sep 6).
+- Arcadian: Megan to confirm an internal test window and provide any IP allowlists (if needed) by Mon (Sep 6).
+
+If that all sounds reasonable I’ll schedule a short 30-min alignment call for early next week to walk through the PoC steps and confirm measurement metrics.
+
+Logan
+VP, Sales Engineering
+Redwood Inference
+
+-----
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Megan Lowe <megan.lowe@arcadianhealth.com>, Logan Wright <logan.wright@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Fri, 3 Sep 2026 08:11:00 -0700
+Subject: Re: Follow-up from demo — latency targets and streaming Qs
+
+Hi Megan — quick technical notes to help your SRE team prepare for the PoC: 
+
+- Client patterns: prefer HTTP/2 with connection reuse; 32-64 concurrent streams per long-lived connection is typical. If you have a connection-per-LB model we can discuss worker affinity.
+- Keepalive: set 60s keepalive for connections to avoid extra TLS handshakes during bursts; tune OS-level ephemeral ports for high concurrent sockets.
+- KV/prefix caching: our hosted prefix cache is per-worker; warm-up is important — during PoC we’ll run a short cache-warm phase prior to measurement windows.
+- Measurement signals: please capture client-side TLS handshake times, server tokenization latency, and per-connection queue depth. We’ll instrument server-side token timing and end-to-end time at request close.
+
+I'll attach a short checklist (redwood_poc_plan.pdf) with the harness steps and simple k6-ish scripts we recommend. Can you confirm whether your front-end multiplexes many small requests over a few connections or uses many short-lived connections? That will change how we size pools.
+
+—Ben
+Principal Solutions Engineer
+Redwood Inference
+
+Attachment: redwood_poc_plan.pdf (PDF, 120KB)
+
+-----
+
+From: Megan Lowe <megan.lowe@arcadianhealth.com>
+To: Logan Wright <logan.wright@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Procurement Team <procurement@arcadianhealth.com>
+Date: Fri, 3 Sep 2026 11:45:00 -0700
+Subject: Re: Follow-up from demo — latency targets and streaming Qs
+
+Logan/Ben — thanks for the quick turnaround. Notes from our side: 
+- Connection pattern: our front end uses a pool of 40 long-lived HTTP/2 connections per region with about ~50 streams per connection during steady state. During promos we spin up additional short-lived connections which explains the burst.
+- We can provide an IP allowlist for Redwood sandbox next week.
+- Procurement wants a 14-day PoC agreement and a simple SLA addendum for the PoC (uptime and latency measurement windows). They're fine with a short sample term sheet; attaching the procurement contact separately.
+
+I'll queue an internal nod for the PoC on Monday and confirm the allowance window by EOD Mon.
+
+Megan
+
+Attachment: arcadian_traffic_matrix.csv (CSV, 8KB)
+
+-----
+
+From: Logan Wright <logan.wright@redwood.com>
+To: Megan Lowe <megan.lowe@arcadianhealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>, Procurement Team <procurement@arcadianhealth.com>
+Date: Sat, 4 Sep 2026 15:02:00 -0700
+Subject: Re: Follow-up from demo — latency targets and streaming Qs (next steps)
+
+Megan — great, appreciate the details and the traffic file. Confirming next steps and owners: 
+
+- Ben: finalize connection/streaming checklist and sample k6 scripts by EOD Mon (Sep 6).
+- Marissa: ship the PoC plan + routing policy draft and DocuSign sample by Mon (Sep 6). I’ll include a short fallback policy example that routes to a cached-lite variant with a <400ms p95 uplift budget during overload.
+- Arcadian: provide IP allowlist and confirm PoC start window (aiming for Sep 13–20).
+- Procurement: we’ll circulate a 14-day PoC term via DocuSign for signature; sample term sheet attached (docsign_term_sheet_v1.pdf).
+
+I’ll schedule a 30-minute kickoff (calendar invite to follow) for Tue Sep 7 to align on measurement windows and instrumentation points. If there are any special blackout times for your front-end team during promos, please flag them so we avoid false negatives during PoC.
+
+Thanks — we’ll treat this as a focused, measurement-first PoC to validate the p95/p99 response envelope and the behavioral fallbacks you asked about.
+
+Logan
+VP, Sales Engineering
+Redwood Inference
+
+Attachment: docsign_term_sheet_v1.pdf (PDF, 45KB)

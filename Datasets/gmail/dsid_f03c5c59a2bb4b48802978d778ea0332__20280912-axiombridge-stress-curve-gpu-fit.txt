@@ -1,0 +1,148 @@
+AxiomBridge commit — capacity stress curve & GPU-fit plan
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Sanjay Reddy <sanjay@axiombridge.com>, Priya Kapoor <priya.kapoor@axiombridge.com>
+Cc: Kimberly Park <kimberly.park@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: Mon, 10 Sep 2028 09:12:00 -0700
+Subject: AxiomBridge commit — capacity stress curve & GPU-fit plan
+
+Hi Sanjay / Priya —
+
+Thanks again for the call last week. We started a conservative sizing pass for the Dedicated slab you asked about and I attached our working model (ben_carter-capacity-model.xlsx). To make sure we align on the inputs before we lock an offer, can you confirm the operational profile below? If anything’s off, we’ll rejigger the curve and update the commitment math.
+
+Quick summary of what we need from you:
+- Steady-state TPS: avg tokens/sec across production day (not per-request tokens) — what should we assume?
+- Campaign spikes: multiplier and typical duration (e.g., 4x for 20 minutes)
+- P95 latency target you must meet on the Dedicated slab (ms)
+- Any quiet-window schedule (night/weekends) we can use to downscale
+
+Our preliminary assumptions (from the sample traces you shared):
+- Baseline: 18,000 tokens/sec aggregate
+- Peak burst (campaign): 96,000 tokens/sec (6x baseline for ~15–30m)
+- Target P95 latency: 450ms for the top-level text-generation route
+
+If those numbers look right we’ll produce:
+1) a stress curve (steady -> peak -> tail) that maps to slab sizing,
+2) an SLA draft and rollout plan that includes an autoscale corridor, and
+3) a recommended reserve for KV-cache cold starts and model-quantization variance.
+
+Attachment: ben_carter-capacity-model.xlsx (sheet: AXB_profile) — contains tokens/sec scenarios and GPU slab mapping.
+
+Can you reply with the steady-state TPS and the typical campaign cadence? I’ll take that and produce a finalized GPU-fit proposal for your procurement team.
+
+Thanks —
+Ben Carter
+Enterprise Lead, Redwood Inference
+ben.carter@redwood.ai | +1 415-555-0112
+
+---
+Redwood Inference — Developer-first LLM inference (hosted / dedicated / private)
+
+From: Sanjay Reddy <sanjay@axiombridge.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Priya Kapoor <priya.kapoor@axiombridge.com>
+Date: Mon, 10 Sep 2028 11:02:00 -0700
+Subject: Re: AxiomBridge commit — capacity stress curve & GPU-fit plan
+
+Ben —
+
+Thanks, this is helpful. Quick answers inline:
+
+- Steady-state TPS: 21,500 tokens/sec (we measure tokens/sec across all multi-turn flows averaged over 1 minute windows)
+- Campaign spikes: 5.5–6x (campaigns run 10–25 minutes, 2–3 campaigns/day on marketing days; usually single-day spikes during product launches)
+- P95 latency: must be <= 500ms for the customer-facing /generate endpoint
+- Quiet windows: nightly 02:00–05:00 PT we see ~25% of baseline; weekends ~40% of baseline
+
+I’m attaching a sanitized extract of last month’s traffic for your model (axiombridge-production-metrics.csv). That has per-minute token counts and a few sample traces.
+
+Question: how much cushion should we expect for KV-cache cold starts? We do a lot of multi-turn assistant work, so cold-cache behavior matters. Also procurement wants a clear line-item for any reserved GPUs vs burst/spot capacity.
+
+Sanjay Reddy
+Head of Product, AxiomBridge
+Sanjay.Reddy@axiombridge.com
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Sanjay Reddy <sanjay@axiombridge.com>, Priya Kapoor <priya.kapoor@axiombridge.com>
+Cc: Kimberly Park <kimberly.park@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: Tue, 11 Sep 2028 08:00:00 -0700
+Subject: Re: AxiomBridge commit — capacity stress curve & GPU-fit plan
+
+Sanjay —
+
+Appreciate the quick turnaround and the CSV. I ran the file through our traffic synthesizer and produced a first-pass mapping. I attached an SLA draft for procurement (SLA-draft-axbridge.pdf) and updated the workbook. High-level mapping below — I kept math conservative to avoid under-provisioning:
+
+Proposed Dedicated slab (baseline):
+- Reserved: 5 x NVIDIA A100-80GB (fp16 path)
+- Effective steady tokens/sec per GPU (observed): ~4,300 tps
+- Aggregate baseline capacity (reserved): 21,500 tps (matches your steady-state)
+
+Burst profile / autoscale:
+- Autoscale up to 12 GPUs for sustained bursts (12 x 4,300 = 51,600 tps)
+- We plan a short-term cold-burst lane using pre-warmed instances (2 extra on hot-standby) to absorb initial ramp for KV-cache cold misses
+
+P95 latency fit (target <= 500ms):
+- Baseline (5 GPUs): expected P95 ~360–420ms (fp16, warmed KV cache)
+- At 6–8x bursts we rely on autoscale to keep latency under 500ms; if burst exceeds autoscale window we’ll serve degraded (fallback to smaller-model variant) rather than violate SLA
+
+Reserve recommendation: +15% buffer on top of mapped reserve to account for:
+- KV-cache miss variability
+- Model quantization throughput variance
+- Short-lived traffic fan-outs during campaign launches
+
+Next steps I propose:
+1) Confirm you’re OK with 5 reserved GPUs + autoscale to 12 (I’ll reflect pricing in the attached SLA).
+2) Procurement review the SLA-draft and call out any billing/commit-period constraints.
+3) Marcus to validate the per-GPU tps number against the exact model variant you’ll run (Mar: any red flags?).
+
+I’ve linked the HubSpot deal and a DocuSign draft in the metadata. If that direction looks good I’ll push a pricing sheet and a firm commitment template.
+
+Attachment: SLA-draft-axbridge.pdf
+
+Best —
+Ben
+
+From: Kimberly Park <kimberly.park@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: Tue, 11 Sep 2028 09:18:00 -0700
+Subject: Re: AxiomBridge commit — capacity stress curve & GPU-fit plan
+
+Ben / Marcus — quick ops note:
+
+I support the 5 reserved + autoscale approach, but please include an operational buffer of 15% on reserved GPU count in the procurement language. For AxiomBridge's multi-turn traffic the KV-cache cold miss can add non-trivial tail load during the first 10–20 minutes of a campaign.
+
+Also flagging that we should include a two-week warmup period in the contract (reduced commit or ramp pricing) so SRE can pre-warm KV caches and observe real traffic before the full commit is enforced.
+
+Kimberly Park
+Head of Enterprise Ops, Redwood Inference
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Kimberly Park <kimberly.park@redwood.ai>, Sanjay Reddy <sanjay@axiombridge.com>
+Date: Wed, 12 Sep 2028 10:30:00 -0700
+Subject: Re: AxiomBridge commit — capacity stress curve & GPU-fit plan
+
+All — I validated the per-GPU throughput numbers against the model variants AxiomBridge mentioned on the call. Notes below:
+
+Model assumptions:
+- Primary model: LM-34B (FP16 / q4_0 path in our runtime) — this is the model we recommend for your quality/latency tradeoff.
+- Fallback model: LM-7B-quant (int8-ish path) for deep-burst graceful degradation.
+
+Measured throughput (typical prompt mix from your CSV):
+- LM-34B @ A100-80GB (fp16 warmed): 4,100–4,400 tokens/sec per GPU (1-min windows) — use 4,300 for planning.
+- LM-7B-quant @ A100-80GB (int8 warm): ~14,000 tokens/sec per GPU (used for fallback path)
+
+KV-cache cold miss impact:
+- Cold miss multiplier: ~1.6x CPU/GPU work for the first 30–90s of a session when large context loads; we bake this into the 15% buffer Kimberly requested.
+
+Autoscale timing and throttles:
+- Autoscale target: add one GPU per ~40k tokens/sec above baseline, with a 60s scale window to avoid flapping.
+- For the 5 -> 12 surge we recommend a short pre-warm (2 GPUs) driven by a traffic trigger to handle the first 90s of a campaign burst.
+
+Risk callouts:
+- If AxiomBridge expects sustained 6x bursts longer than 30 minutes we should convert burst capacity to part of the reserved slab or agree fixed burst credits (cost tradeoff).
+- Quantization variance: performance of LM-34B in q4 path can vary ±8% depending on prompt shape — keep a small cushion.
+
+I’ll update Ben’s workbook with these validated per-GPU rates and a stress-curve graph so procurement can see the sizing line-items.
+
+—Marcus
+Solutions Engineer, Redwood Inference
+marcus.lin@redwood.ai

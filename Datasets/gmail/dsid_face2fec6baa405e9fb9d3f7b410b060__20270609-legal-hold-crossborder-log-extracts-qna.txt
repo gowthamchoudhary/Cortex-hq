@@ -1,0 +1,113 @@
+Legal hold and cross-border log extracts (Finvero) - Questions
+
+From: Finvero Compliance <compliance@finvero.com>
+To: Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: Wed, 9 Jun 2027 09:12:03 -0700
+Subject: Request: preserve and export audit/access logs for legal hold
+
+Hi Rishi,
+
+We're initiating a legal hold related to a customer dispute and need Redwood's assistance. Two questions up front:
+
+1) Can you confirm our ability to preserve all tenant-level audit and access logs for the Finvero tenant dating back to 2026-01-01 through present, and hold them from deletion while the matter is active?
+2) If we need to export a snapshot for our counsel in the EU, can Redwood produce a consolidated export (CSV/NDJSON) with time zone-normalized timestamps and SHA256 checksums, and route the export to a Redacted S3 endpoint in eu-west-1? Any cross-border restrictions we should know about?
+
+Happy to hop on a quick call if helpful. We need an initial runbook/estimate by end of week.
+
+Thanks,
+Sara Klein
+Head of Compliance, Finvero
+compliance@finvero.com
+
+---
+
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+To: Finvero Compliance <compliance@finvero.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, Naomi Feldman <naomi_feldman@redwood.com>
+Date: Wed, 9 Jun 2027 10:03:18 -07:00
+Subject: Re: Request: preserve and export audit/access logs for legal hold
+
+Sara — thanks for the note and the clear ask. Short answers first: yes, and yes — we can preserve and produce exports, with caveats below.
+
+Action plan I propose:
+- I will coordinate an immediate preservation (legal hold flag) on Finvero's audit/access log TTL to prevent scheduled deletions.
+- Laura and Naomi from Security/Forensics will scope the export format, time window, and an estimate for size and time-to-deliver.
+- Monica (Legal) please confirm any retention extension beyond our standard retention policy we should accept for this hold, and whether you want us to exclude any PII fields from exports pre-shipping.
+
+We will attach a short checklist and a sample export spec. Expect a scoped runbook and delivery ETA within 48 hours.
+
+Rishi
+Director, Strategic Accounts
+Redwood Inference
+Attachments: legal-hold-checklist.pdf
+
+---
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Rishi Malhotra <rishi_malhotra@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, Naomi Feldman <naomi_feldman@redwood.com>
+Date: Wed, 9 Jun 2027 11:05:40 -07:00
+Subject: Re: Request: preserve and export audit/access logs for legal hold
+
+Thanks Rishi — quick legal clarifications from our side:
+
+- Legal hold scope: Accept preservation for 2026-01-01 to present. We should record the hold start time and owner (Finvero request).
+- Deletion freeze: set hold flag so automated TTL jobs skip Finvero tenant's audit/access logs until we receive written release from Finvero Legal or a court order changes status.
+- Cross-border: Redwood can export to eu-west-1 but must document the transfer (data flow diagram + transfer justification). If Finvero requires certified deletion at the origin after export, we will follow our erasure playbook but need explicit written instruction.
+- Export contents: Agree to provide NDJSON/CSV with normalized timestamps and SHA256 checksums per file. We should not remove internal event ids unless requested.
+
+Laura/Naomi: please prepare the export estimate and include: total compressed size, number of files, estimated S3 PUT operations cost, and a proposed timeline for a standard extraction job vs. an expedited job.
+
+Monica Patel
+Senior Counsel, Redwood Inference
+
+---
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Finvero Compliance <compliance@finvero.com>, Rishi Malhotra <rishi_malhotra@redwood.com>, Monica Patel <monica_patel@redwood.com>, Naomi Feldman <naomi_feldman@redwood.com>
+Date: Thu, 10 Jun 2027 09:47:12 -07:00
+Subject: Re: Request: preserve and export audit/access logs for legal hold
+
+Sara — looping back with the technical scope and ETA. Apologies for the wall of text, trying to be specific so you can coordinate with counsel.
+
+Summary of capabilities
+- Preservation: We will set an administrative legal-hold flag on Finvero tenant audit/access log TTLs (applies to system audit-log buckets and aggregated access logs). This prevents our automated retention worker from purging records.
+- Export formats: We can produce (a) NDJSON line-delimited event files (recommended for fidelity), (b) CSV with a canonical header map, and (c) gzipped tarballs of either format. Each output will include a manifest.json with SHA256 checksums and row counts.
+- Timestamps: All timestamps will be normalized to ISO-8601 Zulu (UTC) in the export; original timezone fields will be preserved as separate fields if present.
+- Checksums & integrity: We'll include SHA256 per-file and a top-level signed manifest with the Redmond/Redwood service key id for chain-of-custody.
+
+Cross-border and delivery options
+- Deliver to eu-west-1 S3: Yes. We will write to a customer-provided Redacted S3 bucket (we will only use pre-authorized destination endpoints).
+- Transfer documentation: we will attach the Redwood data flow diagram and a transfer justification (DM only).
+- If Finvero requires us to delete a retained copy at the origin after transit, please include explicit instructions and a deletion timestamp window.
+
+Estimate and timing
+- Sample export window: 2026-01-01 to 2027-06-01 (18 months) 
+- Estimated compressed size: 320 GB (NDJSON gzipped) — may vary by activity volume.
+- File count: ~1,200 shard files (configurable shard size).
+- Standard turnaround: 4 business days from hold confirmation and destination access.
+- Expedited turnaround: 24-48 hours (+25% handling premium) if pre-authorized and we schedule an off-hours extraction run.
+- Cost estimators: S3 PUT requests and egress in eu-west-1 are not included in our standard export estimate — we'll provide a line item.
+
+Attachments sent: log_export_spec.csv, redwood_data_flow_diagram.png
+
+Next steps for Finvero
+1) Confirm destination S3 bucket ARN and write permissions (pre-signed role or temporary creds).
+2) Provide written acceptance of the origin-copy deletion policy if you want origin erasure after transfer.
+3) Sign off on the expedited fee if you need <48h delivery.
+
+If you'd like, we can schedule a 30-minute tech run-through to validate credentials and do a dry run for a 7-day micro-window export.
+
+Laura Bennett
+Forensics & Incident Response Lead
+Redwood Inference
+
+---
+
+> On Wed, 9 Jun 2027 at 09:12, Finvero Compliance <compliance@finvero.com> wrote:
+> Sara Klein
+> Head of Compliance, Finvero
+> 
+> Thanks — we are preparing the bucket and will confirm credentials by EOD. We do want the origin erased after export; please list what written instruction you need to proceed.
+> 
+> Sara
+

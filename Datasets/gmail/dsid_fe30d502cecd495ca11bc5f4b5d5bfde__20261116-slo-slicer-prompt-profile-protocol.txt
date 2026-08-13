@@ -1,0 +1,136 @@
+SLO slicer & prompt-profile — dedicated sizing follow-up (Lumina)
+
+From: Elena Park <elena@lumina.ai>
+To: Avery Johnson <avery_johnson@redwood.ai>
+Cc: Rajiv Menon <rajiv@lumina.ai>
+Date: Mon, 9 Nov 2026 09:12:00 -0800
+Subject: SLO slicer & prompt-profile — pre-sales sizing request
+
+Hi Avery,
+
+Thanks again for the demo last week — the team was impressed with the routing and canary options. We're trying to quantify the Dedicated commitment and want to make sure we size the GPU pool correctly before we talk numbers. Quick context: Lumina runs a customer-facing agent product with a 60% chat/40% batch endpoint split. We expect a pilot (Q1) with ~120k monthly active users generating ~1.1M requests in month-1 and 3–4x growth over the year.
+
+Two things we could use your help on: a) a short checklist on the prompt/response shape you need for credible sizing and b) whether quantization can be assumed across our LLMs (we plan to use Llama-3 variants). I've attached a small tokenized sample (traffic_samples.csv) and a prompt mix snapshot.
+
+Goal: arrive at a recommended commit (GPU count + preferred SKU mix) + fallback routing for burst days. Can you point us to the exact variables you need so we avoid back-and-forth?
+
+Thanks — Elena
+Elena Park
+Head of Product, Lumina AI
+
+Attachment: traffic_samples.csv (CSV, 27 KB)
+Attachment: prompt_mix_snapshot.pdf (PDF, 1.2 MB)
+From: Avery Johnson <avery_johnson@redwood.ai>
+To: Elena Park <elena@lumina.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Mon, 9 Nov 2026 11:03:00 -0800
+Subject: Re: SLO slicer & prompt-profile — pre-sales sizing request
+
+Elena — thanks for the context and the samples, that helps a lot. Quick answer up front: yes, we can size a Dedicated pool for your profile, and quantized model variants are typically recommended for cost-efficient commit plans. To speed this up, we've got a short questionnaire + a sizing template I can fill with your samples.
+
+High-level items we need from you (minimal set):
+- Prompt mix breakdown: % short prompts (<64 tokens), % medium (64–512), % long (>512) — examples in the snapshot are perfect.
+- Response distribution: p50/p95/p99 response lengths in tokens.
+- Session vs single-call: average messages per session and KV-cache lifetime (how many follow-ups reuse context).
+- Concurrency tolerance: desired p99 latency target for the chat endpoint and batch SLA (e.g., chat p99 < 300ms; batch p95 < 2s).
+- Peak shape: expected 5–10 minute burst multipliers vs baseline and any predictable daily/weekly peaks.
+- Model choices: exact model names + quantization preference (Q4/INT8/FP16).
+
+I've attached a redwood_dedicated_sizing_template.xlsx — if you drop the CSV into the sheet and fill the prompt-length buckets we'll run a quick throughput model and return a recommendation in 48 hours.
+
+I'll also loop Marissa (SE) and Ben (infrastructure) for technical follow-ups. If you'd like a 30-minute walkthrough of the template we can schedule tomorrow afternoon.
+
+Best,
+Avery Johnson
+Account Executive, Redwood Inference
+
+Attachment referenced: redwood_dedicated_sizing_template.xlsx
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Elena Park <elena@lumina.ai>, Avery Johnson <avery_johnson@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>
+Date: Tue, 10 Nov 2026 09:24:00 -0800
+Subject: Re: SLO slicer & prompt-profile — pre-sales sizing request
+
+Hi Elena — Marissa from SE here. A few clarifying technical questions so our sizing run reflects real-world telemetry: 
+
+1) Tokenization: is the traffic_samples.csv token counts computed with GPT-style tokenization (byte-pair) or raw character counts? We need tokenized lengths.
+2) Session stickiness: when a user enters a long-running session, do you keep the entire KV cache for the session lifetime or prune/restart after N messages? If you prune, how many messages on average are persisted?
+3) Multi-model routing: do you plan to route specific endpoints to smaller/cheaper models for bounded tasks (e.g., intent classification) or will all requests hit the same Llama-3 family model?
+4) Batch window preferences: for the 40% batch traffic, are you comfortable with a batching window up to 200ms to improve throughput, or do you need <50ms?
+
+If you can answer inline, we'll include the assumptions in the sizing PDF. Happy to hop on a quick call to walk the template fields — otherwise we'll run an initial hypothesis using the attached CSV as tokenized.
+
+— Marissa
+Senior Solutions Engineer, Redwood Inference
+
+On Tue, Nov 9, 2026 at 11:03 AM Avery Johnson <avery_johnson@redwood.ai> wrote:
+> Elena — thanks for the context and the samples, that helps a lot. Quick answer up front: yes, we can size a Dedicated pool for your profile, and quantized model variants are typically recommended for cost-efficient commit plans. ...
+From: Elena Park <elena@lumina.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Avery Johnson <avery_johnson@redwood.ai>
+Cc: Rajiv Menon <rajiv@lumina.ai>
+Date: Wed, 11 Nov 2026 10:47:00 -0800
+Subject: Re: SLO slicer & prompt-profile — pre-sales sizing request
+
+Thanks Marissa — answers inline below.
+
+1) Tokenization: the CSV uses GPT-style token counts (our preprocessor). Column token_count is reliable.
+2) Session stickiness: we retain KV-cache for the full session up to 10 messages; typical session length is 3 messages.
+3) Multi-model routing: yes, we plan to route a small subset (≈12%) to a smaller model for classification/embeddings. The remainder will use Llama-3-13B or 34B.
+4) Batch window: batch callers are latency-tolerant; we can tolerate up to 250ms batching window for increased efficiency.
+
+Additional notes: peak arrives between 1400–1600 PST weekdays, with a 7x multiplier on baseline for major marketing pushes. We also prefer INT8 quantized variants where available.
+
+Attaching the filled template and a short high-level appendix (prompt_mix_snapshot.pdf).
+
+— Elena
+
+Attachment: redwood_dedicated_sizing_template.xlsx (filled)
+Attachment: prompt_mix_snapshot.pdf (updated)
+From: Ben Carter <ben_carter@redwood.ai>
+To: Elena Park <elena@lumina.ai>, Marissa Cole <marissa_cole@redwood.ai>, Avery Johnson <avery_johnson@redwood.ai>
+Date: Thu, 12 Nov 2026 14:52:00 -0800
+Subject: Re: SLO slicer & prompt-profile — pre-sales sizing request
+
+Elena — Ben on infra. Thanks for the prompt answers and the filled template. We ran a conservative sizing pass with the assumptions below and a second 'opportunistic' plan that uses INT8 quantized variants: 
+
+Assumptions (conservative):
+- Model mix: 75% Llama-3-13B (FP16), 25% Llama-3-34B (FP16)
+- Median response length: 120 tokens, p95: 640 tokens, p99: 1,900 tokens
+- Session reuse: avg 3 messages, KV cached for 10 messages
+- Peak burst multiplier: 7x for 2 hours (daytime campaign)
+- Chat p99 target: 350ms (end-to-end)
+
+Recommendation (conservative commit):
+- Dedicated pool: 24x A100-equivalent GPUs (or 32x T4-equivalent heavy mix)
+- Autoscale headroom: +25% burst buffer (or routing to hosted fallbacks)
+- Routing policy: keep 12% traffic to small-model pool for classification; reserve 8 GPUs for that pool
+
+Opportunistic plan (INT8):
+- Swap largest model to INT8: effective throughput improves ≈1.9x — recommendation: 14x GPUs INT8-config + 8x smaller-model GPUs
+- Material impact: estimated 35–45% lower monthly unit cost versus conservative plan
+
+Next steps: 1) confirm whether Lumina is comfortable with INT8 for the production commit, 2) we can convert these recommendations into an SOW with exact SKUs and pricing, and 3) schedule a brief runbook review for failover behaviors.
+
+If this looks good I'll prepare a short one-page PDF with the two commit options and keep the backup assumptions.
+
+— Ben
+Principal Infra Architect, Redwood Inference
+
+On Wed, Nov 11, 2026 at 10:47 AM Elena Park <elena@lumina.ai> wrote:
+> Thanks Marissa — answers inline below.
+> ...
+From: Avery Johnson <avery_johnson@redwood.ai>
+To: Elena Park <elena@lumina.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Thu, 12 Nov 2026 15:02:00 -0800
+Subject: Re: SLO slicer & prompt-profile — pre-sales sizing request
+
+Elena — great progress, thank you. Elena and Rajiv, are you available for a 30-minute sync tomorrow at 10am PST to review Ben's two-plan sheet and confirm INT8 comfort? If so I'll lock the meeting and upload the PDF for sign-off.
+
+Action items before call:
+- Lumina: confirm INT8 acceptance and any compliance constraints for quantization (data residency or audit asks).
+- Redwood: we will produce a 1-page commit comparison and an SOW sketch with SKUs + estimated monthly unit costs.
+
+Cheers,
+Avery
+Account Executive, Redwood Inference

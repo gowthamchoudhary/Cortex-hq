@@ -1,0 +1,133 @@
+Transient management-link handshake latency after private deployment upgrade
+
+From: Susan Lin <susan.lin@clearhealth.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>
+Date: Mon, 11 Jun 2028 15:12:00 -0700
+Subject: High error spike after private agent upgrade - management-link handshakes
+
+Hi Rafael,
+
+We rolled the private deployment upgrade for our staging cluster last night (applied Redwood "private-agent v2.13" across 3 nodes). Starting ~02:00 UTC we've seen a recurring pattern: short-lived control connection 'handshake' latency spikes that lead to 502/504s for inference requests for 15-45s windows. Our metrics show ~40% error rate during two 10-minute bursts.
+
+Can your team confirm whether this matches anything on Redwood's side? We need packet-level evidence and any logs that show handshake timing or keepalive behavior — we're preparing evidence for an internal compliance window and need to include vendor artifacts.
+
+I can collect tcpdumps if you can give the exact commands you want. Attaching our initial error chart (screenshot placeholder).
+
+Thanks,
+Susan Lin
+Head of Platform Reliability
+ClearHealth Systems
+
+Attachment: clearhealth_errors_20280611.png
+
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Susan Lin <susan.lin@clearhealth.com>
+Cc: laura_bennett@redwood.com, vivek_kulkarni@redwood.com
+Date: Mon, 11 Jun 2028 15:29:12 -0700
+Subject: Re: High error spike after private agent upgrade - management-link handshakes
+
+Hi Susan — thanks for the flag and the chart. Sorry you're seeing that. We're investigating now.
+
+Immediate actions:
+- I've looped in engineering (Vivek) and our Customer Success lead (Laura).
+- Can you run a tcpdump on one of the affected nodes capturing traffic to the management/control plane for a ~5 minute window during a burst? Command we recommend: sudo tcpdump -i any host <control-plane-ip> and port 443 -w /tmp/clearhealth-mgmt.pcap
+- We'll also request our on-call to pull handshake traces from the private agent runtime and the management-link logs.
+
+If you'd like, we can stand up a short bridge now to coordinate collection.
+
+I'll follow up with an initial triage in the next 45 minutes.
+
+— Rafael
+Rafael Mendes | Enterprise Solutions
+Redwood Inference
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>, laura_bennett@redwood.com
+Cc: Susan Lin <susan.lin@clearhealth.com>
+Date: Mon, 11 Jun 2028 16:03:45 -0700
+Subject: Re: High error spike after private agent upgrade - management-link handshakes
+
+Quick triage notes (initial):
+
+What we saw in our early telemetry: between 01:50-03:15 UTC there are intermittent increases in the management-link handshake latency (SYN->TLS handshake completion) localized to nodes that received the private-agent v2.13 rollout. The runtime traces show occasional 200-400ms additional delay in the client hello->server hello exchange for a small percentage of connections (~0.7% of handshakes) that line up with customer-observed 504s.
+
+Root hypothesis so far: a configuration change in the v2.13 private-agent altered the keepalive/handshake retransmit timers. On some kernels this surfaces as delayed ACKs which prolong TLS negotiation and occasionally triggers request timeouts at the load layer. We are reproducing locally and collecting:
+- Management-link runtime trace (attached as privnet-handshake-trace-20280611.jsonl)
+- Requesting packet capture from the customer's node (see Rafael's tcpdump)
+
+Next steps for us:
+1) If pcap confirms late ACKs or retransmit behavior, we will coordinate a rollback of the agent version on affected pools.
+2) Provide a redacted evidence package for your compliance audit.
+3) Draft a post-incident summary and a minimization plan for future rollouts.
+
+Please attach the tcpdump when ready and include the timestamp window for the burst.
+
+— Vivek (on-call, Serving Runtime)
+
+Attachment: privnet-handshake-trace-20280611.jsonl
+
+From: Susan Lin <susan.lin@clearhealth.com>
+To: Rafael Mendes <rafael.mendes@redwood.com>, vivek_kulkarni@redwood.com
+Cc: ops@clearhealth.com
+Date: Tue, 12 Jun 2028 02:18:57 +0000
+Subject: Re: High error spike after private agent upgrade - management-link handshakes
+
+Attached: tcpdump from 01:58:00–02:05:00 UTC (tcpdump-clearhealth-20280611.pcap). We captured the burst window — packet times line up with ~8 HTTP 504s from our edge. I also exported the load balancer logs and included the request IDs in the pcap filename metadata.
+
+Business impact note: two bursts during that window caused a ~40% spike in 5xx and resulted in several customer-facing failures in staging. We are currently holding off on promoting this release to prod until we get a full RCA. Please confirm estimated ETA for a mitigation (rollback or patch) and whether Redwood will provide an evidence bundle we can use for our audit.
+
+Thanks,
+Susan
+
+Attachment: tcpdump-clearhealth-20280611.pcap
+
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Susan Lin <susan.lin@clearhealth.com>
+Cc: laura_bennett@redwood.com, vivek_kulkarni@redwood.com, evelyn_hart@redwood.com
+Date: Tue, 12 Jun 2028 03:54:12 +0000
+Subject: Post-incident update and preliminary RCA — private-agent v2.13 rollout
+
+Hi Susan — thank you again for the pcap and the timestamps. Quick summary of where things stand and the corrective action we took: 
+
+Summary:
+- Root cause (prelim): a timing change in private-agent v2.13 adjusted the management-link TCP/TLS keepalive and retransmit timers. On a subset of kernel/network stack combinations used by ClearHealth, this caused delayed ACK behavior that manifests as longer handshake latency and occasionally triggers request timeouts at the proxy/load layer.
+- Mitigation performed: at 02:30 UTC we rolled back the private-agent on the affected staging pools to v2.12 and restored the previous keepalive configuration. Post-rollback telemetry shows handshake latency returned to baseline and error rates dropped to normal within ~5 minutes.
+
+Artifacts attached for your audit and records: redwood_prelim_rca_20280612.pdf (redacted), privnet-handshake-trace-20280611.jsonl, tcpdump-clearhealth-20280611.pcap.
+
+Requested next steps (we propose):
+1) Joint technical review call to go over artifacts and the packet trace (we can do a packet walkthrough and show the exact retransmit windows).
+2) Provide a clean evidence bundle (logs + redacted traces) for your compliance package.
+3) We will add a preflight kernel/keepalive validation step to rollout jobs for private-agent releases to prevent recurrence.
+
+As a gesture for the disruption, we are prepared to offer a one-time credit (5% of the monthly bill for staging/prod until issue is closed) — happy to formalize via your account rep if you accept.
+
+I'll coordinate a follow-up call invite for tomorrow morning UTC. Please let me know any preferences on the attendee list.
+
+— Rafael Mendes
+Enterprise Solutions, Redwood Inference
+Phone: +1-415-555-0182
+
+Attachments: redwood_prelim_rca_20280612.pdf, privnet-handshake-trace-20280611.jsonl, tcpdump-clearhealth-20280611.pcap
+
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Susan Lin <susan.lin@clearhealth.com>
+Cc: Rafael Mendes <rafael.mendes@redwood.com>, laura_bennett@redwood.com, vivek_kulkarni@redwood.com
+Date: Tue, 13 Jun 2028 11:04:00 -0700
+Subject: Re: Post-incident update and preliminary RCA — private-agent v2.13 rollout
+
+Hi Susan — Evelyn from Customer Success here.
+
+Thanks to the ClearHealth team for the quick tcpdump and for working with us on this. Next items from Redwood:
+- I'll open JIRA RI-4327 to track follow-up engineering work (kernel validation, rollout preflight).
+- Scheduling: Rafael and Vivek proposed a technical review at 09:00 UTC on 2028-06-13; can you confirm availability?
+- Evidence bundle: we'll prepare a redacted zip that contains the pcap, trimmed traces, and the redacted PDF RCA. Expect delivery by 2028-06-14 18:00 UTC.
+- Credit: we'll route the 5% credit through your account rep pending acceptance — I'll include the billing note in the JIRA ticket.
+
+If you want any additional artifacts for your compliance package (signed SLA note, longer retention of logs, HSM audit statements), let me know and we'll route it through our Security & Compliance team.
+
+Regards,
+Evelyn Hart
+Customer Success Lead, Redwood Inference
+
+Link: https://jira.redwood.ai/browse/RI-4327

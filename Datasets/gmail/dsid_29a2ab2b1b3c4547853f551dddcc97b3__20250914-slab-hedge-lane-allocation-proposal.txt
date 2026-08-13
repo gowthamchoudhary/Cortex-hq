@@ -1,0 +1,121 @@
+Re: Private deployment capacity — slab hedging & lane allocation proposal
+
+From: Carlos Mendez <c.mendez@acmeai.com>
+To: jordan_blake@redwood.com
+Cc: ops@acmeai.com
+Date: Sun, 14 Sep 2025 08:12:00 -0700
+Subject: Private deployment sizing — initial throughput targets and constraints
+
+Hi Jordan,
+
+Thanks again for taking this on. Quick summary of what we need from Redwood for the private VPC deployment:
+
+- Sustained inference target: 90 qps for our summary model (avg prompt 350 tokens, response 150 tokens).
+- Peak handling: 250 qps sustained for 3-minute windows (expected during business spikes).
+- Cold-start constraint: we can tolerate up to 300ms additional latency for cold requests but would like steady-state p95 < 180ms.
+- Network: egress capped at 18 Gbps on our transit link for third-party telemetry.
+- Policy: we require tenant isolation and graceful degradation — fallback to a smaller distilled model is acceptable.
+
+Attached is a sample trace (network-egress-sample.pcap) and a spreadsheet with our traffic histogram. Can your team propose a sizing approach (GPU count, tiling strategy, and slab hedging) and a short runbook for burst absorption? Looping in ops@acmeai.com (CC).
+
+Cheers,
+Carlos
+Site Reliability, Acme AI
+
+From: jordan_blake@redwood.com
+To: Carlos Mendez <c.mendez@acmeai.com>, ops@acmeai.com
+Cc: laura_bennett@redwood.com, karthik_iyer@redwood.com
+Date: Sun, 14 Sep 2025 10:03:00 -07:00
+Subject: Re: Private deployment sizing — initial throughput targets and constraints
+
+Carlos — thanks, got this. I’ll coordinate a short proposal from infra and account. High-level approach we’ll validate:
+
+1) Allocate a mix of 8x A100-like tiles for sustained baseline (90 qps) with 2x spare tiles per slab for warm failover.
+2) Use a lane allocation that maps heavy prompts to dedicated slab lanes (the MAPS tiling diagram attached) so that KV cache reuse is maximized for the 350-token prompts.
+3) Admission control: set a conservative concurrency cap per tile and an immediate soft-fallback to a quantized distilled model when queue depth exceeds threshold.
+
+I’m looping in Karthik for the detailed sizing math and Laura to confirm commercial ops. Expect a formal note by EOD, including an XLS with simulation outputs.
+
+— Jordan Blake
+Solutions Engineer, Redwood Inference
+
+From: karthik_iyer@redwood.com
+To: jordan_blake@redwood.com, Carlos Mendez <c.mendez@acmeai.com>, ops@acmeai.com
+Cc: laura_bennett@redwood.com
+Date: Sun, 14 Sep 2025 12:40:00 -07:00
+Subject: Re: Private deployment sizing — slab hedge and lane allocation proposal (detailed)
+
+Carlos / Jordan / team —
+
+Thanks for the traffic histogram. I ran a quick simulation using the attached spreadsheet (acme_capacity_model_v1.xlsx). Below are the key recommendations and the math we used, expressed as conservative targets so your team has headroom for unknowns: 
+
+Summary recommendation (short):
+- Baseline slab: 6 tiles (each tile approximates an A100-equivalent VM) dedicated to the production model.
+- Warm spare tiles: 2 tiles kept warm (prefetch + KV cache primed) as a slab hedge.
+- Burst pool: 2 flexible tiles that can be multiplexed across tenants; admission control gates these during 250 qps spikes.
+- Total committed tiles: 10 (6 baseline + 2 warm + 2 burst).
+
+How we got there (math, simplified):
+- Measured per-token cost (in our internal benchmark for your model family): ~0.7ms per token on tile.
+- Average tokens/request = 500 tokens total (350 in + 150 out).
+- Per-request token processing time = 500 * 0.7ms = 350ms.
+- With multi-request multiplexing and batching efficiency of 1.8x at steady state, effective per-request time -> 350ms / 1.8 ≈ 195ms.
+- To achieve 90 qps sustained: needed concurrent capacity ≈ 90 * 0.195s ≈ 17.6 concurrent-equivalents.
+- Each tile can support ≈ 2.1 concurrent-equivalents under the expected batching patterns -> tiles_needed ≈ 17.6 / 2.1 ≈ 8.4 -> round up to 9.
+
+We choose 6 baseline + 2 warm (cache primed, faster p95) + 1 burst = 9 — but because you want 3-minute 250 qps windows and limited cold-start tolerance, we recommend adding one more flexible tile (total 10) to avoid oscillation and provide ~12–15% extra headroom for unexpected noise.
+
+Networking considerations:
+- Keep egress under 18 Gbps: with 150 outbound avg tokens and protobuf framing, estimated egress ≈ 12.5 Gbps at 90 qps. During 250 qps spikes, burst egress hits ≈ 35 Gbps unless truncated — so we recommend token chunking + streaming rate caps and an egress throttle policy in the router to guarantee the 18 Gbps transit limit (drop/trim non-essential telemetry).
+
+Operational runbook (short):
+- Warm pool prefetch: pre-warm KV caches for top-10 prefixes hourly; maintain a periodic replay to prevent eviction.
+- Admission control thresholds: set soft queue threshold at 75% of tile concurrency, hard throttle at 95%. Soft threshold triggers fallback to quantized model (p95 target relax), hard threshold returns 429s for non-critical calls.
+- Failover policy: start model fallback after 30s of sustained soft-threshold violations; graceful draining of requests to burst tiles with priority to latency-sensitive routes.
+
+Attachments: acme_capacity_model_v1.xlsx (simulation), MAPS-tiling-diagram.png (tiling lanes visual). Also attached a small pcap sample I replayed for a sanity check.
+
+Notes on latency: with the warm spares primed we project steady-state p95 ≈ 165–175ms. Cold starts (new prefixes) may hit 250–300ms for the first request, within your stated tolerance.
+
+Next steps I recommend:
+1) Confirm you’re comfortable with 10 tiles committed (we can propose a graded ramp over 4 weeks).
+2) If yes, Laura will draft the reserved capacity term sheet and include the SLA/credits for burst overage.
+3) Ops: share any per-tenant telemetry retention constraints that might affect egress numbers.
+
+-Karthik Iyer
+Infra Performance, Redwood Inference
+
+From: laura_bennett@redwood.com
+To: Carlos Mendez <c.mendez@acmeai.com>, jordan_blake@redwood.com, karthik_iyer@redwood.com
+Date: Sun, 14 Sep 2025 14:05:00 -07:00
+Subject: Re: Private deployment sizing — slab hedging & lane allocation proposal
+
+Carlos — thanks for the prompt. Laura here from Accounts. Quick commercial note:
+
+- We can start with a 3-month graded commitment: 6 tiles month 1, 8 tiles month 2, 10 tiles month 3. This reduces upfront spend while we validate the burst behavior.
+- If Acme agrees to the 3-month ramp, we’ll include a one-time professional services engagement to configure the warm-prefetch and admission control policies. PS estimate attached in the XLS.
+
+I’ve created a DocuSign envelope for the ramp proposal and PS (link below). Let me know if you want us to include a 90-day SLA credit for p95 breaches during the ramp phase — we can add a 10% service credit for any month with p95 > 220ms.
+
+DocuSign: https://app.redwood/agreements/ACME-4567/docusign
+HubSpot: https://hubspot.company/contacts/ACME-4567
+
+Best,
+Laura Bennett
+Strategic Accounts, Redwood Inference
+
+From: Carlos Mendez <c.mendez@acmeai.com>
+To: laura_bennett@redwood.com, karthik_iyer@redwood.com, jordan_blake@redwood.com
+Date: Sun, 14 Sep 2025 16:03:00 -07:00
+Subject: Re: Private deployment sizing — slab hedging & lane allocation proposal
+
+Laura / team — appreciate the clear options. We’re fine with the 3-month graded ramp (6→8→10) and want the PS engagement. Please include the 10% credit clause for p95 > 220ms in the ramp window. Ops: I will share a short policy doc with telemetry retention limits by EOD tomorrow.
+
+Two operational asks for the runbook before we sign:
+1) A short checklist for how Redwood will prime KV caches during onboarding (we need step-by-step to hand to our infra team).
+2) The exact router throttle parameters you propose so our network team can pre-configure the transit device.
+
+If you can drop those into the DocuSign package as an addendum, we’ll sign the ramp today.
+
+— Carlos
+Site Reliability, Acme AI

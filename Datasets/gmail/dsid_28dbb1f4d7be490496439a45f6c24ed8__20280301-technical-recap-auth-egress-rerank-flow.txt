@@ -1,0 +1,115 @@
+Post-call recap: auth, networking, and embedding/rerank flow for Finlytics POC
+
+From: Lukas Meyer <lukas.meyer@redwood.ai>
+To: Alex Chen <alex.chen@finlytics.com>, Priya Rao <priya.rao@finlytics.com>
+Cc: Ben Carter <ben_carter@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>
+Date: Thu, 01 Mar 2028 14:12:00 -0700
+Subject: Post-call recap: auth, networking, and embedding/rerank flow for Finlytics POC
+
+Hi Alex / Priya — thanks again for the call earlier. Quick recap and proposed next steps so we all have a shared checklist before the technical deep-dive next week.
+
+Call highlights (short):
+- Goal: POC to validate private inference for sensitive financial documents + ability to run embedding + reranker pipeline on customer-owned data.
+- Requirements you emphasized: private connectivity, strict egress controls, tokenized access per tenant, and reproducible reranker results for audit.
+
+Redwood ask/notes (high level):
+- Auth: two options we discussed — short-lived JWT tokens issued by your IdP (OIDC) or our per-tenant API key with HMAC signer. Both support service-account style calls; OIDC + mTLS recommended for zero-trust.
+- SDK setup: our SDK supports both APIKey and OIDC flows. We can provide an example repo that shows token rotation and structured output parsing for tool calls.
+- Routing & structured output: recommend using our structured output schema for tool-calling (JSON schema enforcement) so reranker inputs are deterministic.
+- Embeddings + rerank: we suggest computing embeddings in your VPC (Redwood supports an embeddings-only chill node pinned to your dedicated pool) and running reranker in our dedicated runtime with a pinned quantized model variant to keep latency predictable.
+- Networking: three connectivity patterns available: VPC endpoint (preferred), IP allowlist + NAT egress, or private peering. For Finlytics' regulatory constraints, VPC endpoint + mTLS for control plane is the baseline we recommend. See attached draft network diagram.
+
+Action items / next steps:
+1) Finlytics to confirm preferred auth mode (OIDC w/ short-lived tokens + mTLS or API key + HMAC).
+2) Redwood (Monica + Soojin) to produce a focused sample repo showing SDK auth, token refresh, and structured output parsing by Thu 2028-03-08.
+3) Schedule a 60-minute tech deep-dive with your infra and security (networking + compliance) — propose Tue 2028-03-07 or Wed 2028-03-08.
+4) Finlytics to share a minimal list of source IP ranges and target DNS names for allowlisting if you prefer IP-based egress instead of VPC endpoint.
+
+Attachments: draft network diagram and sample SDK auth doc attached.
+
+If that looks right I can open a shared Confluence page and start the POC repo.
+
+Thanks,
+Lukas
+Lukas Meyer
+Senior Solutions Architect | Redwood Inference
+[Attachment: redwood_network-draft.png (image/png)]
+[Attachment: poa_sdk-auth-sample.md (text/markdown)]
+From: Alex Chen <alex.chen@finlytics.com>
+To: Lukas Meyer <lukas.meyer@redwood.ai>
+Cc: Priya Rao <priya.rao@finlytics.com>
+Date: Thu, 01 Mar 2028 15:03:00 -07:00
+Subject: Re: Post-call recap: auth, networking, and embedding/rerank flow for Finlytics POC
+
+Thanks Lukas — good summary. A few clarifying questions from our infra team: 
+
+1) For the VPC endpoint option, will traffic to the inference runtime stay entirely within our AWS account (no egress through public internet)? Are there any callbacks to Redwood control plane over the public internet that we need to concern ourselves with?
+
+2) For OIDC + mTLS: do you require client certs signed by a Redwood CA, or can we present certs signed by our internal PKI and still establish mTLS?
+
+3) Embeddings: we'd prefer to compute embeddings inside our network and keep vectors encrypted at rest. Can the embeddings-only node be deployed into our VPC so we control the storage surface?
+
+4) Reranker determinism: what controls do we have to pin model versions and quantization to ensure reranker outputs are reproducible across runs?
+
+We can answer the IP allowlist question but prefer to avoid managing NAT rules if the endpoint approach keeps data in our account.
+
+Alex
+Alex Chen
+Director of Infrastructure Engineering, Finlytics
+
+On Thu, 01 Mar 2028 14:12:00 -0700 Lukas Meyer <lukas.meyer@redwood.ai> wrote:
+> [original message omitted for brevity]
+From: Monica Patel <monica_patel@redwood.ai>
+To: Alex Chen <alex.chen@finlytics.com>, Priya Rao <priya.rao@finlytics.com>
+Cc: Lukas Meyer <lukas.meyer@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>
+Date: Fri, 02 Mar 2028 08:07:00 -07:00
+Subject: RE: Post-call recap: auth, networking, and embedding/rerank flow for Finlytics POC
+
+Hi Alex — thanks for the great questions. Short answers up front, then a few implementation notes and an ask for your security contact so we can share a brief architecture note.
+
+1) VPC endpoint behavior
+- If we use an AWS VPC endpoint (PrivateLink) for inference, the inference data path stays within your AWS environment. The compute that runs the model is in Redwood's dedicated runtime but the network hop for API calls can be over PrivateLink; no public ingress required for inference traffic. Control plane telemetry (billing/usage) needs an outbound to Redwood control plane endpoints — we can either proxy control plane telemetry via a customer-configured egress proxy or bundle minimal telemetry into the PrivateLink path depending on your compliance posture.
+
+2) mTLS and client certs
+- We support mutual TLS with customer-supplied certs; your internal PKI certs are acceptable, provided the certs are presented in X.509 PEM format. Redwood only needs to trust the issuing CA; we can exchange the CA bundle during provisioning. No need to use a Redwood CA.
+
+3) Embeddings-only node in customer VPC
+- We offer an embeddings-hosted-in-VPC pattern for enterprise POCs. That node stores vectors in customer-owned storage (you can bring your own S3 bucket) and talks to Redwood's serving runtime over a secured private connection (PrivateLink / peering). We will provide a compliance checklist for encryption-at-rest and KMS integration.
+
+4) Reranker determinism
+- You can pin model version, tokenization library version, quantization profile, and random seed in the reranker config. We recommend storing the deterministic config in a commit in your repo (we can inject a reproducibility hash into logs).
+
+Implementation notes / ask:
+- Can you share your security contact (email) and a short list of the AWS account IDs for the VPC endpoint evaluation?
+- We'll prepare a short architecture note (2 pages) that describes the PrivateLink pattern + optional telemetry proxy. Monica and Soojin will own that deliverable.
+
+Proposed times for the deep-dive: Tue 2028-03-07 10:00-11:00 PT or Wed 2028-03-08 09:00-10:00 PT. Let us know which works best.
+
+Thanks,
+Monica
+Monica Patel
+Solutions Engineering | Redwood Inference
+[Attachment: redwood_network-draft.png (image/png)]
+From: Priya Rao <priya.rao@finlytics.com>
+To: Monica Patel <monica_patel@redwood.ai>, Alex Chen <alex.chen@finlytics.com>
+Cc: Lukas Meyer <lukas.meyer@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>
+Date: Fri, 02 Mar 2028 09:30:00 -07:00
+Subject: Re: Post-call recap: auth, networking, and embedding/rerank flow for Finlytics POC
+
+Thanks Monica — that helps. I confirmed with our security team:
+- We'll start with PrivateLink (VPC endpoint) for inference traffic and a proxy for telemetry to limit outbound surface.
+- Our security lead is marie.dubois@finlytics.com (please loop her into the architecture note).
+- For auth we'll aim to use OIDC with short-lived tokens + mTLS; we'll provide our CA bundle during provisioning.
+
+Next steps from our side:
+1) I'll send AWS account IDs and a minimal IP list for any temporary allowlisting by EOD Friday.
+2) Schedule the 60min deep-dive for Tue 2028-03-07 at 10:00 PT — invite sent.
+
+Looking forward to the architecture note and the sample repo.
+
+Priya
+Priya Rao
+VP, Platform Engineering | Finlytics
+
+> On Mar 02, 2028, at 08:07, Monica Patel <monica_patel@redwood.ai> wrote:
+> > [original message omitted for brevity]

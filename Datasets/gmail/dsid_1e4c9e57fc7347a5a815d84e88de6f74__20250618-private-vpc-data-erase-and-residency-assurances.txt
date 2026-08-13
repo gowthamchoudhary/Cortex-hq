@@ -1,0 +1,95 @@
+Private VPC data erasure and residency assurances for Acme Corp
+
+From: Jane Li <jane.li@acme-corp.com>
+To: Monica Patel <monica.patel@redwood.ai>
+Cc: Tom Reynolds <tom.reynolds@acme-corp.com>
+Date: Wed, 18 Jun 2025 09:12:00 +0100
+Subject: Questions: data residency & deletion for Private/VPC deployment
+
+Hi Monica,
+
+Thanks again for the demo yesterday. Before we move forward with a pilot, our security team needs clarity on two points for the Private (VPC) deployment:
+
+1) Physical residency guarantees — will data (logs, prompt history, model artifacts, embeddings) ever leave our region or be replicated to other regions under Redwood control?
+2) Deletion / data erasure process — what is the workflow and SLA for a customer-initiated deletion request? Does Redwood retain any residual copies (backups, snapshots) after deletion?
+
+We have a SOC2 audit upcoming and need these answers to sign off. Appreciate concrete steps and any runbooks or evidence you can share.
+
+Best,
+Jane Li
+Security Program Manager
+Acme Corp
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Jane Li <jane.li@acme-corp.com>
+Cc: Tom Reynolds <tom.reynolds@acme-corp.com>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: Wed, 18 Jun 2025 11:03:00 +0100
+Subject: Re: Questions: data residency & deletion for Private/VPC deployment
+
+Hi Jane — thanks for the clear list. Short version up front: for Redwood Private deployed into a customer-managed VPC we operate with customer-controlled storage and do not copy customer data into Redwood-managed buckets; residency is therefore fixed to the region you deploy in; deletion is customer-initiated with configurable retention windows and documented irrecoverability procedures. I attached a concise runbook and a SOC2 extract we can share with auditors.
+
+Below are the specifics and a proposed timeline:
+
+- Residency:
+  - When deployed in your VPC, all runtime artifacts (request logs, KV cache dumps that we persist for warm starts, and user-provided files) are stored in your S3 buckets (or equivalent) that you provision. Redwood’s control plane (separate, optional) communicates over TLS but does not host your data.
+  - We do not replicate your S3 buckets to other regions unless you explicitly configure cross-region replication on your side.
+
+- Encryption and keys:
+  - We support customer-managed keys (KMS/HSM). You can provide the KMS key in your cloud account; Redwood’s processes use that key for any optional server-side encryption operations. Redwood employees do not have access to the plaintext without keys you control.
+
+- Deletion / Erasure process:
+  - Customer-initiated deletion is executed by running our deletion job (we provide a runbook or an automation token). That job deletes primary objects and triggers background cleanup of auxiliary state (index shards, ephemeral caches).
+  - Backups/snapshots: Redwood Private does not take independent long-term backups of your customer data. Any short-lived snapshots for in-cluster upgrades are retained only per the retention window you set (default 48–72 hours) and are stored in your bucket namespace unless you configure otherwise.
+  - SLA & timeline: Primary deletion completes within 24 hours; garbage collection across ephemeral caches and short-lived snapshots completes within 7 days by default. We can contractually shorten that window for the pilot in a Dedicated SLA.
+
+- Evidence & audit:
+  - We can provide deletion logs, KMS key rotation records (redacted to show process), and a signed statement for your SOC2 binder.
+
+I'll loop in Vivek (security) and Karthik (technical PM) to confirm there are no product caveats I missed. If you want, we can schedule a short engineering call tomorrow to walk through the runbook.
+
+Thanks,
+Monica Patel
+Account Executive — Redwood Inference
+
+Attachments: deletion-runbook-v1.2.pdf (PDF, 92KB); acme-soc2-extract.zip (ZIP, 420KB)
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Monica Patel <monica.patel@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Wed, 18 Jun 2025 16:20:00 +0100
+Subject: Fwd: Questions: data residency & deletion for Private/VPC deployment
+
+Looping in technical details for the runbook and to confirm timelines. Key clarifications for docs:
+
+- Confirmed: no Redwood-managed cold backups for Private unless customer enables (we should add an explicit checkbox in the installer to make this explicit).
+- For customers that opt into incremental snapshots for faster recovery, snapshots are written to customer-owned storage and are retained per customer policy. We should expose a retention TTL parameter in the console and the installer.
+- For the deletion job: ensure idempotency and an audit log entry with a deletion token and timestamp; Karthik can point to the ticket for adding the signed audit record if not present.
+
+Vivek
+Director, Security Engineering
+Redwood Inference
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Jane Li <jane.li@acme-corp.com>
+Cc: Tom Reynolds <tom.reynolds@acme-corp.com>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Thu, 19 Jun 2025 15:04:00 +0100
+Subject: Re: Questions: data residency & deletion for Private/VPC deployment
+
+Hi Jane — following up with the engineering confirmations and next steps.
+
+What we can provide this week:
+- Signed one-page statement confirming: (a) data remains in your provisioned region, (b) no Redwood-managed cold backups for Private, (c) KMS integration and access controls. (see Drive link below).
+- Deletion runbook (attached) with CLI snippet and the audit-token pattern. If you prefer an automated route we can execute the deletion job with your team present and provide the post-run audit log.
+- Optional: shorten the GC window contractually to 72 hours for the pilot.
+
+Proposed next steps:
+1) Please confirm whether you want Redwood to run the deletion job for the pilot or you will run it with our guidance.
+2) Share any specific retention SLA your auditor requires (example: "no residual copies after 30 days"); we will scope contract language accordingly.
+
+If helpful I can schedule a 30-minute call with Vivek and Karthik tomorrow at 10am CET to walk the team through the runbook.
+
+Thanks,
+Monica Patel
+Account Executive — Redwood Inference
+
+Related links: https://drive.google.com/drive/folders/0AExampleLink
+DocuSign (pilot SOW): https://app.redwood.ai/signed/docusign/ABC123

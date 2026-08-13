@@ -1,0 +1,91 @@
+NovumTech mid-cycle token surge — need per-request evidence & proposed credit
+
+From: Tom Redd <tom.redd@novumtech.com>
+To: Ava Chen <ava.chen@redwood.com>
+Cc: NovumTech Billing <accounting@novumtech.com>
+Date: Thu, 18 Jun 2026 16:12:00 -0400
+Subject: Unexpected mid-cycle usage spike in May — can you provide per-request samples?
+
+Hi Ava,
+
+We noticed a ~4.3x token jump on May 24–26 on invoice #INV-2026-05 that pushed us well over our committed tier. We don't see any product-side change that would explain it — no batch runs, no partner integrations changed.
+
+Can you share the per-request transaction samples (request_id, timestamp, model_variant, tokens_in, tokens_out, client_api_key) for that window so we can reconcile against our logs? If this looks like a replay or bot activity on our side we may need a retroactive credit.
+
+We need anything exportable (CSV or small JSON) and a short explanation of how Redwood attributes streaming sessions to billing (esp. long-lived websockets vs per-request). Hope to get something by EOD Friday our time.
+
+Thanks — Tom
+Tom Redd
+Head of Infrastructure | NovumTech
+---
+Attachment: none (we'll upload samples to accounting if helpful)
+
+From: Ava Chen <ava.chen@redwood.com>
+To: Tom Redd <tom.redd@novumtech.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: Thu, 18 Jun 2026 18:03:00 -0400
+Subject: Re: Unexpected mid-cycle usage spike in May — can you provide per-request samples?
+
+Hi Tom — thanks for flagging and sorry for the surprise. I pulled this into our billing queue and looped in Ben (acct lead) and Kim (billing ops).
+
+Quick context on routing: for hosted postpay accounts we attribute tokens to the API key that initiated the request; streaming vs request/response differences are reflected in how many "input" vs "output" tokens are recorded but they both show up as individual billing events. Long-lived KV caching won't create large token spikes unless the prompt payloads or generations are large or a replay of requests occurred.
+
+Ben / Kim — can you run a transaction sample export for NovumTech for 2026-05-24 through 2026-05-26, include request_id, session_id, api_key (masked), model, tokens_input, tokens_output, timestamp, and the upstream client IP if available? Tom requested CSV. If we find duplicate request_ids or near-duplicate timestamps that indicate retries/replays, note that too. I'll coordinate next steps on credits.
+
+Tom — we'll aim to get the raw sample CSV and an initial summary by tomorrow EOD PT. If you have any internal request_ids that map to timestamps on your side add them to a reply and we'll prioritize matching.
+
+Best,
+Ava Chen
+Account Executive, Redwood Inference
+Phone: +1 415-555-0182
+---
+Internal note: escalate if we see >2x over baseline without clear origin.
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Ava Chen <ava.chen@redwood.com>, Tom Redd <tom.redd@novumtech.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>
+Date: Fri, 19 Jun 2026 02:22:00 -0700
+Subject: Re: Unexpected mid-cycle usage spike in May — can you provide per-request samples?
+
+Tom / Ava — attached is an initial extract (small sample) and the full export is uploaded to the secure drive link below. I included two files: a CSV of per-request rows covering 2026-05-23 00:00:00 UTC to 2026-05-27 23:59:59 UTC (novum_request_samples.csv) and a compact JSON snapshot of our usage engine (redwood_usage_snapshot-2026-05-31.json).
+
+Preliminary observations:
+- The majority (~78%) of the spike on 2026-05-24 occurred from a handful of high-output completions from api_key starting with "rk-nv-" between 14:12–14:48 UTC (many outputs >10k tokens each).
+- We see many near-duplicate timestamps within sub-second windows for the same request_id (likely retries) — about ~12% of rows are exact request_id duplicates, and an additional ~6% look like near-duplicates with different request_id but identical payload fingerprints.
+- Two long-lived websocket sessions show many small incremental responses; those are accounted as discrete generations and explain some of the volume but not the full magnitude.
+
+Next steps we propose:
+1) Let NovumTech review the sample CSV against your internal request logs for "rk-nv-" keys and the timestamps Ben highlighted.
+2) If you confirm those were accidental replays/retries or a misconfigured worker we can propose a retroactive credit for duplicated request_ids (standard practice). Tentative credit range: we can offset duplicated request events (~12% of spike) and evaluate larger outputs case-by-case.
+3) Kim to run a precise billing reconciliation and provide a credit proposal by EOD Friday PT.
+
+Drive: https://drive.redwood.example.com/drive/folders/novumtech-evidence (restricted link).
+
+Attachment: novum_request_samples.csv (CSV, 182KB)
+Attachment: redwood_usage_snapshot-2026-05-31.json (JSON, 1.1MB)
+
+Thanks — Ben
+Ben Carter
+Senior Account Manager, Redwood Inference
+---
+Redwood internal: flag for potential 1x–1.5x credit depending on confirmed duplicates and whether high-output completions were intended.
+
+From: Tom Redd <tom.redd@novumtech.com>
+To: Ben Carter <ben.carter@redwood.com>, Ava Chen <ava.chen@redwood.com>
+Cc: NovumTech Billing <accounting@novumtech.com>
+Date: Fri, 19 Jun 2026 23:04:00 -0400
+Subject: Re: Unexpected mid-cycle usage spike in May — can you provide per-request samples?
+
+Ben / Ava — thanks for the fast turnaround and the files. I've run a quick match against our internal logs and we see that the api_key prefix "rk-nv-" maps to a temporary worker that inadvertently replayed a queue after a failed deploy on 2026-05-24 14:14 UTC. We see the same request_ids repeated (we had a retry loop misconfiguration).
+
+Next steps on our side:
+- We'll provide an internal incident note and the exact request_ids that should be considered duplicates by EOD Monday — attaching a provisional list as "novum_duplicate_ids.txt" (will upload to your drive).
+- Please ask Kim for a formal credit reconciliation and proposed refund/credit mechanism (we prefer a credit applied to our May invoice rather than a separate refund).
+
+Appreciate the clear export format and initial analysis. If you need anything else from us to validate, flag it and we'll prioritize.
+
+Tom
+Tom Redd
+Head of Infrastructure | NovumTech
+---
+Attachment referenced: novum_duplicate_ids.txt (will be uploaded to Drive)

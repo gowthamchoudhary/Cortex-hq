@@ -1,0 +1,107 @@
+Token-pacing regression causing interactive stalls — customer mitigation & next steps
+
+From: Elena Park <elena@skyapps.io>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: ops+mobile@skyapps.io
+Date: Wed, 30 Jun 2027 08:14:00 -0700
+Subject: UI freeze: streaming responses lagging since 06:00 UTC
+
+Hi Jonas —
+
+We started seeing severe UI stalls on our chat widget around ~06:00 UTC this morning. Messages are sent from the client and we see the request accepted, but the streaming response doesn't arrive for 8–18s in many sessions; some sessions drop and reconnect. This is impacting our mobile users heavily.
+
+What we've observed:
+- Streaming start delayed (first token arrives 8–18s after request).
+- Intermittent 503s during the same window.
+- Non-streaming (polling) responses seem faster but still slightly slower than baseline.
+
+We've attached a trimmed client log and a CSV of sampled token pacing (token timestamps). We rolled a client-side retry/backoff but users saw poor UX. Can you advise immediate mitigations we can apply on our side and let us know if this is a known platform issue?
+
+Attached: skyapps-client-logs-20270630.txt, token-pacing-profiles.csv
+
+Thanks,
+Elena Park
+Head of Mobile, SkyApps
+elena@skyapps.io
+
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Elena Park <elena@skyapps.io>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Wed, 30 Jun 2027 08:36:00 -07:00
+Subject: Re: UI freeze: streaming responses lagging since 06:00 UTC
+
+Elena — thanks for the clear notes and the logs. Sorry you're hitting this. We are seeing an anomalous regression in token pacing for a subset of streaming endpoints that started ~05:45 UTC and engineering is investigating.
+
+Immediate mitigation options you can apply client-side (low risk, fast):
+1) Disable streaming temporarily: call the same endpoint with streaming=false. This will return full responses and avoid waiting on incremental tokens.
+2) If you must stream: reduce chunk size to 32–64 tokens and set a client-side grace timeout of 2s to show a spinner until the first token arrives. That reduces the perceived stall.
+3) Implement a short client-side fallback: if streaming hasn't started within 3s, switch to a non-streaming call for that request.
+4) Pin to the lower-latency model variant (rwd-small-v1) — we can enable routing for SkyApps if you want us to flip that on.
+
+Operational asks for us:
+- Can you send a short window (UTC) where this hit you most heavily? The attached logs helped — please also include one request id (x-rw-request-id) from a problematic session if you have it.
+- We'll open a high-priority investigation and share a short-term remedy within 60–90 minutes.
+
+I'll loop in SRE and our product engineer; Monica will coordinate the support channel.
+
+Best,
+Jonas Weber
+Account Executive, Redwood Inference
+jonas.weber@redwood.com
+
+
+From: Elena Park <elena@skyapps.io>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: ops+mobile@skyapps.io
+Date: Wed, 30 Jun 2027 08:49:00 -07:00
+Subject: Re: UI freeze: streaming responses lagging since 06:00 UTC
+
+Thanks Jonas — sending one example request id: rw-req-87b3f2d. Window of worst impact was 05:45–06:20 UTC.
+
+We rolled the non-streaming fallback and saw noticeably fewer user complaints; it’s an acceptable short-term workaround but worsens perceived responsiveness. If you can flip routing to rwd-small-v1 for us for the next 4 hours, we can validate whether latency improves.
+
+We'd also appreciate communication to our CSM and product lead while you're investigating.
+
+— Elena
+
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Wed, 30 Jun 2027 09:05:00 -07:00
+Subject: Fwd: UI freeze: streaming responses lagging since 06:00 UTC
+
+Team — forwarding SkyApps report. Key facts:
+- Customer: SkyApps (mobile chat), high-visibility production impact 05:45–06:20 UTC (rw-req-87b3f2d sample).
+- Symptom: delayed first-token / token-pacing regression; intermittent 503 spikes.
+- They have applied non-streaming fallback; asked us to route to rwd-small-v1 for 4 hours to validate.
+
+Proposed immediate actions:
+A) Ops: enable routing override to rwd-small-v1 for SkyApps for the next 4 hours (canary 10% -> 100% if initial 5m looks good).
+B) SRE: gather host-level tail logs and token pacing profiles from streaming ingress; correlate with request ids.
+C) Eng (model runtime): check recent kernel selection changes and the KV-cache hot-shard metrics for the morning window.
+D) CS/Acct: notify CSM and offer timeline and temporary credit if degradation continues beyond 2 hours.
+
+Attachments from customer (logs, token pacing CSV) are in the Drive link and attached to this thread. I'll open JIRA-RW-4291 and tag SRE. Monica — can you coordinate the routing flip with Ops and confirm? Rishi/Marissa — can you own postmortem and pricing/credit discussions respectively?
+
+Jonas
+
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Elena Park <elena@skyapps.io>
+Date: Wed, 30 Jun 2027 13:02:00 -07:00
+Subject: RE: Fwd: UI freeze: streaming responses lagging since 06:00 UTC
+
+Updating thread with plan and owners:
+- Monica: Ops will perform a targeted routing override to rwd-small-v1 for SkyApps now. Start with 10% traffic for 5 minutes; if error rate and first-token latency drop, roll to 100% over 10 minutes. Confirm when complete.
+- Rishi: please run an initial triage (kernel selection, KV cache contention, recent deploys around 05:30–06:10 UTC) and post findings to JIRA-RW-4291. Capture the host-level p95/p99 for first-token latency and any spike correlation with 503s.
+- Jonas: coordinate comms with the SkyApps CSM and confirm the temporary workaround instructions in your earlier reply. Offer to set up a 30-min technical sync with their mobile lead after we have initial SRE findings.
+- Me (Marissa): I'll review customer billing impact; if user-facing latency persists >2 hours we'll propose a credit commensurate with impact (TBD).
+
+Elena — thank you for the quick mitigation on your side. We'll aim to have an initial update within 60–90 minutes and a technical sync scheduled by end of day.
+
+Marissa Cole
+VP, Customer Success — Redwood Inference
+marissa.cole@redwood.com
+

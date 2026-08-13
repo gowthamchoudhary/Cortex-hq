@@ -1,0 +1,158 @@
+Recap & open questions: SDK auth, routing, and chat vs completions semantics
+
+From: Laura Bennett <laura.bennett@redwood.com>
+To: Elaine Ho <elaine.ho@novusai.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Mon, 18 Jan 2027 15:04:00 -0800
+Subject: Recap & open questions: SDK auth, routing, and chat vs completions semantics
+
+Hi Elaine —
+
+Thanks for joining the demo today — appreciate the thoughtful questions from the Novus AI team. Below is a concise recap and a set of specific integration/architecture questions so we can make the next engineering touchpoint productive.
+
+Recap (short):
+- Demo: SDK quickstart, hosted inference flow, routing rules between hosted and dedicated capacity, and structured output/tool-calling examples.
+- High-level ask from Novus: low-latency chat for interactive product, plus an offline reranking pipeline for search over embeddings.
+
+Open technical questions / clarifications we need from you (numbered):
+1) Auth & provisioning: you mentioned API key rotation via your secret manager — do you prefer short-lived OAuth tokens (client credentials) or long-lived API keys for server-to-server calls? Any existing requirement for mTLS?
+2) Routing policy: for production traffic, do you want strict isolation (all customer traffic pinned to Dedicated) or policy-based routing (prefer Hosted but failover to Dedicated for latency/SLA)? Any regulatory constraints that force on-prem/VPC-only?
+3) Request/response semantics: for the interactive chat feature, do you expect:
+   - multi-role messages with system/user/assistant framing?
+   - deterministic JSON tool outputs for downstream parsing?
+   Also: how strict should the service be about enforcing a JSON schema in responses vs. post-parse heuristics?
+4) Streaming vs batched scoring: for reranker/embeddings workloads, what are your latency vs cost targets (P95 latency target, qps, and acceptable token-cost)?
+5) Tokenization/limits: do you have an existing tokenizer dependency (e.g., tiktoken) in your infra? Are you sensitive to off-by-one on max_tokens/stop sequences?
+6) Embeddings/reranker: do you plan to use dot-product on normalized vectors (fast) or cosine (equivalent if normalized) for ranking? Any preference for prefiltering / recall-first stage?
+
+What Redwood will do for the next touchpoint:
+- Produce a small draft SDK integration guide showing auth examples (API-key rotation, client-credentials), routing config snippets, and recommended defaults for chat vs completions.
+- Provide a sample response schema (attached) and a short note on streaming semantics for structured output + how we reassemble partial JSONs from deltas.
+- Share an architecture diagram (attached) tailored for your recommended routing choice.
+
+Attachments included: architecture_diagram_v2.pdf (arch sketch), sample_response_schema.json (proposal), demo-recording.mp4 (recording).
+
+Would you be able to answer items 1–6 above before our next engineering sync? If so, we can use those answers to lock down a short mutual action plan. Suggesting a follow-up technical sync next Tue 01/26 — does that work for you?
+
+Thanks —
+Laura Bennett
+Senior Solutions Engineer, Redwood Inference
+laura.bennett@redwood.com
+Redwood Inference
+
+
+From: Elaine Ho <elaine.ho@novusai.com>
+To: Laura Bennett <laura.bennett@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Tue, 19 Jan 2027 09:02:00 -0800
+Subject: Re: Recap & open questions: SDK auth, routing, and chat vs completions semantics
+
+Hi Laura —
+
+Great summary — thanks. Quick answers and clarifications from our side so you can tailor the integration guide:
+
+1) Auth & provisioning
+- We prefer short-lived client-credentials (OAuth 2.0) for services that originate from our backend. For internal tooling/smaller teams we still use API keys managed by HashiCorp Vault. mTLS: not required today, but possible in 2028 roadmap.
+
+2) Routing policy
+- Preference: policy-based routing. Default to Hosted for cost/elasticity but we need an option to pin sensitive customers to Dedicated. We have a compliance requirement to keep EU PII in EU-only regions — for Novus that applies only to a subset of customers.
+
+3) Request/response semantics
+- Chat: multi-role messages are required for system/user/assistant separation.
+- Tooling: determinism in tool outputs is important for the automation flows we plan to build — if Redwood can enforce a strict JSON schema on the response that would be preferred; otherwise we will need robust post-parse validation in our app.
+
+4) Streaming vs batched scoring
+- For reranking: P95 under 120ms is ideal for our online use-case; offline batch rerank (nightly) is ok to be higher latency. Throughput: expect occasional spikes up to 300 qps during reindexing windows. Cost sensitivity: moderate — we care about unit costs when ranking at scale.
+
+5) Tokenization/limits
+- We currently standardize on tiktoken-like tokenization. Off-by-one on max_tokens has bitten us before; any explicit guidance and sample code for reliably computing remaining tokens would be helpful.
+
+6) Embeddings/reranker
+- We will likely normalize vectors and use dot-product for speed. Our recall-first retrieval uses a sparse-first stage (ES / FAISS) then dense rerank.
+
+I'll upload a small sample of our query distribution and a few anonymized chats to the Drive link you provided by EOD.
+
+Thanks,
+Elaine
+Elaine Ho
+Head of Platform, Novus AI
+elaine.ho@novusai.com
+
+On Mon, Jan 18, 2027 at 15:04 Laura Bennett <laura.bennett@redwood.com> wrote:
+> Hi Elaine —
+> 
+> Thanks for joining the demo today — appreciate the thoughtful questions from the Novus AI team. Below is a concise recap and a set of specific integration/architecture questions so we can make the next engineering touchpoint productive.
+> 
+> [original message truncated for thread]
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Laura Bennett <laura.bennett@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Elaine Ho <elaine.ho@novusai.com>
+Date: Tue, 19 Jan 2027 09:45:00 -0800
+Subject: Re: Recap & open questions: SDK auth, routing, and chat vs completions semantics
+
+Thanks Elaine — great context. Some technical notes from the runtime/integration side that we should put into the SDK guide (high level):
+
+A) Chat vs Completions (recommendation):
+- Use Chat API for interactive, multi-turn experiences with explicit roles. Chat semantics preserve role metadata which helps model conditioning and safety filtering.
+- Use Completions API for single-shot scoring or short-format generation where you control exact stop sequences and want minimal framing overhead.
+
+B) Tokenization & max_tokens guidance:
+- We'll include sample code using tiktoken-compatible tokenizers. Recommended pattern: compute token_budget = model_context_length - estimated_response_tokens - safety_margin (e.g., 32 tokens).
+- Stop sequences can truncate output earlier but are not guaranteed under heavy sampling. When streaming, deltas may emit stop tokens across chunks; your reassembly should detect final "stop" sequences in the last chunk, not assume a token boundary map.
+
+C) Streaming semantics & structured output:
+- Streaming returns incremental deltas. For structured (JSON) outputs we recommend two approaches:
+  1) Strict schema enforcement: ask model to emit only JSON with a top-level "response" object and include an explicit finalization token (e.g., "\u0003END_JSON\u0003"). Redwood can optionally validate on the server and return an error if invalid (for Hosted customers).
+  2) Heuristic reassembly: assemble deltas client-side, run a tolerant JSON reparsing step (balanced-brace recovery), then run schema validation.
+- For tool-calling, prefer the structured tool-calling primitives (if you need deterministic parseable output). We can show both examples in the SDK.
+
+D) Caching & KV prefixing:
+- Cache keys should include: model_id + model_version + tokenizer_version + user_prefix_hash (if using prefix caching). For rerank, cache by embedding-id and query-hash.
+
+E) Embeddings & rerank:
+- Normalized vectors + dot product is fine. We'll include a short code snippet for batch scoring using BLAS-optimized dot-product; also an option to pre-normalize and use cosine equivalently.
+
+F) Routing & failover:
+- Provide examples for policy-based routing with fallbacks. If Novus wants EU-only storage, we recommend a region-aware rule that pins specific account IDs to EU clusters.
+
+Open items for Redwood engineering:
+- Draft SDK snippet for token budget computation and stop-handling (Laura).
+- Option 1 and 2 for structured streaming reassembly (Marissa).
+
+-Karthik
+Principal Engineer, Runtime
+karthik_iyer@redwood.com
+
+On Tue, Jan 19, 2027 at 09:02 Elaine Ho <elaine.ho@novusai.com> wrote:
+> Hi Laura —
+> 
+> Great summary — thanks. Quick answers and clarifications from our side so you can tailor the integration guide:
+> 
+> [external message truncated for thread]
+
+From: Laura Bennett <laura.bennett@redwood.com>
+To: Elaine Ho <elaine.ho@novusai.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Aditya Rao <aditya_rao@redwood.com>
+Date: Tue, 19 Jan 2027 10:13:00 -0800
+Subject: Re: Recap & open questions: SDK auth, routing, and chat vs completions semantics
+
+Elaine — thanks for the fast turnaround and the sample expectations. Action items and owners for next steps:
+
+1) Laura: produce SDK integration guide (auth examples: client-credentials + API-key rotation, code snippets for token-budgeting and stop handling). Target: 2027-01-22 EOD.
+2) Marissa: prototype two streaming reassembly patterns (server-side strict schema enforcement + client-side tolerant reassembly) and include sample test harness. Target: 2027-01-24.
+3) Karthik: draft routing-policy YAML examples showing Hosted-first with Dedicated pin for EU PII and example failover. Target: 2027-01-22.
+4) Novus (Elaine): share anonymized query distribution and the sample corpus (you mentioned upload by EOD).
+
+Plan: after we have the artifacts above, schedule a 60-min engineering sync to walk the SDK snippets and the streaming/JSON reassembly options. Proposed slots: Tue 2027-01-26 10:00-11:00 PT or Wed 2027-01-27 08:00-09:00 PT. Please confirm your preference and we will send a calendar invite.
+
+Also attaching the current architecture diagram and the sample_response_schema.json for your review (attached). If Novus wants Redwood to enforce schema validity server-side (Hosted), we can scope that into the mutual action plan and include a simple acceptance test.
+
+Thanks everyone — looks like a good plan.
+
+Best,
+Laura Bennett
+Senior Solutions Engineer, Redwood Inference
+laura.bennett@redwood.com
+
+Attachments: architecture_diagram_v2.pdf, sample_response_schema.json

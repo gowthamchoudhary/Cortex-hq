@@ -1,0 +1,134 @@
+Paxion Health — API availability spike / early customer update
+
+From: Hannah Schmitt <hannah_schmitt@redwood.ai>
+To: oncall@redwood.ai, connor_obrien@redwood.ai, marissa_cole@redwood.ai
+Cc: monica_patel@redwood.ai
+Date: Tue, 08 Dec 2026 03:12:00 +0000
+Subject: [ALERT] Paxion Health — 503 rate spike, opening bridge
+
+Team,
+
+We have a sustained increase in 503s (user-facing API) for Paxion Health across several pods starting ~03:05 UTC. Error rate is ~12% for the last 5m; latency increased on retry traffic.
+
+What I've done so far:
+- Confirmed 503s from gateway logs and service metrics (attached sample request ids).
+- Opened bridge (zoom + slack channel #inc-paxion-8721).
+- Isolating to inference fleet — symptoms consistent with rapid pod churn and OOMs during batching.
+
+Immediate asks:
+- Connor: please notify Paxion primary contacts with a short investigation note and SLA contact.
+- Marissa / Monica: prepare CS/AM contact list and be on the bridge for customer updates.
+- Infra/Runtime: investigate autoscaler and recent batching config pushed around 02:50 UTC.
+
+I will post logs and a short timeline to the bridge in 10m.
+
+--
+Hannah Schmitt
+SRE (on-call)
+Redwood Inference
+
+From: Connor O'Brien <connor_obrien@redwood.ai>
+To: Sara Lin <sara.lin@paxionhealth.com>, DevOps Pager <devops@paxionhealth.com>
+Cc: marissa_cole@redwood.ai, hannah_schmitt@redwood.ai, monica_patel@redwood.ai
+Date: Tue, 08 Dec 2026 03:25:00 +0000
+Subject: Paxion Health — We are investigating increased errors (early notice)
+
+Sara / Paxion team,
+
+Quick update from Redwood: we detected an increase in 503 responses impacting your API traffic starting ~03:05 UTC. Our on-call SREs have opened an incident bridge and are actively investigating the root cause.
+
+What you should know now:
+- Impact: intermittent 503s and degraded throughput for some requests; not all customers are affected.
+- Next update: we will follow up within 30 minutes with an initial impact assessment and ETA for mitigation.
+- Contact: for immediate concerns reply-all here or use my mobile +1 (415) 555-0122.
+
+We will provide an executive update after we have remediated and will produce a postmortem with root cause and actions.
+
+Apologies for the disruption — we know this affects Paxion’s production flows and we are prioritizing a rollback/mitigation.
+
+Best,
+Connor O'Brien
+Account Lead, Customer Success
+Redwood Inference
+
+From: Hannah Schmitt <hannah_schmitt@redwood.ai>
+To: connor_obrien@redwood.ai, marissa_cole@redwood.ai, monica_patel@redwood.ai
+Cc: runtime_team@redwood.ai, infra_leads@redwood.ai
+Date: Tue, 08 Dec 2026 04:05:00 +0000
+Subject: RE: Paxion Health — investigation update (hypothesis + mitigation)
+
+Internal — latest from bridge (summary):
+
+Findings so far:
+- Root symptom: GPU memory pressure causing rank-local OOMs during high-concurrency batching, leading to graceful-failures surfacing as 503s at the gateway.
+- Trigger: a batching config tweak rolled out at 02:50 UTC increased max_batch_size on LLM v4.2 for latency optimization. That change interacts poorly with certain payload shapes from Paxion and increased memory transient peaks.
+- Autoscaler behavior: pod churn increased as nodes scaled down then back up, creating cold-start latency and cache misses.
+
+Actions taken / planned:
+- Rolling back the 02:50 batching config (in progress).
+- Temporarily lowering max_concurrency to reduce peak memory.
+- Forcing a subset of traffic to a smaller, stable model variant while we validate rollback.
+
+Impact assessment (preliminary):
+- Estimated affected Paxion requests: ~18% of traffic during window.
+- Customer-visible errors: 503s and delayed responses.
+
+Attachments: sample request ids, short timeline (incident_timeline.csv). Expect another internal note in ~35 minutes or sooner if rollback completes.
+
+--
+Hannah
+
+From: Thomas Reed <thomas.reed@paxionhealth.com>
+To: Connor O'Brien <connor_obrien@redwood.ai>, Sara Lin <sara.lin@paxionhealth.com>
+Cc: DevOps Pager <devops@paxionhealth.com>, marissa_cole@redwood.ai
+Date: Tue, 08 Dec 2026 06:10:00 +0000
+Subject: Re: Paxion Health — We are investigating increased errors (early notice)
+
+Thanks for the quick update. Paxion relies on low-latency inference for several critical pathways — this window caused retries and a partial failover to fallback logic.
+
+Two asks from our side:
+1) Please confirm whether this incident qualifies under the uptime SLA and the process/timeline for credit.
+2) We need a firm timeline for a permanently safe configuration — temporary mitigations are fine, but we need a plan to prevent recurrence.
+
+Appreciate the transparency. Please include an exec summary once root cause is confirmed.
+
+- Thomas
+VP Engineering, Paxion Health
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Sara Lin <sara.lin@paxionhealth.com>, Thomas Reed <thomas.reed@paxionhealth.com>, DevOps Pager <devops@paxionhealth.com>
+Cc: connor_obrien@redwood.ai, hannah_schmitt@redwood.ai, monica_patel@redwood.ai
+Date: Tue, 08 Dec 2026 12:45:00 +0000
+Subject: Paxion Health — Incident resolution and executive summary (actions + next steps)
+
+Sara / Thomas / Paxion team,
+
+Summary (resolved at 11:40 UTC): we mitigated the issue that produced increased 503s by reverting the batching config rolled out at ~02:50 UTC and applying a conservative concurrency cap while we validate stability. Service is now within normal error/latency bounds.
+
+Root cause (confirmed): an aggressive batching optimization interacted with specific request shapes from Paxion, which caused transient GPU memory pressure and pod churn. The autoscaler exacerbated the effect by triggering additional cold starts during the churn window.
+
+Customer impact:
+- Window: ~03:05–11:40 UTC (intermittent 503s and degraded throughput).
+- Estimated affected Paxion traffic: ~15–20% during peak minutes.
+- Business effect: increased retries on several critical endpoints; no data loss reported.
+
+Actions we have taken:
+1) Reverted the 02:50 batching configuration and rolled out a safe default across affected clusters.
+2) Applied a temporary concurrency cap and pinned a small percentage of Paxion traffic to a stable model variant.
+3) Increased telemetry (heap tracking and per-pod memory histograms) and added an alert for GPU memory transient spikes.
+4) Initiated a postmortem and assigned owners for follow-up items (link below).
+
+Planned next steps (timeline):
+- 48 hours: stabilization and validation of the rollback and telemetry.
+- 5 business days: detailed postmortem draft with timeline, root cause analysis, and action items — we will share a private link.
+- SLA/credits: our CS team will follow up with Paxion procurement on SLA impact and crediting; Connor will coordinate.
+
+Attachments: customer_impact_summary.pdf, incident_timeline.csv, screenshot-503.png
+Related links: https://redwooddrive.company.com/postmortems/PX-8721-draft, https://status.redwood.ai/incidents/2026-12-08-availability
+
+We are sorry for the disruption. If you want a live review of the postmortem draft with our engineering leads this week, we can schedule time.
+
+Regards,
+Marissa Cole
+Head of Customer Success
+Redwood Inference

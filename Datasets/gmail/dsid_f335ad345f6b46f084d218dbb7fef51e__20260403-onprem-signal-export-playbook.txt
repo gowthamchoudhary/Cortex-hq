@@ -1,0 +1,145 @@
+On‑prem signal export playbook — SIEM & tracing export options
+
+From: Olga Petrov <olga.petrov@redwoodinference.com>
+To: Alex Rivera <alex.rivera@acme-corp.com>, platform-integrations@acme-corp.com
+Cc: Markus Klein <markus.klein@redwoodinference.com>, Laura Bennett <laura.bennett@redwoodinference.com>
+Date: Fri, 03 Apr 2026 09:12:00 -0700
+Subject: On‑prem signal export playbook — SIEM & tracing export options
+
+Alex / platform team —
+
+Thanks for the call earlier. Per request, attached is a concise playbook outlining the options we support for exporting logs, metrics and traces from a Redwood Private deployment (VPC / on‑prem) into customer SIEMs and observability stacks. This note focuses on pragmatics for air‑gapped or egress‑restricted environments and recommended configurations that preserve PII minimization and SLOs for telemetry delivery.
+
+High‑level options (ranked by simplicity / customer operational burden):
+
+1) Local collector -> Push to customer SIEM (preferred for private cloud)
+   - Deploy an OTLP/Fluentd/Vector collector inside the customer VPC (sidecar or daemonset).
+   - Collector consumes stdout/files/syslog from Redwood runtime components or accepts OTLP/gRPC directly.
+   - Forwarders translate to Splunk HEC, syslog/tcp, or HTTPS endpoints using TLS client auth.
+   - Benefits: no egress from customer environment to Redwood; full control of retention and parsing.
+
+2) Encrypted, batched export to a controlled endpoint (hybrid)
+   - Collector batches and uploads to a preconfigured private s3 (minio) or SFTP gateway in a DMZ, which the customer’s SIEM pulls from.
+   - Use envelope encryption (KMS) to keep logs encrypted at rest.
+   - Good fit when direct SIEM ingestion is restricted but outbound is allowed to specific host/port.
+
+3) Controlled egress to Redwood (for customers who want Redwood to perform long‑term retention / analytics)
+   - Use an egress proxy with strict allowlist (IP + host) and mTLS.
+   - All payloads are encrypted and redacted per customer policy.
+   - Not available for air‑gapped; requires contract and network review.
+
+Core security controls we recommend (non‑exhaustive):
+- PII redaction: collectors must run configurable redaction rules (regex, jsonpath) before forwarding.
+- Sampling & rate limits: implement tail‑sampling for traces and adaptive log sampling to protect downstream SIEM cost budgets.
+- Backpressure handling: collectors use bounded queues + local disk spool for short spikes; monitor spool growth.
+- Authentication: prefer mTLS client certs or HEC tokens for Splunk, avoid basic auth.
+- Key management: integrate with customer KMS/HSM for envelope keys; do not store unencrypted keys in config.
+
+Mapping notes for SIEM parsers (example: Splunk):
+- Logs: include metadata fields: service, env, hostname, container_id, request_id, trace_id.
+- Traces: export via OTLP -> translate to zipkin/x‑ray style spans if the SIEM requires it.
+- Metrics: prefer Prometheus remote_write or pushgateway pattern if pull is not possible.
+
+Action items for platform integrations team from Redwood:
+- We can provide three reference collector configs (Fluentd, Vector, OTLP Collector).
+- Provide a short network diagram showing recommended ports + NAT/egress paths.
+- Trial: small export of 24 hours of non‑PII logs to validate parsing.
+
+Attachments: telemetry-export-matrix.xlsx (mapping table), network-egress-diagram.png, otlp-collector-sample-config.yaml
+
+Thanks —
+Olga
+Olga Petrov
+Principal Solutions Engineer, Redwood Inference
+olga.petrov@redwoodinference.com
+
+---
+
+From: Alex Rivera <alex.rivera@acme-corp.com>
+To: Olga Petrov <olga.petrov@redwoodinference.com>
+Cc: platform-integrations@acme-corp.com
+Date: Fri, 03 Apr 2026 12:02:00 -04:00
+Subject: Re: On‑prem signal export playbook — SIEM & tracing export options
+
+Olga —
+
+This looks useful, thank you. A couple of clarifying Qs from our side:
+1) For the collector sidecar option, can the collector be fenced into a non‑privileged namespace and still get container stdout from Redwood runtime pods?
+2) Do you support gzip + protobuf batching for OTLP to reduce egress and preserve ordering?
+3) For Splunk HEC, do you recommend HEC token or mTLS client certs for our architecture? We prefer mTLS but our Splunk instance is on a reverse proxy.
+
+We’re keen to trial the local collector approach but want to ensure we don’t lose trace context across our ingress LB.
+
+— Alex
+Alex Rivera
+Sr. Security Engineer, Acme Corp
+alex.rivera@acme-corp.com
+
+---
+
+From: Markus Klein <markus.klein@redwoodinference.com>
+To: Olga Petrov <olga.petrov@redwoodinference.com>, Alex Rivera <alex.rivera@acme-corp.com>
+Cc: Laura Bennett <laura.bennett@redwoodinference.com>, Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>
+Date: Fri, 03 Apr 2026 13:18:00 -07:00
+Subject: Re: On‑prem signal export playbook — SIEM & tracing export options
+
+Quick answers inline:
+1) Yes — collector runs as DaemonSet with RBAC that only reads pod logs via the Kubernetes API (or node file socket) and can be scoped to a namespace. We recommend running a dedicated telemetry namespace and limit ServiceAccount privileges to only what is needed.
+2) We support OTLP over gRPC with gzip compression and protobuf batching; the OTLP collector config in the attachment shows default batch_settings optimized for bursty traffic.
+3) mTLS is preferred for Splunk HEC when possible; if Splunk is behind a reverse proxy that terminates TLS, HEC token + IP allowlist is acceptable. Also consider short‑lived tokens rotated by Vault.
+
+Additional operational notes:
+- Trace context: ensure all Redwood runtime components propagate W3C traceparent and baggage headers; include a light instrumentation shim in the ingress layer if customer LB strips headers.
+- Metric cardinality: cap labels from user input and high‑cardinality fields; use relabeling rules in Prometheus/collector.
+
+I’ll add sample K8s RBAC and a tight DaemonSet YAML to the Drive folder.
+
+— Markus
+Markus Klein
+Director, Product Infrastructure
+markus.klein@redwoodinference.com
+
+---
+
+From: Laura Bennett <laura.bennett@redwoodinference.com>
+To: Alex Rivera <alex.rivera@acme-corp.com>, Olga Petrov <olga.petrov@redwoodinference.com>
+Cc: Markus Klein <markus.klein@redwoodinference.com>, Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>
+Date: Mon, 06 Apr 2026 10:05:00 -07:00
+Subject: Re: On‑prem signal export playbook — SIEM & tracing export options
+
+Alex —
+
+Happy to run the trial. Proposed minimal rollout plan (we can adapt):
+- Day 0: Provide OTLP collector config + RBAC + sample network diagram. (Redwood)
+- Day 1: Customer deploys collector in dev cluster; deploy small synthetic load generator to exercise traces and logs. (Acme)
+- Day 2: Collector forwards to Acme Splunk HEC endpoint (staging). Validate parsing and trace linkage. (Joint)
+- Day 3–4: Review retention, indexing costs, and adjust sampling; confirm redaction rules applied. (Joint)
+
+Please confirm who will be the single point of contact on your side for the runbook and when you’re available this week to kick off.
+
+Thanks —
+Laura
+Laura Bennett
+Solutions Engineering Manager, Redwood Inference
+laura.bennett@redwoodinference.com
+
+---
+
+From: Alex Rivera <alex.rivera@acme-corp.com>
+To: Laura Bennett <laura.bennett@redwoodinference.com>, Olga Petrov <olga.petrov@redwoodinference.com>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>, Markus Klein <markus.klein@redwoodinference.com>
+Date: Mon, 06 Apr 2026 15:44:00 -04:00
+Subject: Re: On‑prem signal export playbook — SIEM & tracing export options
+
+Thanks — this works. POC owners:
+- Acme SRE: Maria Lopez (maria.lopez@acme-corp.com) — will deploy collectors in staging.
+- Redwood POC: Vivek Kulkarni — will provide collector configs and help validate trace propagation.
+
+We’ll start Day 0 tomorrow. Please share the Drive folder link and we’ll grant the service accounts the minimum privileges required. Also sending a Splunk intake test token and endpoint in a secure channel (not in thread).
+
+— Alex
+Alex Rivera
+Sr. Security Engineer, Acme Corp
+alex.rivera@acme-corp.com
+
+

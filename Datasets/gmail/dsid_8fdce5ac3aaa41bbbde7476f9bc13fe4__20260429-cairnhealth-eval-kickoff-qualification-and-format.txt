@@ -1,0 +1,137 @@
+Cairn Health discovery — proposed eval run, data format & scoring
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+To: Alex Holmes <alex.holmes@cairnhealth.com>
+Cc: karthik_iyer <karthik_iyer@redwood.com>
+Date: Thu, 29 Apr 2026 15:05:00 -0700
+Subject: Recap: Cairn Health discovery — eval approach & next steps
+
+Hi Alex — thanks again for the call earlier. Quick recap and concrete next steps so we can kick off a short model-fit eval on Redwood.
+
+Summary of what we heard:
+- Primary goal: improve triage and first-pass summarization for inbound patient messages (reduction of manual triage workload).
+- Key constraints: <10s 99th-pct latency target, sensitive PHI (must be masked before upload), ops team wants predictable unit cost.
+- Success metrics you care about: answer correctness on QA bank, low hallucination rate for factual items, and latency under load.
+
+Recommended short model shortlist for initial eval (we can expand):
+- Llama-2-13B-instruct (int8/quantized) — strong instruction-following baseline
+- MPT-7B-Instruct (efficient on seq lengths up to 4k)
+- Redmond-7B-quant (our Redwood-verified quantized variant for cost testing)
+
+Proposed eval run on Redwood (high level):
+1) You upload a masked sample dataset (CSV) with 2k representative examples — we provide template.
+2) We run the three models above on Hosted inference (dedicated slot for repeatability).
+3) Scoring: exact/normalized match + F1 for longer answers + hallucination heuristic + manual spot-check.
+4) Deliverable: per-model scorecard, latency/cost breakdown, and recommended production config (batching, quantization).
+
+Attached: redwood-eval-spec-v1.pdf (short spec + dataset template). Also: prompt_set_v1.json with our initial prompts and a Drive link to the benchmark doc.
+
+Next steps / asks:
+- Can you confirm who will prepare the masked sample and whether your ML lead wants to be on the kickoff? (Suggested kickoff window: week of May 4 — May 8).
+- Confirm acceptance thresholds (we've suggested defaults in the spec; happy to tune).
+- I'll loop in Karthik (solutions) for the data-format and scoring details.
+
+Thanks — looking forward to running this for you.
+
+Best,
+Stephanie Nguyen
+Senior Sales Lead, Redwood Inference
+stephanie_nguyen@redwood.com | +1 415-555-0198
+Redwood Inference
+
+-- attachment: redwood-eval-spec-v1.pdf (pdf, 78KB)
+-- Drive: https://drive.google.com/drive/folders/1aB2cEvalSpecs_Cairn
+
+From: Alex Holmes <alex.holmes@cairnhealth.com>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: Maya Gupta <maya.gupta@cairnhealth.com>, karthik_iyer <karthik_iyer@redwood.com>
+Date: Thu, 29 Apr 2026 16:12:00 -0700
+Subject: Re: Recap: Cairn Health discovery — eval approach & next steps
+
+Stephanie — thanks for the clear recap.
+
+Quick answers:
+- We'll prepare a masked sample dataset; my ML lead Maya will own that work (cc'd).
+- A couple of questions before we push to the template: what exact columns do you need in the CSV (we prefer explicit schema)? Also, define the hallucination heuristic you mentioned — how do you operationalize that for the scorecard?
+
+Procurement question: once we have results we may move to a PO. Who should procurement contact at Redwood? I can loop them in once we have a kickoff date.
+
+Appreciate it — happy to aim for May 6 or 7 for kickoff if that works for you.
+
+— Alex
+Alex Holmes
+Head of Product, Cairn Health
+alex.holmes@cairnhealth.com | +1 617-555-0123
+
+On Thu, Apr 29, 2026 at 3:05 PM Stephanie Nguyen <stephanie_nguyen@redwood.com> wrote:
+> Hi Alex — thanks again for the call earlier. Quick recap and concrete next steps so we can kick off a short model-fit eval on Redwood....
+
+From: karthik_iyer <karthik_iyer@redwood.com>
+To: Alex Holmes <alex.holmes@cairnhealth.com>, Maya Gupta <maya.gupta@cairnhealth.com>
+Cc: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Date: Fri, 30 Apr 2026 08:03:00 -0700
+Subject: Re: Recap: Cairn Health discovery — eval approach & next steps (data format + scoring)
+
+Alex / Maya — tagging in technical detail and the sample files. Quick answers up front, then specifics below.
+
+Short answers:
+- CSV schema we need: id, prompt, reference_answer, intent, channel, timestamp, metadata_json
+- Masking: remove PHI before upload; a UID can map back internally for audit but do not include raw PHI in the file.
+- Hallucination heuristic: rule-based filters + model-against-knowledge-base cross-check + human spot-check sampling. We provide a small heuristic pipeline as part of the eval run.
+
+Detailed format notes:
+- sample_dataset_template.csv (attached) — one row per prompt. Columns:
+  * id (string)
+  * prompt (string) — the input you send to the model in eval (we recommend including system + user context where relevant)
+  * reference_answer (string) — canonical expected answer (short)
+  * intent (string) — triage label if available
+  * channel (string) — web/email/mobile to help analyze distribution
+  * timestamp (ISO8601)
+  * metadata_json (string) — JSON-encoded metadata for the case (do not include PHI fields)
+
+Scoring rubric (configurable, defaults we propose):
+- Short-answer tasks (<20 tokens): Exact-match (case-insensitive, whitespace-normalized). Acceptance threshold: >= 85%.
+- Long-answer / summarization: Tokenized F1 (normalize punctuation, stopwords). Target F1 >= 0.78.
+- Hallucination: run our heuristic that flags answers with >2 unsupported facts; acceptable hallucination rate: <2% on a 1k sample, with manual spot-check pass-rate >= 95%.
+- Latency: median <150ms per token and 99th <1.5s on the Hosted dedicated slot we propose.
+
+Prompt set notes: prompt_set_v1.json (attached) includes system templates, few-shot examples for triage/summarization, and output formatting constraints. Please review and mark any output-schema constraints (e.g., JSON fields you need).
+
+Operational notes for the run:
+- We'll run the three recommended models on a dedicated Redwood slot so numbers are reproducible.
+- For cost benchmarking, we'll test int8/quantized configs and a fp16 baseline.
+- We'll deliver a per-model CSV of outputs + a scoring report and a short write-up of edge-case failures.
+
+Attachments: sample_dataset_template.csv, prompt_set_v1.json
+
+If this works I can schedule the eval kickoff (I have capacity on May 6 10:00 AM PT). Who from your side will be on the call?
+
+— Karthik Iyer
+Solutions Engineer, Redwood Inference
+karthik_iyer@redwood.com
+
+-- attachment: sample_dataset_template.csv (csv, 3KB)
+-- attachment: prompt_set_v1.json (json, 18KB)
+-- related link: https://drive.google.com/drive/folders/1aB2cEvalSpecs_Cairn
+
+From: Alex Holmes <alex.holmes@cairnhealth.com>
+To: karthik_iyer <karthik_iyer@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: Maya Gupta <maya.gupta@cairnhealth.com>, procurement@cairnhealth.com
+Date: Fri, 30 Apr 2026 09:12:00 -0700
+Subject: Re: Recap: Cairn Health discovery — eval approach & next steps
+
+Karthik, Stephanie — this is perfect and detailed, thanks.
+
+Maya and I will prepare the masked CSV per the template. I'll confirm attendees for the May 6 10:00 AM PT kickoff (we'll include product, infra, and procurement).
+
+Procurement — copying our contact; if Redwood can send a short statement of work + estimated cost for the 2k-sample eval and a link to your standard MSA/NDA, that will speed the PO process.
+
+Action items I see:
+- Cairn: deliver masked sample CSV (by May 4 EOD) — Maya
+- Redwood: send SOW/estimate + MSA/NDA links and confirm kickoff invite — Stephanie
+- Redwood: confirm dedicated slot & model configs we will run — Karthik
+
+Thanks — Alex
+
+On Fri, Apr 30, 2026 at 8:03 AM karthik_iyer <karthik_iyer@redwood.com> wrote:
+> Alex / Maya — tagging in technical detail and the sample files. Quick answers up front, then specifics below....

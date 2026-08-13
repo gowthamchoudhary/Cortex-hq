@@ -1,0 +1,136 @@
+Operational readiness: telemetry workback and go-live workshop
+
+From: Amelia Torres <amelia.torres@datagrid.io>
+To: neha_kapoor@redwood.ai
+Cc: marissa_cole@redwood.ai
+Date: 2026-11-28T09:12:00-08:00
+Subject: Observability handoff & go-live prep for DataGrid
+
+Hi Neha,
+
+Thanks again for the demo last week — the execs liked the low-latency metrics and the KV cache examples. We're aiming for a staged go-live the week of Dec 7 and want to lock the operational runbook and alerting before then. Attached is our updated telemetry requirements document (telemetry_requirements_v2.pdf).
+
+Key asks from our side:
+- A short runbook template we can adopt (playbook for service degradation, spike handling)
+- Dashboards for request latency, error taxonomy by component, feature-flagged traffic splits
+- Tracing hook snippets for our Go and Node services (we currently use OpenTelemetry)
+- Alert routing plan: who gets pages vs. Slack pings vs. ops-email
+
+Can we run a 60-minute workshop next week to walk through the templates and finalize owners?
+
+Thanks,
+Amelia
+Amelia Torres
+Director, Platform Engineering
+DataGrid
+
+Attachment: telemetry_requirements_v2.pdf (PDF, 420KB)
+From: neha_kapoor@redwood.ai
+To: Amelia Torres <amelia.torres@datagrid.io>
+Cc: marissa_cole@redwood.ai, connor_obrien@redwood.ai
+Date: 2026-11-28T10:03:00-08:00
+Subject: Re: Observability handoff & go-live prep for DataGrid
+
+Hi Amelia — thanks for the clear checklist and the timeline. We're aligned to support the staged go-live Dec 7. Proposed plan:
+
+1) Discovery workshop (60 mins) — confirm service map, existing traces, and SLO targets (owner: Marissa)
+2) Runbook + alert matrix draft — Connor will draft and Neha will validate with CS & engineering
+3) Tracing hooks and dashboard templates — Marissa to provide example snippets for Go/Node and a dashboard JSON template
+4) Cutover playbook (short checklist for the day-of) — joint owner: DataGrid ops + Redwood CS
+
+Proposed workshop slots:
+- Tue Nov 30 10:00–11:00 PT
+- Wed Dec 1 14:00–15:00 PT
+
+I've attached a starter checklist we use for migrations (initial-migration-checklist.xlsx). If either slot works for you we'll lock it and Marissa will prepare the dashboard templates beforehand.
+
+Best,
+Neha Kapoor
+Customer Success Manager | Redwood Inference
+neha_kapoor@redwood.ai
+
+Attachment: initial-migration-checklist.xlsx (XLSX, 12KB)
+From: marissa_cole@redwood.ai
+To: Amelia Torres <amelia.torres@datagrid.io>, neha_kapoor@redwood.ai
+Cc: connor_obrien@redwood.ai
+Date: 2026-11-29T08:37:00-08:00
+Subject: Re: Observability handoff & go-live prep for DataGrid
+
+Amelia / Neha — jumping in with the technical plan for the workshop and a few pre-reads. High-level notes below; I'll bring concrete dashboard JSONs to the session.
+
+Dashboards
+- Owner: Marissa Cole (Redwood)
+- Core panels: 95th/99th latency by endpoint, tail-latency histogram, request volume by model version, per-model token cost burn rate, error taxonomy heatmap by service/component
+- SLO suggestions: availability 99.9% request success, P95 latency target 300ms for interactive paths
+
+Tracing hooks
+- We support OpenTelemetry — recommended instrumentation snippets (Go/Node) will be posted to the Drive link you shared. Key: ensure we pass the trace id as x-trace-id and propagate across internal proxies.
+
+Error taxonomy & alert routing
+- Proposed taxonomy levels: INFO/DEGRADED/CRITICAL
+- CRITICAL alerts (service down, high error-rate > 5% sustained 5m) -> PagerDuty (primary oncall), Slack #dg-prod-alerts (ops channel), email to SRE leads
+- DEGRADED (increased latency, partial errors) -> Slack @channel and JIRA ticket auto-created for triage
+
+Pre-reqs for effective workshop
+- Sample traces for the top 3 endpoints (please share links or .zip)
+- A list of current oncall emails and escalation policy
+- Access to your Grafana/CloudWatch dashboards for one-hour read-only window
+
+Attachment: dashboard-templates.json (JSON, 8KB) — draft templates I will refine after the workshop.
+
+—Marissa
+Marissa Cole
+Solutions Architect, Redwood Inference
+From: Amelia Torres <amelia.torres@datagrid.io>
+To: neha_kapoor@redwood.ai, marissa_cole@redwood.ai
+Cc: DataGrid Ops <ops@datagrid.io>
+Date: 2026-11-29T12:22:00-08:00
+Subject: Re: Observability handoff & go-live prep for DataGrid
+
+Thanks — Nov 30 10:00 PT works for the wider team. I've uploaded a small sample of traces and our service map to the Drive folder: https://drive.google.com/drive/folders/1a2B3cDataGrid-Telemetry
+
+Pre-reqs:
+- We'll share the oncall rotation (ops@datagrid.io) and provide a read-only Grafana API key by EOD Nov 30
+- We'll also give you the list of feature-flagged endpoints we plan to route to Redwood for the first week
+
+Looking forward to the session. Please send a calendar invite and an agenda with the link to the Zoom.
+
+Amelia
+
+> On Nov 28, 2026, at 10:03 AM, neha_kapoor@redwood.ai wrote:
+> > Can we run a 60-minute workshop next week to walk through the templates and finalize owners?
+
+Attachment: (links in message)
+From: connor_obrien@redwood.ai
+To: neha_kapoor@redwood.ai, marissa_cole@redwood.ai, Amelia Torres <amelia.torres@datagrid.io>
+Cc: laura_bennett@redwood.ai
+Date: 2026-11-30T16:42:00-08:00
+Subject: Re: Observability handoff & go-live prep for DataGrid — workshop notes and owners
+
+Folks — notes from today's workshop and agreed next steps (summary):
+
+1) Owners & immediate actions (this week)
+- Dashboard templates (Marissa) — finalize templates and post JSON to Drive by Dec 2
+- Tracing snippets & instrumentation guide (Marissa) — create short code examples for Go/Node and open a PR with instrumentation callouts
+- Runbook draft (Connor) — I'll push runbook-draft.md to the shared folder; Neha to review for CS runbook actions
+- Alert thresholds & routing (Neha + DataGrid Ops) — DataGrid to confirm final oncall emails; Neha will propose thresholds for CRITICAL and DEGRADED alerts by Dec 1
+
+2) Decisions made
+- CRITICAL = error rate > 5% sustained for 5 minutes OR service unavailable -> PagerDuty + Slack + email
+- DEGRADED = P95 latency breach for 10 minutes -> Slack + JIRA ticket
+- Use existing DataGrid Grafana with Redwood dashboard JSON import; Redwood will maintain read-only copies for the first 30 days post-go-live
+
+3) Dependencies
+- DataGrid to provide read-only Grafana API key and sample traces by EOD Nov 30 (Amelia confirmed earlier today)
+- Redwood to deliver dashboard templates and runbook draft by Dec 2
+
+4) Next milestone: Dec 2 checkpoint (30-min sync) to sign off on templates and thresholds.
+
+Attachments: runbook-draft.md (MD, 6KB)
+
+Connor O'Brien
+Partner Onboarding Lead | Redwood Inference
+connor_obrien@redwood.ai
+
+> On Nov 29, 2026, at 08:37 AM, marissa_cole@redwood.ai wrote:
+> > I'll bring concrete dashboard JSONs to the session.

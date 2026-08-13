@@ -1,0 +1,125 @@
+Acme compliance: BYOK, audit exports, retention & deployment options
+
+From: Gwen Peters <gwen.peters@acmehealth.com>
+To: mina_haddad@redwood.com, dev_patel@redwood.com
+Cc: security@acmehealth.com
+Date: 2026-07-16T09:12:00-07:00
+Subject: Request: BYOK + audit logs, retention window options
+
+Hi Mina / Dev team,
+
+Quick intro — I'm Gwen on Acme Health's InfoSec team. We're evaluating Redwood for a pilot and have three compliance-critical asks before legal will approve any integration: 
+
+- BYOK/KMS: customer-managed key material for data-at-rest encryption (non-exportable keys preferred). We need details on supported KMS providers and whether envelope encryption with customer keys is possible.
+- Audit logs: full request/response audit stream with per-token metadata for 12 months, or an export mechanism our SIEM can ingest daily.
+- Retention & deletions: configurable retention windows and a documented deletion workflow for customer data (including cached KV/prefix caches).
+
+I've attached our questionnaire (Acme_Security_Questions.pdf). Can you let me know the realistic options (hosted vs. dedicated vs. private) and a timeline for each ask? This is time-sensitive for our Q4 go-live.
+
+Thanks,
+Gwen Peters
+Senior Security Engineer
+Acme Health
+
+Attachments: Acme_Security_Questions.pdf (PDF, 340KB)
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Gwen Peters <gwen.peters@acmehealth.com>
+Cc: dev_patel@redwood.com, evelyn_hart@redwood.com
+Date: 2026-07-16T10:05:00-07:00
+Subject: Re: Request: BYOK + audit logs, retention window options
+
+Thanks Gwen — we got the questionnaire. I'm looping in engineering and product so we can give concrete options. High level:
+
+- Hosted API: fastest onboarding but limited BYOK support today. We can provide audit export and configurable retention in the short term, but BYOK for hosted tokens is not typical without dedicated/private isolation.
+- Dedicated: supports more controls (customer KMS via envelope encryption for storage keys, configurable retention/export).
+- Private: full BYOK/HSM support and fine-grained retention/deletion controls — most flexible but requires more lead time.
+
+Can we set a 30-minute triage call? I'd like to confirm whether Acme requires non-exportable HSM keys or a managed KMS (e.g., customer-managed keys in AWS KMS/GCP KMS). Also note: audit exports can be delivered to an S3 location or streamed to a partner SIEM.
+
+Proposed times: Tue 7/21 10am PT or Wed 7/22 2pm PT.
+
+I'll prepare a short mutual action plan and send the initial implementation estimate.
+
+– Mina Haddad
+Enterprise Account Exec, Redwood Inference
+Phone: +1 (415) 555-0193
+
+Attachments: (none in this message)
+From: Dev Patel <dev_patel@redwood.com>
+To: Mina Haddad <mina_haddad@redwood.com>, Gwen Peters <gwen.peters@acmehealth.com>
+Cc: evelyn_hart@redwood.com
+Date: 2026-07-16T15:28:00-07:00
+Subject: Re: Request: BYOK + audit logs, retention window options
+
+Thanks — quick technical notes from infra: 
+
+1) BYOK/KMS
+- Hosted API: we don't currently let customers upload their own master key for the multi-tenant hosted control plane. We can offer envelope encryption where a Redwood-managed key wraps customer data keys, but that doesn't meet "non-exportable HSM" requirements.
+- Dedicated: feasible to integrate with customer KMS via envelope encryption and key policies; require an admin workflow to install customer key metadata and rotation policies.
+- Private: full support for customer HSM / KMS (bring-your-own-key) including HSM-backed key origin and rotation; requires additional runtime and key-handling code paths.
+
+2) Audit logs
+- We have an "AuditStream" pipeline (internal proto) that can: stream raw events to S3, BigQuery, or push to a SIEM via partner connectors. Event schema includes request id, model id, route, timestamp, token counts; it currently does NOT capture full response text by default (privacy); can be extended if needed but that has cost and privacy tradeoffs.
+
+3) Retention/deletion
+- We can configure retention per-account (default 90d) and offer export before deletion. Deleting KV/prefix caches requires a background sweep and can't be instantaneous for large caches; estimate 24–72 hours for thorough purge depending on size.
+
+Rough implementation estimate attached; this is a cross-team effort (serving runtime, infra, security review).
+
+Questions for Acme: do you need full response bodies in the audit stream? Do you require HSM-backed non-exportable keys or is a customer-managed cloud KMS sufficient?
+
+– Dev
+Staff Engineer, Serving Runtime
+
+Attachments: implementation_estimate.md
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Mina Haddad <mina_haddad@redwood.com>, Dev Patel <dev_patel@redwood.com>
+Cc: Marcus Lin <marcus_lin@redwood.com>
+Date: 2026-07-17T11:02:00-07:00
+Subject: Re: Request: BYOK + audit logs, retention window options
+
+Following up with product recommendations and proposed roadmap placement. Key points: 
+
+MVP (deliverable for sales/enterprise 90-day target):
+- Audit export to S3 with daily delivery and 90-day configurable retention. No default full response logging unless customer signs a privacy waiver — we should keep token counts and metadata in audit by default.
+- Dedicated offering: implement customer KMS integration via envelope encryption (supported cloud KMS providers first: AWS KMS, GCP KMS). This should satisfy most customers that do not demand HSM non-exportable keys.
+
+Roadmap after MVP (Q1 next year):
+- Private deployment BYOK/HSM support (non-exportable keys) and on-prem key management integrations.
+- Fine-grained deletion APIs and faster cache purge tooling.
+
+Tradeoffs and asks:
+- Legal needs to review wording around "full response logging" and data subject rights (Marcus, can you take point?)
+- Security review for KMS key-handling and rotation policies (need security sign-off before Dedicated ship).
+- Engineering: need a 4-sprint effort estimate for Dedicated KMS path; Dev, can you and infra break down into tickets (INF-452, INF-453, INF-454)?
+
+I added a short plan on Confluence: https://confluence.redwood.com/display/INF/Acme+Compliance+Requests. If Acme accepts the MVP scope, we can close the action items in our MAP and aim to present to their procurement next week.
+
+– Evelyn Hart
+Product Manager, Redwood Inference
+
+Quoted text from Mina Haddad:
+> Can we set a 30-minute triage call? I'd like to confirm whether Acme requires non-exportable HSM keys or a managed KMS (e.g., customer-managed keys in AWS KMS/GCP KMS).
+
+Attachments: (none)
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Gwen Peters <gwen.peters@acmehealth.com>
+Cc: dev_patel@redwood.com, evelyn_hart@redwood.com, marcus_lin@redwood.com
+Date: 2026-07-19T16:03:00-07:00
+Subject: Re: Request: BYOK + audit logs, retention window options — next steps
+
+Gwen — thanks for everyone's input. Proposed next steps and owners: 
+
+1) Acme to confirm whether HSM non-exportable keys are an absolute requirement or if customer cloud KMS (AWS/GCP) is acceptable (Acme action).
+2) Dev/Infra: prepare a 4-sprint rough plan for Dedicated KMS path (tickets: INF-452 / INF-453). Owner: Dev Patel. Target: initial estimate by 7/23.
+3) Product: prepare an MVP scope doc for sales (90-day retention, S3 audit export, Dedicated KMS envelope flow). Owner: Evelyn Hart. Target: 7/22.
+4) Legal: review privacy implications of including response bodies in audit stream if Acme requests them. Owner: Marcus Lin. Target: 7/24.
+5) Sales/Acme: schedule a 30-minute technical triage. Proposed: Tue 7/20 10:00am PT. I'll send a calendar invite and attach the mutual action plan and the implementation estimate.
+
+If Acme needs an expedited timeline, we can escalate the Dedicated KMS work to priority with a cost adder. Gwen — please confirm the triage slot and whether cloud KMS meets your baseline.
+
+Mina Haddad
+Enterprise Account Exec, Redwood Inference
+
+Attachments referenced: mutual_action_plan.xlsx, implementation_estimate.md
+Links: DocuSign NDA placeholder: https://www.docusign.com/placeholder/acme-nda

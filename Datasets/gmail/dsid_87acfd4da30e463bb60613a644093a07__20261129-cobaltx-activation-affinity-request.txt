@@ -1,0 +1,121 @@
+Urgent: CobaltX activation affinity & model-pinning request
+
+From: Priyom Das <priyom_das@redwood.com>
+To: Jasmine Liu <jasmine_liu@redwood.com>, Ben Carter <ben_carter@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Cc: Connor O'Brien <connor_obrien@redwood.com>
+Date: Sun, 29 Nov 2026 09:12:00 -0800
+Subject: CobaltX pilot: per-tenant activation affinity + model pinning ask
+
+Team —
+
+Quick context: CobaltX (see contacts below) is moving to a pilot with a mid-sized finance product. They signed the LOI (attached) and have two non-negotiable asks to close:
+
+1) Deterministic model behavior per tenant: they want the same model variant and quantization profile pinned to their tenant for the duration of the pilot to avoid subtle drift across responses.
+2) Activation affinity window: they need guaranteed capacity (warm pool / activation window) during peak hours (09:00–18:00 ET) for a 2-week pilot so their demo traffic is deterministic.
+
+Ask: what minimal engineering/product commitments do we need to make (and how quickly) to deliver a canary that satisfies both asks? The customer expects a canary by the third week of December.
+
+Attached: cobaltx_map_v1.pdf (mutual action plan) and the LOI.
+
+Customer contacts: Sam Wolver (CTO), Priyanka Rao (Head of Engineering) — cc'd on the external thread we had.
+
+Key constraints we expect: must avoid full Dedicated procurement if possible (customer prefers hosted with guarantees). I'm looking for:
+- Product clarification on what 'pinning' exactly implies for routing & rollout.
+- Eng estimate for per-tenant residency/pinning work or routing-level soft pins.
+- Ops gaps: telemetry & rollback plan for pilot.
+
+If we can get a short note with options and rough timelines today/tomorrow I can close the loop with Sam and push for the canary commit.
+
+Thanks —
+Priyom
+Priyom Das
+Enterprise AE | Redwood Inference
+
+From: Jasmine Liu <jasmine_liu@redwood.com>
+To: Priyom Das <priyom_das@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, Connor O'Brien <connor_obrien@redwood.com>
+Date: Mon, 30 Nov 2026 11:22:00 -0800
+Subject: Re: CobaltX pilot: per-tenant activation affinity + model pinning ask
+
+Thanks for the context Priyom —
+
+High level thoughts / questions:
+
+- \"Pinning\" can mean a spectrum: (A) soft routing preference with TTL (route tenant X to model v1 unless capacity forces fallback), (B) strict residency (allocated warm pool pinned to tenant + model), or (C) model-variant lock on the control plane (requests always see the same model artifact but may run on shared pools). Each has different cost/complexity.
+
+- If customer is set on deterministic outputs, soft routing (A) carries risk under contention; (B) is safest but looks like a Dedicated-style commitment.
+
+Questions for CobaltX we should surface now:
+1) Expected sustained QPS at pilot peak and 95th percentile latency SLA they need.
+2) Appetite for a short reserved capacity commitment (even a small burst pool) vs. strict hosted SLA.
+
+Ben / Laura — can you outline the engineering delta between options A/B/C above and give a ballpark lead time (days/weeks) and a safety checklist (telemetry, rollback)? If we can offer a hybrid (soft routing + short reserved burst windows) as an interim canary that would be ideal — can that be instrumented with current runtime?
+
+I can handle the customer call and calibrate expectations once we have those inputs.
+
+Jasmine
+Product Lead — Runtime
+
+On Sun, Nov 29, 2026 at 09:12 AM Priyom Das <priyom_das@redwood.com> wrote:
+> Team —
+> ... (original message)
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Jasmine Liu <jasmine_liu@redwood.com>, Priyom Das <priyom_das@redwood.com>
+Cc: Laura Bennett <laura_bennett@redwood.com>, Connor O'Brien <connor_obrien@redwood.com>
+Date: Tue, 01 Dec 2026 08:46:00 -0800
+Subject: Re: CobaltX pilot: per-tenant activation affinity + model pinning ask
+
+Short answer: feasible, with trade-offs. Longer:
+
+Option A — Soft routing + TTL (lowest effort): ~1–2 engineering sprints (2–4 weeks) to add tenant routing TTLs, dashboards, and a policy that avoids fallback for pinned tenants except under critical capacity pressure. Pros: fast, no infra churn. Cons: not strictly deterministic if we hit contention.
+
+Option B — Tenant residency (hard pin / warm pool): requires allocation changes to scheduler, tenant affinity keys in serving runtime, and warm-pool orchestration: estimate 6–8 weeks (including testing + canary). Pros: deterministic behavior, predictable latency. Cons: increased resource costs and provisioning work; edges toward Dedicated semantics.
+
+Option C — Control-plane model-lock (artifact-level pinning): small effort to ensure model version is fixed per tenant in control plane (~1–2 weeks) but requests still run on shared pools — good middle ground if customer accepts best-effort latency.
+
+Interim workaround we can offer this month: 1) model artifact lock + 2) scheduled burst reservations during their peak demo windows (automation to pre-warm KV cache) — this would give near-deterministic outputs for a limited window while we execute a longer-term residency plan. We have an internal draft spec (pinning_spec_draft.md) attached.
+
+Critical engineering notes:
+- KV cache pre-warm hooks exist but need an ops playbook to trigger per-tenant.
+- Rollback is straightforward if we keep control-plane lock reversible; warm-pool changes need runbook for de-provisioning.
+
+If Sales wants a firm canary date in December, the interim workaround is the only realistic path unless CobaltX accepts a small Dedicated commitment.
+
+Ben
+Sr. Engineering Manager, Serving Runtime
+
+On Mon, Nov 30, 2026 at 11:22 AM Jasmine Liu <jasmine_liu@redwood.com> wrote:
+> Thanks for the context Priyom —
+> ... (Jasmine's message)
+
+From: Priyom Das <priyom_das@redwood.com>
+To: Jasmine Liu <jasmine_liu@redwood.com>, Ben Carter <ben_carter@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Cc: Connor O'Brien <connor_obrien@redwood.com>, Sam Wolver <sam.wolver@cobaltx.com>, Priyanka Rao <p.rao@cobaltx.com>, procurement@cobaltx.com
+Date: Wed, 02 Dec 2026 16:03:00 -0800
+Subject: Re: CobaltX pilot: per-tenant activation affinity + model pinning ask
+
+Team — thanks for the quick turnaround. Summary and MAP below so we have a single artifact for deal ops / product / eng to act on.
+
+Mutual Action Plan (summary):
+- Dec 3: Product confirms which option we will propose to CobaltX (A: soft routing + TTL + artifact lock; B: hard residency; or hybrid). (owner: Jasmine)
+- Dec 4–9: Eng builds interim automation for model artifact lock + pre-warm hook and runs internal canary. (owner: Ben)
+- Dec 10: Redwood internal canary sign-off; red team smoke test. (owner: Ben + Jasmine)
+- Dec 13: Present interim canary plan to CobaltX and schedule pilot windows (customer peak: 09:00–18:00 ET). (owner: Priyom)
+- Dec 20: Customer canary (target date). (owner: CobaltX + Redwood)
+
+Open asks / decisions needed:
+1) Jasmine: which of A/B/C do we present as "recommended" for the pilot? Product rationale + a short blurb I can share with Sam.
+2) Ben: confirm resource/time for the interim automation (are the dates above realistic). Also flag any blocking PRs / infra tickets we need to triage now.
+3) Laura: legal / procurement note — if we slip into a Dedicated-ish reservation, what procurement steps & timeline do we need to surface to CobaltX?
+
+Related links: HubSpot deal (linked), DocuSign LOI (attached).
+
+If we can lock on options and owners today, I’ll update the MAP PDF and send to Sam/Priyanka tomorrow morning. They are excited but want clear commitments.
+
+—Priyom
+Enterprise AE | Redwood Inference
+
+> On Tue, Dec 1, 2026 at 08:46 AM Ben Carter <ben_carter@redwood.com> wrote:
+> > Short answer: feasible, with trade-offs. Longer:
+> > ... (Ben's message)

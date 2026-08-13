@@ -1,0 +1,130 @@
+RFI: SLA measurement, sampling and burst-window attribution for Atlas Health
+
+From: Olivia Barnes <olivia@atlashealth.io>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Date: Mon, 30 Nov 2026 08:12:00 -0800
+Subject: RFI: SLA measurement and burst-window handling for Atlas Health
+
+Hi Kimberly,
+
+Thanks for taking this RFI. As part of Atlas Health's procurement review we need detailed answers on how Redwood measures SLA/SLOs for the hosted inference API. Specifically:
+
+- How is availability defined and measured (per-request vs per-second sampling)?
+- How do you treat retries, client-side vs server-side? Are retries de-duplicated when calculating availability?
+- For short-duration spikes (bursts), what windowing/attenuation do you apply before assigning a breach and before service-credit calculation?
+- Do batching and KV-cache hits affect latency measurement (i.e., are internal batching delays attributed to Redwood)?
+
+We also need sample telemetry (1 week's worth) showing raw request logs, sampling decisions, and a worked example of a credit calculation for a multi-region customer. Procurement timeline: we need your response within 5 business days to keep to our vendor shortlist.
+
+Appreciate any attachments or links to the measurement spec.
+
+Best,
+Olivia
+Procurement Lead, Atlas Health
+[attachment: rfi-atlas-questionnaire.xlsx]
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Olivia Barnes <olivia@atlashealth.io>
+Cc: Dev Patel <dev_patel@redwood.ai>, Markus Klein <markus_klein@redwood.ai>
+Date: Mon, 30 Nov 2026 09:05:00 -08:00
+Subject: Re: RFI: SLA measurement and burst-window handling for Atlas Health
+
+Hi Olivia — thanks for the clear list. Putting a concise answer together and looping in Dev and Markus for the telemetry and calculation examples. Attached: a summary of our SLA measurement approach and a small sample telemetry extract.
+
+High level answers up front:
+- Availability is measured at the request level (successful HTTP 2xx within configured timeouts) and aggregated over 5m windows for crediting.
+- Retries are logged with a unique request_id; server-side retries (automatic fallbacks inside the Redwood runtime) are considered part of the single logical request and are de-duplicated for availability counting. Client-side retries that re-submit a different request_id are treated as independent attempts.
+- Short bursts: we use a burst attenuation policy that ignores transient traffic anomalies under certain thresholds (default: any outage shorter than 30s and affecting <1% of requests in the minute is not immediately credited; the full 5m aggregation still applies). We can adjust thresholds in the contract.
+- Batching: server-side batching increases per-request processing delay but we attribute latency to the model that served the request, including batch queuing time. We publish both end-to-end (ingress to response) and execution (runtime-only) percentiles so you can choose which aligns with your SLOs.
+
+Attachments: redwood-sla-measurement-summary.pdf, atlas-sample-telemetry.csv
+
+I'll follow up with a worked credit example and a short appendix on sampling and synthetic probes.
+
+Regards,
+Kimberly Park
+Head of Sales, Redwood Inference
+redwood.ai | kimberly_park@redwood.ai
+
+From: Dev Patel <dev_patel@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Olivia Barnes <olivia@atlashealth.io>
+Cc: Markus Klein <markus_klein@redwood.ai>
+Date: Mon, 30 Nov 2026 11:42:00 -08:00
+Subject: Re: RFI: SLA measurement and burst-window handling for Atlas Health
+
+Hi Olivia — quick technical addendum to Kimberly's summary with precise rules we apply (note: shortened for email, full spec attached).
+
+1) Timestamps and aggregation
+- Ingress timestamp is assigned at the edge (first Redwood ingress) and stored with the request_id. Our canonical measurement uses ingress -> final-response timestamp for end-to-end latency.
+- Aggregation window: 5-minute non-overlapping windows aligned to UTC. We also compute rolling 1m and 15m windows for observability.
+
+2) Availability definition
+- Success: final status code in 2xx (or 3xx for redirect workflows) and response seen before the configured request timeout.
+- Failure: 5xx, network connection failure, or timeout. If a request is retried server-side (same request_id) and any attempt succeeds, the logical request is counted as success.
+
+3) Retries and de-duplication
+- For client retries that create new request_ids, we count each as a distinct attempt; however, for crediting we attempt to map related attempts by client-provided idempotency_key when present and coalesce.
+
+4) Bursts and attenuation
+- Short bursts are common. Crediting pipeline: (a) detect window with anomalous error rate relative to baseline, (b) require persistence over a minimum duration (default 2 minutes of sustained elevated errors) before automatic credit determination, (c) perform root-cause correlation (e.g., model overload vs network path) before final crediting.
+- We provide a pre-claim report within 24 hours when a potential breach is detected; final credit decisions follow our dispute window (30 days) with evidence bundle.
+
+5) Batching, KV-cache, and attribution
+- Batching is considered internal scheduling. Latency reported in "execution" percentiles excludes client queuing time prior to ingress but includes batching queue time inside the runtime. KV-cache hits are flagged: we publish separate percentiles for cached vs uncached responses to aid attribution.
+
+6) Sampling and telemetry export
+- We store full logs for 30 days by default. For long-term retention we provide sampled exports (default: 1% random sampling plus targeted retention of incidents). Sampled telemetry in the attachment shows the fields we can export: timestamp, request_id, request_path, status_code, latency_ms, model_variant, region, cached (true/false), retry_count.
+
+If you want, we can produce a one-week unredacted export under an NDA.
+
+—Dev
+Director, Serving Infra
+Redwood Inference
+[attachment: measurement-spec-addendum.md]
+
+From: Olivia Barnes <olivia@atlashealth.io>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Cc: Dev Patel <dev_patel@redwood.ai>, Samir Desai <s.desai@atlashealth.io>
+Date: Tue, 01 Dec 2026 10:15:00 -08:00
+Subject: Re: RFI: SLA measurement and burst-window handling for Atlas Health
+
+Thanks Kimberly and Dev — very helpful. Two follow-ups:
+
+1) Can you provide a worked example of a service-credit calculation for a cross-region deployment where one region experienced a 6-minute elevated error period (p95 errors) but global availability over the 5m windows still meets the published thresholds due to traffic failover? How would attribution and credits be handled?
+
+2) Procurement would like a link to your standard crediting matrix and the exact thresholds you apply so we can map to our internal risk model.
+
+We are still on the 5-business-day schedule; appreciate expedited examples if possible.
+
+Best,
+Olivia
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Olivia Barnes <olivia@atlashealth.io>
+Cc: Dev Patel <dev_patel@redwood.ai>, Markus Klein <markus_klein@redwood.ai>
+Date: Thu, 02 Dec 2026 11:20:00 -08:00
+Subject: Re: RFI: SLA measurement and burst-window handling for Atlas Health
+
+Hi Olivia — attached is a brief worked example and our standard crediting matrix. Summary below.
+
+Worked example (cross-region failure, simplified):
+- Scenario: Region-A experiences elevated errors from 12:04:00 UTC to 12:10:00 UTC (6 minutes). Traffic had a planned DR failover such that 70% of traffic remained routed to Region-A and 30% shifted to Region-B.
+- Measurement: We compute per-region 5m windows (12:05-12:10 UTC) and global 5m window by aggregating all ingress records. Region-A shows 87% availability in the 12:05-12:10 window; Region-B shows 99.8% availability; global availability for that window is 95.6%.
+- Crediting: Our standard contract defines availability SLOs per-region and a global availability SLO. If the per-region SLO was breached (Region-A), Region-A's customers can claim a regional credit under the per-region clause. Global SLOs are evaluated separately — if global SLO remains met, no global credit is automatically applied.
+- Attribution nuance: If your traffic routing was under Redwood's managed routing policy and we failed to divert traffic appropriately, we accept responsibility for global impact. If you managed failover (e.g., custom DNS/edge policies at Atlas), crediting uses attribution logic that factors in your routing decisions. We document these attribution rules in section 3 of the attached matrix.
+
+Key excerpts from our crediting matrix (attached):
+- Measurement window: 5m UTC alignment for crediting
+- Burst attenuation: outages <30s and impacting <1% requests are excluded from automatic credit decisions; sustained >2m elevated error rate triggers pre-claim review
+- Credit tiers: 99.9-99.95% => 5% monthly service credit, 99.5-99.9% => 15%, <99.5% => 30% (per-region) — negotiable for large commitments
+
+Attachments: crediting-examples.xlsx, redwood-sla-measurement-summary.pdf (see section 3 for attribution rules). We can produce a tailored example using Atlas's traffic profile if you share an anonymized sample.
+
+If that works, I can have our legal/procurement team produce the contract appendix with the thresholds inline.
+
+Thanks — happy to jump on a quick call to walk through the math.
+
+Regards,
+Kimberly Park
+Head of Sales, Redwood Inference
+[attachment: crediting-examples.xlsx]

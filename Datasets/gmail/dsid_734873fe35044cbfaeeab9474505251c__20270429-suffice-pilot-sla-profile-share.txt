@@ -1,0 +1,109 @@
+Suffice AI discovery — performance profiles, SLOs & pilot prep
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Alex Morgan <alex.morgan@supriflow.ai>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: 2027-04-29T08:15:00-07:00
+Subject: Suffice discovery recap + initial perf recommendations
+
+Alex — thanks again for taking the call this morning. Quick recap from our side and suggested next steps so we have a clear pilot plan.
+
+Key points from discovery:
+- Primary workload: document classification + short-form generation for internal support responses (typical prompt length 30–80 tokens).
+- Traffic pattern: bursty during business hours, ~120 peak concurrent requests, average QPS ~8 outside bursts.
+- Latency target: p95 <= 250ms for inference; p99 target for critical flows <= 400ms.
+- Quality sensitivity: a small drop in answer relevancy is acceptable for cost savings up to ~3% labeled degradation. Anything beyond that requires rollback.
+
+Redwood-first recommendations (pilot):
+1) Model candidates:
+   - rw-medium-8bit-v1 (recommended baseline): good balance of generation quality and throughput; we verified stable p95 latency in our hosted tests for 32-token responses.
+   - rw-small-quant-v2 (cost-optimized fallback): lower cost per token, best for high-concurrency classification calls.
+
+2) Performance expectations (Redwood-verified profiles):
+   - rw-medium-8bit-v1: sustained TPS 260 token/s per GPU NVidia A10G equivalent; latency percentiles observed in our sandbox (32-token prompt + 64-token gen): p50 90ms, p95 220ms, p99 360ms.
+   - rw-small-quant-v2: sustained TPS 480 token/s; p50 60ms, p95 150ms, p99 260ms.
+   Note: these numbers assume our continuous-batching policy with 16ms batching window and KV cache enabled for repeated prompts.
+
+3) Suggested pilot configuration:
+   - 2 dedicated GPUs (reserved) for initial 2-week pilot, autoscale to 4 GPUs on sustained breach of 70% GPU utilization.
+   - Prefix caching for common support prompts and a small prompt set (attached) to monitor quality regressions.
+
+What I attached: redwood_profile_suffice_v1.pdf (full perf profile + test config), and a starter prompt set (suffice_prompt_set_v1.json). Also shared the perf profile link in case you want to pass it to your infra team.
+
+Next steps / asks:
+- Can you confirm the p99 SLO acceptability and whether the procurement team needs an SLA addendum?
+- Marcus/Neha: can you confirm the cost delta between 2 vs 4 GPUs for the pilot and a rough estimate for a 30-day pilot?
+- Alex: would you like us to run an on-call readiness review with your infra folks this week?
+
+Thanks — happy to jump on a short follow-up if helpful.
+
+— Tessa
+Tessa Morgan
+Account Executive, Redwood Inference
+
+From: Alex Morgan <alex.morgan@supriflow.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>
+Cc: Procurement <procurement@supriflow.ai>
+Date: 2027-04-29T09:02:00-07:00
+Subject: Re: Suffice discovery recap + initial perf recommendations
+
+Thanks Tessa — this is really helpful. A few clarifying notes from our side: 
+- The p99 <= 400ms is our hard SLO for any customer-facing generation path. For internal classification (support tagging) we can relax to p99 <= 500ms. So your rw-medium-8bit-v1 p99 of 360ms is acceptable for generation but we'd like to see more headroom for spikes.
+- Traffic spikes can reach ~220 concurrent requests for short windows (15–30 minutes) during product launches. If we hit that in pilot we'll likely need burst capacity.
+
+Procurement chimed in and wants a simple pricing heads-up before we proceed with formal paperwork. Also, can you confirm whether Redwood profiles include tokenization and network overhead assumptions? Our infra team will need that to model end-to-end latency.
+
+If you can get a quick note from Marcus about expected TPS-to-GPU mapping and a sample cost table, we can align procurement and legal. Would prefer a kickoff next Tue morning (PST).
+
+— Alex
+VP Product, Suffice AI
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Alex Morgan <alex.morgan@supriflow.ai>, Tessa Morgan <tessa.morgan@redwood.ai>
+Cc: Neha Kapoor <neha.kapoor@redwood.ai>
+Date: 2027-04-29T10:27:00-07:00
+Subject: Re: Suffice discovery recap + initial perf recommendations
+
+Alex — quick technical follow-up with the numbers you asked for and a small caveat on measurement methodology.
+
+End-to-end assumptions in our perf profiles:
+- Tokenization included on the host (BPE); numbers reflect server-side tokenization cost.
+- Network assumptions: 1x 10Gbps NIC, RTTs typical within same region (us-west) ~2–5ms; profiles do not include additional cross-region network delay.
+- Measured with continuous-batching (16ms), KV cache hit-rate ~18% for repeated prefixes in test corpus.
+
+Sustained throughput -> GPU mapping (approx):
+- rw-medium-8bit-v1: one A10G-equivalent GPU supports ~250–280 tokens/sec under our mix (32 token prompts). For your 120 peak concurrent requests with average 60 tokens per request, that's ~7200 tokens/sec peak — implies ~26 GPUs if you require no batching. With Redwood batching & caching we typically cut token/sec demand per GPU by ~6–8x for this workload; conservatively plan for 4–6 GPUs for pilot peak coverage with autoscale/burst to 8 GPUs.
+- rw-small-quant-v2: roughly double throughput per GPU; good candidate for classification-only paths.
+
+Cost sketch for pilot (ballpark):
+- 2 GPUs reserved (baseline): $12k / month (est) — should cover steady daytime QPS with heavy batching.
+- Autoscale to 4 GPUs on sustained 70% utilization: incremental $6k / month.
+- Burst capacity (on-demand) to 8 GPUs during launches: extra $10–15k depending on duration.
+
+Attachments: redwood_profile_suffice_v1.pdf contains the raw percentile traces, test harness parameters, and the prompt set used for cached vs cold runs. suffic_prompt_set_v1.json has ~20 canonical prompts we recommend tracking for quality regression alerts.
+
+Note on quality regression monitoring: we recommend running an initial labeled eval set (we can help seed 200 examples) and setting alerts for automated A/B checks with a 2% significance threshold — triggers an automatic rollback to the fallback model.
+
+Happy to expand the cost table for procurement; I can post an itemized sheet by EOD.
+
+— Marcus
+Senior Solutions Engineer, Redwood Inference
+
+From: Alex Morgan <alex.morgan@supriflow.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: 2027-04-29T12:48:00-07:00
+Subject: Re: Suffice discovery recap + initial perf recommendations
+
+Perfect — thanks both. Procurement: you should have what you need for a preliminary review; I'll share Marcus's cost sketch with legal.
+
+Next steps from our side:
+- I'll confirm procurement's preferred billing cadence and any SLA addendum questions by Friday.
+- Confirmed kickoff: Tue 2027-05-04 09:00 PT for pilot alignment / infra readiness.
+- Please send the itemized pilot cost table and a one-page SLO appendix we can attach to the PO.
+
+If you can also enable read-only access to the perf profile link for our infra team that would speed things up.
+
+Appreciate the quick turnaround.
+
+— Alex
+VP Product, Suffice AI

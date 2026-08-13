@@ -1,0 +1,144 @@
+Dedicated scaling playbook for HyperByte — burst & autoscale
+
+From: Sophia Grant <sophia.grant@hyperbyte.com>
+To: Marcus Lin <marcus_lin@redwood.com>
+Date: 2026-06-08T09:13:00-07:00
+Subject: Dedicated deployment sizing questions + demo day burst
+
+Hi Marcus,
+
+Thanks again for the walkthrough last week. We’re narrowing in on requirements for our Dedicated deployment and I wanted to get your recommendation on burst capacity for two scenarios:
+
+- Demo Day (one afternoon, expected 120k tokens over ~2 hours with many concurrent sessions)
+- Month-end reports (overnight spike, ~600k tokens, lower concurrency but long sequences)
+
+Attached are our traffic projections and a rough timeline (HyperByte_traffic_projections.pdf). The procurement team asked whether burst can be treated as a capped add-on rather than committing to a larger reserved pool.
+
+Can you outline the recommended approach (dedicated base + burst pool, autoscale cooldowns, any warm/vortex pools needed) and a high-level cost delta? We’re trying to decide on a commit level before the next internal sign-off.
+
+Appreciate any guidance — we’re targeting a decision by EOD Thu.
+
+Best,
+Sophia
+Head of Product, HyperByte
+
+---
+Attachment: HyperByte_traffic_projections.pdf (application/pdf)
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Sophia Grant <sophia.grant@hyperbyte.com>
+Cc: Avery Johnson <avery_johnson@redwood.com>, Aditya Rao <aditya_rao@redwood.com>
+Date: 2026-06-08T11:02:00-07:00
+Subject: Re: Dedicated deployment sizing questions + demo day burst
+
+Hi Sophia — thanks for the projections, that helps a lot. Quick thoughts up-front:
+
+- Recommended pattern: reserve a base Dedicated pool sized for steady-state + an opt-in burst pool (pre-warmed vGPU nodes) that can be consumed for short windows.
+- For Demo Day: suggest base = 4 x A100-80GB equiv (handles baseline concurrency), burst = additional 6 x A100-80GB equiv for 2–3 hours (pre-warmed).
+- For Month-end: consider autoscale with a higher max cap (warm cache policy enabled) to avoid cold-start token penalties; set longer cooldown to avoid oscillation.
+
+I’m looping Avery (SE) to provide an ops-level plan (warm pool size, cooldowns, batching strategy) and Aditya to flag any SLA/credit requests for burst overage.
+
+Action items:
+- Avery: recommend concrete pool sizes, autoscale thresholds, suggested cooldown & min-uptime.
+- Marcus (me): follow up with cost delta & mutual action plan for procurement.
+
+I’ll put a short draft MAP in HubSpot after we sync.
+
+—Marcus
+Account Executive, Redwood Inference
+
+From: Avery Johnson <avery_johnson@redwood.com>
+To: Sophia Grant <sophia.grant@hyperbyte.com>, Marcus Lin <marcus_lin@redwood.com>
+Cc: Aditya Rao <aditya_rao@redwood.com>
+Date: 2026-06-08T14:37:00-07:00
+Subject: Re: Dedicated deployment sizing questions + demo day burst
+
+Hi all — digging into the projections. I attached a quick capacity plan (capacity_plan_v1.xlsx) with three profiles: conservative, recommended, and aggressive. Notes below are the recommended (middle) profile and the operational knobs we’d use.
+
+Recommended profile (middle):
+- Base pool: 4 x A100-80GB equiv (handles baseline 30 concurrent sessions with batching).
+- Burst pool: +6 x A100-80GB equiv, pre-warmed; warm-up time ~8–12 minutes if nodes are cold, so pre-warming is required for Demo Day.
+- Autoscale: scale-up threshold = 70% GPU utilization, scale-down threshold = 40% utilization. Cooldown: scale-up = 60s, scale-down = 600s (10m).
+- Warm cache policy: keep KV cache warm for top 25% of active users to reduce token recomputation during bursts.
+- Batching: dynamic batching with max batch size tuned to latency SLO (target p95 < 400ms for interactive flows).
+- Fallbacks: route low-priority traffic to quantized model variant to preserve core capacity.
+
+Cost and billing model:
+- Burst-as-add-on: supported; we can define a capped burst budget for a window (e.g., 3 hours at N nodes) with a per-hour overage rate.
+- If procurement prefers predictable costs, we can offer a short-term reserved top-up (e.g., 3-month add-on) at a reduced hourly rate.
+
+Operational checklist for Demo Day (what we need from HyperByte):
+1) Confirm exact start window and expected concurrent sessions by 48h prior.
+2) Approve pre-warm time and confirm whether we can pre-warm within your network constraints.
+3) Approve a capped burst spend and fallback routing policy.
+
+I put conservative numbers in the XLSX; Marcus, I recommend we present the recommended profile + two cost options to HyperByte (burst-capped vs short-term reserve).
+
+—Avery
+Senior Solutions Engineer, Redwood Inference
+
+---
+Attachment: capacity_plan_v1.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+
+From: Tim Rourke <tim.rourke@hyperbyte.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Sophia Grant <sophia.grant@hyperbyte.com>
+Date: 2026-06-09T09:05:00-07:00
+Subject: Re: Dedicated deployment sizing questions + demo day burst
+
+Marcus — thanks, Avery. A couple procurement questions before we move to internal approval:
+
+1) How will burst charges be itemized on the invoice? We need a clean line-item for burst hours vs committed capacity.
+2) Can we cap daily burst spend? We’d like a hard cap (e.g., $X/day) to avoid surprise overruns.
+3) If we pick the short-term reserve option, what’s the minimum term and can you produce a SOW addendum?
+
+Also need to understand whether signing a short addendum would affect our timeline for go-live (we’re aiming for July 12). Procurement turnaround is 7–10 business days once we have a clear cost sheet and SOW.
+
+Thanks,
+Tim
+Senior Procurement Manager, HyperByte
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Tim Rourke <tim.rourke@hyperbyte.com>, Sophia Grant <sophia.grant@hyperbyte.com>
+Cc: Avery Johnson <avery_johnson@redwood.com>, Aditya Rao <aditya_rao@redwood.com>
+Date: 2026-06-09T11:22:00-07:00
+Subject: Re: Dedicated deployment sizing questions + demo day burst
+
+Tim — quick answers:
+
+1) Invoices: we can produce separate line items: "Dedicated committed capacity (monthly)" and "Burst consumption (hourly - capped window)". We’ll provide example invoice rows.
+2) Hard cap: yes — we support a per-day/per-event cap for burst. If you hit the cap we can auto-enforce fallback routing (quantized model variant) to prevent further spend.
+3) Short-term reserve: minimum 1-month add-on; we’ll provide SOW addendum and a DocuSign link for signature. Signing should not materially delay a July 12 go-live if done this week — procurement 7–10 business days is tight but feasible.
+
+I’ll push the two cost options (burst-capped vs 1-month reserve) and a one-page SOW addendum to the HubSpot deal and send a DocuSign placeholder for countersign.
+
+Next steps (I’ll own):
+- Upload cost table + SOW link to HubSpot by EOD today.
+- Schedule 30-min ops runbook with Avery, Sophia, and HyperByte infra to confirm pre-warm and network requirements (propose Thu 6/11 10:00 PT).
+
+Link to draft MAP: https://app.hubspot.com/deal/9876543
+DocuSign (placeholder): https://www.docusign.com/placeholder/HYP-2026-014
+
+—Marcus
+Account Executive, Redwood Inference
+
+From: Aditya Rao <aditya_rao@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Avery Johnson <avery_johnson@redwood.com>, Sophia Grant <sophia.grant@hyperbyte.com>, Tim Rourke <tim.rourke@hyperbyte.com>
+Date: 2026-06-10T16:45:00-07:00
+Subject: Re: Dedicated deployment sizing questions + demo day burst
+
+Team — I approve the temporary burst exception under the following conditions:
+
+- We limit the pre-warmed burst window to a 3-hour block unless HyperByte formally extends it.
+- Hard cap to be defined by procurement and enforced at the control plane; if the cap is reached, we’ll automatically switch to the quantized fallback model.
+- SLO exceptions for 1 week around Demo Day documented in the SOW addendum.
+
+Marcus — please attach the SLA exception request PDF in HubSpot and route to legal. I’ll coordinate with infra to ensure node availability and the staging canary on 6/30.
+
+Thanks everyone — this looks good and keeps our ops risk bounded.
+
+—Aditya Rao
+Director, Sales Engineering, Redwood Inference
+
+---
+Attachment: sla-exception-request.pdf (application/pdf)

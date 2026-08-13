@@ -1,0 +1,112 @@
+Post-call: Availability & graceful-degradation checklist — Zenith Bank
+
+From: Lauren Bishop <lauren.bishop@redwood.com>
+To: Priya Shah <priya.shah@zenithbank.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.com>
+Date: Mon, 10 May 2027 13:04:00 -0700
+Subject: Post-call: Availability & graceful-degradation checklist — Zenith Bank
+
+Priya — thanks again for taking time today. Short recap and three proposed next steps so we can align on a pilot that addresses the operational reliability concerns you raised.
+
+What we heard (pain points)
+- External-facing fraud detection models have caused customer-facing API timeouts during traffic spikes (last two incidents in Mar/Apr had 95th percentile latencies > 3s).
+- Cross-region failover is slow: current infra requires manual promotion and config changes, increasing MTTR.
+- Lack of a tested fallback model tier; teams have not validated lower-cost/quantized variants for acceptable accuracy drops.
+- Procurement and security need SLO/SLA language and evidence of audit logging for internal review.
+
+Current stack you described
+- Internal microservices on GCP us-central1 + DR on Azure eastus
+- Primary model: custom T7-like model hosted on-prem by a partner; inference currently routed via a homegrown proxy
+- Logging: Splunk; Identity: Okta; Key management: Azure Key Vault
+
+Success criteria for a pilot (proposal)
+1) Endpoint availability: maintain 99.95% availability for production traffic with documented graceful degradation behavior.
+2) Latency SLO: p95 < 800ms for primary path under expected load profile; when degraded, p95 for fallback < 1.8s.
+3) Cost control: show token-cost delta using batching + prefix cache with no >5% regression in quality for selected prompts.
+4) Runbook + automated failover: region failover time < 5 minutes with automated model variant fallback.
+
+Immediate next steps I propose
+- Rishi will draft an SLO matrix (attached) and an initial pilot config for a two-week trial (staging traffic)
+- Karthik to outline model-variant quantization options and expected accuracy tradeoffs on the fraud prompts you shared
+- Procurement: Lauren to send an initial commercial/PO note and evidence package for compliance review
+
+Attachments: zenith_slo_matrix.xlsx (SLO targets + monitoring hooks), redwood-initial-proposal-zenith.pdf (high-level pilot scope)
+
+If this matches what you expect, I’ll get Rishi and Karthik to schedule a technical workshop with your infra and security next week.
+
+Thanks,
+Lauren Bishop
+Enterprise Solutions — Redwood Inference
+lauren.bishop@redwood.com
++1 415-555-0124
+
+
+From: Priya Shah <priya.shah@zenithbank.com>
+To: Lauren Bishop <lauren.bishop@redwood.com>
+Cc: Amit Desai <amit.desai@zenithbank.com>, procurement@zenithbank.com
+Date: Mon, 10 May 2027 16:37:00 -07:00
+Subject: Re: Post-call: Availability & graceful-degradation checklist — Zenith Bank
+
+Lauren — this is perfect, thanks for the concise recap. A few clarifications and requests from our side: 
+
+Clarifications
+- The incidents in Mar/Apr were production peaks during batch reconciliation windows; they affected downstream webhooks and caused duplicate alerts.
+- Our security team requires proof of customer-isolated logs and end-to-end encryption for any cross-cloud routing before we can sign the pilot.
+
+Requests
+- Can you include a diagram of the proposed routing (how Redwood will sit between our proxy and model hosts) and the exact telemetry fields you’ll surface?
+- For fallback models: we need an A/B plan showing precision/recall delta across ~1k labeled fraud prompts.
+- Procurement needs an estimated monthly committed spend for the Dedicated pilot (ballpark range is ok).
+
+We’re generally aligned on the success criteria. Please loop in someone from your security team on the next call. Amit and procurement are on copy to coordinate timing; procurement prefers proof-of-concept before full contract discussions.
+
+—Priya
+Head of Fraud Ops, Zenith Bank
+priya.shah@zenithbank.com
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Priya Shah <priya.shah@zenithbank.com>, Lauren Bishop <lauren.bishop@redwood.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 11 May 2027 09:12:00 -07:00
+Subject: Re: Post-call: Availability & graceful-degradation checklist — Zenith Bank
+
+Priya — appreciate the quick feedback. Early answers and next artifacts we’ll prepare: 
+
+1) Routing diagram + telemetry
+- I’ll attach a simple architecture diagram in the follow-up (shows request routing, KV cache points, and health-check flows).
+- Telemetry fields we’ll surface: request_id, model_variant, region, runtime_ms, kv_cache_hit, batch_size, token_count, error_code, sla_breach_flag.
+
+2) Fallback A/B plan
+- We’ll run a controlled eval on your sample set: primary model vs two fallback variants (quantized int8 and a distilled medium model). Expect to see a precision drop in the 3–6% range for the quantized path; distilled model TBD after an initial run.
+
+3) Cost/committed spend estimate
+- Ballpark for a 3-month Dedicated pilot (staging + 2 production endpoints, 99.95% target): $35k–$60k/month depending on burst capacity and regional replication. We can tighten this after we size peak qps.
+
+Deliverables timeline
+- Wed 12 May: routing diagram + SLO matrix v1 (I’ll send the diagram + telemetry fields).
+- Thu 13 May: model-variant eval plan and expected accuracy tradeoffs.
+- Fri 14 May: draft pilot statement of work for procurement.
+
+Looping Karthik to start the model-variant checklist and to book the technical workshop with your infra team.
+
+Rishi
+Solutions Architect — Redwood Inference
+rishi.malhotra@redwood.com
+
+From: Amit Desai <amit.desai@zenithbank.com>
+To: Lauren Bishop <lauren.bishop@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: procurement@zenithbank.com, Priya Shah <priya.shah@zenithbank.com>
+Date: Wed, 12 May 2027 09:42:00 -07:00
+Subject: Re: Post-call: Availability & graceful-degradation checklist — Zenith Bank
+
+Lauren / Rishi — thanks for the thorough follow-up. A few procurement notes: 
+
+- Procurement confirms we prefer a short POC (4–6 weeks) before committing to Dedicated. Please include acceptance criteria in the SOW.
+- Please add a bullet on data residency and retention policy for logs in the SOW; we cannot retain raw PII in vendor logs beyond 30 days.
+- We will require a SOC2 Type II attestation (or equivalent) before going to production.
+
+Next steps for scheduling: can we do the technical workshop Friday 14 May at 10:00am PT? If that works for Redwood, procurement will start a parallel checklist for compliance review.
+
+Thanks — Amit
+Senior Director, Procurement — Zenith Bank
+amit.desai@zenithbank.com

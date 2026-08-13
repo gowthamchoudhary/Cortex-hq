@@ -1,0 +1,114 @@
+Client SDK backoff misconfiguration causing request surge / exec attention
+
+From: Tom Li <tom.li@fluentpay.com>
+To: Ben Carter <ben_carter@redwood.ai>
+Date: Thu, 1 Mar 2028 09:12:00 -0800
+Subject: Persistent 5xx/429s since SDK upgrade - urgent
+
+Ben —
+
+We started seeing elevated 5xx and 429 rates on our production integration after upgrading to Redwood SDK v2.1. Customer-facing latency jumped and some checkout flows time out. Engineering rolled back to the previous client on a canary subset and errors dropped, which strongly suggests the SDK's client-side retry/backoff is amplifying failures.
+
+We need an immediate mitigation path and a joint postmortem. Can you triage and loop in anyone on infra/serving who can look at request traces? Attaching a quick sample of the client-side retry trace and a snapshot of rate metrics.
+
+Regards,
+Tom
+Head of Integrations
+FluentPay
+
+Attachments: retry_trace_20280301.log (text), api_rate_snapshot_0301.csv (csv)
+From: Ben Carter <ben_carter@redwood.ai>
+To: Tom Li <tom.li@fluentpay.com>
+Cc: Grace O'Connor <grace_oconnor@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Thu, 1 Mar 2028 09:35:00 -0800
+Subject: Re: Persistent 5xx/429s since SDK upgrade - urgent
+
+Tom — thanks for the heads up and the attachments. I'm escalating this internally now. Short next steps from our side:
+- Grace, can you pull the request traces for FluentPay across 02:00–10:00 PST and confirm whether the traffic pattern looks like repeated immediate retries (fixed short backoff) vs. exponential backoff?
+- Marissa, I want us to consider an SLA-level mitigation (temporary rate-limiter exemption/priority route) if we see cascading retries.
+
+Tom, we'll come back within 90 minutes with an initial diagnostic and proposed mitigations. Sorry for the disruption — we'll prioritize.
+
+Best,
+Ben Carter
+Enterprise AE, Redwood Inference
+ben_carter@redwood.ai | +1 415-555-0199
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Tom Li <tom.li@fluentpay.com>
+Date: Thu, 1 Mar 2028 10:03:00 -0800
+Subject: Re: Persistent 5xx/429s since SDK upgrade - urgent
+
+Ben / Marissa / Tom — quick update from infra: initial traces indicate repeated bursts where the client retried with ~200ms fixed intervals up to 10 attempts on failure. We correlated increased 5xx counts at our gateway with those bursts; between 08:45–09:15 PST FluentPay's requests had a retry amplification factor ~6x.
+
+Preliminary notes:
+- The SDK v2.1 defaults apparently introduced a "fast_retries=true" flag for some languages; we see the FluentPay agent set no custom backoff policy, so it inherits the aggressive default.
+- Our serving runtime handled the load but latency spiked for other tenants in the same pool because of CPU/IO contention.
+
+Immediate mitigations we can do from our side:
+1) Apply a short-term throttle rule for FluentPay's API key to smooth bursts (non-blocking, reduce concurrency).
+2) Push a config override in the control plane disabling aggressive fast_retries for their tenant (will take ~20 minutes to propagate).
+3) Offer a patch for the SDK today to revert to exponential backoff defaults; engineering estimates a 6–8 hour turnaround for a stable release.
+
+I'll start the throttle and the control-plane override now.
+
+—Grace
+SRE Lead, Redwood Inference
+
+----Original message----
+> From: Tom Li <tom.li@fluentpay.com>
+> Date: Thu, 1 Mar 2028 09:12:00 -0800
+> Subject: Persistent 5xx/429s since SDK upgrade - urgent
+>
+> [see above]
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: Grace O'Connor <grace_oconnor@redwood.ai>
+Date: Thu, 1 Mar 2028 10:28:00 -0800
+Subject: Fwd: Persistent 5xx/429s since SDK upgrade - exec heads-up
+
+Marissa — forwarding the incident. Grace is implementing throttles and a control-plane override. We should prep a short exec note for our customer success/SE leadership and propose the credits/comp package if this meets the threshold for SLA impact.
+
+Suggested one-paragraph for execs: 
+"FluentPay experienced a request amplification incident tied to an aggressive retry default in our SDK v2.1. We implemented tenant-level throttles and a control-plane configuration override to stop retries propagating; a patch to SDK to restore exponential backoff defaults is in progress."
+
+Do you want me to pull in legal/finance or do you want to own the credits discussion?
+
+Ben
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>, Tom Li <tom.li@fluentpay.com>
+Date: Fri, 2 Mar 2028 08:21:00 -0800
+Subject: Re: Persistent 5xx/429s since SDK upgrade - exec heads-up
+
+Team / Tom — thank you for the quick action. I'm recommending the following next steps as part of the customer remediation and postmortem:
+- Immediate: Confirm the throttles have reduced 5xx/429 spikes and share a 24-hour rolling graph with FluentPay. Grace, please attach the pre/post metric excerpt.
+- Next 24 hours: Publish a rollback patch for v2.1 that flips the default backoff parameter; communicate release notes and mitigation guidance to customers.
+- 72 hours: Joint postmortem (Redwood+FluentPay) with root cause, timeline, and follow-up actions (SDK default change, improved telemetry).
+- Commercial: Offer a partial credit to FluentPay; I'll coordinate with finance.
+
+Tom — we'll schedule a short sync for Monday to review the postmortem structure. Appreciate your patience.
+
+Marissa Cole
+Director, Customer Success | Redwood Inference
+marissa_cole@redwood.ai
+
+----Forwarded message----
+> From: Ben Carter <ben_carter@redwood.ai>
+> Date: Thu, 1 Mar 2028 10:28:00 -0800
+> Subject: Fwd: Persistent 5xx/429s since SDK upgrade - exec heads-up
+>
+> [see above]
+
+From: Tom Li <tom.li@fluentpay.com>
+To: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>
+Date: Sat, 3 Mar 2028 14:05:00 -0800
+Subject: Re: Persistent 5xx/429s since SDK upgrade - exec heads-up
+
+Marissa / Ben / Grace — thanks for the rapid response and the throttles; the 24-hour snapshot shows a clear reduction in 5xx/429 noise. Our engineers validated the client-side change (reverting to exponential backoff) in staging. We appreciate the offer of a credit; let's discuss a small goodwill credit and the timeline for the SDK patch on Monday.
+
+I'll send a short list of telemetry queries that would help in the joint postmortem so we can quantify impact across checkout completion and latencies.
+
+Best,
+Tom
+
+----Original attachments: retry_trace_20280301.log, api_rate_snapshot_0301.csv----

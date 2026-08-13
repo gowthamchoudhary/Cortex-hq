@@ -1,0 +1,138 @@
+Deployment pathways and POC proposal for CareLumen inference (hosted/dedicated/private)
+
+From: Priya Natarajan <priya.natarajan@redwood.com>
+To: Sara Lopez <sara.lopez@carelumen.com>
+Cc: Aditya Rao <aditya.rao@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Thu, 12 Aug 2027 16:05:00 +0000
+Subject: Deployment pathways and POC proposal for CareLumen inference (hosted/dedicated/private)
+
+Hi Sara —
+
+Thanks again for the conversation this morning. Quick recap and suggested next steps so we can align on the proper deployment path for your clinical summarization workload:
+
+Summary of what I heard:
+- Goal: near-real-time summarization for ED triage and physician handoff (median end-to-end 150–300ms target for short requests).
+- Traffic profile: bursty mornings, sustained volume during day; current peak estimate ~250 qps with single-request payloads ~1–2k tokens.
+- Data/residency: PHI in scope, must be encrypted-at-rest and in-transit; prefer EU region for storage with US processing acceptable if contractual controls in place.
+- Risk tolerance: zero tolerance for cross-tenant data leakage; SOC 2 Type II and audit trails required.
+
+Initial deployment options we presented (we'll recommend one after follow-up):
+1) Hosted API + Private VPC: fastest time-to-value; can provide strict network isolation and customer-managed VPC peering; good if you want Redwood-managed runtime but isolated control plane.
+2) Dedicated capacity (reserved GPU pools): predictable throughput and stronger isolation at the compute layer; we can reserve a pool dedicated to CareLumen and offer SLOs on tail latency.
+3) Private/on-prem: for the strictest PHI controls; supports air-gapped installs and KMS/HSM integration; longer procurement and on-boarding.
+
+Open questions for you:
+- Which of the three options is the starting preference for procurement? (Hosted Private VPC vs Dedicated pool vs Private on-prem)
+- Who owns your security questionnaire (SOC 2 owner)? Please share a contact and any deadlines.
+- Can you confirm desired SLO percentile and acceptable cost range for an initial POC?
+
+Attachments: MVP-cost-estimate.pdf (PDF, 72KB) — very rough numbers for a 2-week POC on Dedicated vs Hosted Private VPC.
+
+Proposed next steps:
+- Aditya (cc'ed) will propose a technical POC plan outlining resource profile and isolation safeguards.
+- If procurement wants, we can turn around a 1–2 week Dedicated POC with monitoring and per-token telemetry.
+- I’ll schedule a 30-min follow-up tomorrow to lock down POC scope if you’re available.
+
+Thanks — look forward to working through this.
+
+Best,
+Priya Natarajan
+Account Executive | Redwood Inference
+priya.natarajan@redwood.com | +1 415-555-0132
+
+---
+
+From: Sara Lopez <sara.lopez@carelumen.com>
+To: Priya Natarajan <priya.natarajan@redwood.com>
+Cc: CareLumen Procurement <procurement@carelumen.com>
+Date: Thu, 12 Aug 2027 20:22:00 +0000
+Subject: Re: Deployment pathways and POC proposal for CareLumen inference (hosted/dedicated/private)
+
+Priya — thanks for the clear recap. A couple clarifications from our side before we lock scope:
+
+1) Noisy neighbor risk: our security/privacy team wants specific guarantees around resource isolation. Can you describe how the Dedicated pool prevents noisy neighbor interference versus Hosted Private VPC? We need to quantify expected tail latency under co-tenancy.
+
+2) Data residency & PHI: SOC 2 Type II is required; we also need audit logs showing access to model inputs/outputs and a retention policy. If you offer Private on-prem, is full air-gapped deployment supported?
+
+3) Timeline: procurement needs to know contract length options (monthly POC vs 12-month reserved). We expect to start procurement conversations next week.
+
+I attached our SOC2 questionnaire and a short set of legal must-haves. Happy to take a quick call with Aditya to go over the technical items.
+
+Attachments: carelumen-soc2-answers.docx (DOCX, 45KB)
+
+Best,
+Sara Lopez
+Head of AI | CareLumen Health
+sara.lopez@carelumen.com | +1 212-555-0199
+
+---
+
+From: Aditya Rao <aditya.rao@redwood.com>
+To: Sara Lopez <sara.lopez@carelumen.com>
+Cc: Priya Natarajan <priya.natarajan@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Fri, 13 Aug 2027 08:10:00 +0000
+Subject: Re: Deployment pathways and POC proposal for CareLumen inference (hosted/dedicated/private)
+
+Hi Sara —
+
+Appreciate the detail. I wanted to respond with a technical tradeoff summary and a concrete POC proposal so your security and procurement teams have what they need. High level: all three deployment paths are viable, but they differ in isolation guarantees, lead time, and cost.
+
+Isolation and noisy-neighbor controls (concise):
+- Hosted Private VPC: logical isolation via customer VPC peering and network controls; runtime still shared at the scheduler level but we provide strong namespace isolation (per-tenant KV cache, per-tenant disk encryption keys, and strict RBAC). Good if you prioritize time-to-value and network isolation.
+- Dedicated capacity (recommended for your profile): dedicated GPU pools assigned to CareLumen — no other tenants scheduled on those nodes. We enforce compute-level tenancy using topology-aware allocation and explicit GPU reservations. This removes noisy neighbor risk on the GPU layer and lets us offer tighter tail-latency SLOs (example: median 120ms, 95th 320ms at 200 qps in our internal tests for a 70B quantized model; numbers vary by model and sequence length).
+- Private on-prem (air-gapped): full control over hardware and networking; we ship a private control plane and runtime that can run without Internet egress if required. Longest procurement and onboarding timeline but maximum control for PHI.
+
+Operational features we provide across options:
+- KV cache per-tenant and configurable prefix caching to reduce token costs and tail latency.
+- Per-tenant telemetry and request tracing (token-level costs, latency percentiles, model versioning).
+- Rolling canary and automatic fallback to smaller model variants if SLOs are breached.
+- Audit logs with immutable append-only storage and configurable retention for legal/forensic needs.
+
+POC proposal (recommended: Dedicated pool)
+- Duration: 1 week (proof-of-performance) followed by optional 2-week extension for scale test.
+- Resources: 2x A100-equivalent nodes (or same vCPU/GPU mix you specify).
+- Deliverables: performance report (p50/p95/p99), cost per 1k tokens, isolation verification steps + audit log export, and runbook for failover to hosted fallback.
+- Timeline: we can provision a Dedicated POC environment in ~5 business days after contract/PO.
+
+Attached: isolation-options-20270813.pdf (short tech brief with diagrams and tail-latency charts). Happy to run a 30-min technical deep-dive with your security team — propose Mon/Tue next week.
+
+Thanks,
+Aditya Rao
+Solutions Engineer | Redwood Inference
+aditya.rao@redwood.com | +1 650-555-0178
+
+---
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Priya Natarajan <priya.natarajan@redwood.com>
+Cc: Aditya Rao <aditya.rao@redwood.com>, Sara Lopez <sara.lopez@carelumen.com>
+Date: Fri, 13 Aug 2027 12:03:00 +0000
+Subject: Re: Deployment pathways and POC proposal for CareLumen inference (hosted/dedicated/private)
+
+Priya / Aditya —
+
+Great thread. From a commercial perspective we should propose: 1-week Dedicated POC (paid) with a short credit applied toward a 12-month reserved commitment if they convert within 30 days. Pricing: please use the MVP-cost-estimate.pdf as the baseline but add an alternate 12-month reserved line item (savings % vs on-demand). Also include a legal contact and a simple SOW template for the POC.
+
+Priya, can you get procurement contact and proposed PO cadence? Aditya, please prepare the SOW + POC acceptance criteria so procurement can review quickly.
+
+Ben Carter
+Sr. Sales Manager | Redwood Inference
+ben.carter@redwood.com | +1 415-555-0144
+
+---
+
+From: Sara Lopez <sara.lopez@carelumen.com>
+To: Priya Natarajan <priya.natarajan@redwood.com>, Ben Carter <ben.carter@redwood.com>, Aditya Rao <aditya.rao@redwood.com>
+Cc: CareLumen Procurement <procurement@carelumen.com>
+Date: Fri, 13 Aug 2027 15:45:00 +0000
+Subject: Re: Deployment pathways and POC proposal for CareLumen inference (hosted/dedicated/private)
+
+Thanks everyone — this is helpful. Procurement is ready to receive a one-page SOW and a price table for the 1-week Dedicated POC and the 12-month reserved option. Our legal lead is Samir Patel (samir.patel@carelumen.com) — please loop him on the SOW and the SOC2 artifacts.
+
+We will confirm a kickoff date once we review your SOW; tentative target: provision POC week of Aug 23 (gives procurement a little over a week to review). Please include the audit log export steps in the SOW acceptance criteria. If the Dedicated POC demonstrates isolation and latency SLOs as discussed we are likely to proceed to a 12-month reserved contract.
+
+Best,
+Sara Lopez
+Head of AI | CareLumen Health
+
+---

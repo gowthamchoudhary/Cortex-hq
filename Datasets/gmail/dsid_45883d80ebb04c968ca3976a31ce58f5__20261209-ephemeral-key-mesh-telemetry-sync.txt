@@ -1,0 +1,113 @@
+Ephemeral key mesh telemetry sync for BYO operatorless deployments
+
+From: Alice Ramos <alice.ramos@finsecure.com>
+To: Connor O'Brien <connor_obrien@redwood.ai>, Tessa Morgan <tessa_morgan@redwood.ai>
+Cc: FinSecure DevOps <devops@finsecure.com>
+Date: Wed, 09 Dec 2026 09:12:00 -0800
+Subject: Re: Ephemeral key mesh telemetry sync for BYO operatorless deployments
+
+Connor / Tessa,
+
+Thanks again for the demo yesterday. A follow-up from our security team: we need an explicit design for how your operatorless BYOK flow will signal key usage and rotations back to our audit team without leaking any key material or high-entropy seeds. Specifically: 
+
+- What telemetry fields do you export from the keystore sidecar / proxy?
+- How are those fields authenticated and routed (collector vs direct to FinSecure telemetry)?
+- Can we get a tamper-evident sequence of rotation events that ties back to the HSM attestation?
+
+We're preparing a SOC-like intake, so any sample payloads or event names will speed approvals. Attaching our internal template.
+
+Regards,
+Alice Ramos
+Director, InfoSec 
+FinSecure Inc.
+
+---
+Attachment: finsecure-audit-template.xlsx (attachment stub)
+
+From: Connor O'Brien <connor_obrien@redwood.ai>
+To: Alice Ramos <alice.ramos@finsecure.com>
+Cc: Tessa Morgan <tessa_morgan@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Date: Wed, 09 Dec 2026 11:03:00 -08:00
+Subject: Re: Ephemeral key mesh telemetry sync for BYO operatorless deployments
+
+Alice — thanks for the clear asks. High level answers below; I attached a compact diagram and a CSV mapping of telemetry fields to our internal event names.
+
+Summary answers:
+1) Telemetry fields: we expose non-sensitive metadata only — event_type, timestamp (RFC3339), key_id (UUID), operation (encrypt/decrypt/sign/rotate), rotation_phase (init/requested/completed), attestation_digest (SHA256 of attestation blob), operator_present (bool), node_region, request_latency_ms, tokenized_kv_cache_hit (bool). No key material, nonces, seeds, or raw signatures are exported.
+
+2) Authentication & routing: telemetry is signed with a short-lived mTLS client cert issued per-keystore instance by Redwood's controlplane. Optionally, customers can configure an outbound collector URL (HTTPS) to send telemetry to their on-prem collector; when configured, telemetry is TLS-mTLS authenticated to the collector using their mTLS cert. Defaults: telemetry goes to Redwood telemetry ingest (hashed key_id) and we provide webhook relay to customer collector.
+
+3) Tamper-evidence and rotation sequence: each rotation event includes a monotonically increasing rotation_epoch and attestation_digest. We chain rotation events by including previous_event_digest in the new event (SHA256 over canonical event fields) so an auditor can verify no events were dropped. For HSM attestation, we include the HSM-signed attestation blob (or its digest) and the attestation certificate chain.
+
+Immediate ask: can you confirm whether FinSecure wants telemetry to terminate in your collector (we'll disable Redwood relay) or if you prefer dual-send (Redwood + your collector) for fallback? Also: do you require us to redact node_region?
+
+I'll follow up with a small sample JSON event (sanitized) and the diagram.
+
+—Connor
+Senior Infra Engineer, Redwood Inference
+Attachment: ekm-arch-diagram-v1.pdf (attachment stub)
+Attachment: telemetry-field-map.csv (attachment stub)
+
+From: Tessa Morgan <tessa_morgan@redwood.ai>
+To: Alice Ramos <alice.ramos@finsecure.com>, Connor O'Brien <connor_obrien@redwood.ai>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>
+Date: Thu, 10 Dec 2026 08:26:00 -08:00
+Subject: Re: Ephemeral key mesh telemetry sync for BYO operatorless deployments
+
+On Wed, Dec 9, 2026 at 11:03 AM Connor O'Brien <connor_obrien@redwood.ai> wrote:
+> Alice — thanks for the clear asks. High level answers below; I attached a compact diagram and a CSV mapping of telemetry fields to our internal event names.
+
+Adding a few operational constraints from the on-prem side: 
+
+- Telemetry batching: we batch small events (<=1KB) with a deterministic flush every 5s to keep costs bounded; each batch has a batch_id and batch_digest so you can verify integrity across the batch boundary.
+- Rotation windows: for operatorless BYOK we require a scheduled maintenance window for live rotations if customers opt for zero-downtime split-rollover; otherwise rotations use a short grace window and atomic swap. We surface expected outage window in the rotation_event.
+- Replay prevention: each keystore instance keeps a sliding window of recent event digests; collectors should reject events older than N minutes (configurable).
+
+We can also publish a small reference collector (Go) that validates chain-of-events and verifies attestation digests; Kimberly, can we attach the repo link?
+
+Tessa
+Product Manager, Private Deployments
+
+From: Alice Ramos <alice.ramos@finsecure.com>
+To: Tessa Morgan <tessa_morgan@redwood.ai>, Connor O'Brien <connor_obrien@redwood.ai>
+Cc: FinSecure DevOps <devops@finsecure.com>
+Date: Thu, 10 Dec 2026 13:19:00 -08:00
+Subject: Re: Ephemeral key mesh telemetry sync for BYO operatorless deployments
+
+Thanks — this is exactly the level of detail we need. A few follow-ups from our compliance team after reading the field map: 
+
+- We want the option to receive only digests (no attestation blobs) forwarded to our collector. Is that supported?
+- For rotation_epoch chaining: do you persist the chain server-side as well or is it only produced at the keystore edge? We need retained server-side evidence for 1 year.
+
+Assuming you can dual-send and provide a retention/export of chained events, we can give a conditional approval pending a short pen-test. Could you provide the sample JSON payload and the small collector repo so our engineers can run a smoke check?
+
+Best,
+Alice
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Alice Ramos <alice.ramos@finsecure.com>, Tessa Morgan <tessa_morgan@redwood.ai>, Connor O'Brien <connor_obrien@redwood.ai>
+Cc: Soojin Lee <soojin_lee@redwood.ai>
+Date: Fri, 11 Dec 2026 15:48:00 -08:00
+Subject: Re: Ephemeral key mesh telemetry sync for BYO operatorless deployments
+
+Hi Alice — quick update and planned deliverables: 
+
+1) Dual-send: supported. We will add a flag in the private-deploy config: telemetry.dual_send = true|false; when true, events are sent to Redwood ingest and an outbound customer collector. Both streams sign events independently with mTLS certs.
+
+2) Attestation blobs vs digests: supported. By default we include attestation_digest only; full blob can be enabled per-customer (attestation_blob = true). We'll provide a redaction policy that strips the blob before outbound to the customer's collector unless explicitly enabled.
+
+3) Server-side retention: we persist canonical chained events (digest+metadata) for retention windows configurable per-tenant; default 90 days, enterprise option up to 3 years. We'll surface an export API /audit/events?start=&end= that returns the canonical chain and proofs (digests). We will also provide a bulk export in NDJSON for your archive requirements.
+
+Deliverables by EOD Monday
+- sanitized sample JSON event (we'll include previous_event_digest example)
+- link to reference collector repo (v0.1) with verification runbook
+- short FAQ on telemetry privacy and redaction
+
+If that works, we'll schedule a 30-min smoke test with your DevOps next week (please propose a slot).
+
+—Kimberly
+Group Security Engineer, Redwood Inference
+
+---
+Attachment: telemetry-sample-event.json (attachment stub)
+Link: https://github.com/redwood-ekm/ref-collector (repo stub)

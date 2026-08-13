@@ -1,0 +1,125 @@
+Constraints-driven model slate + ops playbook for Tangent pilot
+
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Alex Perez <alex.perez@tangenthealth.com>, Kelsey Morgan <kelsey@tangenthealth.com>
+Cc: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Sun, 18 Oct 2026 15:02:00 -0400
+Subject: Constraints-driven model slate + ops playbook for Tangent pilot
+
+Hi Alex / Kelsey — thanks for taking time today. Quick post-call recap and concrete next steps so we keep momentum: 
+
+1) Goal & constraints (your ask)
+- Primary goal: clinical note summarization + triage hinting for post-visit workflow.
+- Hard constraints you emphasized: p99 latency < 550ms on 512-token prompts, peak concurrent TPS ~ 18, data residency (US), and strict PII redaction in the prompt pipeline.
+
+2) Preliminary model slate (constraints-driven) — what we think to pilot
+- rlm-7b-q4f (quantized) — best cost/latency for higher throughput; expect ~250–350 TPS steady for short prompts.
+- rlm-13b-slow-but-higher-quality — fallback for longer-context summarization where quality tradeoff matters.
+- rlm-3b-embed — embeddings for downstream retrieval/QA.
+
+3) What we'll share now (attached & links)
+- Redwood-verified performance profiles: per-model TPS and latency percentiles (attached PDF).
+- Raw benchmark CSV with test vectors and prompt sets we used (attached).
+- Pilot MOP (scope, metrics, acceptance criteria) draft (attached doc).
+
+4) Immediate asks for Tangent
+- Share a representative sample of 50 de-identified notes (or synthetic equivalent) so we can run the exact prompt pack against your data distribution.
+- Confirm your preference for canary rollout timing (2-week vs 4-week).
+
+5) Next steps (timeline)
+- We will run a short constrained benchmark on your sample and return a “pilot readiness” pack with recommended batch settings, KV cache policies, and quantization profile within 48–72 hours after we receive the sample.
+- Proposed check-in: Wed 10/20 10:00am ET — 30m to review pass/fail criteria and pilot runway.
+
+Thanks — attaching the initial artifacts for visibility.
+
+Best,
+Evelyn
+
+Evelyn Hart
+Senior Solutions Architect | Redwood Inference
+evelyn.hart@redwood.ai | +1 (415) 555-0142
+[Attachment: redwood_profiles_tps_latency.pdf] [Attachment: tangent_benchmarks_v2.csv] [Attachment: pilot_mop.docx]
+From: Alex Perez <alex.perez@tangenthealth.com>
+To: Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: Kelsey Morgan <kelsey@tangenthealth.com>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Mon, 19 Oct 2026 09:18:00 -0400
+Subject: Re: Constraints-driven model slate + ops playbook for Tangent pilot
+
+Thanks, Evelyn — that recap is helpful. A few clarifying Qs: 
+
+- The p99 < 550ms requirement: is that achievable on rlm-7b-q4f at our concurrency? Do you have p99 numbers measured on 512-token prompts?
+- For the sample notes: we can provide a de-id bucket (S3 link) by EOD today. Any formatting constraints we should follow?
+- For the fallback path: how seamless is automatic routing between the quantized 7b and the 13b during a spike? We want simple operations and predictable billing.
+
+Also, can you share the HubSpot record id so our procurement team can link to the demo notes?
+
+—Alex
+Alex Perez
+CTO, Tangent Health
+alex.perez@tangenthealth.com | (617) 555-9201
+From: Ben Carter <ben.carter@redwood.ai>
+To: Alex Perez <alex.perez@tangenthealth.com>, Kelsey Morgan <kelsey@tangenthealth.com>, Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Mon, 19 Oct 2026 13:40:00 -0400
+Subject: Re: Constraints-driven model slate + ops playbook for Tangent pilot
+
+Hi Alex — quick answers and added artifacts below.
+
+On Mon, Oct 19, 2026 at 9:18 AM Alex Perez <alex.perez@tangenthealth.com> wrote:
+> The p99 < 550ms requirement: is that achievable on rlm-7b-q4f at our concurrency? Do you have p99 numbers measured on 512-token prompts?
+
+Short answer: Yes, with the right batching and KV-cache policy. From our Redwood-verified profile (attached PDF):
+- rlm-7b-q4f (NVIDIA A10x2 pool, single-instance serving with continuous batching tuned): median ~210ms, p95 ~360ms, p99 ~520ms on our 512-token synthetic prompt set.
+- At sustained concurrency ~18 TPS the model still hits ~p99 520–580ms depending on prompt variability; we recommend a max burst headroom and a 2-instance canary to keep p99 comfortable.
+
+> For the sample notes: we can provide a de-id bucket (S3 link) by EOD today. Any formatting constraints we should follow?
+
+Please: newline-delimited JSON with fields: note_id, timestamp_iso, text. If there are structured fields (diagnoses), include a diagnoses array. If not possible, send CSV and we'll transform.
+
+> For the fallback path: how seamless is automatic routing between the quantized 7b and the 13b during a spike?
+
+We route by policy. Simple options: 
+- latency-first: route to rlm-7b-q4f, fallback to rlm-13b for higher-quality requests only on a per-request signal.
+- cost-first: default to rlm-7b, route >X tokens or flagged prompts to 13b.
+Either approach is transparent in telemetry and billing; we can add a canary that mirrors 5% of traffic to 13b for drift detection.
+
+Attachments added: tangent_benchmarks_v2.csv (raw measurements), redwood_profiles_tps_latency.pdf (profile sheet), short prompt pack inlined below.
+
+--- Prompt pack (excerpt) ---
+1) "Summarize this visit in 2–3 bullets focusing on action items and discharge instructions."
+2) "Extract diagnosis codes and list potential follow-ups (one-liners)."
+3) "Rewrite the note in patient-friendly language under 75 words."
+
+--- end excerpt ---
+
+I will run a constrained run on their sample when we get the S3 link and push updated CSV/perf artifacts back to this thread within 48 hours.
+
+Ben Carter
+Senior Solutions Engineer | Redwood Inference
+ben.carter@redwood.ai
+[Attachment: tangent_benchmarks_v2.csv] [Attachment: redwood_profiles_tps_latency.pdf]
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Alex Perez <alex.perez@tangenthealth.com>, Kelsey Morgan <kelsey@tangenthealth.com>
+Cc: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Tue, 20 Oct 2026 09:12:00 -0400
+Subject: Re: Constraints-driven model slate + ops playbook for Tangent pilot
+
+Alex / Kelsey — great, appreciate the quick answers. Confirming next steps so we all have the same tracker: 
+
+- Tangent: share de-id S3 link with newline-delimited JSON (see Ben's schema) by EOD today.
+- Redwood: run benchmark with the exact prompt pack Ben included, return final pilot-ready pack (CSV + profile + short runbook) within 48 hours of receiving data. 
+- Schedule: Wed 10/20 10:00am ET check-in stands (I’ll send a calendar invite once you confirm).
+
+I'll include the HubSpot record here: https://app.hubspot.com/contacts/12345/company/67890 so procurement can cross-reference the demo. Also linking the model catalog page we referenced: https://catalog.redwood.ai/models/rlm-7b-q4f (profiles live in the attached PDF).
+
+If you prefer, we can also enable a 5% mirror to rlm-13b during the initial week to capture quality deltas — we recommend that for clinical workloads.
+
+Thanks — looking forward to the sample.
+
+Best,
+Evelyn
+
+Evelyn Hart
+Senior Solutions Architect | Redwood Inference
+evelyn.hart@redwood.ai | +1 (415) 555-0142
+[Attachment: redwood_profiles_tps_latency.pdf]

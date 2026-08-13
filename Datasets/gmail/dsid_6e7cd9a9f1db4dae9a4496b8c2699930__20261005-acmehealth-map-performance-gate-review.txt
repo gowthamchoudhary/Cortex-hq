@@ -1,0 +1,121 @@
+MAP performance gate review — weekly checkpoint (Acme Health)
+
+From: rishi_malhotra@redwood.com
+To: hannah_schmitt@redwood.com, marissa_cole@redwood.com, marcus_lin@redwood.com
+Cc: karthik_iyer@redwood.com
+Date: Fri, 02 Oct 2026 14:12:00 -0700
+Subject: ACME weekly perf snapshot + raw runs attached
+
+Team — attaching the raw run for the week (attached: acme_latency_run_v3.csv). Quick highlights from the 10/02 suite against the customer MAP test set (seq_len median 512, mixed batch sizes):
+- Avg token throughput: 1,850 tokens/s (p3.16xlarge, single model variant)
+- Median latency (per request): 145 ms
+- P95 latency: 420 ms
+- P99 tail: 1.35 s (worse for long-context traces)
+- Cost estimate: ~$0.048 / 1k tokens at current batching config
+
+Notes:
+- We see a clear tail-latency spike when the KV cache is cold for long histories; prefix caching prevents some of this, but customer workloads include many long-chat flows.
+- Default kernel selection (standard attention) performs well up to seq 1k, but beyond that quantized execution (Q4_8 profile) starts to out-perform for throughput; accuracy regression negligible on our eval set.
+
+Next suggested steps before the MAP checkpoint:
+1) Run a short quantization sweep (Q4_8 vs Q6_8) on the same dataset — estimate 3 hours (owner: marcus_lin).
+2) Capture 30 representative traces for p99 debugging and share compressed traces (owner: hannah_schmitt).
+3) Evaluate impact of a 2x batch size bump with auto-batching enabled (owner: marissa_cole).
+
+See attached csv for per-run samples. I will be on the checkpoint call Monday with these numbers ready to discuss.
+
+— Rishi
+Senior SRE, Inference Performance
+Redwood Inference
+
+From: hannah_schmitt@redwood.com
+To: Elena Torres <et@acmehealth.com>, J. Patel <j.patel@acmehealth.com>
+Cc: rishi_malhotra@redwood.com, marissa_cole@redwood.com, marcus_lin@redwood.com, karthik_iyer@redwood.com, procurement@acmehealth.com
+Date: Sat, 03 Oct 2026 09:07:00 -0700
+Subject: Re: ACME weekly perf snapshot + raw runs attached
+
+Hi Elena / team — thanks for the patience. I pulled Rishi's runs into a short MAP update and a draft MAP document (link below). Quick read: we have a clear performance gate (p99 <= 1s target) to hit before the close window opens; current runs are at 1.35s.
+
+Agenda for our Monday checkpoint (10/05, 10:00am PT):
+- Quick recap of numbers (Rishi)
+- Root-cause for p99 (Marcus)
+- Tuning steps we can run without changing model family (quantization + batching)
+- Proposed action items, owners, and close timeline (Hannah / Marissa)
+
+Action items I want visible during the call:
+- Marcus: quantization sweep results and short A/B (Q4_8 recommended)
+- Marissa: update MAP timeline & close-date implications if we accept a 1-week tuning window
+- Rishi: upload 30 traces + perf trace tar.gz to shared drive
+
+Attachments/links: map-draft-acme-v2.docx (drive) — https://drive.google.com/open?id=map-draft-acme-v2
+Raw results attached.
+
+Can Elena confirm whether the procurement team needs the tuning window documented as part of the commercial timeline? If so, we can add a 7-day tuning contingency to the MAP.
+
+Thanks — Hannah
+Director, Customer Solutions
+Redwood Inference
+
+From: Elena Torres <et@acmehealth.com>
+To: hannah_schmitt@redwood.com
+Cc: procurement@acmehealth.com, j.patel@acmehealth.com
+Date: Sat, 03 Oct 2026 13:45:00 -0700
+Subject: Re: ACME weekly perf snapshot + raw runs attached
+
+Thanks, Hannah — useful summary. A couple quick clarifications before Monday: 
+1) For the p99 target, is the 1s target measured on cold-starts or steady-state? We need steady-state for our SLA.
+2) Can you share the perf traces for two representative long-chat sessions (we can only reproduce these in our environment) — those will help our platform team validate.
+
+Procurement: we will need a short note that the MAP may shift the SaaS start date by up to one week if additional tuning is accepted. Please confirm.
+
+I'll be on the call Monday; thanks for looping procurement.
+
+— Elena
+Head of Platform, Acme Health
+
+From: marcus_lin@redwood.com
+To: hannah_schmitt@redwood.com, rishi_malhotra@redwood.com, marissa_cole@redwood.com
+Cc: karthik_iyer@redwood.com
+Date: Sun, 04 Oct 2026 11:22:00 -0700
+Subject: Re: ACME weekly perf snapshot + raw runs attached
+
+Re: actions — I ran a short pre-sweep today and saw Q4_8 reduce p99 to ~0.98s on the same instance class with a negligible eval delta (0.3% on rouge-like metric used by the customer). Proposed concrete plan for the MAP tuning window: 
+
+1) Quantization sweep (Q4_8 vs Q6_8) — run full suite and capture metrics (owner: marcus_lin) — due: 2026-10-07
+2) Batch size increase experiment (2x) with safety limits on latency for short requests (owner: marissa_cole) — due: 2026-10-06
+3) 30 trace captures for p99 debugging + flamegraph extraction (owner: rishi_malhotra) — due: 2026-10-06
+4) MAP doc update with contingency language for procurement (owner: karthik_iyer) — due: 2026-10-06
+
+ACCEPT/REJECT rules for the MAP gate: if quantized config achieves p99 <= 1s AND eval delta <= 1% for the customer eval set, we move to close-window and finalize commercial terms. If not, we recommend a small model-variant fallback and schedule an engineering migration window.
+
+I'll prepare a short slide with the quantization trade-offs for Monday.
+
+— Marcus
+Principal Performance Engineer
+Redwood Inference
+
+From: hannah_schmitt@redwood.com
+To: Elena Torres <et@acmehealth.com>, rishi_malhotra@redwood.com, marcus_lin@redwood.com, marissa_cole@redwood.com, karthik_iyer@redwood.com, procurement@acmehealth.com
+Date: Mon, 05 Oct 2026 09:03:00 -0700
+Subject: MAP performance gate — meeting notes & confirmed actions (10/05)
+
+Thanks again for the call this morning. Short meeting notes and owners (confirmed):
+- Summary: baseline p99 1.35s -> Q4_8 preliminary reduces to ~0.98s in our pre-sweep. We will complete the full quantization sweep and batching tests this week.
+- Owners & due dates (finalized):
+  * marcus_lin — full quantization sweep, slides, and result summary — due 2026-10-07 (attachment: perf-traces-10-02.tar.gz)
+  * rishi_malhotra — capture and upload 30 representative traces (tar.gz attached) + short flamegraphs — due 2026-10-06
+  * marissa_cole — run 2x batch experiment and report cost delta; update MAP timeline & close date language — due 2026-10-06
+  * karthik_iyer — draft procurement contingency clause and add to MAP doc (drive link) — due 2026-10-06
+  * hannah_schmitt — coordinate final sign-off meeting & commercial close window if gate passes — target sign-off meeting 2026-10-08
+
+Decisions:
+- If quantization + batching meet p99 <= 1s AND eval delta <= 1%, Redwood and Acme agree to start contract finalization workflows (legal & procurement) with a 3-business-day close window.
+- Procurement will accept a 7-day tuning contingency added to the MAP timeline (Elena to confirm in writing).
+
+Next steps: Marcus and Rishi will upload their artifacts to the Drive link; Marissa and Karthik will update the MAP doc and we will reconvene Fri (10/08) for sign-off.
+
+Attachments: acme_latency_run_v3.csv, perf-traces-10-02.tar.gz, map-draft-acme-v2.docx
+
+— Hannah
+Director, Customer Solutions
+Redwood Inference

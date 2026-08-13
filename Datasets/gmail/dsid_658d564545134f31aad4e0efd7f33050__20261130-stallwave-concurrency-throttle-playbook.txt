@@ -1,0 +1,118 @@
+Immediate: 'stall waves' causing multi-minute completions — proposed concurrency throttle playbook
+
+From: Ava Ross <ava@odysseyanalytics.com>
+To: Alex Martinez <alex.martinez@redwood.com>
+Date: Mon, 30 Nov 2026 08:12:00 -0800
+Subject: Sudden long-tail completions — multiple jobs hit minutes, partial failures
+
+Alex — sorry to ping so early. Starting ~07:45 PT we saw a handful of inference calls for our pipeline take 90–240 seconds to complete (normal is <400ms). Around 08:02 two downstream jobs timed out and the customer-facing app returned 500s. We've attached a minimal trace and a request id list.
+
+Quick facts:
+- Model: rdx-3b-int8 (pinned)
+- Requestids: 02c4a, 02c4b, 02c4f
+- Pattern: short requests (<=50 tokens) but long queue+compute time; some requests were retried and amplified.
+
+This is hitting key customers in Europe in their local business hours — we need something immediate. Can you escalate?
+
+Thanks,
+Ava
+Customer Success
+Odyssey Analytics
+(Attachment: odyssey_trace_20261130.txt)
+From: Alex Martinez <alex.martinez@redwood.com>
+To: Ava Ross <ava@odysseyanalytics.com>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: Mon, 30 Nov 2026 08:27:00 -08:00
+Subject: Re: Sudden long-tail completions — multiple jobs hit minutes, partial failures
+
+Ava — thanks for the quick report and the traces. I'm opening a high-priority Ops investigation now and looping in our SRE and CS leads.
+
+Immediate next steps from our side:
+- We're pulling live traces and queue metrics for the model pool serving your requests.
+- If this is queue/backpressure related, we will temporarily tighten concurrency caps for Odyssey and enable a smaller fallback model if available.
+- Marcus will start collecting per-host request latency distributions and in-flight counts.
+
+I will keep you posted within 30 minutes with a mitigation plan.
+
+— Alex
+Account Exec, Redwood Inference
+alex.martinez@redwood.com
+(Attachment: alex_ack_20261130.txt)
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Alex Martinez <alex.martinez@redwood.com>, Vanessa Ortiz <vanessa.ortiz@redwood.com>
+Cc: Sean Gallagher <sean.gallagher@redwood.com>
+Date: Mon, 30 Nov 2026 08:45:00 -08:00
+Subject: RE: Sudden long-tail completions — initial telemetry and suspected backpressure
+
+Quick summary of what I'm seeing so far (08:45 snapshot):
+- A small subset (~0.7%) of pods in the rdx-3b-int8 pool experienced KV-cache miss storms simultaneously due to a cache eviction cascade after a spike of large-context requests from a different tenant.
+- In-flight queues on affected hosts surged to 12–16 concurrent requests; our configured safe concurrency is 8 for this machine class — we hit a soft cap which triggered request queueing and eventual timeouts.
+- Retries from the client (exponential backoff misconfigured) amplified the pressure.
+
+Immediate mitigation proposal (30–90 min window):
+1) Apply a per-tenant concurrency cap of 4 for Odyssey on the rdx-3b-int8 pool to stop amplification.
+2) Enable prefix KV caching for Odyssey sessions where applicable (reduce repeated kv misses).
+3) Roll temporary fallback: route <=200-token requests to rdx-1.3b-quant (lower cost, faster warm paths) for Odyssey only.
+4) Patch the request-retry guidance in our SDK to prevent aggressive client retries — coordinate with Customer.
+
+I'll start step 1 now (rate-limiter config) and post logs. If Alex/Vanessa want to approve step 3 I can create the routing rule and do a small canary.
+
+— Marcus
+Infrastructure Engineer, Redwood Inference
+(Attachment: host_latency_snapshot_20261130.csv)
+From: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+To: Alex Martinez <alex.martinez@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.com>
+Date: Mon, 30 Nov 2026 09:02:00 -08:00
+Subject: RE: Sudden long-tail completions — mitigation plan and customer comms
+
+Team — thanks Marcus, this is helpful and concise. Approved to proceed with steps 1 and 3 (per-tenant cap and routed fallback) as an emergency mitigation.
+
+Alex — I will take point on customer comms. Proposed message: short apology, outline what we're changing, and ask them to hold off on retries for 1 hour while we stabilize. We should offer a credit for the window and ask for any expanded traces.
+
+Action owners:
+- Marcus: implement cap + routing and monitor (ETA 30m).
+- Alex: send comms to Ava and copy Lauren for exec visibility.
+- Vanessa: prepare a short note for the CRO/RevOps if escalation to finance for credit is needed.
+- Sean: keep an eye on host health, look for eviction cascade root cause.
+
+— Vanessa
+Head of Customer Success, Redwood Inference
+(Attachment: stallwave_mitigation_playbook_draft.pdf)
+From: Alex Martinez <alex.martinez@redwood.com>
+To: Ava Ross <ava@odysseyanalytics.com>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>
+Date: Mon, 30 Nov 2026 09:10:00 -08:00
+Subject: Re: Sudden long-tail completions — immediate actions we are taking
+
+Ava — quick update and what we are doing right now:
+
+1) We have applied a temporary per-tenant concurrency cap for Odyssey to reduce amplification; you should see new requests complete in normal time within the next 5–10 minutes.
+2) For short requests (<=200 tokens) we've temporarily routed to rdx-1.3b-quant — this will keep latency down while we investigate.
+3) Please pause client-side retries for the next 60 minutes; retries are amplifying the problem.
+
+We're also preparing a follow-up report and a small credit for the impacted window. Marcus and Sean are keeping the cluster on 5-minute monitoring. I'll ping when we have stabilization graphs.
+
+Apologies again — we know this impacts your users.
+
+— Alex
+alex.martinez@redwood.com
+(Attachment: mitigation_summary_20261130.txt)
+From: Lauren Bishop <lauren.bishop@redwood.com>
+To: Alex Martinez <alex.martinez@redwood.com>, Vanessa Ortiz <vanessa.ortiz@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: Tue, 01 Dec 2026 15:24:00 -08:00
+Subject: Re: Incident follow-up and exec note draft — stabilization confirmed
+
+Thanks team — good work moving quickly. Quick notes for exec pack:
+- Root cause hypothesis: eviction cascade from large-context tenant caused a transient KV cache storm; multiple hosts hit soft concurrency thresholds and queued, producing long-tail completions.
+- Short-term mitigations executed: per-tenant cap, routed fallback, temporary kv-prefetch where safe. Measured improvement: p99 (impacting requests) reduced from ~75s to ~1.2s within 20 minutes post-mitigation.
+- Next steps (owner tags):
+   * Postmortem (Marcus) — include trace-level examples + repro plan. ETA 3 business days.
+   * SDK guidance (Customer Docs team / Alex) — add retry/backoff best-practices.
+   * Capacity tuning (Sean) — evaluate soft vs hard concurrency caps and possible pre-warming heuristics.
+   * Credit proposal (Vanessa + Finance) — draft value and get approval.
+
+Alex — I'll take the exec note and run it up to the COO/CRO. Please attach the stabilization graphs and the minimal traces.
+
+— Lauren
+VP, Sales & Partnerships, Redwood Inference

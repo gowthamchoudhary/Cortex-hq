@@ -1,0 +1,118 @@
+Post-call: Delta Health technical recap — latency/throughput SLOs & topology next steps
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Ruth Chan <ruth.chan@deltahealth.com>, Evan Morales <evan.morales@deltahealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Sat, 6 Sep 2025 15:02:00 -0700
+Subject: Post-call: Delta Health technical recap — latency/throughput SLOs & topology next steps
+
+Hi Ruth / Evan —
+
+Thanks again for taking the deep-dive today. Quick recap and proposed next steps so we have aligned expectations before I loop in Solutions Engineering for the POC kickoff. I tried to capture the pain points and the constraints you emphasized on the call.
+
+Summary of customer goals / pain:
+- Primary: real-time triage assistant in clinician workflow with p95 latency <= 200ms for 32-token prompts and ~1–2k token summaries for notes generation (these are separate call paths).
+- Secondary: throughput target ≈ 120 req/s at peak for triage calls during shift change windows; sustained baseline ~30–40 req/s.
+- Accuracy constraint: cannot truncate clinical context > 2k tokens without clear fallback; hallucination sensitivity high.
+- Compliance: data residency in us-east1 and audit logs retained for 2 years.
+
+Initial technical read (high level):
+- Model family: you suggested using an instruction-tuned open model (mimic of Llama-3 style) for triage prompts and a larger model for note summarization. We recommend providing a quantized 8-bit variant for triage to hit latency/throughput targets, and a 16-bit or fp16 variant on Dedicated for long-form summarization.
+- Latency/throughput tradeoffs: with Redwood’s batching and KV prefix cache we can keep single-request p95 for short prompts ~120–180ms on A100-equivalent Dedicated nodes with an optimized kernel set. Long-form summarization will target p95 ~600–900ms depending on sequence length and beam settings.
+- Fallbacks/routing: suggest policy routing — triage -> quantized small model on Dedicated; summarization -> larger model on Dedicated (or Hosted with burst to Dedicated). Canary route to smallest-latency fallback for regional outages.
+
+Proposed next steps (actionable):
+1) I’ll share a topology sketch and ballpark throughput/VM sizing (attached). Can we confirm typical prompt length distributions for triage and summarization?
+2) Karthik to review SLOs and propose a pilot configuration (models/quantization + batch sizing) — expect a doc by Tue 9/9.
+3) Delta to share a redacted prompt sample set and token distribution for both call paths (Ruth) — target by EOD 9/8.
+4) We’ll scope an initial 4-week POC: throughput validation + latency SLO runbook + basic hallucination checks.
+
+Attachments: delta_throughput_model_estimates.xlsx (ballpark cost/VM count), kv_cache_topology_sketch.png
+
+If that matches your read, I’ll schedule a short internal SE + infra alignment meeting to scope the Dedicated node types and the private-network checklist.
+
+Thanks —
+Marissa
+--
+Marissa Cole
+Senior Sales Engineer | Redwood Inference
+marissa.co@redwood.com
+(415) 555-0214
+
+
+From: Ruth Chan <ruth.chan@deltahealth.com>
+To: Marissa Cole <marissa.co@redwood.com>, Evan Morales <evan.morales@deltahealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>
+Date: Mon, 8 Sep 2025 08:40:00 -0700
+Subject: Re: Post-call: Delta Health technical recap — latency/throughput SLOs & topology next steps
+
+Marissa —
+
+This looks great and matches our internal notes. A couple clarifications from our side:
+- Prompt distributions: triage prompts are short (median ~22 tokens, 95th ~68). Summaries average ~1,800 tokens (after concatenating context + output). I’ve attached a small redacted sample set to the reply (see attachement stub: delta_redacted_prompts.csv).
+- Residency: us-east1 is required for PHI-handling endpoints; we can use Hosted control plane but must ensure the inference nodes are in our VPC (Private).
+- Throughput windows: the 120 req/s is a 10–15 minute burst during shift handoffs. Sustained baseline is closer to 35 req/s.
+
+Questions:
+- For the triage path, do you have a recommended batch sizing and max waiting window target to keep p95 <= 200ms?
+- For summarization, can we get an estimate for the Dedicated node count if we target p95 <= 900ms for 1.8k tokens?
+
+Thanks,
+Ruth
+Ruth Chan
+Director of Clinical Products | Delta Health
+ruth.chan@deltahealth.com
+
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Marissa Cole <marissa.co@redwood.com>, Ruth Chan <ruth.chan@deltahealth.com>, Evan Morales <evan.morales@deltahealth.com>
+Cc: Grace O'Connor <grace_oconnor@redwood.com>
+Date: Mon, 8 Sep 2025 09:05:00 -0700
+Subject: Re: Post-call: Delta Health technical recap — latency/throughput SLOs & topology next steps
+
+Thanks for the samples, Ruth — very helpful. Quick technical notes and preliminary sizing: 
+
+1) Triage (short prompts)
+- Given median 22 tokens and 95th 68, we can target a batching window of 6–8ms with dynamic batching. That plus a quantized 8-bit model on Dedicated A100-class nodes should hit p95 ~120–170ms (including network hop inside VPC) with batch sizes ~8–12 (dependent on concurrency).
+- Recommendation: keep max batching delay at 10ms and use aggressive priority routing for triage traffic to avoid queueing behind long-form jobs.
+
+2) Summarization (1.8k tokens)
+- For 1.8k tokens, single-request inference time is dominated by decode time. On a 80GB-A100 equivalent node with an optimized kernel path (fp16), p95 ~700–900ms is plausible with a single-stream pipeline; if you need lower p95, we scale horizontally.
+- Ballpark Dedicated sizing: for the 4-week POC and to handle 2–3 concurrent summarization jobs at target p95, start with 2 x 80GB nodes. If you plan concurrent bursts (3–5 concurrent), move to 3 nodes. I included the quick sizing table in the attached spreadsheet.
+
+3) KV cache and prefixing
+- For triage use-case we propose prefix caching for patient context where appropriate; this reduces token work for repeated context across short prompts. We’ll need to nail our cache TTL and eviction policy (Grace — will follow up with options).
+
+4) Compliance & topology notes
+- Private control plane + customer VPC for inference nodes looks like the right plan. We’ll provide an audit log retention config and KMS integration checklist.
+
+I’ll draft a short pilot config doc (models + quantization + routing rules + canary fallback) and share by EOD today.
+
+-karthik
+--
+Karthik Iyer
+Principal Inference Architect | Redwood Inference
+karthik.iyer@redwood.com
+
+
+From: Marissa Cole <marissa.co@redwood.com>
+To: Ruth Chan <ruth.chan@deltahealth.com>, Evan Morales <evan.morales@deltahealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Mon, 8 Sep 2025 09:15:00 -0700
+Subject: Re: Post-call: Delta Health technical recap — latency/throughput SLOs & topology next steps
+
+Appreciate the quick turnaround — great signal from the prompt samples. Next concrete items:
+- Ruth: please upload the full redacted prompt set and a short note on tokenization edge-cases to our shared Drive link (I put the placeholder in the related_links).
+- Karthik / Grace: please finalize the POC pilot config doc and the SE runbook (include rollout canary thresholds: p95 increase >25% triggers rollback; error rate >1% triggers investigation).
+- I’ll set up a 30-min kickoff session for Tue 9/9 @ 11:00am PT with Delta engineering and our SE/Infra team (invite forthcoming).
+
+If there are any immediate blockers (e.g., procurement windows or SOC 2 evidence you need before access), flag them and I’ll loop in our sales leadership.
+
+Thanks — looking forward to getting this scoped.
+
+Marissa
+--
+Marissa Cole
+Senior Sales Engineer | Redwood Inference
+marissa.co@redwood.com
+(415) 555-0214

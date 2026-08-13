@@ -1,0 +1,134 @@
+[NovaCorp] model-10c p95 surge — control measures & temporary SLA exception
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Mon, 11 Oct 2027 08:14:00 -0700
+Subject: model-10c p95 spike observed — NovaCorp (EU)
+
+Team,
+
+Monitoring picked up a sustained p95 increase for model-10c serving NovaCorp in eu-west-1 starting ~07:58 UTC. The spike correlates with yesterday's kernel rollout for quantized execution (kernel v2.3). Early indicators:
+- KV cache miss rate up ~42% for NovaCorp prefixes
+- 95th latency increased from ~210ms to ~740ms on affected hosts
+- Error rate remains nominal (0.08%), so this is a latency/regression not an outright failure
+
+I've attached a short diagnostic snapshot (diag_snapshot_20271011.json) and a link to the quick traces. Initial ask: can we assemble a short mitigation plan (traffic controls + fallback) and confirm whether we want to request a temporary SLA exception for NovaCorp while we stabilize? They are on a paid Dedicated plan and are sensitive to p95 breaches.
+
+Next steps I propose:
+1) Immediate traffic pin to model-10b (previous variant) for NovaCorp routing (soft redirect)
+2) Re-enable older kernel on a subset of instances to validate KV warm start behavior
+3) Offer a short SLA exception window and a credit; ask Commercial to own customer comms
+
+Marcus — can you confirm feasibility of 1/2 and an ETA? Laura/Stephanie — please advise on communications/credit ask.
+
+Thanks,
+Priyom
+
+Attachment: diag_snapshot_20271011.json (application/json, 120KB)
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.ai>
+To: Elena Martinez <elena@novacorp.com>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Priyom Das <priyom_das@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Date: Mon, 11 Oct 2027 09:02:00 -0700
+Subject: Re: model-10c p95 spike observed — NovaCorp (EU)
+
+Hi Elena — thanks for the quick flag. We see the same p95 behavior on our end and wanted to share next steps while we work on a technical fix.
+
+Short summary (what we're doing now):
+- We will place NovaCorp traffic on a soft redirect to model-10b while we validate fixes; this keeps throughput steady and should reduce p95 sharply.
+- We are requesting a temporary SLA exception for the p95 window from our internal SLA team; Laura will co-ordinate the exact credit offer.
+- We'll schedule a 30-minute call to walk through the mitigation timeline and confirm rollback/rollforward criteria.
+
+Proposed call slots (PT): 10/11 10:30am, 11:30am, 1:00pm — let me know what works and we'll send a calendar invite.
+
+We aim to have traffic pinning complete within 30 minutes of confirmation. Apologies for the disruption — we know NovaCorp relies on low tail latency here and will prioritize minimizing client impact.
+
+Best,
+Stephanie Nguyen
+Account Executive, Redwood Inference
+stephanie_nguyen@redwood.ai | +1 (415) 555-0182
+
+On Mon, Oct 11, 2027 at 08:14 AM Priyom Das <priyom_das@redwood.ai> wrote:
+> Team,
+>
+> Monitoring picked up a sustained p95 increase for model-10c serving NovaCorp in eu-west-1 starting ~07:58 UTC. The spike correlates with yesterday's kernel rollout for quantized execution (kernel v2.3). Early indicators:
+> - KV cache miss rate up ~42% for NovaCorp prefixes
+> - 95th latency increased from ~210ms to ~740ms on affected hosts
+> - Error rate remains nominal (0.08%), so this is a latency/regression not an outright failure
+>
+> I've attached a short diagnostic snapshot (diag_snapshot_20271011.json) and a link to the quick traces. Initial ask: can we assemble a short mitigation plan (traffic controls + fallback) and confirm whether we want to request a temporary SLA exception for NovaCorp while we stabilize? They are on a paid Dedicated plan and are sensitive to p95 breaches.
+>
+> Thanks,
+> Priyom
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.ai>, Priyom Das <priyom_das@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Mon, 11 Oct 2027 10:01:00 -0700
+Subject: Re: model-10c p95 spike observed — NovaCorp (EU)
+
+Short technical summary and recommended actions (ETA estimates in parentheses):
+
+Root cause hypothesis:
+- The kernel v2.3 introduced a slightly different KV eviction ordering under heavy multi-tenant prefix churn. For NovaCorp's traffic pattern this produces a higher cold-start miss rate and extra host-level serialization at the cache tier.
+
+Immediate mitigation (can do within ~20-35 minutes):
+1) Soft redirect NovaCorp to model-10b (variant pinned) — safe and low-risk. (20m)
+2) Enable fallback routing: requests that exceed 400ms will be automatically re-routed to model-10b at the edge for the next 2 hours. (25m to enable feature flag)
+3) Re-provision a small pool of instances with kernel v2.2 (previous kernel) and warm KV cache for a controlled roll-forward test. If metrics normalize we can switch traffic back. (60-90m to provision warm pool)
+
+Operational notes:
+- The runbook for controlled failover is attached (runbook_model10c_failover.md). It contains the exact CLI commands to pin routing and the signal thresholds for rollback/rollforward.
+- We recommend keeping a 4-hour SLA carveout window while we validate; commercial to confirm credit terms.
+
+Authorization request:
+- I need a go-ahead from Stephanie/Laura to execute 1+2 now, and from leadership if we extend the carveout beyond 4 hours.
+
+I'll stand by to run the commands as soon as you confirm.
+
+— Marcus
+
+On Mon, Oct 11, 2027 at 09:02 AM Stephanie Nguyen <stephanie_nguyen@redwood.ai> wrote:
+> Hi Elena — thanks for the quick flag. We see the same p95 behavior on our end and wanted to share next steps while we work on a technical fix.
+>
+> Short summary (what we're doing now):
+> - We will place NovaCorp traffic on a soft redirect to model-10b while we validate fixes; this keeps throughput steady and should reduce p95 sharply.
+> - We are requesting a temporary SLA exception for the p95 window from our internal SLA team; Laura will co-ordinate the exact credit offer.
+> - We'll schedule a 30-minute call to walk through the mitigation timeline and confirm rollback/rollforward criteria.
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Elena Martinez <elena@novacorp.com>, Stephanie Nguyen <stephanie_nguyen@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Mon, 11 Oct 2027 12:03:00 -0700
+Subject: Re: model-10c p95 spike observed — NovaCorp (EU)
+
+Elena / team —
+
+Thanks for flagging and for your patience. We have authorized the following immediate actions:
+
+1) We will soft-redirect NovaCorp traffic to model-10b within the next 20 minutes (Marcus' team will execute).
+2) We are opening a 4-hour SLA exception window starting at the time of redirect; during this period we will not count p95 breaches toward monthly SLA calculations.
+3) Redwood will issue a one-time service credit equivalent to 10% of October's Dedicated invoice for NovaCorp as a gesture of goodwill; this is subject to final billing reconciliation.
+
+We will monitor closely and provide continuous updates on the call. If stabilization is not achieved within the 4-hour window we will escalate to a leadership-level decision for an extended carveout or other remediation.
+
+Stephanie — please send the calendar invite for the 10:30am PT slot and copy the NovaCorp engineers. Marcus — proceed with soft-redirect as agreed and post status in this thread when complete.
+
+Regards,
+Laura Bennett
+Head of Commercial Operations, Redwood Inference
+laura_bennett@redwood.ai | +1 (650) 555-0147
+
+Attachment: map_traffic_shift_plan.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, 48KB)
+
+On Mon, Oct 11, 2027 at 10:01 AM Marcus Lin <marcus_lin@redwood.ai> wrote:
+> Short technical summary and recommended actions (ETA estimates in parentheses):
+>
+> Root cause hypothesis:
+> - The kernel v2.3 introduced a slightly different KV eviction ordering under heavy multi-tenant prefix churn. For NovaCorp's traffic pattern this produces a higher cold-start miss rate and extra host-level serialization at the cache tier.
+>
+> Immediate mitigation (can do within ~20-35 minutes):
+> 1) Soft redirect NovaCorp to model-10b (variant pinned) — safe and low-risk. (20m)
+> 2) Enable fallback routing: requests that exceed 400ms will be automatically re-routed to model-10b at the edge for the next 2 hours. (25m to enable feature flag)
+> 3) Re-provision a small pool of instances with kernel v2.2 (previous kernel) and warm KV cache for a controlled roll-forward test. If metrics normalize we can switch traffic back. (60-90m to provision warm pool)

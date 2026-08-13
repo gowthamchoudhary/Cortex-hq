@@ -1,0 +1,115 @@
+Token aggregation exceptions and discounting for long-running sessions
+
+From: Sam Park <sam@atlaslabs.ai>
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Tue, 14 Sep 2026 09:18:00 -0700
+Subject: Quick clarifications on billing for very long chat sessions + discount ask
+
+Hi Neha,
+
+Thanks again for the demo last week — Atlas Labs is seriously considering Redwood Dedicated for our private inference workload. Before we move to procurement, legal and engineering need a couple of billing clarifications so we can finalize internal budgeting. Two key questions: 
+
+1) How do you account for tokens for long-running conversational sessions that hold large KV caches? We host multi-hour sessions where each reply is small but the context window grows; does Redwood bill every request input+output tokens, or do you have session aggregation rules where you bill on a rolling window? If so, what is the aggregation window and rounding behavior?
+
+2) We expect very spiky usage across the month. Your standard docs mention a per-session minimum and a granularity for token charges — can you confirm the rounding quantum and whether you can waive the per-session minimum for a pilot? We also wanted to confirm whether context tokens loaded from previous turns are billed at the same rate as generated tokens.
+
+I've attached a small sample of our usage logs so you can see the pattern (tiny replies, heavy context retention). Olivia (cc'd) is covering procurement questions.
+
+Appreciate a quick read and any guidance (and any draft contract language you can share for discounts/exceptions).
+
+Best,
+Sam
+Sam Park
+Head of AI Platforms | Atlas Labs
+attachments: usage_sample_logs.csv
+
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Tue, 14 Sep 2026 10:05:00 -0700
+Subject: Fwd: Quick clarifications on billing for very long chat sessions + discount ask
+
+Marissa / Karthik — forwarding Atlas' questions (see attached usage sample and their ask on waiving per-session minimum for a pilot).
+
+Key asks from Atlas:
+- How we bill for long-running sessions (aggregation window and rounding)
+- Whether context tokens are billed same as generated tokens
+- If we can waive the per-session minimum or change quantum for a pilot + proposed discount they asked for (they didn't propose a number yet)
+
+They are fairly close to procurement and this affects their internal TCO modeling. Can you confirm current policy and a recommended concession we can offer as a pilot incentive? If we can draft a short clause to add to the redline that would be ideal — I attached their logs and the latest contract_redline_v3.pdf.
+
+Thanks — Neha
+Neha Kapoor
+Account Executive | Redwood Inference
+Phone: (415) 555-0198
+attachments: contract_redline_v3.pdf, token_calculation_example.xlsx
+
+----- Forwarded message -----
+From: Sam Park <sam@atlaslabs.ai>
+Date: Tue, 14 Sep 2026 at 09:18
+Subject: Quick clarifications on billing for very long chat sessions + discount ask
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: Olivia Tan <olivia@atlaslabs.ai>
+
+(see above)
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Tue, 14 Sep 2026 17:30:00 -07:00
+Subject: Re: Fwd: Quick clarifications on billing for very long chat sessions + discount ask
+
+Neha — thanks for the ping and for attaching the logs. Short answer, and then a recommended concession for Atlas: 
+
+Summary of standard billing rules (current product ops):
+- Token accounting: we bill per-request for input tokens (context + prompt) and output tokens (generated). Both are billed at the same per-token unit price.
+- Aggregation / session window: for streaming or multi-turn sessions we support a 30-minute session aggregation window by default. That means if multiple requests for the same session arrive within 30 minutes of each other and reuse the KV cache, we will aggregate token accounting into a single rolling session bucket for billing smoothing purposes.
+- Rounding quantum: we normally round up billing to 10-token increments for each aggregated session bucket when computing line items to reduce metering noise. 
+- Minimums: product policy applies a conservative 50-token per-session floor for very short sessions to prevent microcharges. This floor *only* applies when a session ends and total aggregated tokens for that session are <50 — we bill at 50 instead of the actual smaller usage.
+
+How that maps to Atlas' logs: your sample shows long sessions with many small replies spaced under the 30-minute threshold and heavy context retention. Under default rules they will be aggregated into one session bucket and billed accordingly. Because they reuse the KV cache, the incremental cost per reply is primarily the generated tokens + occasional context refreshes.
+
+Recommended concession for pilot / commercial play:
+- Waive the 50-token per-session floor for the first 3 full months of the pilot (so sessions are billed at actual aggregated token counts).
+- Offer a 15% usage discount (applied to billed token units) for the pilot term (3 months) conditional on a minimum committed monthly spend (MRC) of $6,000. If they want the floor waived without commitment, we could do the waiver for 1 month only.
+- For clarity in contract language, add a clause: "For the Pilot Term, Redwood will waive the standard per-session minimum billing floor and apply a 15% usage discount, subject to the Customer meeting the Minimum Monthly Commitment stated in the Order Form. Billing will continue to aggregate session usage using Redwood's standard session aggregation window and rounding quantum (30-minute window; 10-token rounding)."
+
+Operational notes (for onboarding/CS):
+- Engineering should enable session-affinity for their Dedicated pool so KV reuse is stable (reduces unnecessary context re-sends).
+- Add a metering tag for Atlas sessions so we can easily show usage broken down by session and by context vs generated tokens in the Console.
+
+If you want, I can draft a one-paragraph addition to the redline. Also looping Karthik for a quick confirm on the 10-token rounding quantum — that's the current default but product is open to lowering it for strategic pilots if legal thinks the math is cleaner.
+
+— Marissa
+Marissa Cole
+Head of Sales Engineering | Redwood Inference
+marissa.cole@redwood.ai | (650) 555-0103
+
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Sam Park <sam@atlaslabs.ai>
+Cc: Olivia Tan <olivia@atlaslabs.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Wed, 15 Sep 2026 11:05:00 -07:00
+Subject: Re: Quick clarifications on billing for very long chat sessions + discount ask
+
+Hi Sam / Olivia — thanks for the detailed logs. Per our internal follow-up (cc Marissa), here is a concise proposal so you can present to procurement and legal: 
+
+Proposal (Pilot):
+- Pilot term: 3 months starting on customer sign date.
+- Billing aggregation: Redwood will use standard session aggregation (30-minute rolling window) and 10-token rounding quantum for line item smoothing. Context tokens (loaded context / KV cache) are billed the same as other input tokens.
+- Waiver: Redwood will waive the 50-token per-session minimum for the duration of the 3-month pilot.
+- Discount: 15% usage discount applied to billed token units for the pilot term.
+- Commercial condition: pilot concessions are contingent on a Minimum Monthly Commitment (MRC) of $6,000. If Atlas prefers no MRC, we can offer a 1-month waiver only.
+
+Next steps:
+1) If this is acceptable, please confirm and we'll send an updated redline (I've attached the draft with the proposed clause).
+2) Legal: we'll include the pilot clause as an addendum and route via DocuSign — I'll include Marissa on the sign-off.
+
+I'll follow up with a formal redline and DocuSign link once you confirm. Let me know if you want a different discount % to present to finance and I can take that back to Sales Ops for pricing math.
+
+Best,
+Neha Kapoor
+Account Executive | Redwood Inference
+neha.kapoor@redwood.ai | (415) 555-0198
+attachments: contract_redline_v3.pdf
+
+On Tue, Sep 14, 2026 at 10:05 AM Neha Kapoor <neha.kapoor@redwood.ai> wrote:
+> Marissa / Karthik — forwarding Atlas' questions (see attached usage sample and their ask on waiving per-session minimum for a pilot).

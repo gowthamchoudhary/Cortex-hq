@@ -1,0 +1,103 @@
+Capacity & routing clarifications for Pinepoint launch - quota ask
+
+From: J. Alvarez <jalvarez@pinepoint.ai>
+To: markus.klein@redwood.ai
+Date: Fri, 25 Jun 2027 08:42:00 -0700
+Subject: Launch traffic profile & quota request (June 30)
+
+Hi Markus —
+
+Quick note as we finalize our prep: Pinepoint's marketing push goes live on June 30 and we expect a concentrated 48-hour spike. Attached is a conservative traffic file (pinepoint_launch_traffic.csv) and a brief diagram of our canary routing.
+
+Ask: can Redwood provide a temporary ingress uplift to 3x our current pilot quota for 48 hours (June 30 00:00 UTC - July 2 00:00 UTC)? We also want to understand fallback routing if the primary model variant reaches throttle.
+
+Key points:
+- Peak TPS expected: 220 r/s sustained for ~2 hours, taper to 80 r/s over 36 hours.
+- Mostly chat completions (avg length ~90 tokens).
+- We will enable client-side retry at 30s and have a small canary cohort starting 6 hours pre-launch.
+
+Can you confirm timing and what product/infra checks you need from us?
+
+Thanks,
+J.
+Javier Alvarez
+Ops Lead, Pinepoint Labs
+Attachment: pinepoint_launch_traffic.csv (text/csv), canary_routing_diagram.png (image/png)
+
+From: markus.klein@redwood.ai
+To: kimberly_park@redwood.ai, karthik_iyer@redwood.ai
+Cc: jalvarez@pinepoint.ai
+Date: Fri, 25 Jun 2027 09:15:00 -07:00
+Subject: Re: Launch traffic profile & quota request (June 30)
+
+Kimberly / Karthik —
+
+Looping you both in to align on feasibility and gating items. Pinepoint (external) is requesting a temporary 3x ingress uplift for a 48-hour window starting June 30. I attached their CSV and routing diagram. High level asks from my side:
+
+1) Product: is there any product-side config we need to pre-stage (routing policies, model pinning, or fallback variants)? Also need an acceptance criteria for when we should pull back the uplift (error rate or latency thresholds).
+
+2) Infra/Quota: can we provision a temporary quota bump for the account in the US region and ensure route-level protection to avoid affecting neighboring tenants? If autoscaler needs pre-warm, what estimate do you need?
+
+3) Observability: what dashboards and alerts should we confirm with customer (token burn, 5xx, tail latency)?
+
+Timelines: Pinepoint wants confirmation by EOD today (they're doing a final ops runbook at 18:00 their time). If we can approve the uplift, we should also confirm the decommission/rollback plan.
+
+Appreciate concise answers so I can update them.
+
+-Markus
+Markus Klein
+Account Executive, Redwood Inference
+
+From: kimberly_park@redwood.ai
+To: markus.klein@redwood.ai, karthik_iyer@redwood.ai
+Cc: jalvarez@pinepoint.ai
+Date: Fri, 25 Jun 2027 12:04:00 -07:00
+Subject: Re: Launch traffic profile & quota request (June 30)
+
+Thanks for the ping. Short answers and product asks below — copying what we need from Pinepoint to move fast.
+
+Product requirements (what we will do / what we need):
+- Model variant: pin to gptx-infer-v2-small for this window (lower latency profile). Fallback to gptx-infer-v1 if memory pressure triggers (automated).
+- Rate-limit policy: create a per-route burst allowance (3x) with per-customer circuit-breaker at 5xx > 1.5% sustained for 5 minutes.
+- Canary: allow a rolling increase rule: 5% traffic -> 25% -> 100% over 6 hours. We need the canary cohort IDs and start timestamp.
+- Acceptance criteria to end uplift: sustained 5xx > 1.5% or p95 latency > 1.8s for 10 minutes.
+
+From Pinepoint (we need):
+- Canary user IDs and the exact UTC start time for the canary phases.
+- Clarify whether the 220 r/s peak is concurrent or aggregated across regions (they listed US only).
+- Confirm whether the average token length (90) is for assistant responses or full-turn tokens.
+
+Observability/alerts: I will create a temporary dashboard (token burn, p50/p95/p99, 5xx rate, queue depth). Karthik — can you pre-stage the quota entries and confirm the pre-warm steps?
+
+I'll prepare the routing/policy changes as an ephemeral config so we can roll back immediately.
+
+-Kim
+Kimberly Park
+Product Manager, Redwood Inference
+
+From: karthik_iyer@redwood.ai
+To: markus.klein@redwood.ai, kimberly_park@redwood.ai, jalvarez@pinepoint.ai
+Date: Fri, 25 Jun 2027 17:03:00 -07:00
+Subject: Re: Launch traffic profile & quota request (June 30)
+
+Markus / Kim / Javier —
+
+Infra can support a temporary 3x ingress uplift for the June 30 window with the following constraints and steps:
+
+1) Pre-warm: We need a 6-hour pre-warm starting June 29 18:00 UTC to spin up reserved Dedicated capacity (approx 8 GPUs equivalent) to stabilize kernels and caches. Please advise if Pinepoint can accept the pre-warm window.
+
+2) Routing isolation: We'll apply tenant-level shaping (soft cap) and model-variant isolation to avoid noisy-neighbor impact. This will be enforced by a circuit-breaker config that Kim referenced.
+
+3) Rollback runbook: If 5xx > 1.5% for 5 continuous minutes or p95 > 1.8s for 10 minutes we will lower the tenant cap by 50% and start degrading to fallback variant. Full rollback to baseline will take ~20 minutes to drain in-flight requests.
+
+4) Billing/entitlement: Temporary uplift will be recorded as a short-term entitlement spike; we need PO confirmation by EOD to approve provisioning.
+
+Next steps:
+- Javier: confirm canary start times and whether the 220 r/s is US-only, and sign off on pre-warm window.
+- Markus: confirm if we should proceed with provisional quota entry (I can stage it but will not finalize without PO).
+- Kim: share the dashboard link and the exact circuit-breaker config once staged.
+
+-Karthik
+Karthik Iyer
+Senior Infra Engineer, Redwood Inference
+Attachment: provisioning_estimate.txt (text/plain)

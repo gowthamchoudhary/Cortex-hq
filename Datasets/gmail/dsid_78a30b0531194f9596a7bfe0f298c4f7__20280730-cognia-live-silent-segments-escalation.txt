@@ -1,0 +1,120 @@
+Urgent: Cognia live API intermittent silent segments during demo
+
+From: Alex Mercer <alex.mercer@cognia.ai>
+To: david_kim@redwood.ai
+Cc: support@cognia.ai
+Date: Mon, 30 Jul 2028 09:14:00 -0700
+Subject: Live demo - intermittent silent segments (urgent)
+
+David —
+
+We ran into an issue during a customer demo this morning (trial account: cognia-trial-07) where the model output went silent mid-response multiple times. The UI showed the connection as open but no tokens arrived for 4–20s windows; you can see two example request IDs below:
+
+- req_20280730_09_02_a7f4
+- req_20280730_09_08_c1b2
+
+We captured the browser console and the raw network trace and attached a small sample (cognia_request_samples.txt). The demo is scheduled again in ~2 hours — this is blocking our trial conversation and the prospect is concerned about reliability.
+
+Observations:
+- Affected endpoints appear to be the streaming path (chunked transfer).
+- No HTTP 5xx visible on client; connection remains open.
+- Reconnecting to a non-streaming (batch) route resumed immediate text.
+
+Can you help triage urgently? We need temporary mitigation steps and an ETA for root cause.
+
+Thanks,
+Alex Mercer
+Head of AI Integrations
+Cognia Inc.
+
+Attachment(s): cognia_request_samples.txt
+
+From: david_kim@redwood.ai
+To: Alex Mercer <alex.mercer@cognia.ai>
+Cc: marissa_cole@redwood.ai, jordan_blake@redwood.ai, support@cognia.ai
+Date: Mon, 30 Jul 2028 09:29:00 -07:00
+Subject: Re: Live demo - intermittent silent segments (urgent)
+
+Alex — thanks for the quick heads up and the sample. We're sorry this interrupted the demo. I want to get engineering eyes on it immediately.
+
+Immediate asks:
+1) Can you confirm whether the silent segments always start after ~2–3s of streaming activity or are they variable?
+2) If you have any server-side request IDs (our headers include X-Request-ID), please share.
+3) We're going to route affected requests to a non-streaming path as a mitigation while we investigate — does that work for your demo in 2 hours?
+
+I've looped in Marissa (platform eng) and Jordan (support lead) to triage. Marissa — can you pull logs for the request IDs in the sample and check for chunked transfer pauses or backend 502/timeout patterns?
+
+I'll propose a short warroom if we see anything obvious.
+
+-David
+David Kim
+Senior Customer Reliability Manager
+Redwood Inference
+
+
+From: marissa_cole@redwood.ai
+To: david_kim@redwood.ai, jordan_blake@redwood.ai
+Cc: Alex Mercer <alex.mercer@cognia.ai>, support@cognia.ai
+Date: Mon, 30 Jul 2028 10:11:00 -07:00
+Subject: Re: Live demo - intermittent silent segments (urgent)
+
+Quick triage notes (initial):
+
+- Pulled the two request IDs Alex provided; correlating trace shows a pattern of "chunk interval elongation" on the proxy to model worker hop: token chunks emitted at ~40–100ms then a gap of 6–18s, then resume. No upstream 5xx returned to the client — the proxy kept the connection open and buffered.
+- Within our runtime logs we see repeated transient EPIPE / connection reset to a subset of the model workers at the same time window (09:01–09:12 PST). Those resets were retried, but our streaming stitcher doesn't re-send the missing tokens into the open client stream — resulting in the silent segment the client observed.
+- Attached a filtered log (chunk-intervals-20280730.log) with the proxy timestamps and worker error markers.
+
+Immediate mitigation options (short timeline):
+A) Route Cognia trial users to the non-streaming generate endpoint for the next 4 hours (recommended for the demo). This avoids relying on continuous chunk stitching.
+B) Apply a conservative chunk-emit timeout on the proxy (force a short heartbeat chunk at 2s if no tokens) — low risk but requires a rolling restart of the proxy fleet (30–45m).
+C) Roll back a recent kernel change on a small subset of workers that we suspect correlate with increased EPIPEs (requires SRE window).
+
+I recommend option A now to guarantee demo continuity, and option B as a 1–2 hour follow-up if the instability persists.
+
+Next steps I will take now:
+- Open INC-4128 and attach logs.
+- Start a lightweight flow check to confirm whether the issue is localized to a worker subset (5–10m).
+
+Marissa Cole
+Principal Platform Engineer, Serving Runtime
+Redwood Inference
+
+Attachment(s): chunk-intervals-20280730.log
+
+From: david_kim@redwood.ai
+To: evelyn_hart@redwood.ai, jordan_blake@redwood.ai, marissa_cole@redwood.ai
+Cc: Alex Mercer <alex.mercer@cognia.ai>, support@cognia.ai
+Date: Mon, 30 Jul 2028 11:02:00 -07:00
+Subject: Fwd: Live demo - intermittent silent segments (urgent)
+
+Evelyn / Jordan — FYI and next-step ask. Cognia is a mid-funnel trial with a scheduled demo later today; they experienced multiple silent segments on our streaming path. Marissa's initial analysis points to transient worker-side connection resets causing long chunk gaps but no 5xx to client.
+
+Business impact: demo risk and potential stall on D-98721 (annualized $120k). The prospect has visibility and asked for an ETA.
+
+Proposed customer-facing plan (I want approval to proceed):
+- Immediately route Cognia trial traffic to non-streaming endpoint (low customer impact; keeps functionality).
+- Offer a one-time service credit for the missed demo window (10% off first invoice) if we can't fully remove risk before their next demo.
+- Schedule a 30-minute exec sync with Cognia and our SRE/Platform leads in the next 90 minutes to present findings and mitigations.
+
+Marissa — how long do you estimate the targeted probe and confirm step? Jordan — can you prepare the customer-facing note and confirm credit language?
+
+-David
+
+
+From: Alex Mercer <alex.mercer@cognia.ai>
+To: david_kim@redwood.ai
+Cc: marissa_cole@redwood.ai, jordan_blake@redwood.ai, support@cognia.ai
+Date: Mon, 30 Jul 2028 15:43:00 -07:00
+Subject: Re: Live demo - intermittent silent segments (urgent)
+
+David / team — thanks for the rapid response and the mitigation suggestion. Routing to non-streaming worked for the rehearse this afternoon and the demo completed without interruption.
+
+We appreciate the proposal for a 10% credit and welcome the 30-minute sync. Please confirm the meeting link (we have availability 16:30–17:00 PST) and attach any post-mortem write-up and the logs you plan to share. We'll also upload our extended traces to the HubSpot ticket.
+
+Accepting mitigation for now — please follow up with a root cause ETA and a timeline for the proxy heartbeat patch (if that's the chosen fix).
+
+Best,
+Alex
+Head of AI Integrations, Cognia Inc.
+
+Attachment(s): none

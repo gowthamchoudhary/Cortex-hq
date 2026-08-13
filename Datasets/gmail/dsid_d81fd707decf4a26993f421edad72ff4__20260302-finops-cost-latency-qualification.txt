@@ -1,0 +1,171 @@
+Post-call: FinOps.ai - cost & latency tradeoffs / next steps
+
+From: Marissa Cole <marissa@redwood.ai>
+To: Eva López <eva.lopez@finops.ai>
+Cc: Rishi Malhotra <rishi@redwood.ai>
+Date: Mon, 02 Mar 2026 15:05:00 -0700
+Subject: Post-call recap + ask: token volumes & latency targets
+
+Hi Eva — thanks again for taking time today. Quick recap and a few concrete asks so we can get you a tight pricing/architecture recommendation: 
+
+Call recap (30m):
+- Use case: FinOps.ai will add real-time cost insights into their web console and Slack alerts. Typical request size ~100–500 tokens/user action; 90th pct live latency target 300–600ms for UI path.
+- Expected traffic: pilot 10k requests/day (avg 200 tokens), growth to 1.5M requests/day in 12 months (avg 250 tokens).
+- Data sensitivity: PII in some prompts — you'd want Private deployment or strict VPC connectivity.
+
+Asks from our side:
+1) Please confirm approximate monthly token volume range for pilot and steady-state (ballpark is fine).
+2) What budget range do you have for inference (monthly)? You mentioned the cost team is thinking in terms of $/1M tokens. If you can give a target $/1M tokens that helps us pick the right model/tier.
+3) Which latency is stricter: the UI path (300–600ms) or background batch scoring?
+
+Next steps we propose:
+- Rishi will sketch two cost/latency configurations (Performance vs Standard) with unit economics and an estimated $/1M-tokens.
+- I’ll send a short mutual action plan and a pricing estimate workbook for procurement.
+
+Attachments I’ll share after Rishi’s notes: pricing spreadsheet + SLA summary.
+
+Best,
+Marissa Cole
+Enterprise Sales | Redwood Inference
+[attachment: redwood-sales-signature.vcf]
+From: Eva López <eva.lopez@finops.ai>
+To: Marissa Cole <marissa@redwood.ai>
+Date: Mon, 02 Mar 2026 17:13:00 -05:00
+Subject: Re: Post-call recap + ask: token volumes & latency targets
+
+Hi Marissa — great summary, thanks. A few clarifications from our side: 
+
+- Pilot traffic: 10k requests/day sounds right; we estimate ~2M tokens/day for pilot (averaging more on analytics).
+- Steady state (12 months): 375M–450M tokens/day (~1.5M requests/day @ ~300 tokens).
+- Budget band: the finance team is aiming for $10k–$30k/month for pilot and evaluating $100k–$250k/month at scale. They phrased unit cost as a target of $20–$50 per 1M tokens, but we can be flexible if latency gains justify higher units.
+- Latency priority: UI path is critical for top-level dashboard interactions (target ~400ms 90th). Background jobs can be 2–5s.
+
+Procurement (cc): we’ll need an initial pricing workbook and an SLA summary to start an internal business case. Also can you call out whether streaming vs batch is cheaper at our volumes?
+
+Thanks — Eva
+Eva López
+Head of Product, FinOps.ai
+Procurement: procurement@finops.ai
+From: Rishi Malhotra <rishi@redwood.ai>
+To: Eva López <eva.lopez@finops.ai>, Marissa Cole <marissa@redwood.ai>
+Date: Tue, 03 Mar 2026 09:40:00 -07:00
+Subject: RE: Post-call recap + ask: token volumes & latency targets
+
+Eva —
+Thanks for the details. High-level guidance below, plus two example configurations with ballpark unit economics (numbers are illustrative; we’ll refine after you confirm model family preference and whether Private is required).
+
+Key trade-offs (short):
+- Streaming vs non-streaming: Streaming (token-by-token) reduces perceived latency for long responses but reduces batching efficiency for many short requests. For your UI use case (100–500 tokens), streaming helps UX but can raise tokens/sec utilization and per-token cost slightly when it prevents batching.
+- Batching: Larger batches increase throughput (lower $/1M tokens) but raise tail latency. On our Standard tier, we target micro-batching ~8–16 requests; Performance tier uses optimized kernels + smaller micro-batches and lower P99s.
+- Model size & quantization: Smaller quantized variants lower cost substantially (~2–3x) but may increase latency slightly depending on kernel availability.
+
+Example A — Performance Tier (SLO-driven):
+- Target: 90th pct latency <= 400ms for 100–500 token requests.
+- Config: Performance GPU pool, streaming enabled for UI paths, per-customer warm KV cache, and aggressive autoscaling for spikes.
+- Unit economics (rough): $45–$65 per 1M tokens (includes reserved capacity amortized, 24/7 SLA + observability).
+- Pros: Meet 400ms 90th; predictable SLA; fewer errors under spikes.
+- Cons: Higher $/1M tokens; commitment recommended.
+
+Example B — Standard Tier (cost-first):
+- Target: 90th pct latency ~700–1200ms (may be fine for background tasks and some UI paths).
+- Config: Standard GPU pool, batch-first (no streaming for UI), larger batching windows, more aggressive batching cache.
+- Unit economics (rough): $12–$28 per 1M tokens depending on batch efficiency and quantization.
+- Pros: Much lower unit cost; easy to pilot on pay-as-you-go.
+- Cons: Harder to hit 400ms 90th consistently; may require model trimming or caching to meet UX bar.
+
+Recommendation for FinOps.ai:
+- Pilot: Start Standard tier with a Performance-tier trial on UI-critical routes. Route UI calls to Performance only for a subset of users (canary) while everything else on Standard. This keeps blended $/1M tokens ~ $20–$35 assuming 10–20% of requests hit Performance.
+- Streaming: Enable streaming for the Performance UI route only. For Standard, use small batching windows to reduce cost.
+
+I’ll attach a quick latency-vs-cost chart and a sample pricing workbook. If you can confirm the model family (e.g., LlamaX-13B quantized vs unquantized) and whether Private deployment is required, I’ll run tighter estimates.
+
+—Rishi
+Rishi Malhotra
+Solutions Engineer | Redwood Inference
+[attachment: perf-vs-standard-latency-chart.png (png, 86KB)]
+From: Eva López <eva.lopez@finops.ai>
+To: Rishi Malhotra <rishi@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: Tue, 03 Mar 2026 12:55:00 -05:00
+Subject: Re: RE: Post-call recap + ask: token volumes & latency targets
+
+Thanks Rishi — this is exactly the level of detail we need. A couple quick asks: 
+
+1) Can you confirm an example blended cost if 15% of customer-facing UI traffic is on Performance and the rest on Standard? Ideally show $/1M tokens and monthly for our projected steady state (use 375M tokens/day as baseline).
+2) Will streaming for Performance add any incremental billing dimension (e.g., per-connection charge) or is it purely token-based?
+
+Procurement is reviewing the $20–$50 / 1M target. If Performance ends up near $60 / 1M we’ll need a business case to justify it — can Redwood provide a 30-day Performance trial or a discounted rate for the pilot?
+
+Best,
+Eva
+From: Marissa Cole <marissa@redwood.ai>
+To: Eva López <eva.lopez@finops.ai>, Rishi Malhotra <rishi@redwood.ai>
+Cc: Procurement <procurement@finops.ai>
+Date: Wed, 04 Mar 2026 08:31:00 -07:00
+Subject: Re: Post-call: FinOps.ai - cost & latency tradeoffs / next steps
+
+Hi Eva —
+Following up with the mutual action plan and attachments (pricing workbook + SLA summary). See the quick blended-cost example below — Rishi, feel free to correct numbers if you want to replace them with exacts from infra: 
+
+Blended cost example (steady-state 375M tokens/day):
+- Total tokens/month ≈ 11.25B tokens
+- If 15% UI on Performance @ $55/1M and 85% on Standard @ $20/1M:
+  - Performance cost = 0.15 * 11.25B tokens = 1.6875B tokens → 1,687.5 * $55 / 1000 = $92,812.50
+  - Standard cost = 9.5625B tokens → 9,562.5 * $20 / 1000 = $191,250.00
+  - Blended monthly cost ≈ $284k/month
+
+I’m attaching: redwood-pricing-estimate.xlsx (workbook with scenario tabs) and SLA-summary.pdf.
+
+Proposed MAP (mutual action plan):
+- This week: Redwood provides 30-day Performance trial for up to 50k UI monthly active users (trial includes SLA + observability).
+- Next 2 weeks: FinOps supplies preferred model family and confirms Private vs Hosted decision.
+- Procurement: sign MSA + initial PO for pilot (Mar/Apr).
+
+Attachments: [attachment: redwood-pricing-estimate.xlsx (xlsx, 42KB)], [attachment: SLA-summary.pdf (pdf, 120KB)]
+
+Happy to hop on a 20m call with Procurement this week to walk the workbook.
+
+Best,
+Marissa Cole
+Enterprise Sales | Redwood Inference
+From: Vivek Kulkarni <vivek@redwood.ai>
+To: Marissa Cole <marissa@redwood.ai>, Rishi Malhotra <rishi@redwood.ai>, Eva López <eva.lopez@finops.ai>
+Date: Wed, 04 Mar 2026 09:12:00 -07:00
+Subject: Re: Post-call: FinOps.ai - cost & latency tradeoffs / next steps
+
+Marissa/Rishi —
+Thanks for the plan. I’m ok to approve a 30-day Performance trial with standard trial guardrails (usage cap + single-seat SLA). If Procurement needs a one-time promotional credit to get to a POC number inside their target band, we can consider up to $25k credit for the pilot.
+
+Vivek Kulkarni
+VP Sales | Redwood Inference
+
+-----Original Message-----
+From: Marissa Cole <marissa@redwood.ai>
+Sent: Wed, Mar 04, 2026 08:31:00 -07:00
+To: Eva López <eva.lopez@finops.ai>
+Cc: Procurement <procurement@finops.ai>; Rishi Malhotra <rishi@redwood.ai>
+Subject: Post-call: FinOps.ai - cost & latency tradeoffs / next steps
+
+> Hi Eva —
+> Following up with the mutual action plan and attachments (pricing workbook + SLA summary). See the quick blended-cost example below — Rishi, feel free to correct numbers if you want to replace them with exacts from infra:
+> 
+> Blended cost example (steady-state 375M tokens/day):
+> - Total tokens/month ≈ 11.25B tokens
+> - If 15% UI on Performance @ $55/1M and 85% on Standard @ $20/1M:
+>   - Performance cost = 0.15 * 11.25B tokens = 1.6875B tokens → 1,687.5 * $55 / 1000 = $92,812.50
+>   - Standard cost = 9.5625B tokens → 9,562.5 * $20 / 1000 = $191,250.00
+>   - Blended monthly cost ≈ $284k/month
+>
+> I’m attaching: redwood-pricing-estimate.xlsx (workbook with scenario tabs) and SLA-summary.pdf.
+>
+> Proposed MAP (mutual action plan):
+> - This week: Redwood provides 30-day Performance trial for up to 50k UI monthly active users (trial includes SLA + observability).
+> - Next 2 weeks: FinOps supplies preferred model family and confirms Private vs Hosted decision.
+> - Procurement: sign MSA + initial PO for pilot (Mar/Apr).
+>
+> Attachments: [attachment: redwood-pricing-estimate.xlsx (xlsx, 42KB)], [attachment: SLA-summary.pdf (pdf, 120KB)]
+>
+> Happy to hop on a 20m call with Procurement this week to walk the workbook.
+>
+> Best,
+> Marissa Cole
+> Enterprise Sales | Redwood Inference

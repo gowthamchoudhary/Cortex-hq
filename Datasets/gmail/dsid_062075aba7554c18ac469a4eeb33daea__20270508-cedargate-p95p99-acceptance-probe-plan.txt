@@ -1,0 +1,97 @@
+Post-call: p95/p99 latency qualification for CedarGate integration
+
+From: Aditya Rao <aditya@redwood.com>
+To: Samir Patel <samir@cedargate.com>, Kelly O'Neal <kelly.oneal@cedargate.com>
+Cc: Marissa Cole <marissa@redwood.com>, Jordan Blake <jordan@redwood.com>, Ben Carter <ben@redwood.com>
+Date: 2027-05-08T14:12:00-07:00
+Subject: Post-call: p95/p99 latency qualification for CedarGate integration
+
+Thanks for the time today — good call. Quick recap and the suggested acceptance/probe approach so we all have the same checklist. High-level requirements you stated on the call:
+
+- E2E p95 target: <= 220ms
+- E2E p99 target: <= 420ms (note: Samir called out a legacy path that could be higher; captured below)
+- Sustained throughput: 50 TPS for typical peak; ability to handle bursts up to 200 concurrent streaming sessions (avg. session ~256 tokens, chunked streaming)
+- Streaming chunk latency guidance: each chunk deliver within ~30ms on average after the model emits tokens (for UI snappiness)
+- Tokenization/avg tokens: 250–300 tokens per request for your conversational assistant workloads
+
+Proposed 2-phase qualification plan (we can tighten times once you confirm windows):
+1) Synthetic acceptance probe (hosted vs incumbent): 48-hour A/B run using your traffic envelope (attached: cedargate-traffic-envelope.csv). Measure p95/p99, tail distribution, and chunk latency under:
+   - baseline prefix caching enabled
+   - no-cache cold-starts for KV
+   - streaming concurrency at 50/100/200 sessions
+2) Focused regression test: run a set of 1000 real-ish dialogues sampled from your dataset to validate model output parity and latency at production token sizes.
+
+Action items (owners):
+- CedarGate: provide test token/ingress instructions + sample traffic generator (Samir, Kelly)
+- Redwood infra: provision temporary hosted endpoints and (optionally) a Dedicated pool for burst windows (Jordan)
+- Redwood perf: run A/B traffic, collect p95/p99, per-token breakdown, and streaming chunk histograms (Marissa)
+- Commercial: confirm PoC billing/credits for Dedicated burst runs (Ben)
+
+Attachments: redwood-slo-runbook-v1.pdf (SLO definitions + test harness), cedargate-traffic-envelope.csv (traffic profile export)
+
+Please reply if any of the bullets above are off — otherwise we can lock dates. Suggested PoC window: May 17–18 (2 days) for the synthetic probe, followed by a 48-hour real-dialogue regression window May 20–21.
+
+Thanks,
+Aditya Rao
+Head of Solutions — Redwood Inference
+aditya@redwood.com
+Redwood Inference
+
+From: Samir Patel <samir@cedargate.com>
+To: Aditya Rao <aditya@redwood.com>
+Cc: Kelly O'Neal <kelly.oneal@cedargate.com>, Marissa Cole <marissa@redwood.com>, Jordan Blake <jordan@redwood.com>
+Date: 2027-05-09T09:30:00-07:00
+Subject: Re: Post-call: p95/p99 latency qualification for CedarGate integration
+
+Thanks, Aditya — appreciate the clear rundown. A few clarifications from our side after we regrouped: 
+
+- The p95 <= 220ms is accurate for our primary path (API gateway -> model). However, p99 needs a small caveat: for our legacy orchestration that does additional enrichment (third-party lookups) p99 tolerances are 450ms unless we can offload those lookups. For the acceptance probe let's keep two p99 gates ("model-only" and "end-to-end with enrichment").
+- Burst pattern: the 200 concurrent streaming sessions is a good stress ceiling. We also see short spikes (10–30s) where concurrency can hit ~350 on promos — we don't expect you to guarantee for that level but would like to observe behavior and fallbacks.
+- We'll provide a traffic generator and token set; expect that by EOD Monday (May 10). We'll also include a small set of sample enriched flows to exercise the legacy path.
+
+One ask: can Redwood surface per-token CPU/GPU breakdowns in the logs for the probe? That will help our infra team justify the Dedicated burst usage.
+
+I'll attach our internal connectivity diagram and a sample traffic manifest in a follow-up.
+
+—Samir
+Samir Patel
+Senior Product Manager, CedarGate Health
+samir@cedargate.com
+
+From: Marissa Cole <marissa@redwood.com>
+To: Aditya Rao <aditya@redwood.com>, Jordan Blake <jordan@redwood.com>, Ben Carter <ben@redwood.com>
+Cc: Samir Patel <samir@cedargate.com>, Kelly O'Neal <kelly.oneal@cedargate.com>
+Date: 2027-05-09T11:45:00-07:00
+Subject: Re: Post-call: p95/p99 latency qualification for CedarGate integration — internal plan and owners
+
+Looping the internal action plan here and calling out owners/timing so we can move quickly once CedarGate sends their artifacts. I'm quoting Samir's clarifications above (p99 legacy path and burst spikes) — important to measure both model-only and E2E with enrichment.
+
+Internal checklist: 
+- Jordan: provision temporary hosted endpoints (model versions: gpt-open-1.3q & gpt-redwood-medium) and enable streaming with chunk histograms. Please add a read-only telemetry endpoint for Cedargate to pull histograms. ETA: May 14.
+- Marissa (perf): define traffic schedule for the synthetic probe (50/100/200 concurrency buckets) and run initial dry-run May 16. Deliverable: p95/p99 CSV + per-chunk latency distribution.
+- Ben (commercial): prepare a short Dedicated burst quote for two 4-hour windows per probe day (estimate attached in redwood-slo-runbook-v1.pdf). Confirm whether we can apply a one-time PoC credit.
+- Security/Network: request Cedargate IP allowlist (Samir) and test token; coordinate with infra for TLS + cert checks.
+
+Data we need from CedarGate: traffic generator binary/command, sample payloads, list of enrichment flows (to trigger the legacy path), and the approximate promo spike cadence if possible.
+
+On the per-token CPU/GPU breakdown — yes, we can emit that. We'll include per-token host/gpu_time and model decode_time fields in the perf logs for the probe. Jordan, add that to the telemetry contract.
+
+Next internal sync: May 15 standup to confirm endpoints and runbooks. If we get Cedargate artifacts Monday EOD, we keep May 17–18 PoC as proposed.
+
+Marissa Cole
+Principal Performance Engineer, Redwood Inference
+marissa@redwood.com
+
+From: Kelly O'Neal <kelly.oneal@cedargate.com>
+To: Marissa Cole <marissa@redwood.com>, Aditya Rao <aditya@redwood.com>
+Cc: Samir Patel <samir@cedargate.com>, Jordan Blake <jordan@redwood.com>, Ben Carter <ben@redwood.com>
+Date: 2027-05-10T09:03:00-07:00
+Subject: Re: Post-call: p95/p99 latency qualification for CedarGate integration
+
+Thanks all — sounds good. We'll send the traffic generator, sample payloads, and the enrichment flow list by EOD today (May 10). Also attaching our short network diagram in the follow-up.
+
+Confirming: we expect to observe the Hosted A/B vs incumbent run and will evaluate the per-token breakdowns you provide. If the Dedicated burst quote looks reasonable, we can greenlight the two-window setup for the probe.
+
+Kelly O'Neal
+Director, Infrastructure — CedarGate Health
+kelly.oneal@cedargate.com

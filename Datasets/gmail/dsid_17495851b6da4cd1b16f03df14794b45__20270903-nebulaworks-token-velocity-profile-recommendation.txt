@@ -1,0 +1,106 @@
+NebulaWorks Dedicated: token velocity profiling & GPU slab recommendation
+
+From: Laura Chen <laura@nebulaworks.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Cc: procurement@nebulaworks.com
+Date: Wed, 1 Sep 2027 09:12:00 -0700
+Subject: Dedicated capacity: rough tokens/sec and headroom ask
+
+Hi Karthik / Ben,
+
+Thanks again for the demo last week — our exec team liked the latency numbers but procurement wants a tighter grip on committed capacity reasoning before we move to contract. Two asks from my side:
+
+- Can you provide a compact mapping that shows tokens/sec demand under our expected profile (avg, 95th, peak) mapped to H100 slab counts? We need clear headroom assumptions.
+- We use ~85 tokens per API response on average, and we expect 12M user-facing responses / month initially. Important SLO: p95 latency <= 600ms for interactive chat (context length ~512).
+
+I've attached our token mix and a small sample of trace logs (network_latency_results.pdf) — happy to jump on a quick call to walk through.
+
+Open to whatever format is easiest — spreadsheet preferred.
+
+Thanks,
+Laura Chen
+Head of Platform
+NebulaWorks
+
+Attachments: network_latency_results.pdf
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Laura Chen <laura@nebulaworks.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: Wed, 1 Sep 2027 13:45:00 -07:00
+Subject: Re: Dedicated capacity: rough tokens/sec and headroom ask
+
+Laura — thanks for the sample and the SLO target. I pulled a quick first-pass mapping and attached a spreadsheet (nebula_mup_estimates.xlsx) that walks through:
+
+- assumptions (model variant, quantization, average request tokens, warm cache fraction)
+- tokens/sec per GPU estimate and derived slab counts at different safety margins
+- latency fit: expected p50/p95 and where we recommend autoscale thresholds
+
+Short summary (high-level):
+- Assumptions I used: Llama-3-70B quantized (4-bit) multi-instance on H100, average reply 85 tokens, prefix/cache warm for ~40% of requests, median batch size ~4 for batching windows of 20ms.
+- Measured tokens/sec per H100 (conservative): 620 tokens/sec. Effective tokens/sec (accounting for KV cache hits & batching variance): 780 tokens/sec per GPU when warm fraction applied (i.e., effective capacity higher due to cache).
+- For your forecast (12M responses/mo ≈ 4.6M requests/mo * 85 tokens → ~391M tokens/day peak months), sustained observed qps maps to ~4.5k tokens/sec baseline with p95 bursts to ~20k tokens/sec during peak events (30-45 minute surges).
+
+Recommendation:
+- Committed pool: 28 H100s (this maps to ~21.8k effective tokens/sec raw; with our safety margin of 20% gives ~17.4k usable tokens/sec). This covers p95 bursts comfortably and leaves room for background tasks.
+- Burst lane (on-demand): +8 H100s available for short windows (can be pre-warmed with KV cache copies for quicker ramp).
+- Canary policy: start with 10 H100s dedicated to a small percentage (10%) of users for 2 weeks to validate real-world tail latencies.
+
+Latency fit: with this config we expect p95 generation latency for 512-length contexts: ~420–530ms (depends on network e2e). If you want <450ms p95 target consistently, we should increase committed pool to ~34 H100s or enable more aggressive local caching & shorter batching windows.
+
+I've kept cost / month rough in the sheet (node-hour estimate) and left notes where we assume 4-bit quantization and where we recommend additional profiling. Two attachments: nebula_mup_estimates.xlsx (spreadsheet) and the network traces you sent.
+
+If this aligns, Ben can follow up with an ops-friendly plan (autoscale triggers, canary runbook). Happy to hop on a call this week.
+
+— Karthik
+Senior Solutions Engineer, Redwood Inference
+
+Attachments: nebula_mup_estimates.xlsx
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Laura Chen <laura@nebulaworks.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Thu, 2 Sep 2027 10:18:00 -07:00
+Subject: Re: Dedicated capacity: rough tokens/sec and headroom ask
+
+Laura — quick follow-up with ops details and a conservative cost snapshot.
+
+Notes on safety and autoscale:
+- Autoscale thresholds: trigger warm-up when sustained tokens/sec > 70% of committed for >5 min; scale to burst lane if sustained >90% for >2 min. This avoids flapping on microbursts.
+- KV/prefix caching: recommend pre-warming top-150 intents into the burst lane for the first 30 minutes of high-traffic windows. Pre-warm reduces cold-start token overhead by ~40% in our test traces.
+- Fallback policy: if queued latency > 750ms for >1 min, automatically divert non-critical requests to a smaller quantized variant (L3-13B int4) to preserve interactive experiences.
+
+Cost snapshot (back-of-envelope, USD/month):
+- 28 committed H100s (24x7): equivalent node-hours estimate ≈ $XXX,XXX/month (see sheet for breakdown).
+- 8 burst H100s (on-demand): assume usage 10% of month typical -> $YY,YYY/month incremental.
+
+Operational runbook items we will include in the contract appendix:
+- Canary plan (Karthik's 10-node canary for 2 weeks)
+- SLAs and scheduled maintenance windows
+- Telemetry — token-level cost/latency traces surfaced into a shared Redwood dashboard (we'll provide read-only link)
+
+If you'd like, we can model a conservative alternative that targets a tighter p95 of 450ms by increasing committed pool to 34 H100s — tradeoff is ~+20% cost.
+
+Ben
+Director of Solutions, Redwood Inference
+
+> On Wed, Sep 1, 2027 at 1:45 PM Karthik Iyer <karthik_iyer@redwood.com> wrote:
+> > (spreadsheet attached with detailed assumptions)
+
+From: Laura Chen <laura@nebulaworks.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Fri, 3 Sep 2027 17:05:00 -07:00
+Subject: Re: Dedicated capacity: rough tokens/sec and headroom ask
+
+Thanks Karthik / Ben — this is exactly what procurement needed. A few quick clarifications before we loop legal:
+
+1) Can you confirm the p95 latency numbers assume our region (us-west) placement and the network traces we attached?
+2) For the canary, we want a documented rollback criterion — can you add a single-paragraph failure criterion we can include in the MOU (e.g., sustained p95 > 750ms for >15 minutes triggers rollback and pause on expansion)?
+3) Please convert cost placeholders into a conservative dollar figure we can present to finance (we need a line item).
+
+If you can get those back by EOD Monday our procurement and legal teams can start drafting the commitment language. Happy to schedule a 30-min sync Monday afternoon if helpful.
+
+Best,
+Laura
+Head of Platform, NebulaWorks
+
+On a related note: procurement@nebulaworks.com is copied to keep the downstream folks in the loop.

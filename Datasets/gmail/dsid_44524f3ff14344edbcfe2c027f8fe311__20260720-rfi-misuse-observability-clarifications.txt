@@ -1,0 +1,134 @@
+RFI: Misuse Monitoring, Alerts & Reporting - clarifications
+
+From: Laura Nguyen <laura.nguyen@aegisfinancial.com>
+To: Ben Carter <ben.carter@redwood.com>
+Cc: Tom Ellis <t.ellis@aegisfinancial.com>
+Date: Mon, 20 Jul 2026 09:12:00 -0700
+Subject: RFI: Misuse Monitoring, Alerts & Reporting - initial questions
+
+Hi Ben,
+
+Thanks for the RFI response packet you submitted last week. Our security team read through the misuse monitoring section and had a few follow-up clarifications before we take this to procurement:
+
+1) Detection coverage: can you list the specific categories of misuse you currently detect out-of-the-box (e.g., hate/harassment, violent wrongdoing planning, fraud patterns, PII exfiltration)?
+
+2) Alerting SLAs: what is your standard detection-to-alert SLA for high-severity events and how do you measure detection latency?
+
+3) Alert noise and tuning: do you provide built-in suppression, deduplication, and replayable tuning (we need to validate model-level thresholds during onboarding)?
+
+4) Evidence & auditability: what artifacts are available in an investigation (raw prompt + response, model version, KV cache snapshot, trace id, per-token log probabilities)? Retention options?
+
+5) Integrations: what downstream channels are supported (Splunk/HTTP webhook/SQS/SNS/S3), and is there a sandbox for us to test alert webhooks?
+
+6) False positives & remediation: what operational playbooks do you provide for triage, and can your alerts be enriched with customer-supplied risk signals (account age, transaction volume)?
+
+7) Compliance: do you produce an evidence bundle for incident review and does this tie back to your SOC 2 artifacts?
+
+Can you loop in the engineering contact who owns monitoring and any sample alert schemas? We'd appreciate a short written reply we can attach to the RFP.
+
+Best,
+Laura
+Laura Nguyen
+Head of Security Programs, Aegis Financial
+[Attachment: Aegis_RFI_Section_Misuse.pdf (PDF)]
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Laura Nguyen <laura.nguyen@aegisfinancial.com>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 20 Jul 2026 10:02:00 -0700
+Subject: Re: RFI: Misuse Monitoring, Alerts & Reporting - initial questions
+
+Laura — thanks for the precise list. I'm looping in Vivek who owns Observability & Safety for a technical reply; Marissa is on the thread for any compliance artifacts.
+
+High level: we can provide a written Q&A you can attach to the RFP, plus a sandbox webhook and sample alert payloads. We also have a playbook PDF that outlines triage flows and remediation steps (attached).
+
+Timeline: Vivek, can you draft a short technical response to cover 1–6 and attach the alert schema? Aim for the reply by EOD tomorrow — Aegis is in procurement next week.
+
+Ben
+Ben Carter
+Enterprise Account Executive | Redwood Inference
+[Attachment: redwood_misuse_playbook_v2.pdf (PDF)]
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.com>
+To: Laura Nguyen <laura.nguyen@aegisfinancial.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 21 Jul 2026 11:30:00 -0700
+Subject: Re: RFI: Misuse Monitoring, Alerts & Reporting - technical response
+
+Hi Laura — thanks for the clear questions. Below is a concise, RFP-friendly technical reply that you may attach directly to your RFI. I've included concrete metrics, integration options, and operational notes. I also attached a JSON example of our alert schema (alert_schema_example.json).
+
+1) Detection coverage (out-of-the-box detectors)
+- Hate / harassment / extremist content detection (model + policy filters)
+- Violent wrongdoing planning & stepwise malign instruction detection
+- Fraud patterns (social engineering prompts, credential harvesting attempts)
+- PII exfiltration heuristics (regex + model-assisted PII scoring)
+- Account takeover / impersonation indicators (behavioral signals + prompt similarity)
+- Malicious code generation (dangerous shell commands, crypto-mining scripts)
+
+Each detector combines lightweight rule-based checks with model classifiers. Customers can enable/disable categories at the tenant level.
+
+2) Detection-to-alert SLA
+- High-severity (P0/P1) events: default target median detection latency = 2s (95th percentile <= 5s) from request completion to alert emission for hosted deployments in our us-west region.
+- Medium-severity: median <= 15s; Low-severity batched hourly.
+- Measurement: timestamps include request_complete_ts, detector_eval_ts, alert_emit_ts; we compute distribution metrics and expose them in the Console.
+
+3) Alert noise & tuning
+- Suppression: alert deduplication window (configurable, default 60s) and per-tenant noise filters (min-occurrence thresholds).
+- Replay & tuning: we provide a replay API that can re-run historical traffic through tuned detector thresholds for validation.
+- Adaptive thresholding: optional ML-based dynamic thresholds that reduce alert spikes during model rollouts.
+
+4) Evidence & auditability
+- Investigation artifacts included in alert bundle: raw prompt, final model response, model id & version, decoding params, per-token log-probs (configurable), request metadata (client_id, route), trace id, KV-cache snapshot reference, nearest-neighbor match IDs (if retrieval augmentation enabled).
+- Retention: default 90 days for full bundles; configurable up to 3 years for enterprise Dedicated/Private deployments. PII redaction policies can be applied before storage.
+
+5) Integrations & sandboxing
+- Push targets: HTTP(S) webhook, Splunk HEC, Datadog Events, S3/MinIO drop, SQS/SNS, Azure Event Grid.
+- Pull access: S3 export of alert bundles or direct API query (with pagination and time-range filters).
+- Sandbox: we provide a webhook sandbox endpoint and a test harness for replaying sample alerts (token-limited).
+
+6) False positives & remediation playbook
+- We ship a baseline triage playbook: 1) confirm evidence bundle; 2) check rate/recurrence window; 3) correlate with account signals; 4) assign severity and escalate to CS/Trust if necessary.
+- Enrichment: alerts support custom enrichment fields (customer-supplied risk signals), which can be attached at ingestion or via our enrichment webhook before final dispatch.
+- Escalation: built-in integration with PagerDuty and Jira (create incident ticket with pre-filled fields).
+
+7) Compliance & evidence bundles
+- SOC 2: we provide a SOC 2 summary (SOC2_summary.pdf) plus a list of controls mapped to alerting/monitoring responsibilities. Evidence bundles for incidents include hashed manifests and an audit chain.
+
+Operational notes and limits
+- Rateing: alerting throughput is subject to plan limits; Dedicated customers receive dedicated alerting pipelines with guaranteed throughput and delivery SLAs.
+- Data residency: Private customers can store evidence bundles in customer-managed S3/VPC.
+- PII handling: redaction and tokenization hooks are supported during ingestion.
+
+Sample alert schema (high level)
+- id, severity, detector_ids, request_complete_ts, alert_emit_ts, model_id, tenant_id, evidence_url, enrichment_fields[], suggested_actions[], triage_links[]
+(See attached alert_schema_example.json for concrete JSON payload.)
+
+Attached artifacts:
+- alert_schema_example.json (sample payload)
+- redwood_misuse_playbook_v2.pdf (triage & remediation flows)
+- SOC2_summary.pdf
+
+If useful, we can also provide a brief demo of the sandbox webhook and a guided replay session. Happy to set that up this week.
+
+Best,
+Vivek Kulkarni
+Director, Observability & Safety | Redwood Inference
+
+From: Laura Nguyen <laura.nguyen@aegisfinancial.com>
+To: Ben Carter <ben.carter@redwood.com>, Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Cc: Tom Ellis <t.ellis@aegisfinancial.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Thu, 22 Jul 2026 14:30:00 -0700
+Subject: Re: RFI: Misuse Monitoring, Alerts & Reporting - confirmation and next steps
+
+Vivek / Ben — thanks, that level of detail is perfect and exactly what procurement needs. Couple of follow-ups: 
+
+- Can you confirm the default retention is 90 days for hosted and that Dedicated can be configured to 3 years? We need that statement in writing for our data retention appendix.
+- We'd like the sandbox webhook demo — can you do 30 minutes on Friday 07/24 at 11:00 PT?
+- Please include one sample alert bundle (anonymized) in the HubSpot record you linked so procurement can attach it to the packet.
+
+If you can confirm retention in writing and send the demo invite, we'll proceed to a mutual action plan for procurement.
+
+Thanks,
+Laura
+
+[signature block omitted for brevity]

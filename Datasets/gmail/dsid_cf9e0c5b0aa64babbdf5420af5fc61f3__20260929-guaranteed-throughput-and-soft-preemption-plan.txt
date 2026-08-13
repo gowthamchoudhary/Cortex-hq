@@ -1,0 +1,128 @@
+Guaranteed throughput + soft-preempt behavior — proposed plan
+
+From: Tobias R. <tobias@gridlytics.com>
+To: kimberly_park@redwood.ai
+Cc: Amara Singh <amara@gridlytics.com>
+Date: Tue, 29 Sep 2026 09:12:00 -0700
+Subject: Baseline throughput guarantee + preemption clarifications
+
+Kimberly —
+
+Thanks for the demo last week. We ran a short load test against the dedicated pool and have a couple of gaps to close before we can sign. High-level asks:
+
+- Can Redwood commit to a sustained 800 tokens/sec for our model under our reserved GPU plan (we expect ~200 concurrent low-latency calls)?
+- If you need to preempt due to cluster pressure, what does that look like from an app perspective? Specifically: will requests queue and wait (with backpressure), get immediate 429s, or be drained mid-response?
+- We also want a simple runbook for incident response and an on-call contact for SLA-impacting events.
+
+Attached is our draft SLO language and some numbers from the load test. Happy to hop on a quick call if that helps.
+
+—Tobias
+Tobias R., Head of Platform Engineering
+GridLytics
+
+Attachments: glx-loadtest-summary.csv (referenced), GLX-SLA-draft-v1.pdf
+
+From: kimberly_park@redwood.ai
+To: Tobias R. <tobias@gridlytics.com>
+Cc: ben_carter@redwood.ai, laura_bennett@redwood.ai
+Date: Tue, 29 Sep 2026 11:03:00 -07:00
+Subject: Re: Baseline throughput guarantee + preemption clarifications
+
+Tobias —
+
+Really appreciate the detail and the test artifacts. Short answers up front, longer below: yes, we can support a sustained 800 tokens/sec under a reserved GPU commitment with the config you're describing; preemption will not drain in-flight token streams mid-response under that plan — instead we put affected requests into a short-duration queue and, in worst case, return a 503 when the queue exceeds a configured headroom.
+
+Details / proposed controls:
+- Reserved pool sizing: recommend 4x tiles equivalent to your peak concurrent usage to cover burst and KV/cache warmup. See attached commitment sheet.
+- Soft-preempt window: we propose a 90s grace window during maintenance or transient overload where we continue to accept inflight requests into a bounded queue (default 120 concurrent inflight per shard) before applying 503s. This avoids truncated responses.
+- Grace tokens: we can provide a token-credit buffer (headroom) of 25% sustained headroom for short bursts; these are measured per-minute and reset after a cooldown.
+- Observability & runbook: attached is a draft runbook (gridlytics-runbook-draft.md) that outlines alerts, remediation steps, and an on-call escalation path.
+
+Next steps I propose:
+1) We incorporate these bullets into the SLA addendum and share a redline.
+2) Ben will follow up with pricing for the reserved GPU commit that maps to the headroom credit.
+3) Laura will loop Legal for a short addendum on preemption semantics and incident credits.
+
+Would you be available Thu 10/1 for 30 minutes to walk the runbook and the credit math?
+
+Best,
+Kimberly Park
+Director, Enterprise Sales — Redwood Inference
+Mobile: (415) 555-0128
+
+Attachments: reserved-gpu-commitment-sheet.xlsx, gridlytics-runbook-draft.md
+
+From: ben_carter@redwood.ai
+To: Tobias R. <tobias@gridlytics.com>, kimberly_park@redwood.ai
+Cc: laura_bennett@redwood.ai
+Date: Wed, 30 Sep 2026 09:27:00 -07:00
+Subject: Pricing sketch for 800 tps + headroom credits
+
+Tobias —
+
+Following Kimberly's note — here's a concise pricing and commitment sketch so you can see the tradeoffs:
+
+- Reserved tier: 8 reserved vGPUs (NVIDIA-HX class equivalent), monthly commit. This maps to sustained ~850 tokens/sec with expected 200 concurrent calls in our perf model.
+- Headroom credits: included 25% burst buffer for the first 10 minutes per day. Additional burst time is billed at a predictable unit rate but capped at a monthly overage threshold you set.
+- Incident credit: if we return more than 1% 503s in an SLA month attributable to scheduling/preemption, we provide a partial credit applied to the following invoice (formula in the draft addendum).
+
+I'll assemble an amortized price sheet and include optional 12/24-month discounts. We can also add a short clause guaranteeing no mid-response truncation for reserved customers — that will be in the addendum Laura prepares.
+
+If you're comfortable with the structure I can turn this into a line-item in a commercial term sheet.
+
+Cheers,
+Ben Carter
+Senior Account Executive — Redwood Inference
+
+Attachment: reserved-gpu-commitment-sheet.xlsx (versioned)
+
+From: Amara Singh <amara@gridlytics.com>
+To: kimberly_park@redwood.ai
+Cc: Tobias R. <tobias@gridlytics.com>
+Date: Thu, 01 Oct 2026 08:04:00 -07:00
+Subject: Re: Guaranteed throughput + soft-preempt behavior — proposed plan
+
+Kimberly / Ben —
+
+Thanks — helpful. A few clarifications from our side after review and a quick internal sync:
+
+- We want the soft-preempt window reduced to 60s (instead of 90s) so our tail latencies stay bounded for end-users. Is that feasible?
+- For the headroom credits, can you confirm whether these are consumed on a per-shard or per-account basis? We have spiky traffic isolated to a single shard usually and want credits to be usable where the spike occurs.
+- For the incident credit formula, please confirm that scheduled maintenance with >48hr notice will not count towards credits.
+
+Also, legal asked that the addendum include a single on-call Slack handle and a runbook link (Doc link preferred). We attached redlines to the SLA draft and a short note on the desired credit calculation.
+
+Would like to finalize commercially by EOW if possible.
+
+Regards,
+Amara Singh
+Head of Reliability — GridLytics
+
+Attachments: GLX-SLA-draft-v1_redlines.pdf
+
+From: laura_bennett@redwood.ai
+To: Amara Singh <amara@gridlytics.com>, Tobias R. <tobias@gridlytics.com>
+Cc: kimberly_park@redwood.ai, ben_carter@redwood.ai
+Date: Fri, 02 Oct 2026 16:43:00 -07:00
+Subject: Re: Guaranteed throughput + soft-preempt behavior — proposed plan
+
+Amara / Tobias —
+
+Thanks for the redlines — they were clear and reasonable. Quick responses to each ask: 
+
+- Soft-preempt window: we can accept 60s. We will reflect that in the addendum language and the runbook; operationally it means the bounded queue will accept inflight requests up to 60s before shedding.
+- Headroom credits: consumed at the shard level but pooled across the reserved allocation for your account — effectively credits follow the allocation but can be drawn by any shard within the reserved pool. We'll call this 'pool-level credits' in the addendum to avoid per-shard disputes.
+- Scheduled maintenance: confirmed, planned maintenance with >48 hours notice is excluded from incident credit calculations. Unplanned events are eligible.
+
+Action items:
+1) Laura (me) will draft the SLA addendum and circulate a redline to your legal team (target: Mon 10/05).
+2) Ben will send the commercial term sheet and the DocuSign link for signature.
+3) Kimberly will post the final runbook link to the Drive and add the single Slack escalation handle to the doc.
+
+We will include two attachments to the addendum: the exact headroom credit calculation (spreadsheet) and the runbook. If this looks good I'll loop Legal and get the DocuSign route started.
+
+Best,
+Laura Bennett
+Sr. Contracts Counsel — Redwood Inference
+
+Attachments referenced: GLX-SLA-draft-v1.pdf (redline incoming), gridlytics-runbook-draft.md

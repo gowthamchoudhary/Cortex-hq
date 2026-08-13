@@ -1,0 +1,122 @@
+Urgent: Halogen Health — intermittent stream pauses and elevated 502/error rate
+
+From: Alex Rivera <alex.rivera@halogenhealth.com>
+To: jonas_weber@redwood.ai
+Cc: priya.shah@halogenhealth.com
+Date: 2026-08-18T09:12:00-07:00
+Subject: Realtime feed — intermittent pauses during morning peak
+
+Jonas,
+
+We started seeing intermittent pauses in the streaming transcript during our morning batch window (08:00–09:30 PT). The client UI shows a stream that stops for 6–12s, then resumes with a burst of several tokens; we also observed a spike in 502 and 504 responses on the helper endpoint. Throughput is within the agreed profile, so this looks like output fragmentation rather than throttling.
+
+Attached is a short capture and timeline. Can you confirm this is on Redwood's side or our edge? This started after the last model roll last week.
+
+—Alex
+Alex Rivera
+Director of Platform — Halogen Health
+
+From: jonas_weber@redwood.ai <jonas_weber@redwood.ai>
+To: Alex Rivera <alex.rivera@halogenhealth.com>
+Cc: michael_grant@redwood.ai, marissa_cole@redwood.ai
+Date: 2026-08-18T09:33:00-07:00
+Subject: Re: Realtime feed — intermittent pauses during morning peak
+
+Alex — thanks for the quick note and the capture. I’m looping in Michael (engineer on serving infra) and Marissa (CS) to triage.
+
+Immediate next steps:
+- Michael: can you review the attached capture and check for increased retry / chunk reassembly events on the serving side?
+- Marissa: I’ll coordinate a joint call if we need to involve ProdEng and our on-call.
+
+We’ll treat this as high priority until we confirm root cause; I’ll update within 60 minutes.
+
+—Jonas
+Jonas Weber
+Account Executive, Redwood Inference
+
+From: michael_grant@redwood.ai <michael_grant@redwood.ai>
+To: jonas_weber@redwood.ai, alex.rivera@halogenhealth.com
+Cc: marissa_cole@redwood.ai
+Date: 2026-08-18T10:02:00-07:00
+Subject: Re: Realtime feed — intermittent pauses during morning peak
+
+Alex / team,
+
+I pulled the capture and searched server-side logs across the customer’s dedicated pool. Early findings (preliminary):
+- We see a pattern of elevated per-connection backpressure around 08:10–08:35 PT; many sessions show multiple short-lived WS reconnects (1006) and chunked transfer close events.
+- Token generation latency for that window increased ~3x on average; the runtime is falling back to a synchronous I/O path on ~7% of requests due to fragmented frames from the proxy layer. This correlates with the bursty resumed output you described.
+- Error surface: a small but visible bump in 502/504 from the helper proxy during the same minutes. Not a wholesale service outage.
+
+Hypothesis: increased intermediate proxy fragmentation (either at customer edge or our ingress) causing the runtime to reassemble tokens inefficiently; the runtime currently triggers protective sync drains when it detects partial chunk sequences, which raises latency and can produce transient 502s.
+
+Next steps I’m taking now:
+1) Capturing packet-level frame boundaries from the ingress for the peak window (attached logs).
+2) Temporarily disabling the extra proxy-level chunk coalescing rule on the customer’s route to see if it reduces fragmentation impact (non-disruptive toggle).
+3) If toggling reduces the symptom, we’ll propose a longer-term fix: adjust keepalive / frame-size heuristics and add a small buffering window to prevent synchronous drains under fragment patterns.
+
+I’ll report back with the ingress trace in ~30 minutes.
+
+—Michael Grant
+Senior Software Engineer, Serving Runtime — Redwood Inference
+
+From: marissa_cole@redwood.ai <marissa_cole@redwood.ai>
+To: jonas_weber@redwood.ai, alex.rivera@halogenhealth.com
+Cc: evelyn_hart@redwood.ai
+Date: 2026-08-18T11:10:00-07:00
+Subject: Re: Realtime feed — intermittent pauses during morning peak
+
+Alex, Jonas — thanks for the updates. Halogen is understandably jittery: this customer runs patient-facing tooling in the window where this happened.
+
+Customer ask so far:
+- A rollback or targeted mitigation they can apply now (they’ve paused a subset of sessions temporarily).
+- A simple postmortem they can include in their incident notes.
+- Confirmation on whether this will affect SLAs / credits.
+
+Evelyn (CS Lead) — I’m marking this for exec visibility. If the mitigation requires a service change or a model pin, we should decide quickly on a temporary credit and a formal incident response.
+
+Alex — we’ll share the mitigation toggle and a concise timeline within the hour. I’ll also get product to prioritize the keepalive heuristics fix in the short-term backlog.
+
+—Marissa Cole
+Customer Success Manager — Redwood Inference
+
+From: jonas_weber@redwood.ai <jonas_weber@redwood.ai>
+To: evelyn_hart@redwood.ai, rishi_malhotra@redwood.ai, marissa_cole@redwood.ai
+Cc: alex.rivera@halogenhealth.com, priya.shah@halogenhealth.com
+Date: 2026-08-19T17:45:00-07:00
+Subject: Escalation summary and ask: Halogen — incident follow-up + executive decision required
+
+Evelyn / Rishi — following up with a short summary and an ask for executive alignment. Please see the diagnostic timeline below and the decision we need.
+
+Summary (prior 24hrs):
+- Incident window: 2026-08-18T08:05–08:40 PT. Customer experienced repeated short pauses (6–12s) in streaming output and a localized 502/504 bump.
+- Root cause (interim): Fragmented chunk sequences from an upstream proxy path caused the runtime to enter synchronous drain behavior for a subset of sessions (~7% of traffic), increasing per-token latency and surfacing 502s from the helper proxy.
+- Mitigation applied: We pushed a non-disruptive toggle to reduce proxy-level chunk coalescing on Halogen’s route; observed immediate reduction in output pauses during the subsequent window. Packet traces attached.
+- Impact: Customer paused ~15% of sessions and reduced feature gating to limit exposure; business impact is moderate — patient-facing feature was degraded for 35 mins during a high-value window.
+
+Ask for execs:
+1) Approve a one-time customer credit equal to 10% of last month’s hosted usage as a goodwill gesture pending final RCA (Halogen’s legal prefers a numerical credit).
+2) Approve prioritization (2-week) for runtime keepalive/frame-coalescing heuristics in the serving backlog with an on-call owner and a post-deploy verification plan.
+3) Greenlight an outreach call with Halogen’s CTO next week (Jonas to schedule) and provide a short executive summary to include in the meeting.
+
+I recommend approval on all three items to de-escalate and retain the account. Marissa, I leave the customer communications to you once we have Rishi/Evelyn sign-off.
+
+Attachments: capture-20260818-peak-window-logs.txt, halogen-requested-playbook.pdf
+Doc links: JIRA SUP-7892 (tracking runtime fix)
+
+—Jonas Weber
+Account Executive, Redwood Inference
+
+On Tue, Aug 18, 2026 at 11:10 AM Marissa Cole <marissa_cole@redwood.ai> wrote:
+> Alex, Jonas — thanks for the updates. Halogen is understandably jittery: this customer runs patient-facing tooling in the window where this happened.
+>
+> Customer ask so far:
+> - A rollback or targeted mitigation they can apply now (they’ve paused a subset of sessions temporarily).
+> - A simple postmortem they can include in their incident notes.
+> - Confirmation on whether this will affect SLAs / credits.
+>
+> Evelyn (CS Lead) — I’m marking this for exec visibility. If the mitigation requires a service change or a model pin, we should decide quickly on a temporary credit and a formal incident response.
+>
+> Alex — we’ll share the mitigation toggle and a concise timeline within the hour. I’ll also get product to prioritize the keepalive heuristics fix in the short-term backlog.
+>
+> —Marissa Cole
+> Customer Success Manager — Redwood Inference

@@ -1,0 +1,117 @@
+Region lockdown & customer-managed storage erasure — questions
+
+From: Daniel Park <daniel.park@aegispharma.com>
+To: Michael Grant <michael.grant@redwood.ai>
+Cc: Priya Shah <priya.shah@aegispharma.com>
+Date: 2026-07-14T09:12:00-04:00
+Subject: Region lockdown & erase process for our private deployment
+
+Hi Michael,
+
+Thanks for the demo last week. We are reviewing the deployment checklist for our private VPC deployment and have two immediate questions from security: 1) Can you walk us through how we (the customer) can ensure data never leaves our selected AWS region (region-lockdown/geofencing)? 2) When we request a full erase of customer-controlled storage, what is the exact sequence you run, what artifacts do you provide as proof of deletion, and how long does it take?
+
+Priya (CC’d) is our security lead — she’ll coordinate compliance requirements. High level answers are fine to start; we may request a more formal attestation afterward.
+
+Regards,
+Daniel
+Director, Cloud Security
+Aegis Pharmaceuticals
+
+--
+(Contact: +1-617-555-0194)
+From: Michael Grant <michael.grant@redwood.ai>
+To: Daniel Park <daniel.park@aegispharma.com>
+Cc: Priya Shah <priya.shah@aegispharma.com>, Evelyn Hart <evelyn.hart@redwood.ai>
+Date: 2026-07-14T10:05:00-04:00
+Subject: Re: Region lockdown & erase process for our private deployment
+
+Hi Daniel — thanks, and great questions. Short answers up front:
+
+- Region lockdown: Yes — for Private/VPC deployments we support strict region pinning. When you configure the deployment we provision customer-managed storage (S3-compatible buckets or on-prem object stores under your account) and we enforce egress controls so no data is routed outside the selected region. We also support subnet and routing policies to prevent cross-region egress.
+
+- Erase process & artifacts: We perform a coordinated three-step erase: (1) logical removal (delete markers/DB pointers), (2) object-level purge (S3 delete + version purge / object-store compaction), (3) cryptographic tombstone (optionally rekey CMKs). After completion we provide an audit package: deletion-job IDs, cloud audit logs (timestamps, request IDs), manifest of deleted object keys, and a signed attestation PDF on request. Typical SLA for a full customer-storage erase is 48–72 hours from approval for standard-sized deployments; timelines vary by store size and retention holds.
+
+Looping in Evelyn (security engineering) for the technical runbook and evidence format — Evelyn, I’ve attached a simple diagram of the VPC data flow and can share the erase runbook if helpful.
+
+Next steps: Priya — if you can share (a) expected bucket sizes / approx TB, (b) whether you require CMK rotation/rekey, and (c) any legal holds, we’ll map a tailored timeline and attestation plan.
+
+Best,
+Michael Grant
+Account Executive, Redwood Inference
+
+Attachment: redwood-vpc-data-flow.png
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Michael Grant <michael.grant@redwood.ai>, Rishi Malhotra <rishi.malhotra@redwood.ai>
+Cc: Daniel Park <daniel.park@aegispharma.com>, Priya Shah <priya.shah@aegispharma.com>
+Date: 2026-07-14T15:02:00-04:00
+Subject: Re: Region lockdown & erase process for our private deployment
+
+Michael / team — adding the technical details so Aegis has a clear, reproducible plan. I’m pasting the sanitized runbook excerpt below and attaching a slightly longer playbook.
+
+On region lockdown:
+- For Private/VPC we run the control plane in Redwood-managed regions, but all customer payloads and persistent storage are provisioned in the customer's cloud account or in customer-hosted on-prem object stores. We require the customer to provide the target region and networking (VPC/subnet/route table) during provisioning.
+- Network-level enforcement: We deploy strict egress ACLs and security group rules, and we validate via an automated egress test (iperf/http checks) that no outbound packets reach IPs outside the region. We provide the test report as part of handover.
+
+On erase sequence (detailed):
+1) Authorization & freeze (t0): Customer approves erase via signed ticket (email or ticketing system). We create an immutable delete-order record with a unique erase_job_id.
+2) Logical deletion (t0+0–2h): Application-level pointers and indexing are removed to make data unreachable by the service. Database transactions are recorded with request IDs.
+3) Object purge (t0+2–48h): For S3-compatible stores we call DeleteObject for each key, then if versioning is enabled we purge all versions and delete delete-markers. For on-prem stores we run vendor-specific compaction/garbage-collection APIs. We capture cloud provider request IDs and job IDs for each operation.
+4) Crypto tombstone (optional, t0+2–72h): If requested, we rotate or revoke the customer-managed CMK so any lingering encrypted blobs cannot be decrypted. Note: CMK revocation is irreversible — confirm with legal.
+5) Final verification & artifact package (t0+24–72h): We run a scan to confirm no reachable keys remain, collect CloudTrail/Stackdriver/audit logs for the operations, generate a manifest (SHA256 hashes of key names + sizes), and create a signed attestation.
+
+Evidence provided:
+- Erase job manifest (CSV): key path, operation timestamps, request IDs.
+- Cloud audit logs (zip): CloudTrail events filtered to erase_job_id.
+- Verification report: scan results and pass/fail counts.
+- Signed attestation PDF (draft provided) that includes job id, operator identity, and time window.
+
+Edge cases & retention holds:
+- If your account has legal holds or 3rd-party retention locks, we cannot override those and we’ll surface blockers in the initial authorization step.
+- For very large stores (>100TB) the object purge may be chunked and take longer; we provide progress updates and intermediate manifests.
+
+Operational notes:
+- We recommend using customer-managed buckets under your cloud account (not Redwood-managed) to maximize control and minimize reliance on us for long-term governance.
+- We support S3 Object Lock/retention if you need write-once guarantees, but that may lengthen erase timelines.
+
+Attachment: erase-playbook.md (operator commands, verification queries, sample manifest format)
+
+Evelyn Hart
+Security Engineering Lead
+Redwood Inference
+
+On Jul 14, 2026, at 10:05, Michael Grant <michael.grant@redwood.ai> wrote:
+> Hi Daniel — thanks, and great questions. Short answers up front:
+> 
+> - Region lockdown: Yes — for Private/VPC deployments we support strict region pinning. ...
+> 
+> Attachment: redwood-vpc-data-flow.png
+From: Michael Grant <michael.grant@redwood.ai>
+To: Daniel Park <daniel.park@aegispharma.com>, Priya Shah <priya.shah@aegispharma.com>
+Cc: Evelyn Hart <evelyn.hart@redwood.ai>
+Date: 2026-07-15T16:47:00-04:00
+Subject: Re: Region lockdown & erase process for our private deployment
+
+Daniel / Priya — thanks for the details you sent offline (approx 12 TB across two buckets; no legal holds). Based on that:
+
+Planned timeline:
+- Authorization & freeze: today by ticket (we’ve created erase_job_id = EJ-20260715-AEGIS-9)
+- Logical deletion: within 2 hours of authorization
+- Object purge: expected 24–36 hours (we’ll run parallel workers against both buckets)
+- Crypto tombstone: we will not rotate CMKs unless you request; default is no crypto tombstone.
+- Final attestation: delivered within 72 hours of start.
+
+Deliverables we will provide after completion:
+- CSV manifest of deleted keys and sizes (SHA256 on key names)
+- Cloud provider request IDs and CloudTrail slice for the job
+- Verification scan summary (zero reachable keys)
+- Signed PDF attestation (we can Docusign if you need a signature) — draft attached.
+
+Next actions for Priya: reply-all with explicit authorization to proceed and confirm whether you want CMK revocation. If you want the Docusign attestation path, say so and we’ll send the DocuSign packet.
+
+We’ll post progress updates to the ticket and share intermediate manifests as they complete.
+
+Best regards,
+Michael Grant
+Account Executive, Redwood Inference
+
+Attachment: redwood-deletion-attestation-draft.pdf

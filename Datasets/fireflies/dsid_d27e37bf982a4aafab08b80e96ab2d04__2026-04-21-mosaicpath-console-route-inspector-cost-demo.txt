@@ -1,0 +1,93 @@
+MosaicPath Console: route inspector & cost breakdown demo
+
+Intro demo of Redwood Console route inspector, per-route telemetry and cost attribution. Customer focused on mapping traffic to billing and identifying high-cost routes. Discussed hosted vs dedicated tradeoffs, SSO/KMS requirements, and pilot next steps.
+Meeting header: 2026-04-21 16:00 PT; duration ~42m; attendees: Daniela Park (Redwood AE), Marco Reyes (Redwood SE), Aisha Kumar (Redwood Solutions), Leah Chen (MosaicPath), Omar Diaz (MosaicPath), Priya Nair (MosaicPath), Samir Patel (MosaicPath Finance)
+
+Summary (auto): quickconsole walkthrough, focus on per-route cost attribution and route inspector; collection of sample traffic; agreement to run pilot and share security artifacts.
+
+[00:00] Daniela Park: hey everybody, thanks for joining. can you all hear me okay?
+[00:05] Leah Chen: yes, can hear you. thanks da- uh Daniela.
+[00:12] Marco Reyes: hi team, marco here, i'll be showing the route inspector and cost breakdown pieces. a couple of folks from infra on your end?
+[00:20] Omar Diaz: yep that is me, omar, s-r-e. priya's on too.
+[00:25] Priya Nair: yep, hi all. quick context, we're running a bunch of inference routes in-house today and billing is a black box across teams, our finance partner samir wanted to join to ask about chargeback.
+[00:36] Samir Patel: thanks, yeah, want to see how costs map to teams, curious about per-route attributions and smoothing anomalies.
+
+[01:02] Marco Reyes: great, quick agenda: 1) high level console view, 2) route inspector per-route telemetry and token-level cost where possible, 3) compare hosted vs dedicated economics, 4) questions and next steps.
+
+[02:15] Marco Reyes: opening the console... this is the usage overview dashboard, shows total tokens, latencies, and cost estimate. notice the left nav under 'Routes' — when you click a route you get a breakdown of request volumes by model, avg latency, p95, and then cost split.
+[02:40] Priya Nair: is that using our billing export mapping or is it an estimated cost model?
+[02:48] Marco Reyes: good question. for hosted customers we use Redwood's internal unit pricing to estimate per-route costs. if you supply your reserved rates or committed pricing for dedicated, we overlay that so the numbers match your invoicing. occasionally the transcription may say 'we used committed rates' but it's an overlay, not a rewrite of your invoices.
+
+[04:03] Marco Reyes: zooming into a route here — route inspector shows a time series of requests per minute, a token distribution histogram, and cost per 1k tokens. we also surface 'hot' request patterns that spike KV cash — I mean KV cache churn — apologies.
+[04:20] Omar Diaz: KV cash, ha. yes cache churn has bitten us before. can you filter by model variant and sequence length?
+[04:28] Marco Reyes: yes, you can facet by model variant, sequence length buckets, and by metadata tags like service, org, and customer id. the console supports custom route tags so you can map requests back to product teams.
+
+[06:04] Leah Chen: how do you handle routing policies — if we have a canary or overflow to cheaper model during burst do we still get accurate cost attribution?
+[06:12] Marco Reyes: we attach route context + fallback info. the cost attribution is tagged per actual execution: so if the request fell back to a quantized variant, the cost recorded is the variant's execution cost. smoothing across fallbacks is optional but we can show both 'logical route' and 'execution trace' views.
+
+[07:30] Priya Nair: we're particularly worried about tokenization differences across open models — will the token counts be normalized?
+[07:38] Marco Reyes: tokens are counted at the runtime tokenization step we run; there can be small variances between tokenizers, we surface 'model tokenizer' used in the trace. we also provide a conversion table for common models (gpt-style vs llama-style) in the mapping doc.
+
+[09:05] Marco Reyes: switching to the cost drilldown: per-route breakdown has three panes — volume, tokens, and estimated $ cost. you can expand the cost pane to see unit cost contributors: kernel selection, batching efficiency, and sustained instance surcharge for dedicated pools.
+[09:26] Samir Patel: sustained instance surcharge? can you unpack that?
+[09:30] Marco Reyes: sure — for dedicated capacity there's a baseline reserved cost which we amortize across tokens; on top of that we show runtime-specific variable cost (e.g., increased kernel use for long sequences). the surcharge term is our label for the proportion of fixed reserved cost allocated to a route when utilization is low.
+
+[11:10] Leah Chen: curious about how much of the cost savings come from caching vs batching. our traffic is very bursty.
+[11:18] Marco Reyes: for bursty traffic, prefix/KV caching can save a lot if you have repeated prompts; batching helps for steady streams. our Optimize recommendations will suggest batching windows and quantization for routes with high p50 token lengths. we can run sample simulations if you share traffic traces.
+
+[12:55] Omar Diaz: security — we need SOC2 docs, SSO via SAML, and KMS integration for keys. any gotchas for on-prem vs VPC?
+[13:03] Daniela Park: yes, we have standard SOC2 and ISO artifacts; SSO/SAML is supported and RBAC maps to your IdP groups. for private deployments we support customer-managed KMS/HSM and detailed audit logs — you'll get audit events per request including route id and execution variant. we'll share the security pack after the call.
+
+[14:45] Priya Nair: does audit logging include full prompt text or is that redactable?
+[14:52] Aisha Kumar: logs are configurable — you can choose to redact prompt content, or store only digests/hashes for QA. retention policies are configurable per environment.
+
+[16:20] Marco Reyes: demoing the instrumentation flow now: you can add route tags via header or SDK parameter, or set at the tenant-level in the API. we also ingest platform labels from telemetry systems like prometheus or Datadog if you forward them.
+
+[17:55] Leah Chen: will we have to change our clients a lot to send these tags?
+[18:01] Marco Reyes: minimal; if you already set a header for team or service we can read it. otherwise a small SDK patch to attach route metadata on request will do. we include migration snippets in our runbook.
+
+[19:40] Marco Reyes: showing anomaly detection — console flags cost anomalies by z-score and by manual thresholds. you can set alerts to slack/email and create a ticket template that pre-populates with route traces and example requests.
+[20:10] Omar Diaz: nice. can we backfill cost attribution for historical data?
+[20:16] Marco Reyes: yes, if you provide request logs with timestamps and model/execution variant we can retroactively compute per-route costs for the last N months — there's a small processing fee for large backfills.
+
+[22:03] Priya Nair: on accuracy, if we pin a route to a quantized variant for cost reasons, how do we manage quality regressions?
+[22:12] Marco Reyes: great question — Redwood Optimize ties quality monitoring to prompt sets. you can define golden prompts and we run evals comparing outputs across variants. if regression exceeds threshold, we alert and can auto-fallback to a higher-quality variant.
+
+[24:00] Samir Patel: what does the pilot look like? we want to start small with a few routes and get a chargeback-ready report for finance.
+[24:08] Daniela Park: typical pilot is 2–4 weeks: we instrument 3–5 routes, import a week's of traffic, enable the route inspector and cost attribution, and deliver a chargeback-ready CSV plus a live dashboard for stakeholders. we'll also run a small benchmark to validate unit costs.
+
+[25:12] Leah Chen: timeline wise we have a quarterly review on 05/18, it'd be great to have initial pilot numbers before that.
+[25:20] Daniela Park: understood — we can aim to deliver pilot results week of 05/11 if we get traffic samples and finalize pilot scope this week.
+
+[26:45] Marco Reyes: returning to the console, here's an example of route-level tags enabling team-level chargebacks: you can pivot by tag and create allocation rules to split shared infrastructure across teams by percent-of-requests or token-weighted allocation.
+[27:05] Samir Patel: token-weighted allocation seems fairer for us given long-form generation in one of our products. can the console export a per-team monthly cost breakdown CSV?
+[27:12] Marco Reyes: yes, exportable, and you can schedule recurring exports for finance. we also have a reporting API if you want programmatic ingestion into your billing system.
+
+[29:02] Priya Nair: curious about dedicated pools — if we reserve gpus for high-throughput routes how does autoscaling and burst to hosted work?
+[29:10] Marco Reyes: Redwood Dedicated supports configurable autoscale and burst policies; you can specify a fallback tier where overflow requests route to hosted cheaper instances or a smaller quantized model. the console will show both tiers and attribute cost to the actual execution.
+
+[31:00] Omar Diaz: any readiness checklist for VPC/private deployments?
+[31:06] Aisha Kumar: short checklist: network peering/vpn, routing rules, KMS access, NFS or object store for artifacts, and reserved capacity sizing. we'll send a detailed onboarding doc and a template security questionnaire.
+
+[33:12] Leah Chen: do you support encryption-at-rest with customer keys?
+[33:18] Daniela Park: yes, both at-rest and in-transit; customer-managed keys are supported in private deployments. for hosted we can also integrate with major cloud KMS providers.
+
+[34:45] Marco Reyes: quick note on instrumentation: we recommend tagging early in the request lifecycle to capture full context including user id, product feature, and customer tier. small differences in tag placement can cause big mismatches in attribution.
+
+[36:20] Priya Nair: one more thing — how do we handle ephemeral sessions where token reuse is high? does attribution credit repeated prefixes correctly?
+[36:28] Marco Reyes: the KV cache and prefix caching logic are exposed in the trace; we show cache hits and attribute marginal token costs for each request. repeated prefixes will show lower marginal cost per request in the inspector.
+
+[38:10] Samir Patel: pricing — will you send a pricing sheet that separates reserved capacity vs token-unit pricing for hosted?
+[38:18] Daniela Park: yes, we'll send a tailored pricing sheet with sample math for your traffic patterns, plus the pilot pricing.
+
+[39:25] Leah Chen: ok, quick recap?
+[39:30] Daniela Park: recap — goals: instrument 3–5 routes, provide 1 week of anonymized traffic, run a 2-week pilot to produce a chargeback-ready report and dashboard. deliverables: pilot proposal/pricing, security pack (SOC2 + KMS docs), sample dashboard JSON, and scheduling pilot kick-off. owners: Daniela (pilot proposal & pricing), Marco (runbook + dashboard JSON), Priya (traffic samples), Aisha (security pack share).
+
+[40:12] Priya Nair: sounds good. I'll sync with Samir and get the traffic files.
+[40:18] Samir Patel: thanks — we'll try to get budget approved quickly.
+
+[41:00] Daniela Park: great, i'll send notes and next steps after the call. thanks everyone.
+[41:10] Marco Reyes: thanks, bye.
+[41:20] Omar Diaz: thanks all, bye.
+
+End of transcript.

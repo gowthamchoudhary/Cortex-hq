@@ -1,0 +1,110 @@
+Next steps: extended records trial & model shortlist
+
+From: jonas_weber@redwood.com
+To: emma.li@summithealth.ai, patrick@clinicalops.io
+Cc: neha_kapoor@redwood.com, marcus_lin@redwood.com
+Date: Sun, 30 May 2027 15:12:00 -0700
+Subject: Recap + proposal: extended records demo — suggested models & immediate next steps
+
+Thanks again for the call today — great discussion on the use case and the long-history summarization constraints. Quick recap and a pragmatic plan so we can kick off an initial evaluation next week.
+
+Recap (2 min):
+- Goal: Accurate, extractive + abstractive visit summaries across multi-year EHR notes (~50k–120k token ranges).
+- Constraints: low-latency windowed responses for UI previews, preservation of critical diagnosis tokens, and strict PII-handling (Summit Health SOC2 + custom retention rules).
+- Success signals you mentioned: average ROUGE-L >= 0.48 on your clinician-graded set, <4% hallucination rate on medication/diagnosis spans, and 95th pct latency < 1.2s for 4k token summarization previews.
+
+Model shortlist (initial candidates to benchmark):
+- Llama-3-70B-q4f (floating quantized) — strong long-range capabilities on our extended attention path.
+- Redstone-13B-extended-q3b — fast, cheaper option with KV caching tuned for repeated-patient contexts.
+- Mistral-Extended-32B (open) — promising on long docs in our internal tests; higher memory, better abstractive coherence.
+
+Proposed evaluation plan (week 1):
+1) Synthetic pilot: run 100 representative patient records across 2 windowing configs (sliding 50k vs chunk+chain 120k) to measure truncation/recall tradeoffs. expected turn-around: 3 business days.
+2) Metric set: ROUGE-L, QAGS-style factuality for diagnosis/medication spans, token retention delta (how often critical tokens are lost), latency & cost per 1k tokens.
+3) Deliverables: CSV benchmark (attached as benchmark-results-v1.csv), recommended prompt set (attached prompt-set-v2.jsonl), and a one-page summary with recommended model+quant/config.
+
+Attachments included: mutual_action_plan.pdf (high-level milestones), benchmark-results-v1.csv, prompt-set-v2.jsonl.
+
+Questions for you to confirm:
+- Can we get a 100-record de-identified sample by Tue (June 1)?
+- Any specific policy on token retention/PII beyond SOC2 (e.g., strict deletion after X days)?
+
+If that lines up, we’ll schedule the synthetic run first and loop in Neha to own model selection and Marcus to handle performance tuning. Thanks — I’ll send a short Miro/Drive with the plan after you confirm.
+
+Best,
+Jonas Weber
+Enterprise Solutions
+Redwood Inference
+
+Attachment stubs: mutual_action_plan.pdf (PDF, 2 pages), benchmark-results-v1.csv (CSV, 724 KB), prompt-set-v2.jsonl (JSONL, 28 KB)
+From: emma.li@summithealth.ai
+To: jonas_weber@redwood.com
+Cc: patrick@clinicalops.io
+Date: Mon, 31 May 2027 09:18:00 -0400
+Subject: Re: Recap + proposal: extended records demo — suggested models & immediate next steps
+
+Jonas — thanks for the clear summary. A few clarifying questions before we hand over the sample set: 
+
+1) Token retention & streaming: can Redwood stream partial summaries while preserving a session-level KV cache for a 100k token conversation? We need the UI to show progressive previews without reprocessing the whole window.
+2) PII/data retention: we’re SOC2-certified but have an internal policy to purge PHI after 30 days in test environments. Does Redwood’s Private deployment support customer-managed KMS and configurable ephemeral KV retention?
+3) If we move forward, do you need the data de-identified at our side or can we provide an environment token and let Redwood handle on-host deid?
+
+Also, any rough order-of-magnitude on cost for the synthetic 100-record run (ballpark dollars)? We’ll confirm availability of the sample by EOD Tuesday.
+
+—Emma
+Emma Li
+Head of Data, Summit Health
+
+On Sun, May 30, 2027 at 3:12 PM jonas_weber@redwood.com wrote:
+> Thanks again for the call today — great discussion...
+
+From: jonas_weber@redwood.com
+To: emma.li@summithealth.ai, patrick@clinicalops.io
+Cc: neha_kapoor@redwood.com, marcus_lin@redwood.com
+Date: Mon, 31 May 2027 11:06:00 -0700
+Subject: Re: Recap + proposal: extended records demo — suggested models & immediate next steps
+
+Emma — good questions, answers inline and an updated set of immediate asks.
+
+1) Streaming + KV: yes — our serving runtime supports progressive streaming responses while maintaining a session KV cache for the request lifetime. For the synthetic run we’ll emulate a 100k token logical window using our windowing + prefix-caching (not full 100k always in-memory but accessible through KV retrieval). For Summit Health’s UI previews we recommend a hybrid approach: progressive summaries from a short prefix (4–8k) and a background full-context summarizer that updates the canonical summary.
+
+2) PII / retention: Redwood Private supports customer-managed KMS and configurable KV lifecycle policies. For pilot work we can deploy in a private sandbox with 30-day purge rules. I’ll loop security separately if you want a diagram of the data flow.
+
+3) Data handling: de-identifying on your side is simplest and fastest. If you prefer, we can accept an environment token and run in a dedicated Private sandbox (requires legal + infra steps ~5 business days).
+
+Ballpark cost for synthetic 100-record run (mixed model shortlist): ~$2k–$3k total depending on model choice (we’ll provide exact after we run the first pass).
+
+Immediate asks and owners: 
+- Summit Health: share 100 de-identified records (Emma) — target Tue EOD.
+- Redwood: run synthetic pilot and return CSV + per-record failure examples (Jonas/Marcus) — target Thu next week.
+- Redwood: share a short evaluation dashboard and link to the Drive folder (Jonas).
+
+I’ve attached the prompt-set-v2.jsonl and benchmark-results-v1.csv we used in today’s demo so you can preview prompts and expected scoring.
+
+If that looks good I’ll create the HubSpot deal task and drop the Drive link (see related_links). Neha — can you suss out the config matrix (quant, batching, tokens) and own run steps? Marcus — can you prepare the performance baseline script (latency + KV retrieval checks)?
+
+Thanks — looking forward to getting this running.
+
+Best,
+Jonas
+
+> Attachment stubs: prompt-set-v2.jsonl, benchmark-results-v1.csv
+From: neha_kapoor@redwood.com
+To: jonas_weber@redwood.com, marcus_lin@redwood.com
+Date: Tue, 1 Jun 2027 09:04:00 -0700
+Subject: Re: Recap + proposal: extended records demo — suggested models & immediate next steps
+
+Quick internal note — taking ownership of the config matrix. Initial test matrix (will post full doc to Drive):
+- Models: Llama-3-70B-q4f, Redstone-13B-extended-q3b, Mistral-Extended-32B
+- Quant: q3b/q4f where available
+- Window modes: sliding 50k vs chunk+chain 120k vs hybrid prefix + background canonicalization
+- Metrics: ROUGE-L, token retention delta (policy spans), QAGS-factuality on meds/diagnoses, latency p95
+- Thresholds to qualify: ROUGE-L >= 0.48, QAGS-factuality >= 0.9 on target spans, hallucination <4%
+- Owners / ETA: Neha (model selection + runs) — 3 business days after sample; Marcus (performance tuning) — baseline within 2 business days of runs; Jonas (client comms + deliverable) — final report.
+
+I’ll post the Drive link and the run script later today. We should also confirm whether we’ll run quantized variants on Redwood Dedicated vs Private sandbox (cost delta matters).
+
+-Neha
+Neha Kapoor
+Senior ML Solutions Engineer
+Redwood Inference

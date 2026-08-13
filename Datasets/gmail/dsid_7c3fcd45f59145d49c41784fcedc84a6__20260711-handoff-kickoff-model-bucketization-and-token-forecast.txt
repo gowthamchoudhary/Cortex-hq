@@ -1,0 +1,173 @@
+Kickoff: model shortlist & token estimates for ClearPay onboarding
+
+From: Hannah Ortiz <hannah@clearpay.io>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Date: Sat, 11 Jul 2026 09:02:00 -0700
+Subject: Kickoff: model shortlist & token estimates for ClearPay onboarding
+
+Hi Priya,
+
+Thanks again for the quick intro — excited to get ClearPay onto Redwood. We're planning a kickoff next week to scope the integration and wanted to surface the high-level product needs so your team can suggest an initial model shortlist and rough token volume estimates ahead of the call.
+
+Quick product summary:
+- Primary customer surface: customer support chat (multi-turn), and an automated receipt/expense summarization flow (longer context; attached receipts).
+- Secondary: embeddings for search & classification for receipt OCR outputs.
+- Expected metrics: ~250k MAU, ~20k DAU, with estimated ~3% of DAU hitting the chat feature daily (subject to validation).
+- Typical chat session: 3–5 turns. Average user prompt ~300–700 tokens (variable); responses typically 100–400 tokens. Receipt documents can be up to ~6–12 pages (we can provide sample PDF/text).
+- SLA: 95th pct latency target ~600ms for short chats; okay with higher latency for receipt summarization.
+
+Can you provide:
+1) 2–3 model candidates for chat and 1 for embeddings, with tradeoffs (cost vs quality vs context window).
+2) Ballpark tokens/day and peak QPS given the MAU/DAU above (we recognize this is rough).
+3) Any configuration guidance (context window, caching, batching) we should plan for at kickoff.
+
+I've attached the sizing-template.xlsx with our rough usage. Looking forward to your initial thoughts — can we target a short reply today/tomorrow?
+
+Thanks,
+Hannah Ortiz
+Head of Integrations, ClearPay
+H: +1 415-555-0199
+
+Attachment: sizing-template.xlsx (spreadsheet stub)
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Hannah Ortiz <hannah@clearpay.io>
+Cc: Monica Patel <monica_patel@redwood.ai>, Jordan Blake <jordan_blake@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Sat, 11 Jul 2026 11:15:00 -0700
+Subject: Re: Kickoff: model shortlist & token estimates for ClearPay onboarding
+
+Hi Hannah — thanks for the detail and the template. Looping in Monica (CS lead), Jordan (solutions/implementation), and Ben (inference/throughput) so we can give grounded recommendations before the kickoff.
+
+At a high level, here are an initial candidate set and a few notes:
+
+Model shortlist (initial recommendations)
+- RedSeal-7B-int8 (cost-efficient; good for standard chat, fast latency for short contexts)
+- RedForge-13B-q4f16 (balanced quality/cost; wider context handling up to ~8k tokens)
+- OpenFast-70B-fp16 (highest-quality fallback for the 1–5% of requests requiring best-in-class summarization or complex reasoning)
+- Embeddings: RedEmbed-3B or OpenEmbed-2B (depending on precision needs; RedEmbed cheaper/fast)
+
+Configuration & tradeoffs
+- Context windows: recommend planning for two lanes — a 8k lane for most chat and a 16k lane for document/receipt summarization. If you can confirm the max receipt size, we can refine.
+- Caching: prefix/KV caching will help recurring conversational turns and templated prompts (expect ~8–12% token savings typically).
+- Routing: route short chats to RedSeal-7B-int8 and overflow/higher-quality to RedForge-13B; set an automatic fallback to OpenFast-70B for specific high-value flows.
+
+Next actions before the kickoff:
+- Monica: can you sketch ballpark token/day and peak QPS given Hannah's MAU/DAU assumptions?
+- Ben: please include a short note on recommended dedicated pool sizes for the two lanes and any autoscale/burst guidance.
+
+I've attached a short PDF with the shortlist and quick notes. Will refine once we have the sample receipt and a clearer peak-window estimate.
+
+Thanks,
+Priya Natarajan
+Customer Success Manager, Redwood Inference
+priya_natarajan@redwood.ai
+Attachment: initial_model_shortlist.pdf (one-page PDF)
+From: Monica Patel <monica_patel@redwood.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: Jordan Blake <jordan_blake@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Hannah Ortiz <hannah@clearpay.io>
+Date: Sun, 12 Jul 2026 08:30:00 -0700
+Subject: Re: Kickoff: model shortlist & token estimates for ClearPay onboarding
+
+Thanks — added some concrete math below so the team has a baseline to work from. Quoting Hannah's usage assumptions above for reference.
+
+Summary assumptions (from Hannah):
+- MAU 250k, DAU 20k, chat penetration ~3% of DAU => active chat users/day = 600
+- Average sessions per active user: 1.2
+- Avg prompt length (conservative): 500 tokens; avg response: 200 tokens
+- Avg turns per session: 4 turns (2 prompts from user / 2 responses from model)
+
+Per-session token estimate (approx):
+- Prompts: 2 * 500 = 1,000 tokens
+- Responses: 2 * 200 = 400 tokens
+- Overhead (system + metadata): ~200 tokens
+- Total/session = 1,600 tokens
+
+Daily chat token volume: 600 active users * 1.2 sessions/day * 1,600 tokens = ~1,152,000 tokens/day (~1.15M)
+
+Embeddings & other flows:
+- If 10% of DAU use a search/embedding flow with 3 calls per user at ~512 tokens input each => 20k * 0.10 * 3 * 512 = ~307,200 tokens/day (~0.31M)
+
+Combined estimated tokens/day (baseline): ~1.46M tokens/day
+
+Peak sizing / QPS estimate (worst-case 3 peak hours/day):
+- Assume 40% of daily traffic occurs during 3 peak hours => tokens in peak window = 0.40 * 1.46M = ~584k tokens across 3 hours => ~194.6k tokens/hour => ~54 tokens/sec average over peak hours.
+- For short chat requests (~700 tokens total/request), that maps to ~0.08 requests/sec average. But spikes may concentrate: plan for 4–6x burst capacity => design for ~0.5 rps sustained during peaks and occasional 2–3 rps bursts.
+
+Serving recommendations (initial):
+- Primary lane (short chat, low-latency): RedSeal-7B-int8. Expect sub-500ms token latency on optimized runtime for prompts <=1k tokens.
+- Mid lane (context up to 8k): RedForge-13B-q4f16 for 70–80% of complex multi-turn sessions.
+- High-quality lane: OpenFast-70B-fp16 as a fallback for receipts/long summarization (1–5% of requests).
+
+Pool sizing (ballpark):
+- Host RedSeal-7B-int8 on 2x A10/A100-equivalent nodes (handles short-chat baseline + buffer).
+- RedForge-13B-q4f16: start with 2x A100-80GB-equivalent with autoscale policy (target 60% CPU/GPU util).
+- OpenFast-70B: consider shared on-demand capacity (not dedicated) unless ClearPay wants guaranteed latency for long summaries.
+
+Operational mitigations to reduce cost/latency:
+- Prefix/KV caching for returning conversations (12% savings estimate).
+- Minimize model context by extracting relevant receipt sections (we can help design prompt templates).
+- Use batching for embeddings calls (saves token overhead and GPU utilization).
+
+Next steps for the kickoff:
+1) Hannah: if you can share a small sample set of receipts and the CSV of API usage you mentioned, we'll run a quick tokenization pass to validate the 6–12 page assumption.
+2) Ben/Jordan: please convert the pool sizing above into an initial Dedicated quote (gpu counts + expected monthly commit) so we can include it in the kickoff slide.
+
+Adding HubSpot link for the deal: https://app.hubspot.com/deals/1245789/CP-2026-07-11-01
+
+Thanks — happy to refine.
+
+—Monica
+Monica Patel
+Senior Customer Success Engineer, Redwood Inference
+monica_patel@redwood.ai
+
+> On Sat, 11 Jul 2026 at 11:15, Priya Natarajan <priya_natarajan@redwood.ai> wrote:
+> > Hi Hannah — thanks for the detail and the template. Looping in Monica (CS lead), Jordan (solutions/implementation), and Ben (inference/throughput) so we can give grounded recommendations before the kickoff.
+> >
+> > At a high level, here are an initial candidate set and a few notes:
+> >
+> > Model shortlist (initial recommendations)
+> > - RedSeal-7B-int8 (cost-efficient; good for standard chat, fast latency for short contexts)
+> > - RedForge-13B-q4f16 (balanced quality/cost; wider context handling up to ~8k tokens)
+> > - OpenFast-70B-fp16 (highest-quality fallback for the 1–5% of requests requiring best-in-class summarization or complex reasoning)
+> > - Embeddings: RedEmbed-3B or OpenEmbed-2B (depending on precision needs; RedEmbed cheaper/fast)
+> >
+> > Configuration & tradeoffs
+> > - Context windows: recommend planning for two lanes — a 8k lane for most chat and a 16k lane for document/receipt summarization. If you can confirm the max receipt size, we can refine.
+> > - Caching: prefix/KV caching will help recurring conversational turns and templated prompts (expect ~8–12% token savings typically).
+> > - Routing: route short chats to RedSeal-7B-int8 and overflow/higher-quality to RedForge-13B; set an automatic fallback to OpenFast-70B for specific high-value flows.
+> >
+> > Next actions before the kickoff:
+> > - Monica: can you sketch ballpark token/day and peak QPS given Hannah's MAU/DAU assumptions?
+> > - Ben: please include a short note on recommended dedicated pool sizes for the two lanes and any autoscale/burst guidance.
+> >
+> > I've attached a short PDF with the shortlist and quick notes. Will refine once we have the sample receipt and a clearer peak-window estimate.
+> >
+> > Thanks,
+> > Priya
+> > Attachment: initial_model_shortlist.pdf (one-page PDF)
+
+From: Hannah Ortiz <hannah@clearpay.io>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: Monica Patel <monica_patel@redwood.ai>, Jordan Blake <jordan_blake@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Sun, 12 Jul 2026 10:45:00 -0700
+Subject: Re: Kickoff: model shortlist & token estimates for ClearPay onboarding
+
+Thanks all — this is extremely helpful and much appreciated. We confirmed the three daily peak windows are roughly 8–9am, 12–1pm, and 6–7pm PT (US-focused traffic).
+
+I've attached a small CSV export (api-usage.csv) showing per-minute ingestion for last week's pilot traffic — it highlights concentrated spikes during the windows above. For receipts, attached is a zipped sample set internally; the longest is about 9 pages of text.
+
+We can proceed with the suggested 2-lane approach (8k + 16k), and we're OK with a small percentage of summaries going to a higher-quality model if that keeps the user experience strong. Please go ahead and prepare the Dedicated sizing estimate and a short kickoff slide set (30 mins) with the flow we discussed.
+
+Proposed next call: Mon 2026-07-13 at 10:00am PT — does that work?
+
+Thanks again — looking forward.
+Hannah
+Hannah Ortiz
+Head of Integrations, ClearPay
+
+Attachment: api-usage.csv (CSV stub)
+
+> On Sun, 12 Jul 2026 at 08:30, Monica Patel <monica_patel@redwood.ai> wrote:
+> > Thanks — added some concrete math below so the team has a baseline to work from. Quoting Hannah's usage assumptions above for reference.
+> >
+> > [snip — see full math above]

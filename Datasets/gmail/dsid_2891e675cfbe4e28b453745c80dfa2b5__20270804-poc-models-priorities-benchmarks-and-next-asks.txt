@@ -1,0 +1,125 @@
+Post-demo model prioritization & benchmark links
+
+From: Mina Haddad <mina@redwood.inference>
+To: Daniel Park <daniel@orionai.com>
+Cc: Ben Carter <ben@redwood.inference>, Karthik Iyer <karthik@redwood.inference>
+Date: 2027-08-04T15:10:00-07:00
+Subject: Post-demo model prioritization & benchmark links
+
+Hi Daniel —
+
+Thanks again for the demo time today. Quick recap and a recommended model shortlist with rationale so your procurement and infra teams can evaluate tradeoffs quickly. I attached the prompt pack we used plus the latency benchmarking spreadsheet. Links below too.
+
+Shortlist (recommended starting configs):
+- zephyr-lite-3b-quant (int8) — best cost/throughput for high-concurrency routing.
+  - Rationale: very low token cost (~$0.18 / 1k tokens), P95 latency observed ~320ms for 128-token responses on a single T4-equivalent instance, quality is strong on shorter, template-driven responses but degrades on long-form coherence vs larger models.
+- velocity-6b-int8 (mixed precision) — balanced latency and quality.
+  - Rationale: solid middle ground. P95 ~520ms at 128 tokens, better on domain-specific entity extraction and instruction-following; cost ~ $0.48 / 1k tokens. Good candidate for default.
+- clarity-13b-fp16 (fp16) — quality-first candidate.
+  - Rationale: highest answer fidelity in our tests, P95 ~920ms at same prompt lengths and higher token costs (~$1.20 / 1k). Recommend as fallback for high-importance queries or for an A/B test to validate quality delta.
+
+Operational suggestions and risks:
+- Routing policy: start with velocity-6b-int8 as the primary route, fall back to clarity-13b-fp16 on a small % of requests (canary 5–10%) for quality comparisons. Use zephyr-lite for bulk batch jobs where latency SLOs are stricter than quality.
+- Regression risk: prompt-pack includes edge cases where tokenization differences (int8 quant vs fp16) produced hallucination-like artifacts in long multi-step instructions. We recommend running a 48–72 hour regression run using the attached prompt_pack_v1.jsonl before swapping any production traffic.
+- Benchmarks: latency_benchmarks_q2.xlsx contains per-model P50/P95/P99, token-cost samples, and throughput curves at 1, 5, 10, 25 RPS.
+
+Next asks from your side to firm this up:
+1) Confirm which objective we prioritize (1: minimize cost, 2: minimize P95 latency, 3: maximize quality).
+2) Expected steady-state concurrency (req/s) and SLOs (P50/P95 targets).
+3) Procurement timeline and PO contact so we can map Dedicated capacity sizing.
+
+If helpful we can spin a 72-hour evaluation fleet (dedicated trial) and run the prompt pack across all three configs — we’ll provide a per-model regression report + diffed example failures and a suggested fallback policy.
+
+Links & attachments:
+- Drive (benchmarks + raw logs): https://drive.google.com/drive/folders/1BenchmarksPack
+- HubSpot deal: https://app.hubspot.com/deal/OR-4832
+- Attachments: latency_benchmarks_q2.xlsx; prompt_pack_v1.jsonl; model_eval_summary.pdf
+
+Thanks — I’ll block a short technical follow-up slot if you’re available next week.
+
+—
+Mina Haddad
+Enterprise Solutions — Redwood Inference
+mina@redwood.inference | +1 (415) 555-0142
+
+
+From: Daniel Park <daniel@orionai.com>
+To: Mina Haddad <mina@redwood.inference>
+Cc: procurement <procure@orionai.com>
+Date: 2027-08-04T17:04:00-07:00
+Subject: Re: Post-demo model prioritization & benchmark links
+
+Thanks Mina — great recap and nice to see the numbers. A couple clarifying items from my side: we currently need to hit a 250ms median and <=800ms P95 for our interactive assistant at ~10 sustained req/s per instance. Our cost target is ~ $0.60 / 1k tokens or lower if possible (we can re-route heavier prompts to background jobs).
+
+Can you confirm which of your recommended configs meets both the latency and cost ceiling at our target concurrency, and what the expected failure modes are? Also, procurement will need a simple monthly cost projection for 10k / 100k / 1M tokens so they can size the PO.
+
+We would also like to see a short list of prompts (subset of the pack) that typically surface hallucination/regression behavior so our internal eval team can parallel-run checks.
+
+Finally — timeline: procurement wants a 30–45 day window for contract review. Can Redwood provide a 30-day trial or we should aim for a paid pilot immediately?
+
+Regards,
+Daniel
+Senior Product Manager — Orion AI
+daniel@orionai.com
+
+
+From: Mina Haddad <mina@redwood.inference>
+To: Daniel Park <daniel@orionai.com>
+Cc: Ben Carter <ben@redwood.inference>, Karthik Iyer <karthik@redwood.inference>
+Date: 2027-08-05T09:12:00-07:00
+Subject: Re: Post-demo model prioritization & benchmark links
+
+Hi Daniel —
+
+Thanks — quick answers inline and a proposed low-effort validation plan.
+
+1) Latency/cost mapping at ~10 RPS (summary):
+- zephyr-lite-3b-quant: meets your median and P95 comfortably (P50 ~ 95ms, P95 ~ 260–340ms depending on batching); cost ~ $0.18 / 1k tokens. This is the only model in the shortlist that reliably hits 250ms median at 10 RPS without expensive horizontal scaling.
+- velocity-6b-int8: borderline on P95 at 10 RPS (P95 ~ 480–560ms in our T4-equivalent baseline); cost ~ $0.48 / 1k. With modest autoscaling (1.5x), it hits your P95 target. Provides better quality than zephyr on complex prompts.
+- clarity-13b-fp16: does not meet 800ms P95 at your concurrency without dedicated higher-tier GPUs (A10/A100) — P95 ~ 900–1100ms on mid-tier. Cost > $1.00 / 1k unless run on committed Dedicated capacity. Best used as a controlled fallback for high-value flows.
+
+2) Failure modes to call out:
+- Quant artifacts: zephyr-lite occasionally shortens generated lists or drops nested bullet structure with long contexts — appears in ~0.6% of our evals on the provided prompt set.
+- Hallucination spikes: clarity-13b shows fewer hallucinations overall, but when present the responses are longer and harder to detect via token-based heuristics; we recommend human-in-the-loop flags for the first 2 weeks.
+- Tokenization mismatches: some of your older prompts include non-UTF whitespace that alters input length and degrades cache efficiency — we’ll provide a small normalizer script.
+
+3) Ask/proposal:
+- We can spin a 72-hour dedicated trial (no charge) that runs the full prompt_pack across the three configs, collects P50/P95/P99, per-example diffs, and a small set of automated quality checks (BLEU, ROUGE-ish metrics, and a factuality heuristic). Results delivered within 5 business days after trial completion.
+- Procurement: we’ll provide projected spend tables for 10k/100k/1M tokens across the three configs (attached in model_eval_summary.pdf). If you prefer an immediate paid pilot, we can propose a 30-day committed trial with a credit back if you convert to Dedicated within 60 days.
+
+Next steps I suggest:
+- You confirm priority (cost vs latency vs quality).
+- We schedule a 30 minute technical sync where we run through the prompt subset that surfaces regressions.
+- I’ll task Ben to provision a trial fleet if you say go.
+
+Quoted for context:
+> On 2027-08-04T15:10:00-07:00, Mina Haddad wrote:
+> > Shortlist (recommended starting configs):
+> > - zephyr-lite-3b-quant (int8) — best cost/throughput for high-concurrency routing.
+> > - velocity-6b-int8 (mixed precision) — balanced latency and quality.
+> > - clarity-13b-fp16 (fp16) — quality-first candidate.
+
+Let me know what you want us to run first and I’ll get the trial queued.
+
+—
+Mina Haddad
+Enterprise Solutions — Redwood Inference
+mina@redwood.inference
+
+
+From: Ben Carter <ben@redwood.inference>
+To: Mina Haddad <mina@redwood.inference>, Karthik Iyer <karthik@redwood.inference>
+Date: 2027-08-05T10:22:00-07:00
+Subject: Re: Post-demo model prioritization & benchmark links
+
+Mina/Karthik — confirmed. I’ll provision the 72-hour trial fleet (zephyr-lite + velocity-6b + clarity-13b) and attach the automated eval harness. Procurement note — I added the HubSpot deal OR-4832 and a cost projection card.
+
+Action items:
+- Ben: provision trial + enable perf logging to shared Drive folder.
+- Mina: send the 10–15 prompt subset for regression focus (we already have prompt_pack_v1.jsonl attached).
+- Karthik: prepare autoscale policy suggestion for velocity-6b to meet 10 RPS P95 target.
+
+Ben Carter
+Solutions Engineering — Redwood Inference
+ben@redwood.inference
+

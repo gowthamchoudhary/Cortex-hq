@@ -1,0 +1,122 @@
+Cache hit modeling & budget next steps (NovaHealth)
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Aisha Roy <aisha.roy@novahealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 20 Jul 2027 16:12:00 -0700
+Subject: Follow-up: Cache hit modeling for NovaHealth integration
+
+Hi Aisha —
+
+Great to meet earlier. Quick recap + open questions so we can lock the pricing model and get a pilot scoped. Notes from the call:
+
+- Product: patient-facing conversational assistant for intake + triage.
+- Active MAU-ish: ~4,000 users (you mentioned this was expected to scale).
+- Sessions: ~2 sessions/user/day average (you flagged this may vary by pilot cohort).
+- Tokens: I captured ~1,200 tokens per session from examples you showed.
+
+Back-of-envelope monthly token math (so we’re aligned):
+- Daily sessions = 4,000 users * 2 sessions = 8,000 sessions/day
+- Daily tokens = 8,000 * 1,200 = 9,600,000 tokens/day
+- Monthly tokens (30d) ≈ 9,600,000 * 30 = 288,000,000 tokens/month
+
+Open questions we need to confirm for a pricing model:
+1) Average tokens/session — can you confirm if 1,200 is a 90th-percentile or a median?
+2) Prefix reuse: how much of the user experience is identical across sessions (e.g., fixed intake prompts, policy text)? We use this to estimate prefix cache hit rates.
+3) Pilot target budget range (monthly) and target effective $/1M tokens. You mentioned wanting to keep effective spend under a set band — please share that band if possible.
+
+I’ll attach a short hit-rate model and a pricing anchor to show effective $/1M at different cache-hit scenarios. If we can confirm the two data points above I’ll turn this into a pilot SOW with concrete cost estimates.
+
+Attachments: novahealth_call_recording.mp4 (recording), novahealth_hitrate_model_v1.xlsx (model)
+
+Next steps:
+- Aisha: confirm tokens/session and prefix reuse %
+- Marissa/Karthik: prepare a 30-day pilot proposal once we have the numbers
+
+Thanks — Jonas
+Jonas Weber
+Enterprise AE | Redwood Inference
+jonas.weber@redwood.com | +1 415-555-0199
+
+From: Aisha Roy <aisha.roy@novahealth.com>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: Tom Chen <tom.chen@novahealth.com>
+Date: Tue, 20 Jul 2027 19:03:00 -0700
+Subject: Re: Follow-up: Cache hit modeling for NovaHealth integration
+
+Thanks Jonas — good summary. Two clarifications from our side after talking to the product team:
+
+- Tokens/session: median is closer to 900 tokens/session (we had a few longer sessions in the demo that pushed the 1,200 number).
+- Sessions/user/day: we see ~1.3 sessions/user/day in production (pilot cohort likely higher).
+- Prefix reuse: ~60% of session requests share a common intake prefix (standard questions + policy text). Another ~10% are repeated follow-ups within the same user session.
+
+Revised monthly math (median):
+- Daily sessions = 4,000 * 1.3 ≈ 5,200 sessions/day
+- Daily tokens = 5,200 * 900 = 4,680,000 tokens/day
+- Monthly tokens (30d) ≈ 4,680,000 * 30 = 140,400,000 tokens/month
+
+Budget: for the pilot we have a soft cap of $40k/month. For GA we’re targeting an effective spend of $500–$900 per 1M original tokens (we know caching can reduce billed tokens).
+
+We also have a standard security questionnaire — I’ll share it separately.
+
+Aisha
+Aisha Roy
+Head of Product — NovaHealth
+aisha.roy@novahealth.com
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Aisha Roy <aisha.roy@novahealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Hannah Schmitt <hannah.schmitt@redwood.com>
+Date: Wed, 21 Jul 2027 08:02:00 -0700
+Subject: Re: Follow-up: Cache hit modeling for NovaHealth integration
+
+Thanks for the clarifications — super helpful. I updated the attached model (novahealth_hitrate_model_v1.xlsx) and included a concise pricing anchor (redwood_pricing_anchor_v2.pdf). Key assumptions I used so we have a shared baseline:
+
+Assumptions (baseline):
+- Median monthly tokens (from your numbers): 140,400,000 tokens/month
+- Base list price (uncached) we’re using for this example: $1,200 per 1M billed tokens
+- Prefix cache operational overhead: we apply a small storage/serve uplift ~5% on top of billed compute to cover cache management and ephemeral storage (this shows as a small uplift vs pure linear math)
+
+How we compute effective $/1M original tokens:
+- Billed tokens = original_tokens * (1 - hit_rate)
+- Total cost = (billed_tokens / 1,000,000) * base_price + cache overhead (modeled as 5% uplift on cost)
+- Effective $/1M original tokens = Total cost / (original_tokens/1,000,000)
+
+Scenario outputs (rounded):
+- Hit rate = 0% -> Effective ~$1,260 per 1M original tokens (1200 * 1.05)
+- Hit rate = 25% -> Effective ~$945 per 1M original tokens (1200 * 0.75 * 1.05)
+- Hit rate = 50% -> Effective ~$630 per 1M original tokens (1200 * 0.5 * 1.05)
+- Hit rate = 70% -> Effective ~$378 per 1M original tokens
+- Hit rate = 90% -> Effective ~$126 per 1M original tokens
+
+Interpretation / recommendation:
+- Your target band ($500–$900 /1M original tokens) maps to a required hit rate roughly between 40%–60% (given our 5% cache overhead and the $1,200 baseline).
+- Given your stated ~60% prefix reuse, a realistic pilot hit rate (prefix + session repeat) of 50% is achievable with:
+  - Aggressive short TTLs on the prefix cache for intake templates
+  - A warm-start strategy where we pre-fill hot prefixes for the pilot cohort
+
+Pilot proposal (next steps):
+1) 30-day pilot with a capped spend of $40k/month (you mentioned the cap) — we’ll scope traffic to validate hit rate.
+2) Redwood will run a one-week warm-fill: pre-populate prefix cache for top 200 intake flows and monitor hit coverage.
+3) Weekly check-ins to update the model and adjust TTLs.
+
+Attachments: novahealth_hitrate_model_v1.xlsx, redwood_pricing_anchor_v2.pdf
+
+If you’re comfortable, Marissa and Karthik will draft the pilot SOW and we’ll route the security questionnaire to your security team.
+
+— Jonas
+
+From: Aisha Roy <aisha.roy@novahealth.com>
+To: Jonas Weber <jonas.weber@redwood.com>
+Cc: Tom Chen <tom.chen@novahealth.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Wed, 21 Jul 2027 09:12:00 -0700
+Subject: Re: Follow-up: Cache hit modeling for NovaHealth integration
+
+Appreciate the clear modeling — this is exactly what we needed. We’re supportive of the 30-day pilot with the $40k/month cap. Two quick asks before we sign the SOW:
+
+1) Can you include an explicit acceptance criteria for hit rate measurement (how many requests, which endpoints, sampling method)? We want the pilot to produce defensible metrics.
+2) Security questionnaire: I’ll send it by EOD. Please share a timeline for Redwood to respond (we should aim for <7 business days).
+
+If those are OK, we’re good to move to SOW drafting. Please have Marissa send the SOW and a short timeline (kickoff, warm-fill, pilot).
+
+Thanks — Aisha

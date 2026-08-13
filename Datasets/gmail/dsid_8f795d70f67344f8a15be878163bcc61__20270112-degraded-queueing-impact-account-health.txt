@@ -1,0 +1,128 @@
+Degraded queueing causing customer timeouts — account health and exec briefing
+
+From: Jill Park <jill.park@neurolytics.com>
+To: soojin_lee@redwood.ai
+Cc: tim.olson@neurolytics.com, ops@neurolytics.com
+Date: Tue, 12 Jan 2027 08:23:00 -0800
+Subject: Spike in timeouts impacting batch ingestion
+
+Soojin —
+
+We started seeing a surge in timeouts against the Redwood inference endpoint for our nightly batch ingestion job starting ~01:30 UTC this morning. Job used to finish in ~12m; it timed out after 25m (we have a hard 30m window). Attached are traces and a p99 graph.
+
+Symptoms: repeated HTTP 504s from the API gateway, increased retries from our side. We noticed p99 latency climbed from ~0.9s to ~4.1s during the window; error rate up to ~1.2% for the impacted route.
+
+This is customer-critical for our SLA. Can you confirm if this is on Redwood's side (queueing/backpressure) or our batch pattern? We can try different request pacing but need guidance ASAP.
+
+-Jill
+Head of Product, Neurolytics
+
+From: soojin_lee@redwood.ai
+To: hannah_schmitt@redwood.ai, marcus_lin@redwood.ai
+Cc: rishi_malhotra@redwood.ai
+Date: Tue, 12 Jan 2027 08:41:00 -0800
+Subject: Fwd: Spike in timeouts impacting batch ingestion
+
+Forwarding Neurolytics' report — they attached traces and p99 graph. Initial read shows a sustained p99 jump and a brief window where concurrency caps were hit on the serving pool for region-us-west-2.
+
+Quick asks:
+- Hannah: can you pull the serving pool metrics (queue length, inflight requests, backpressure events, per-route concurrency) for the 01:00–02:30 UTC window?
+- Marcus: can you check whether the customer routed to a larger model variant during their job? That would raise token service time and may trigger batching backpressure.
+- Rishi: FYI / exec loop if we need a short-term capacity bump.
+
+I'll coordinate with Neurolytics and keep them posted.
+
+— Soojin
+Senior Account Lead, Redwood Inference
+
+From: hannah_schmitt@redwood.ai
+To: soojin_lee@redwood.ai, marcus_lin@redwood.ai
+Cc: rishi_malhotra@redwood.ai
+Date: Tue, 12 Jan 2027 09:05:00 -0800
+Subject: Re: Fwd: Spike in timeouts impacting batch ingestion
+
+Quick summary of what I pulled:
+- 01:18–01:42 UTC: inflight requests on pool-az3-US-WEST-2 hit the configured hard concurrency cap (1200) for ~14 minutes.
+- Queue length spiked to ~420 requests; average queue wait rose from 60ms -> 1.8s; p99 internal queuing delay to 3.2s.
+- We recorded 87 backpressure events (reject-with-backoff) and several loopback retries from the API tier.
+- The customer was routed to model:redwood-clarity-large-v2 at ~00:59 UTC (they usually use clarity-base). That model has ~2.6x higher token latency on this hardware.
+
+Preliminary cause: simultaneous batch job runs from two Neurolytics tenants (prod + analytics sandbox). Combined load + larger model caused sustained cap exhaustion and queuing.
+
+Immediate mitigation suggested:
+1) Short-term: increase pool concurrency cap to 1600 for the next 6 hours and add a temporary surge node to the pool (need ops change).
+2) Route neurolytics-prod to clarity-base for nightly batch window (00:30–02:00 UTC) until we stabilize.
+3) Add per-tenant soft quotas to prevent sandbox from running heavy batches during prod windows.
+
+I can prepare the metric snapshots and a short timeline for exec.
+
+— Hannah
+SRE, Serving Runtime
+
+From: marcus_lin@redwood.ai
+To: soojin_lee@redwood.ai, hannah_schmitt@redwood.ai, laura_bennett@redwood.ai
+Cc: rishi_malhotra@redwood.ai
+Date: Tue, 12 Jan 2027 10:03:00 -0800
+Subject: Re: Fwd: Spike in timeouts impacting batch ingestion
+
+Adding context from model side:
+- Confirmed Neurolytics' job targeted clarity-large-v2 due to an automated config they recently flipped in staging. They didn't realize the nightly job would use that alias.
+- Kernel-level patch deployed last week for continuous batching changed the default grouping window from 12ms -> 18ms to favor throughput; that increases per-token latency variance for large models under bursty load.
+
+Action plan (short-term):
+- Rishi: can we authorize a one-off pool capacity boost (reserved burst) for neurolytics-prod tonight? That buys us breathing room while we shift them back to clarity-base.
+- Ops: revert grouping window to 12ms for the affected pool or apply a model-specific override for clarity-large-v2 to reduce queuing amplification.
+
+I'll draft an RFC for the kernel tweak rollback + model-specific tuning; will include risk and rollback steps.
+
+— Marcus
+Principal Applied ML Engineer, Serving Runtime
+
+From: laura_bennett@redwood.ai
+To: soojin_lee@redwood.ai, hannah_schmitt@redwood.ai, marcus_lin@redwood.ai, rishi_malhotra@redwood.ai
+Date: Wed, 13 Jan 2027 11:47:00 -0800
+Subject: Re: Fwd: Spike in timeouts impacting batch ingestion — exec brief and customer communication
+
+Thanks team — good triage. High level for exec / customer:
+- Root cause: simultaneous heavy batch runs + model switch + batching window change amplified queuing; concurrency cap hit produced long-tail p99 increases and HTTP 504s.
+- Immediate actions approved: temporary pool cap increase to 1600 (Ops to execute now), force routing neurolytics-prod -> clarity-base for 00:30–02:00 UTC tonight, and apply model-specific batching override to clarity-large-v2 in pool-az3-US-WEST-2.
+- Communication: Soojin, send Neurolytics a short incident note summarizing what happened, measures taken, and next steps (permanent quota + scheduled kernel rollback RFC). Include attachments and timeline. Offer a credit for the incident window if they request one — redirect to finance.
+
+I'll follow up with exec summary doc for the leadership meeting. Rishi — flag for capacity commit if we see recurrence.
+
+— Laura
+VP, Customer Success & Ops, Redwood Inference
+
+From: soojin_lee@redwood.ai
+To: Jill Park <jill.park@neurolytics.com>
+Cc: hannah_schmitt@redwood.ai, marcus_lin@redwood.ai
+Date: Wed, 13 Jan 2027 12:05:00 -0800
+Subject: Re: Spike in timeouts impacting batch ingestion — remediation and next steps
+
+Jill —
+
+Thanks again for the traces and patience. Short update and action items:
+
+What we found:
+- During your nightly window (01:18–01:42 UTC) our serving pool hit its hard concurrency cap because both your prod batch and sandbox analytics ran overlapping jobs. At the same time your job was targeted at clarity-large-v2 (an alias flip picked up in staging), which increased per-token latency and amplified queueing.
+- The combination produced the p99 tail spike you saw (peak ~4.1s), and the API gateway returned 504s as requests exceeded the retry/backoff thresholds.
+
+What we did (completed):
+- Temporarily increased pool concurrency cap to 1600 and provisioned a surge node for pool-az3-US-WEST-2 (effective immediately).
+- Routed neurolytics-prod to clarity-base for the nightly window tonight.
+- Applied a model-specific batching override to clarity-large-v2 in the affected pool to reduce grouping window and per-request latency amplification.
+
+Next steps (planned):
+- We will add per-tenant soft quotas to prevent sandbox from running heavy analytic batches during prod windows. ETA: 72 hours.
+- Ops/R&D will file an RFC to roll back the grouping-window change or make it model-aware. ETA: 7 days for the RFC; 2–3 days for validation and canary if approved.
+- If you'd like, we can run a joint replay of your nightly job in a staging environment with our proposed settings to validate end-to-end.
+
+Attachments: p99_latency_timeseries.png, neurolytics_timeout_trace.zip (trace + logs), concurrency_snapshot.json
+
+Please let me know if you'd like a short call — available 15:00–17:00 PST today.
+
+Regards,
+Soojin Lee
+Senior Account Lead, Redwood Inference
+soojin_lee@redwood.ai | +1 (415) 555-0197
+Redwood Inference

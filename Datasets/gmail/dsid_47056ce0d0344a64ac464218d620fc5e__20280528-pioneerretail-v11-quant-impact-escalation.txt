@@ -1,0 +1,146 @@
+PioneerRetail: latency & decode errors after v11 qprofile rollout — exec attention
+
+From: Emma Torres <emma@pioneerretail.com>
+To: avery_johnson@redwood.com
+Cc: ops@pioneerretail.com, Jonas Meyer <jonas@pioneerretail.com>
+Date: Tue, 28 May 2028 08:12:00 -0700
+Subject: Sudden latency & decode errors after v11 rollout (urgent)
+
+Hi Avery,
+
+We just saw a sharp increase in p99 latency (approx +2.8s) and sporadic decode failures across our inference requests since you pushed the v11 quantization profile at 07:50 PT. The errors look like truncated output / decode exceptions — a subset of calls are returning 5xx with "decode_failed" and some long tail latency spikes. This started within minutes of the rollout.
+
+Attached are a short sample of error snippets and a small log bundle from our side. Can you confirm whether anything changed in model weights or serving kernel selection? This is impacting our checkout flow and we are seeing cart abandonment. We need immediate mitigation and an ETA on a rollback or fix.
+
+Thanks,
+Emma
+Customer Success Manager
+PioneerRetail Inc
+Attachments: error_snippets.txt (text), sample_request_ids.txt (text)
+
+From: Avery Johnson <avery_johnson@redwood.com>
+To: grace_oconnor@redwood.com, vivek_kulkarni@redwood.com, laura_bennett@redwood.com
+Cc: neha_kapoor@redwood.com
+Date: Tue, 28 May 2028 08:35:00 -0700
+Subject: Fwd: Sudden latency & decode errors after v11 rollout (urgent)
+
+Forwarding PioneerRetail incident — their ops just hit us with increased p99 and decode errors after our v11 qprofile rollout (q4_8_v11). They attached snippets; ops say it began ~07:50 PT.
+
+Immediate asks:
+- Can eng confirm whether q4_8_v11 changed any prefix KV behavior or kernel selection for v11?
+- Quick mitigation options (rollback to v10 / fallback qprofile) and impact on traffic.
+- I want a customer-facing timeline and an exec note within the hour.
+
+Laura — please own customer comms. Vivek / Grace — triage and advise rollback plan. CC'ing Neha for exec escalation if we need credits/SLA concessions.
+
+Thanks,
+Avery
+
+----- Forwarded message -----
+From: Emma Torres <emma@pioneerretail.com>
+Date: Tue, May 28, 2028 at 08:12 AM -0700
+To: avery_johnson@redwood.com
+Subject: Sudden latency & decode errors after v11 rollout (urgent)
+
+(see original)
+
+From: Grace O'Connor <grace_oconnor@redwood.com>
+To: avery_johnson@redwood.com, vivek_kulkarni@redwood.com
+Cc: laura_bennett@redwood.com, neha_kapoor@redwood.com
+Date: Tue, 28 May 2028 09:05:00 -0700
+Subject: Re: Fwd: Sudden latency & decode errors after v11 rollout (urgent)
+
+Avery / team,
+
+Thanks for the heads up and the snippets — I started a quick pass on this. Initial observations:
+- Error string "decode_failed" comes from the tokenization/decoder path when the model returns malformed EOS sequences or when kernel decode fails for certain quantized kernels.
+- p99 jump aligns with the rollout window for q4_8_v11. Canary traffic shows the same failure rate (~0.6%) on v11.
+
+Immediate requests for Pioneer (if they can share quickly):
+1) 3-5 request IDs that reproduced a decode failure (we can correlate to server logs).
+2) A short list of prompts that hit the failure consistently (if available).
+
+Short-term mitigation options I'm considering:
+- Roll back traffic away from v11 canary to v10 (safe, immediate).
+- Swap q4_8_v11 -> q3_32_profile (less aggressive quant) on v11 (quicker than full rollback but risk of not fixing kernel mismatch).
+
+I can prepare a hotfix path to revert the qprofile toggle across the serving cluster within ~25 minutes (requires a rolling restart of a small subset of pods to flush compiled kernels). If we go full v11->v10 rollback we'll preserve state and avoid restarts but it will take ~12 minutes to flip routing with warmup.
+
+I'll request the logs and start building a diagnostics bundle. Vivek — if you allow me to proceed with the qprofile revert in parallel to preparing a routing rollback, I can have an initial mitigation out within ~30m.
+
+-Grace
+Senior SRE, Serving Runtime
+Redwood Inference
+Attachments: none
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: grace_oconnor@redwood.com, avery_johnson@redwood.com
+Cc: laura_bennett@redwood.com, neha_kapoor@redwood.com
+Date: Tue, 28 May 2028 10:12:00 -0700
+Subject: Re: Fwd: Sudden latency & decode errors after v11 rollout (urgent)
+
+Good diagnosis — thanks Grace. Proposed immediate mitigation and comms plan:
+
+Mitigation (live within 30m):
+1) Shift PioneerRetail traffic off v11 canary back to v10 routing (traffic split change) — estimated 12 minutes to complete and validate. Minimal risk to sessions; no model reload.
+2) If we see persistent errors post-traffic-shift, revert qprofile on the v11 binary to q3_32_profile (requires rolling kernel flush, ~25 minutes window).
+3) Post-mitigation: run a focused test harness for the problematic request IDs and capture kernel traces.
+
+I authorize Grace to start the qprofile revert if the v10 traffic shift does not reduce the error rate within 15 minutes of completion. Please coordinate with infra on a short warmup to avoid cold-start inflation.
+
+Laura: suggest customer message that (a) acknowledges impact, (b) commits to traffic shift within 30m and (c) promises an incident follow-up with root cause and any make-good.
+
+Neha: flagging for exec visibility; we may need to authorize a one-time credit depending on customer impact.
+
+-Vivek
+VP, Serving Engineering
+Redwood Inference
+Attachments: rollout_manifest_v11.json
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Emma Torres <emma@pioneerretail.com>
+Cc: avery_johnson@redwood.com, grace_oconnor@redwood.com, vivek_kulkarni@redwood.com
+Date: Tue, 28 May 2028 12:01:00 -0700
+Subject: RE: Sudden latency & decode errors after v11 rollout (urgent)
+
+Hi Emma —
+
+First, I'm really sorry for the disruption this morning. We traced the spike to a recent quantization profile change associated with the v11 rollout and have an immediate mitigation plan.
+
+What we're doing now (commitments):
+- Within the next 30 minutes we will shift your traffic off the v11 canary and back to the v10 routing to stop the errors and reduce p99.
+- Engineering will monitor and, if any errors persist, will revert the qprofile on the v11 binary as a follow-up (we expect the traffic shift to resolve most issues).
+- We'll share an incident document with timeline, root cause analysis, and a proposed make-good if impact thresholds are met. Link: https://drive.redwood.com/teams/pioneerretail/incident-20280528
+
+ETA: traffic shift started at 12:05 PT — I'll send another note when we see error rate/p99 return to baseline.
+
+Again, apologies — Laura
+Account Lead, Customer Success
+Redwood Inference
+Attachments: none
+
+From: Avery Johnson <avery_johnson@redwood.com>
+To: neha_kapoor@redwood.com, vivek_kulkarni@redwood.com, laura_bennett@redwood.com
+Date: Tue, 28 May 2028 14:37:00 -07:00
+Subject: PioneerRetail incident — final update and exec ask
+
+Team, quick post-mortem summary and asks for execs:
+
+Summary:
+- Incident window: 07:50 PT -> 12:21 PT. Root cause (preliminary): incompatibility between q4_8_v11 compiled kernels and a small subset of tokenization edge cases causing decode failure and p99 latency spikes.
+- Mitigation performed: traffic shifted back to v10 at 12:05 PT; error rate dropped from ~0.6% to <0.02% and p99 returned within 200ms of baseline by 12:21 PT. A targeted qprofile revert on v11 was prepared but not required after traffic shift.
+- Customer impact: increased checkout latency and a measurable short window of cart abandonment (Pioneer ops report ~0.4% lost conversions during window).
+
+Exec asks:
+1) Approve a goodwill credit up to $12k for PioneerRetail to make them whole for demonstrated conversion loss (Laura to confirm exact number).
+2) Approve a post-incident cross-functional RCA and a policy change: require a 48-hour canary with edge-case tokenization tests before qprofile promotes from canary -> global.
+
+Artifacts: logs and sample IDs attached (pioneer_service_logs_20280528.zip), incident doc link above, rollout manifest attached.
+
+I'll schedule a 30-minute exec sync at 16:00 PT to review RCA and customer communication draft.
+
+Thanks,
+Avery
+Director, Sales (Strategic Accounts)
+Redwood Inference
+Attachments: pioneer_service_logs_20280528.zip

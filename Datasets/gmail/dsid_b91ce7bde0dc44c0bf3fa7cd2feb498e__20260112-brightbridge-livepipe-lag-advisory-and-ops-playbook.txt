@@ -1,0 +1,125 @@
+Intermittent high latency on streaming endpoint - BrightBridge
+
+From: Carlos Ruiz <c.ruiz@brightbridge.com>
+To: Marcus Lin <marcus_lin@redwood.ai>
+Cc: ops@brightbridge.com
+Date: Thu, 8 Jan 2026 09:14:00 -0800
+Subject: Intermittent high latency on streaming endpoint - urgent
+
+Marcus —
+
+We started seeing intermittent but significant latency increases on the streaming chat endpoint around 08:55–09:10 PST this morning. The client reports that tokens sometimes arrive in 1.5–3s bursts (previously ~120–200ms per chunk) and several sessions stalled entirely, causing timeouts in our UI. Impacted customers are on us-east-1.
+
+Sample request ids: rb-req-5a3c9, rb-req-5a3d2, rb-req-5a3f8. We attached a condensed trace and a small diag snippet. This is hitting our live agent queue and we have customers complaining. Can you confirm whether this is on your side and any immediate workarounds?
+
+We need an ETA to restore normal chunk pacing or recommended short-term mitigations we can apply client-side. Also please advise if you expect any token loss or incorrect completions when falling back to non-streaming.
+
+Thanks,
+Carlos Ruiz
+Sr. Engineering Manager — Platform
+BrightBridge Financial
+
+Attachments: stream_trace_20260108.txt (11KB, text), redwood_diag_snippet.json (2KB, json)
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Carlos Ruiz <c.ruiz@brightbridge.com>
+Cc: ben_carter@redwood.ai, laura_bennett@redwood.ai
+Date: Thu, 8 Jan 2026 12:02:00 -0800
+Subject: Re: Intermittent high latency on streaming endpoint - urgent
+
+Carlos — thanks for the quick heads-up and for attaching the traces. We're seeing the same symptom in our telemetry: increased inter-chunk latency for a subset of streaming sessions in us-east-1 between 08:45 and 09:20 PST. SRE is investigating a capacity scheduling regression that increases kv-cache pressure for some model shard placements.
+
+Immediate suggestions you can deploy client-side while we triage (short-term mitigations):
+- Disable streaming for critical flows (switch to single-response/non-streaming completion) — this avoids chunk reordering and gives deterministic latency.
+- Reduce max_tokens per request (we recommend lowering by 30% for now).
+- Implement a simple client-side retry with exponential backoff for failed/slow streams (start 250ms, max 2s, 3 attempts).
+- Enable smaller streaming chunk size on your end (if you control chunking) or fall back to our compact model variant by setting model=redwood-compact-1 in the request. Compact reduces per-token compute load and has lower observed tail latency in these conditions.
+
+We do not expect token loss when switching to non-streaming; you'll receive the same completion content. We'll confirm consistency across model variants in our follow-up.
+
+I've looped in Laura (SRE) and Ben (Customer Success) to coordinate an ops-level response and update your account for any potential SLA impact. I'll follow up with a timeline once we establish the root cause.
+
+—Marcus Lin
+Support Engineering Manager | Redwood Inference
+---
+On Thu, Jan 8, 2026 at 09:14 AM Carlos Ruiz <c.ruiz@brightbridge.com> wrote:
+> Marcus —
+>
+> We started seeing intermittent but significant latency increases on the streaming chat endpoint around 08:55–09:10 PST this morning....
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Carlos Ruiz <c.ruiz@brightbridge.com>
+Cc: ben_carter@redwood.ai
+Date: Fri, 9 Jan 2026 07:31:00 -0800
+Subject: Re: Intermittent high latency on streaming endpoint - urgent
+
+Carlos, Marcus —
+
+Quick update from SRE: we confirmed a scheduling edge case causing uneven shard packing under a recent autoscaler heuristic. That heuristic increased memory pressure on a small subset of inference nodes, which in turn elongated attention-kernel scheduling and caused inter-chunk latency spikes. Patch is drafted and currently in canary deploy in us-east-1.
+
+Short-term operational playbook we recommend for BrightBridge (we can push some flags on our side if you prefer):
+- If you need immediate stability and can tolerate slight latency increase, flip to non-streaming for high-risk flows (UI paths that cannot tolerate chunk jitter).
+- For sessions that must remain streaming: set model=redwood-compact-1 OR send requests with smaller max_tokens and enable client retry on 5xx / stalled streams.
+- Optional: add header X-Redwood-Fallback: compact-1 to requests; we can honor it server-side to route your sessions to the compact pool with minimal change.
+
+I've attached a condensed postmortem brief and the canary rollout schedule. We'll notify you when the full fix is in prod (expected within 24 hours barring regression).
+
+Laura Bennett
+SRE Manager | Redwood Inference
+
+Attachments: postmortem-briefing.pdf (24KB)
+
+From: Carlos Ruiz <c.ruiz@brightbridge.com>
+To: Marcus Lin <marcus_lin@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: ops@brightbridge.com
+Date: Fri, 9 Jan 2026 09:02:00 -0800
+Subject: Re: Intermittent high latency on streaming endpoint - urgent
+
+Thanks, Laura & Marcus. Appreciate the rapid triage and the canary note. Two quick asks:
+1) Can you confirm whether we should expect any ordering or partial-output differences when switching to redwood-compact-1? We need to validate in our integration tests.
+2) BrightBridge will likely request a small credit if this affects customer-facing SLAs during the window — can Ben advise on next steps for that?
+
+We'll implement the temporary non-streaming toggle for two critical UI paths and run the compact-1 test in our staging environment. I'll send results by EOD.
+
+Carlos
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Carlos Ruiz <c.ruiz@brightbridge.com>
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, stephanie_nguyen@redwood.ai
+Date: Mon, 12 Jan 2026 10:20:00 -0800
+Subject: Re: Intermittent high latency on streaming endpoint - urgent
+
+Carlos — following up on SLA/credits and next steps. We logged an incident for BrightBridge (INC-20260108-03) and will evaluate credit eligibility against our SLA policy once the incident window closes. To speed that process, could you share a short list of impacted customer IDs and the start/end times you observed for each? If you prefer, I can run a scoped query on our side using your tenant id.
+
+Also attaching a short ops-playbook you can apply immediately — it contains the client-side snippet for toggling to non-streaming and an example request header to force compact routing.
+
+Ben Carter
+Senior Customer Success Manager | Redwood Inference
+
+Attachments: brightbridge-ops-playbook.txt (5KB)
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Carlos Ruiz <c.ruiz@brightbridge.com>, Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, stephanie_nguyen@redwood.ai
+Date: Mon, 12 Jan 2026 17:42:00 -0800
+Subject: Post-incident summary: scheduling regression caused streaming latency spikes (BrightBridge)
+
+Carlos —
+
+Final update from our side and next steps:
+- Root cause: an autoscaler heuristic change (deployed 2026-01-07 03:12 UTC) allowed tighter packing of model shards which increased KV-cache pressure on a small subset of nodes. Under certain session mixes this increased attention-kernel contention and produced the inter-chunk latency spikes you saw.
+- Mitigation applied: we rolled back the heuristic and deployed a targeted scheduler patch to redistribute affected shards; the canary completed successfully in us-east-1 at 2026-01-09 08:45 PST and the full rollout finished by 2026-01-12 15:10 PST. Real-time telemetry shows chunk latency returned to expected baselines.
+- Customer impact: transient tail latency increases on streaming responses for a subset of sessions between 2026-01-08T08:40:00-08:00 and 2026-01-09T09:00:00-08:00. We do not see evidence of token loss or generation corruption.
+- Follow-ups we will complete in the next two weeks:
+  * Postmortem write-up and RCA (link: https://docs.google.com/document/d/1Bb-Postmortem-Redwood-BrightBridge)
+  * Scheduler unit-tests and additional telemetry coverage for inter-chunk latency tails
+  * Account review with Ben & Carlos on credits/compensation eligibility
+
+If you want, we can coordinate a short sync (15–20m) to walk through the postmortem and validate your integration tests against compact-1. Thanks again for working with us through this.
+
+—Marcus Lin
+Support Engineering Manager | Redwood Inference
+
+References:
+Status: https://status.redwood.ai/incidents/INC-20260108-03
+Postmortem: https://docs.google.com/document/d/1Bb-Postmortem-Redwood-BrightBridge
+Jira: RED-INC-2026-2345

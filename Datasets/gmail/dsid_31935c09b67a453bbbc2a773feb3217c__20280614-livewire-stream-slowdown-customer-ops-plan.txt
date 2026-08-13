@@ -1,0 +1,103 @@
+LiveWire streaming slowdown - client workarounds & proposed credits
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Rachel Kim <rachel_kim@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Fri, 14 Jun 2028 08:22:00 -0700
+Subject: [ALERT] elevated streaming latency affecting LiveWire production endpoints
+
+Rachel —
+
+Short heads-up: telemetry is showing a sustained latency increase (~600-1200ms p50->p95 delta) on the streaming/chat endpoints serving LiveWire (region: us-west-2). We started seeing the divergence at ~08:05 PT and it's persisted through our last sample at 08:18.
+
+What we know so far:
+- Scope: ~12% of LiveWire sessions (their prod model route: redwood-gen-qa-1).
+- Impact: slow streaming token delivery (longer gaps between SSE chunks), occasional truncated client manifests.
+- Probable root signal: an interleaving scheduling regression in the continuous-batching path after a kernel fallback (investigating).
+
+Short-term mitigations we've pushed (platform):
+- Autoscaler paused / enforced immediate bounce for a small pool to clear stuck kernels.
+- Routing rule: divert new LiveWire traffic to a backup variant (redwood-gen-qa-1-compat) with slightly higher cost but stable streaming throughput.
+
+Attachments: telemetry screenshot (latency-telemetry-20280614.png).
+
+Please draft a customer note we can send to LiveWire ops; include clear client-side mitigations and set expectation for a follow-up postmortem.
+
+Ben
+Senior Escalation Engineer
+Redwood Inference
+
+From: Rachel Kim <rachel_kim@redwood.com>
+To: Alex Torres <alex.torres@livewire.ai>, support@livewire.ai
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Fri, 14 Jun 2028 08:35:00 -0700
+Subject: LiveWire streaming slowdown - client workarounds & proposed credits
+
+Hi Alex / LiveWire ops team —
+
+Thanks for bearing with us this morning. Ben flagged a sustained increase in streaming latency that affected a subset of your sessions. We routed new requests to a compatible model variant to stabilize throughput and are actively working on a code-level fix.
+
+Immediate steps you can take while we remediate (these are safe, reversible, and low-risk):
+1) Enable short-term polling instead of streaming for larger responses (reduce perceived gaps). Example: call generation with polling every N tokens or request final output only.
+2) Reduce client-side max_tokens or lower streaming chunk granularity. If you can drop max_tokens by ~20% for heavy workloads, you should see fewer long tails.
+3) Increase client read timeout to 45s (if your current setting is lower) and add exponential backoff (starting 250ms) for retrying aborted streams.
+4) If you use our SDK streaming handler, set a 2s chunk-aggregation window to smooth burst token arrivals (we can share code snippet).
+
+Planned next steps from Redwood: 
+- Engineering is prioritizing a hotfix to the batching scheduler; targeted ETA for deploy: 6–12 hours (we will update).
+- We'll keep your traffic on the compatible route until validation is complete.
+- I will send a short post-incident summary and a proposed credit for impacted requests once we have the full impact numbers.
+
+I know this impacts end-user experience; we appreciate the quick reports from your SREs. Would you like a 30-minute sync at 10:30 PT to walk through the mitigation checklist? I'm available and can include Ben and Marissa.
+
+Attachments: mitigation checklist (livewire-mitigation-checklist.pdf).
+
+—
+Rachel Kim
+Account Executive, Strategic Accounts
+Redwood Inference
+rachel_kim@redwood.com | +1 415-555-0129
+
+From: Alex Torres <alex.torres@livewire.ai>
+To: Rachel Kim <rachel_kim@redwood.com>
+Date: Fri, 14 Jun 2028 09:05:00 -0700
+Subject: Re: LiveWire streaming slowdown - client workarounds & proposed credits
+
+Thanks Rachel —
+
+Appreciate the quick note and the mitigation checklist. A couple quick items from our side:
+- Yes to a 10:30 PT sync; we'll have two SREs join.
+- Can you confirm whether the diverted traffic variant preserves token semantics (no prompt rewriting)? We need to ensure model parity.
+- Our ops team asked about potential credit for the 14:05–09:00 PT window where we saw elevated error rates and user complaints. Can you share the estimate process / timeline for credits?
+
+Alex Torres
+Head of Platform
+LiveWire AI
+alex.torres@livewire.ai | +1 213-555-0192
+
+From: Rachel Kim <rachel_kim@redwood.com>
+To: Alex Torres <alex.torres@livewire.ai>, support@livewire.ai
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Fri, 14 Jun 2028 16:10:00 -0700
+Subject: Re: LiveWire streaming slowdown - client workarounds & proposed credits
+
+Alex —
+
+Thanks for the questions and for confirming the sync. Quick answers and next steps: 
+
+1) Model parity: The compatible route (redwood-gen-qa-1-compat) preserves the model's tokenization and output semantics; we did not apply prompt rewriting. Differences are limited to a small decoding profile that favors throughput; we captured a sample-set and will include it in the postmortem.
+
+2) Credits / estimate: We'll calculate impacted token counts across your routed and pre-routed traffic for the window you highlighted. Initial estimate ETA: 24 hours; formal credit proposal + accounting ticket by EOD tomorrow. We typically credit 100% of documented failed responses and prorate degraded streaming sessions; we'll share the spreadsheet.
+
+3) Engineering status: a rollout candidate for the batching scheduler fix went to canary at 15:00 PT and preliminary telemetry post-deploy looks good. We'll keep traffic on the compatible route for one more validation cycle (~12 hours).
+
+I've attached a short draft of the incident writeup (incident-20280614-draft.pdf) and linked the internal incident page. We'll incorporate your SRE notes after the sync.
+
+Post-sync plan: deliver customer-facing postmortem within 48 hours, include root cause, exact impact numbers, remediation steps taken, and the credit offer.
+
+Apologies again for the disruption — we take these incidents seriously and will follow through.
+
+Best,
+Rachel
+Account Executive, Strategic Accounts
+Redwood Inference

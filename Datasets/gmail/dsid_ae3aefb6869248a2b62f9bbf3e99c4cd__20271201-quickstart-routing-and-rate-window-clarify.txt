@@ -1,0 +1,121 @@
+Quickstart routing, endpoints and rate windows — follow-up
+
+From: Sam Li <sam.li@clearvault.com>
+To: dylan_brooks@redwood.ai
+Cc: priya.shah@clearvault.com
+Date: Wed, 1 Dec 2027 15:02:00 -0800
+Subject: Thanks — quick recap and a couple follow-ups
+
+Hi Dylan,
+
+Thanks again for the demo this morning — the latency numbers looked promising and the console walkthrough was helpful. A few quick follow-ups from our side while we sync internally: 
+
+- For the Hosted API trial you mentioned: does Redwood enable prefix/KV caching at the sandbox level, or is that only for Dedicated/Private? We want to understand whether the trial will reflect our caching gains.
+- What does the default rate window look like for sandbox endpoints during a trial? We prototype at 5–10 rps, but need to understand burst behavior (and what your observability exposes per-route).
+- If we decide this is a fit, can we move from Hosted -> Dedicated later without redoing integration work, or are there migration costs/effort we should expect?
+- Security/SSO: we use Okta; is SSO available for sandbox access, or only in Dedicated/Private?
+
+Also, Priya asked for a short matrix that we can share with procurement summarizing differences (hosted vs dedicated vs private) for compliance and data residency reasons. If you have a one-pager that helps accelerate that, it’d be great.
+
+Can you also provision a sandbox endpoint (read-only traffic pattern) for our engineering team to smoke-test the prompt flows? Sample curl and basic keys are fine.
+
+Appreciate it — looking to get this triaged with our infra and security teams today.
+
+Best,
+Sam
+Sam Li
+Senior Platform Engineer, ClearVault
+
+From: dylan_brooks@redwood.ai <dylan_brooks@redwood.ai>
+To: Sam Li <sam.li@clearvault.com>
+Cc: monica_patel@redwood.ai, stephanie_nguyen@redwood.ai
+Date: Wed, 1 Dec 2027 18:27:00 -08:00
+Subject: Re: Thanks — quick recap and a couple follow-ups
+
+Sam — great to hear, thanks for the thoughtful list. Answers inline below and next steps at the end.
+
+- Prefix/KV caching: Hosted sandbox endpoints do support prefix caching and KV reuse for the common case (we expose the same caching behavior you’d see in production hosted endpoints). For highly-custom cache policies we recommend Dedicated but you’ll get realistic caching behavior during the trial.
+
+- Rate windows for sandbox: default trial sandbox is configured at 10 requests/sec steady-state with a short burst allowance up to 25 rps for microbursts (30s window). We expose per-route token and rps metrics in Console; you’ll see 1m and 5m aggregates plus per-request latency breakdowns. If you need a higher steady-state for the trial we can provision a larger slice.
+
+- Migration Hosted -> Dedicated: migration is designed to be low-friction — we preserve the same API surface and endpoint naming when you pin model versions. Work typically required: update traffic routing/credentials, and a brief cutover window to switch to your Dedicated pool. There’s some operational coordination (capacity reservation + contract), but no rework of prompts or SDK changes. We’ll share a short checklist.
+
+- SSO/Okta: Okta SSO for the Console and API key management is available for Dedicated and Private by default. For Hosted trials we offer SSO on request for enterprise accounts; for initial sandbox access we provide scoped API keys. If Okta SSO is a blocker for procurement, we can arrange a temporary SSO binding for the trial with a short onboarding step.
+
+I attached a one-page deployment matrix (deployment-access-matrix.xlsx) and a tiny sample curl demonstrating the sandbox endpoint (sandbox-endpoint-sample-curl.txt).
+
+Next steps I propose:
+1) I’ll provision a sandbox slice (10 rps, burst 25) and drop credentials into a secure folder.
+2) Quick ops sync (30m) with Monica to run through prefetched keys, KV behavior, and endpoint mappings — suggested times: Thu 12/2 09:00–11:00 PST or 14:00–16:00 PST. Monica, can you take this?
+3) Security sync with Stephanie (15m) to cover SSO and audit logs; Priya, would you prefer to join that call?
+
+If you’re good, I’ll provision and send the keys + HubSpot link for the trial.
+
+Thanks —
+Dylan Brooks
+Account Executive, Redwood Inference
+Phone: (415) 555-0147
+
+From: Sam Li <sam.li@clearvault.com>
+To: dylan_brooks@redwood.ai
+Cc: priya.shah@clearvault.com
+Date: Thu, 2 Dec 2027 08:03:00 -08:00
+Subject: Re: Thanks — quick recap and a couple follow-ups
+
+Thanks Dylan — that all helps. A couple quick clarifications before we lock the times:
+
+- Good to hear cache behavior matches Hosted production. If we start seeing divergence in KV hit rates under our traffic, will you be able to surface recommendations (e.g., split endpoints, prefix hints) during the trial?
+- If we provision a higher steady-state sandbox (say 50 rps) for performance validation, what is the lead time?
+
+Also — Priya asked whether we can upgrade to Dedicated mid-trial if the numbers look good. You mentioned contract/reservation, but can you share a high-level expected timeline and the point-person? Procurement will want to know the handoff path.
+
+If you can attach the matrix you referenced in the previous message that would be perfect.
+
+Cheers,
+Sam
+
+From: dylan_brooks@redwood.ai <dylan_brooks@redwood.ai>
+To: Sam Li <sam.li@clearvault.com>
+Cc: monica_patel@redwood.ai, stephanie_nguyen@redwood.ai
+Date: Thu, 2 Dec 2027 09:16:00 -08:00
+Subject: Re: Thanks — quick recap and a couple follow-ups
+
+Sam — answered below and attached the matrix.
+
+- KV hit rate tuning: yes — Monica (CC) will surface recommendations during the ops sync. Typical actions: tweak prefix splits, enable longer-lived KV partitions for common prompts, and pin model quantization/profile if you need deterministic cost numbers. We’ll record hits and provide a short runbook with suggested prefix hints.
+
+- Higher steady-state (50 rps): we can provision that for the trial with ~24–48 hour lead time, depending on availability in your chosen region. For immediate validation we can run a short load window with the existing slice (burst) while we provision larger capacity.
+
+- Upgrade path to Dedicated: typical timeline is 2–4 weeks from signed reservation to Dedicated pool availability (shorter if you pick an existing configuration). Point-person for the handoff is Monica Patel (CC) — she’ll coordinate capacity, contract details, and the migration checklist with procurement.
+
+Attachments: deployment-access-matrix.xlsx (one-page comparison), sandbox-endpoint-sample-curl.txt (example curl + env var notes).
+
+Next concrete step: Monica, can you confirm availability Thu 12/2 09:30 PST for the ops sync? If Sam is fine with 09:30 I’ll provision the 10 rps sandbox and share credentials to the secure folder + HubSpot record (DEAL-1397).
+
+Thanks everyone —
+Dylan
+
+---
+On Wed, Dec 1, 2027 at 6:27 PM dylan_brooks@redwood.ai wrote:
+> Sam — great to hear, thanks for the thoughtful list. Answers inline below and next steps at the end.
+>
+> - Prefix/KV caching: Hosted sandbox endpoints do support prefix caching and KV reuse for the common case (we expose the same caching behavior you’d see in production hosted endpoints). For highly-custom cache policies we recommend Dedicated but you’ll get realistic caching behavior during the trial.
+>
+> - Rate windows for sandbox: default trial sandbox is configured at 10 requests/sec steady-state with a short burst allowance up to 25 rps for microbursts (30s window). We expose per-route token and rps metrics in Console; you’ll see 1m and 5m aggregates plus per-request latency breakdowns. If you need a higher steady-state for the trial we can provision a larger slice.
+>
+> - Migration Hosted -> Dedicated: migration is designed to be low-friction — we preserve the same API surface and endpoint naming when you pin model versions. Work typically required: update traffic routing/credentials, and a brief cutover window to switch to your Dedicated pool. There’s some operational coordination (capacity reservation + contract), but no rework of prompts or SDK changes. We’ll share a short checklist.
+>
+> - SSO/Okta: Okta SSO for the Console and API key management is available for Dedicated and Private by default. For Hosted trials we offer SSO on request for enterprise accounts; for initial sandbox access we provide scoped API keys. If Okta SSO is a blocker for procurement, we can arrange a temporary SSO binding for the trial with a short onboarding step.
+>
+> I attached a one-page deployment matrix (deployment-access-matrix.xlsx) and a tiny sample curl demonstrating the sandbox endpoint (sandbox-endpoint-sample-curl.txt).
+>
+> Next steps I propose:
+> 1) I’ll provision a sandbox slice (10 rps, burst 25) and drop credentials into a secure folder.
+> 2) Quick ops sync (30m) with Monica to run through prefetched keys, KV behavior, and endpoint mappings — suggested times: Thu 12/2 09:00–11:00 PST or 14:00–16:00 PST. Monica, can you take this?
+> 3) Security sync with Stephanie (15m) to cover SSO and audit logs; Priya, would you prefer to join that call?
+>
+> If you’re good, I’ll provision and send the keys + HubSpot link for the trial.
+>
+> Thanks —
+> Dylan Brooks
+> Account Executive, Redwood Inference

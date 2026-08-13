@@ -1,0 +1,167 @@
+Clearstream concurrency & error-rate: exec bridge and customer comms
+
+From: Avery Cole <avery@clearstream.ai>
+To: jordan_blake@redwood.ai
+Cc: procurops@clearstream.ai
+Date: 2027-09-14T08:12:00-07:00
+Subject: Production alert: checkout errors + p95 latency spike
+
+Hi Jordan,
+
+We're seeing a sustained jump in error rates (5xx) and 95th percentile latency across our high-throughput checkout route since 07:50 PT. Traffic profile hasn't changed on our side — this is user-impacting (checkout failures).
+
+Quick facts:
+- Error rate: baseline ~0.4% -> 3.8% since 07:50
+- P95 latency: baseline 420ms -> 1.8s
+- Throughput: small increased burst but within expected window (QPS +12%)
+
+We've attached a CSV with the last 2 hours of QPS/latency samples and a trimmed log bundle. Can Redwood get an immediate bridge? We need triage and a customer-facing status line. Procurement/ops (procureops@clearstream.ai) is on the thread for contract/po impact if this goes long.
+
+Attachments: [clearstream-qps-metrics-14sep.csv], [debug_snapshot_20270914.zip]
+
+— Avery
+Avery Cole
+Head of Production, Clearstream
+avery@clearstream.ai
+
+From: Jordan Blake <jordan_blake@redwood.ai>
+To: Avery Cole <avery@clearstream.ai>
+Cc: rishi_malhotra@redwood.ai, laura_bennett@redwood.ai, monica_patel@redwood.ai
+Date: 2027-09-14T08:25:00-07:00
+Subject: Re: Production alert: checkout errors + p95 latency spike
+
+Avery — thanks for the alert and the CSV.
+
+We're standing up an executive bridge now (30 minutes). Proposed cadence: 08:45 PT bridge (30m) to run triage, short mitigations, and customer comms. I'll host and will invite our on-call infra and platform owners. Please confirm you can join at 08:45.
+
+Immediate asks (so we come prepared):
+- Rishi: prioritize telemetry (tail logs, model-level error breakdown, KV cache hit rates).
+- Monica/Laura: draft customer-facing message (ETA + mitigations).
+- Avery: if you can share the top 10 failing request IDs that would speed root-cause correlation.
+
+I'm attaching a short customer-comm template (customer-comm-template-v2.docx) and will circulate bridge details in five minutes.
+
+Attachment: [customer-comm-template-v2.docx]
+
+Thanks — Jordan
+Jordan Blake
+Enterprise Account Executive | Redwood Inference
+jordan_blake@redwood.ai | +1 (415) 555-0194
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: jordan_blake@redwood.ai, laura_bennett@redwood.ai, monica_patel@redwood.ai
+Cc: grace_oconnor@redwood.ai
+Date: 2027-09-14T08:30:00-07:00
+Subject: Re: Production alert: checkout errors + p95 latency spike
+
+Starting pre-bridge notes so the team can act quickly once we open: 
+
+Immediate triage steps (first 15 min):
+1) Verify model variant fallback: enable fallback to model-v2-small for the checkout route (drops token throughput but reduces tail latency).
+2) Bump dedicated pool from 6 -> 9 instances (auto-scale override) for the next 45m.
+3) Toggle KV prefix caching to aggressive for known stable prefixes (reduces KV miss storms).
+4) Apply temporary rate shaping for noisy clients (identified by IP/app-id) — 5% of traffic for 10m to measure effect.
+
+Data asks: clearstream-qps-metrics-14sep.csv is useful — also request the top failing request IDs (Avery). I'll pull model-level traces and a short tokenization breakdown.
+
+Attachment: [debug_snapshot_20270914.zip] (was uploaded to our ops drive: see link)
+
+If mitigation gets errors down and p95 < 700ms, we can keep scaled state and schedule follow-up rollback plan at +2h. If not, escalate to kernel team for deeper perf traces.
+
+— Rishi
+Rishi Malhotra
+Director, Platform Operations | Redwood Inference
+rishi_malhotra@redwood.ai
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Jordan Blake <jordan_blake@redwood.ai>, Avery Cole <avery@clearstream.ai>
+Cc: monica_patel@redwood.ai, rishi_malhotra@redwood.ai
+Date: 2027-09-14T08:36:00-07:00
+Subject: Draft: customer status (for 09:00 push)
+
+Jordan — here's a short, conservative customer-facing note I recommend we send at 09:00 PT (assuming the bridge and initial mitigations are underway). Please approve/adjust.
+
+---- DRAFT START ----
+Subject: Incident update: Clearstream checkout — triage in progress
+
+Hi Clearstream team,
+
+We’ve identified an increase in checkout errors and higher-than-normal tail latency affecting a subset of requests. Redwood has opened a priority incident and the on-call platform and engineering teams are triaging.
+
+What we’re doing right now:
+- Running mitigations to reduce tail latency (fallback routing and increased capacity)
+- Collecting request-level traces to identify any model- or cache-related regressions
+- Expected next update: 09:30 PT with initial mitigation results
+
+We appreciate your patience — Jordan Blake (Enterprise AE) and Monica Patel (Customer Success) are your primary contacts here.
+
+— Redwood Inference Ops
+---- DRAFT END ----
+
+I can send this at 09:00 if you give the go-ahead.
+
+— Laura
+Laura Bennett
+Senior Customer Success Manager | Redwood Inference
+laura_bennett@redwood.ai
+
+From: Avery Cole <avery@clearstream.ai>
+To: Jordan Blake <jordan_blake@redwood.ai>
+Cc: procureops@clearstream.ai, David Ruiz <david@clearstream.ai>
+Date: 2027-09-14T09:05:00-07:00
+Subject: Re: Production alert: checkout errors + p95 latency spike
+
+Jordan/Team — confirmed, we can join at 08:45 PT (we were delayed briefly). Attaching the top failing request IDs and a short stack trace for one sample.
+
+We appreciate the quick response. Procurement is monitoring — if this runs long we will need to discuss credits and an SLA remediation plan (CC'd).
+
+Attachments: [top_failing_request_ids.txt], [sample_stacktrace.txt]
+
+— Avery
+
+On Tue, Sep 14, 2027 at 8:12 AM Avery Cole <avery@clearstream.ai> wrote:
+> We're seeing a sustained jump in error rates (5xx) and 95th percentile latency across our high-throughput checkout route since 07:50 PT. Traffic profile hasn't changed on our side — this is user-impacting (checkout failures).
+>
+> Quick facts:
+> - Error rate: baseline ~0.4% -> 3.8% since 07:50
+> - P95 latency: baseline 420ms -> 1.8s
+> - Throughput: small increased burst but within expected window (QPS +12%)
+
+
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: Jordan Blake <jordan_blake@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Avery Cole <avery@clearstream.ai>
+Date: 2027-09-15T10:37:00-07:00
+Subject: Clearstream incident — outcome and next steps
+
+Team + Avery — thank you for the partnership on this. Quick readout from exec side: 
+
+What happened (short):
+- A combination of an unexpected client-side burst and a model-variant kernel hot path caused KV miss amplification and increased synchronous calls to the primary model replica pool.
+- Result: p95 increased to ~1.8s, error rate peaked ~3.8%.
+
+What we did (mitigations run on 09/14):
+- Scoped fallback routing to model-v2-small for heavy checkout prefixes (reduced token pressure)
+- Temporarily scaled dedicated pool +3 instances and adjusted autoscale overrides
+- Applied aggressive KV prefix caching for stable prefixes and short rate shaping for noisy app-ids
+
+Outcome (verified by midnight run):
+- Error rate reduced by ~72% vs peak (to ~1.1%) within first 30 minutes
+- p95 latency improved from 1.8s -> 630ms for the checkout route
+- Throughput recovered to within expected baselines, no data lost
+
+Customer comms and commercial:
+- Laura sent an initial status update; Jordan coordinated the bridge and follow-ups. We offered a one-off usage credit and a joint postmortem — procurement acknowledged and will follow up on credits.
+
+Next steps (owners):
+- Postmortem doc (Rishi/Infra) due 2027-09-16 16:00 PT — include kernel traces and model selection timeline.
+- Customer readout (Jordan/Laura) scheduled for 2027-09-16 11:00 PT (30m).
+- Engineering: investigate KV hot-path and add automated detection to alert earlier (Infra/Research) by 2027-10-01.
+
+Attachments: [final-ops-summary-0915.pdf], [postmortem-template.docx]
+
+If folks agree, I'll prepare an executive one-pager for the account team and the CSM to share with Clearstream execs.
+
+— Grace
+Grace O'Connor
+VP, Customer Reliability | Redwood Inference
+grace_oconnor@redwood.ai

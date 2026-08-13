@@ -1,0 +1,142 @@
+Urgent: latency cascade on model-7r -> request for temporary SLA carveout and mitigation approval
+
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Wed, 22 Sep 2026 08:15:00 -0700
+Subject: [ALERT] model-7r p95 cascade observed in prod (region: us-west)
+
+Hannah —
+
+We started seeing a p95 latency cascade for model-7r beginning at ~07:58 PDT. Baseline p95 for this model has been ~120ms; we're observing sustained p95 ~620ms for the last 12 minutes across several instances. Error rates are still low (<=0.5%) but tail latency is spiking and client retries are increasing.
+
+Quick notes:
+- Affected pool: hosted-us-west-prod, model: model-7r v2.1 (quantized vqa path)
+- Spike correlates with increased seq length and a rise in short-burst traffic from FinLytics (see logs attached).
+- KV cache hit rates look unchanged; no obvious OOMs.
+
+I'm triaging with Marcus now to isolate root cause. Short term options: enable fallback variant (model-7r-lite) for high-latency requests, or reduce batch window for these requests. Both approaches have tradeoffs: fallback reduces quality slightly, batch change increases CPU.
+
+Attaching: prod-logs-model-7r-snippet.txt, p95-trend-screenshot-20260922.png
+
+Soojin
+Software Reliability Engineer
+Redwood Inference
+
+
+From: Hannah Schmitt <hannah.schmitt@redwood.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Soojin Lee <soojin.lee@redwood.com>
+Date: Wed, 22 Sep 2026 08:22:00 -0700
+Subject: Re: [ALERT] model-7r p95 cascade observed in prod (region: us-west)
+
+Neha / Marcus / Ben —
+
+Thanks Soojin. I want to escalate this as a potential SLA exception for FinLytics (deal DEAL-90312). Maria from FinLytics has already pinged support and is seeing end-customer impact. Marcus — please propose an immediate mitigation plan (5–30 minute actions + 3 hour plan).
+
+Requesting authorizations:
+- Temporary SLA carveout (p95 tolerance raised) for FinLytics while we stabilize (target window: until 23:59 UTC today).
+- Authorization to flip traffic to fallback variant (model-7r-lite) for up to 30% of FinLytics traffic as an automated fallback if p95 > 400ms.
+
+Ben — please hold any client-facing comms until we scope the mitigation. If legal/procurement needs an external notice, we'll align.
+
+Hannah
+Director, Customer Reliability
+Redwood Inference
+
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Cc: Soojin Lee <soojin.lee@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Wed, 22 Sep 2026 08:35:00 -0700
+Subject: Re: [ALERT] model-7r p95 cascade observed in prod (region: us-west)
+
+Hannah / Neha —
+
+Short plan (immediate, ~5–30m):
+- Enable automated fallback gate for model-7r -> model-7r-lite for requests with rolling p95 > 400ms (20% initial traffic split).
+- Temporarily lower batch window to 8ms for impacted pools (reduces batching-induced tail compaction).
+- Kick a rolling sampling trace to capture full KV cache activity and attention kernel latencies.
+
+Medium plan (30m–3h):
+- If p95 remains > 400ms after fallback, trigger traffic shift: move 60% of FinLytics requests to model-7r-lite and limit max seq length to 512 for their sessions.
+- Run quick quantization sanity check on v2.1 to ensure no kernel fallback path introduced a regression.
+
+I've attached the mitigation playbook (mitigation-playbook-v2.pdf) and a short logs snippet. These actions are reversible; fallback reverts in under 90s.
+
+Decision needed: authorization for the fallback gate + temporary SLA carveout window. I recommend we accept the fallback and 23:59 UTC carveout, then reassess after two hours.
+
+Marcus
+Senior SRE, Serving Runtime
+Redwood Inference
+
+
+From: Maria Gomez <maria.gomez@finlytics.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: support@finlytics.com, procurement@finlytics.com
+Date: Wed, 22 Sep 2026 09:02:00 -0400
+Subject: Re: Urgent: latency cascade on model-7r -> request for temporary SLA carveout and mitigation approval
+
+Hannah —
+
+Thanks for the quick heads-up. We're seeing user-facing delays in our data ingestion flows; several customers have reported timeouts. Any ETA on mitigation? We prefer rollback to a previously-stable variant if that reduces impact quickly.
+
+If you need us to approve a temporary change to SLAs for today, we can sign off on a limited carveout provided we get a clear rollback path and an estimate for when full SLA will be restored.
+
+Maria Gomez
+Customer Success Manager, FinLytics
+
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>, Maria Gomez <maria.gomez@finlytics.com>
+Cc: Neha Kapoor <neha.kapoor@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: Wed, 22 Sep 2026 09:18:00 -0700
+Subject: Re: Urgent: latency cascade on model-7r -> request for temporary SLA carveout and mitigation approval
+
+Maria / Hannah —
+
+Appreciate the patience, Maria. From a customer success standpoint we should authorize the limited carveout to avoid customer churn; provide the rollback guarantee and a short note explaining why quality may vary under fallback. I'll draft client comms once we confirm the mitigation window.
+
+Neha — can you confirm business/legal ok for a one-day SLA tolerance for DEAL-90312? If procurement needs signatures, loop them in.
+
+Ben Carter
+Head of Sales Engineering
+Redwood Inference
+
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>, Ben Carter <ben.carter@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Cc: Soojin Lee <soojin.lee@redwood.com>
+Date: Wed, 22 Sep 2026 12:05:00 -0700
+Subject: Re: Urgent: latency cascade on model-7r -> request for temporary SLA carveout and mitigation approval
+
+Hannah / team —
+
+Approved: temporary SLA carveout for FinLytics (DEAL-90312) until 2026-09-22T23:59:00Z, contingent on the mitigation steps Marcus outlined and a rollback guarantee. Authorization notes:
+- Approve enabling fallback gate (max 30% automatic fallback, escalate to 60% if no improvement in 60 minutes).
+- Require runbook entry and comment in INF-1198 documenting actions taken.
+- Sales to share the drafted customer comms before send.
+
+Please execute and confirm once fallback is live. Marcus: mark the action in the mitigation-playbook-v2 and attach final logs to the ticket.
+
+Neha Kapoor
+VP, Customer Reliability & Ops
+Redwood Inference
+
+On Wed, 22 Sep 2026 at 08:35, Marcus Lin <marcus.lin@redwood.com> wrote:
+> Hannah / Neha —
+>
+> Short plan (immediate, ~5–30m):
+> - Enable automated fallback gate for model-7r -> model-7r-lite for requests with rolling p95 > 400ms (20% initial traffic split).
+> - Temporarily lower batch window to 8ms for impacted pools (reduces batching-induced tail compaction).
+> - Kick a rolling sampling trace to capture full KV cache activity and attention kernel latencies.
+>
+> Medium plan (30m–3h):
+> - If p95 remains > 400ms after fallback, trigger traffic shift: move 60% of FinLytics requests to model-7r-lite and limit max seq length to 512 for their sessions.
+> - Run quick quantization sanity check on v2.1 to ensure no kernel fallback path introduced a regression.
+>
+> I've attached the mitigation playbook (mitigation-playbook-v2.pdf) and a short logs snippet. These actions are reversible; fallback reverts in under 90s.
+>
+> Marcus
+> Senior SRE, Serving Runtime
+> Redwood Inference

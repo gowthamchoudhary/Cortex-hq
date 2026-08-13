@@ -1,0 +1,114 @@
+Re: Instrumentation, SLO measurement, and temporary SLA exception request
+
+From: Olivia Harper <olivia.harper@tideway.ai>
+To: soojin_lee <soojin.lee@redwood.com>
+Cc: Procurement Team <procurement@tideway.ai>
+Date: Sat, 18 Jul 2026 09:12:00 -0700
+Subject: SLO measurement & metrics access questions (procurement questionnaire)
+
+Hi Soojin —
+
+Thanks again for the demo yesterday. Procurement sent over a short SLO questionnaire that we need answered to move the contract to legal. High level asks: how do you measure uptime/latency SLOs, what monitoring and alerting access can we have, and what is the exception process in case of sustained incidents?
+
+We attached the questionnaire; I've pasted the three most important items below so you can respond directly in thread: 
+1) Precise SLO definitions (error budget window, latency percentiles, and what constitutes an outage).
+2) The monitoring stack and what read-only access or dashboards Tideway can get (Grafana/Prometheus metrics, sampling rates, retention).
+3) The process for an SLA exception or credit: who approves, how we calculate credit, and expected lead time.
+
+Procurement would like answers by EOD Tuesday (20 Jul) to keep the July renewal cadence. Let me know if you need me to route to someone else.
+
+—Olivia
+Principal Product Manager
+Tideway AI
+
+Attachment: Tideway_SLO_Questionnaire.pdf (pdf)
+From: soojin_lee <soojin.lee@redwood.com>
+To: Olivia Harper <olivia.harper@tideway.ai>
+Cc: marcus_lin <marcus.lin@redwood.com>, evelyn_hart <evelyn.hart@redwood.com>
+Date: Mon, 20 Jul 2026 08:55:00 -0700
+Subject: Re: SLO measurement & metrics access questions (procurement questionnaire)
+
+Hi Olivia —
+
+Thanks for the clear list. I'm attaching our formal responses and a small CSV export of the metrics you asked about. High-level answers below — happy to jump on a quick call tomorrow morning if you'd like to go line-by-line.
+
+1) SLO definitions: 
+- Uptime SLO: 99.95% availability measured as successful request rate (2xx/3xx) over a rolling 30-day window. Outage is defined as service availability under 99.0% over any rolling 60-minute window for core inference endpoints.
+- Latency SLOs: p95 <= 280ms and p99 <= 900ms for requests with <1024 token input on the standard hosted tier; for long context variants we provide separate SLOs noted in the doc. Measurements are per-customer aggregated at the ingress proxy layer before load-balancing.
+- Error budget policy: we consume error budget on any availability or latency breach per the measurement rules in the attached PDF.
+
+2) Monitoring & access: 
+- Stack: Prometheus (metric ingestion), Cortex (long-term metrics), Grafana (dashboards), and an internal tracing layer (Jaeger-compatible).
+- Customer access: read-only Grafana dashboard and a metrics export (CSV for last 90 days) by default for enterprise customers. We can provide a scoped Prometheus remote_read endpoint under an approved MSP agreement for Dedicated/Private plans.
+- Sampling & retention: 1s scrape for ingress latency counters, aggregated to 10s series stored for 90 days, 1y for summarized hourly rollups. Logs are retained 30 days; full request traces 14 days.
+
+3) SLA exception & credits: 
+- Exception approval: Customer success + legal sign-off for credits; engineering provides incident analysis. For temporary exceptions (e.g., planned migration), we accept formal exception requests with at least 7 business days' notice.
+- Credit calculation: total seconds of unavailability beyond the SLO window, normalized to monthly committed units, multiplied by the monthly fee to produce a prorated credit. Example calculation is in the PDF.
+- Escalation: level-1 support -> CS -> engineering on-call -> SRE review.
+
+Attachments: Tideway_SLO_Questionnaire_Responses_20260720.pdf; redwood-slo-metrics-sample.csv; sla-exception-request-form.docx
+
+Next steps: I'll add Marcus and Evelyn who own the instrumentation and legal-side clarifications respectively. If you want a live walkthrough of the Grafana dashboards we can spin up a read-only link.
+
+Best,
+Soojin Lee
+Senior Solutions Engineer
+Redwood Inference
+
+From: Olivia Harper <olivia.harper@tideway.ai>
+To: soojin_lee <soojin.lee@redwood.com>
+Date: Mon, 20 Jul 2026 10:03:00 -0700
+Subject: Re: SLO measurement & metrics access questions (procurement questionnaire)
+
+Thanks Soojin — this is great and answers most items. A couple follow-ups from procurement + engineering: 
+- Can you confirm whether latency SLOs are measured client-side or server-side? We need to align on whether CDN or network jitter is excluded.
+- For the read-only Grafana link: can it be scoped to only our org and tokenized? Also what RBAC roles are available?
+
+On the exception flow: Tideway is requesting a short-term SLA exception for a planned go-live on Aug 1 where we expect a burst while we test an integration. We'd like to understand the mechanism (formal form to submit, expected timeline for review, and any impact to credits). I'll attach the intent note.
+
+—Olivia
+
+Attachment: tideway_exception_intent.docx (docx)
+From: marcus_lin <marcus.lin@redwood.com>
+To: Olivia Harper <olivia.harper@tideway.ai>, soojin_lee <soojin.lee@redwood.com>
+Cc: evelyn_hart <evelyn.hart@redwood.com>
+Date: Mon, 20 Jul 2026 13:10:00 -0700
+Subject: Re: Instrumentation detail and exception mechanics
+
+Hi Olivia — looping in a few implementation details from the instrumentation team. Short answers: 
+
+- Measurement point: latency SLOs are measured at the server-side ingress (our LB edge) after TLS termination but before model runtime. This excludes client-side rendering and upstream CDN caching variance. Network transit inside cloud regions is included in the measurement. We also publish tail-latency traces so you can correlate client observations to server timelines.
+
+- RBAC & tokenization: We provide a tokenized, time-bound Grafana link scoped to your org and routes (read-only). Role options: org_admin_read, eng_read, billing_read. You can request additional scopes for Dedicated/Private where we map to your IAM.
+
+- Exception form & timeline: submit the attached SLA Exception Request Form (filled and signed by your CS or Procurement). We aim for a 5-business-day review for standard exceptions; expedited reviews (2 business days) are possible with an on-call SRE escalation. Approved exceptions are recorded and can be annotated to the monthly SLO reports to avoid retro-active credit triggers.
+
+- Calculation clarity: credits are only applied to sustained breaches that are not covered by an approved exception. If you want, we can run a pre-approval run for the Aug 1 window: you submit the expected traffic profile and we'll simulate expected error-budget consumption under that profile.
+
+I'll be available later today for a 30-minute call to walk through the dashboard examples.
+
+—Marcus
+Director, Instrumentation
+Redwood Inference
+
+From: Olivia Harper <olivia.harper@tideway.ai>
+To: soojin_lee <soojin.lee@redwood.com>, marcus_lin <marcus.lin@redwood.com>
+Cc: Procurement Team <procurement@tideway.ai>
+Date: Tue, 20 Jul 2026 16:45:00 -0700
+Subject: Re: Instrumentation, SLO measurement, and temporary SLA exception request
+
+All —
+
+Appreciate the quick turnaround. Procurement will accept the responses and the exception workflow. We'll: 
+1) Fill & return the SLA Exception Request Form by Friday 24 Jul.
+2) Request an org-scoped Grafana read-only token (eng_read) for our platform team — please send the link and token expiry options.
+3) Ask for the simulation run for our projected Aug 1 traffic (I'll upload the CSV this afternoon).
+
+If you can include a short paragraph in the PDF describing how credits are calculated (we want that in the legal exhibit), that would help speed legal review. Otherwise we can proceed to signature once exception form is accepted.
+
+Thanks again — looking forward to the call.
+
+—Olivia
+Principal Product Manager
+Tideway AI

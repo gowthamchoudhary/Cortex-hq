@@ -1,0 +1,133 @@
+Request: SLA exception for progressive release with auto-revert + version lock
+
+From: Jordan Ellis <jordan.ellis@acme.com>
+To: naomi.feldman@redwood.com, aditya_rao@redwood.com
+Cc: procurement@acme.com
+Date: Mon, 22 Mar 2027 09:15:00 -0700
+Subject: Progressive rollout + SLA ask for GenText v3
+
+Hi Naomi / Aditya,
+
+We're preparing to cut over Acme's knowledge assistant to Redwood's GenText v3. The internal stakeholders want a staged release to reduce risk — a small A/B for 10% traffic, then 25% -> 50% over two weeks. We need two things from Redwood to proceed: an SLA amendment that acknowledges staged rollout with automatic rollback thresholds, and a short doc that explains the auto-revert behavior + how you will "pin" sessions to previous model variants if the canary trips.
+
+Key asks:
+- Can you commit to an automatic rollback if p50 latency increases >25% over baseline or if error rate >0.8% on canary segment?
+- Will you allow us to pin a given customer to the previous model for 48 hours while you investigate?
+- We also need an estimated downtime/impact window in worst-case revert scenarios for our ops calendar.
+
+Procurement copied for SLA/contract follow-up.
+
+Thanks,
+Jordan
+Head of Product Integrations
+Acme Corp
+
+--
+Attachment: mmp-acme-v1.pdf (application/pdf)
+
+From: naomi_feldman@redwood.com
+To: aditya_rao@redwood.com, marissa_cole@redwood.com, priyom_das@redwood.com
+Cc: Jordan Ellis <jordan.ellis@acme.com>
+Date: Mon, 22 Mar 2027 10:02:00 -07:00
+Subject: Re: Progressive rollout + SLA ask for GenText v3
+
+Thanks Jordan — looping in Aditya (runtime) and Marissa (account lead) to confirm feasibility and contract path. High level: Redwood supports automatic rollbacks and per-customer pinning; we just need to agree thresholds and document them in an SLA amendment.
+
+Aditya / Priyom — can you review the thresholds Jordan proposed and advise:
+- Is auto-revert on p50 +25% and error rate >0.8% a safe default?
+- How long to pin a customer to previous model without impacting other customers?
+- Any telemetry/reporting we should expose to Acme during canary to satisfy their compliance team?
+
+Marissa — if we can agree on the technical behavior, let's get procurement a short SLA addendum and a DocuSign for signature. I've attached a sketch of the expected progressive-release timeline.
+
+Naomi
+Enterprise Sales
+Redwood Inference
+
+--
+Attachment: progressive-release-diagram.png (image/png)
+
+From: aditya_rao@redwood.com
+To: naomi_feldman@redwood.com, priyom_das@redwood.com
+Cc: Jordan Ellis <jordan.ellis@acme.com>
+Date: Mon, 22 Mar 2027 13:18:00 -07:00
+Subject: Re: Progressive rollout + SLA ask for GenText v3
+
+Naomi — technical reply below, copied Priyom for orchestration notes.
+
+Short answer: yes, we can support the behavior Jordan described. Details and caveats:
+
+1) Auto-revert triggers and timing
+   - Triggers: p50 latency delta >25% over a rolling 10-minute baseline OR request error rate >0.8% sustained for 5 minutes.
+   - When a trigger fires we will:
+     a) immediately divert new traffic for the canary cohort away from the new variant (instant).
+     b) gracefully let in-flight requests finish (max tail up to 2s per request depending on model).
+     c) re-route the cohort to the pinned previous model binary.
+   - Expected visible impact: <30s for new requests to start hitting the pinned version; worst-case additional tail latencies during the in-flight window.
+
+2) Pinning semantics
+   - We can pin a customer-token to the prior model variant for a configurable window (default 48 hours).
+   - Pinning is per-API-key + session cookie; it does not reserve GPU capacity — load will continue to be multiplexed across shared pools. If Acme has a Dedicated pool, pinning guarantees the variant is available without cross-tenant interference.
+
+3) Observability exposed to Acme
+   - We'll provide a read-only dashboard URL showing canary vs baseline p50/p95, error rate, throughput.
+   - We'll also surface the rollback event (who/what triggered it), affected cohort size, and which variant was pinned.
+
+4) Edge cases / risks
+   - If a pinned variant is subsequently deprecated for security reasons, we will require an emergency plan; this should be spelled out in the SLA addendum.
+   - Network partitions between regions can delay rollout/revert propagation; we'll document expected propagation windows per region.
+
+Action items:
+- I'll prepare a short technical appendix describing thresholds, timelines, and dashboard fields for the SLA amendment.
+- Priyom: can you add the dashboard link and the rollback event schema to the addendum?
+
+Aditya
+Senior Infra Eng, Runtime
+Redwood Inference
+
+--
+Attachment: acme-sla-exception-form.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+
+From: marissa_cole@redwood.com
+To: naomi_feldman@redwood.com, aditya_rao@redwood.com
+Cc: Jordan Ellis <jordan.ellis@acme.com>, procurement@acme.com
+Date: Tue, 23 Mar 2027 11:45:00 -07:00
+Subject: Re: Progressive rollout + SLA ask for GenText v3
+
+Thanks all — legal has drafted a 1-page SLA amendment that references the auto-revert triggers and pin window (48h default, configurable). A few commercial notes:
+
+- The staged release with auto-revert is covered under standard usage; there is no additional charge for the rollback itself.
+- Pinning to prior variant for >48h is billable if it results in sustained delta in resource utilization; we will capture this as a line item in the amendment.
+- We will need a signed DocuSign to append to the main Master Services Agreement before we start canary traffic.
+
+Jordan / Procurement — I created the DocuSign packet and included the technical appendix link and the read-only dashboard snippet. Please review and sign: https://www.docusign.com/ACME/SLA-Amendment-ACME-0045
+
+Marissa Cole
+Account Executive
+Redwood Inference
+
+--
+Attachment: SLA-amendment-redwood-acme.pdf (application/pdf)
+
+From: naomi_feldman@redwood.com
+To: Jordan Ellis <jordan.ellis@acme.com>, procurement@acme.com
+Cc: aditya_rao@redwood.com, marissa_cole@redwood.com, priyom_das@redwood.com
+Date: Wed, 24 Mar 2027 17:02:00 -07:00
+Subject: Re: Progressive rollout + SLA ask for GenText v3
+
+Jordan — great, thanks for the quick turn. Next steps and summary for clarity:
+
+1) Redwood will implement auto-revert on the following agreed triggers: p50 latency delta >25% (rolling 10m baseline) OR error rate >0.8% sustained for 5m.
+2) Upon trigger, the canary cohort will be re-routed to the prior model variant; expected switch-over time for new requests is <30s (in-flight tail up to ~2s).
+3) We will allow per-customer pinning for 48 hours by default; extension is possible but will be captured in the amendment if it creates incremental costs.
+4) Marissa has sent the DocuSign for the SLA amendment — please sign to document the thresholds and pinning rules.
+5) Once signed, we'll enable a 10% canary for 48 hours, then move to 25%/50% as agreed if no rollback events occur.
+
+I attached the mutual action plan (MMP) with dates and owners. Jordan — can you confirm the start target week (we proposed week of Apr 5) and that your security/compliance team is satisfied with the dashboard telemetry?
+
+Thanks — Naomi
+Enterprise Sales
+Redwood Inference
+
+--
+Attachment: mmp-acme-v1.pdf (application/pdf)

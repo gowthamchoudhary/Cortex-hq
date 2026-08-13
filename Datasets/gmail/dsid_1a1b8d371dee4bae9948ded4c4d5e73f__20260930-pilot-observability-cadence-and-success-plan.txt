@@ -1,0 +1,116 @@
+Post-call: Hightide pilot — observability cadence, owners & success metrics
+
+From: Diego Fernandez <diego@redwood.com>
+To: Alex Morgan <alex@hightide.ai>, Jamie Liu <jamie@hightide.ai>
+Cc: Vanessa Ortiz <vanessa@redwood.com>
+Date: Fri, 25 Sep 2026 10:15:00 -0700
+Subject: Post-call recap + proposed observability cadence for pilot
+
+Hi Alex / Jamie —
+
+Thanks for the time earlier today. Quick recap and the observability plan I promised. High-level asks from Hightide: keep latency tail under 200ms for 99th percentile, full request/response logs exportable to S3, and basic trace spans for the inference pipeline (request ingestion -> model lookup -> generate -> postprocess).
+
+Proposed POC observability scope (short):
+- Dashboards: 1) Latency distribution (p50/p90/p95/p99) per model route, 2) Token-level cost + throughput, 3) Error rate + retried requests, 4) KV cache hit ratio.
+- Tracing: Capture request id across service boundary; include model variant, prompts size, and response size in spans.
+- Logs: Structured JSON logs with request_id, client_id, route, model_id, latency_ms, and errors; daily export to a customer S3 bucket.
+- Alerting/OKRs: Alert on p99 > 250ms for more than 15m; alert on error rate > 1% sustained 10m.
+
+Deliverables & owners (proposed):
+- Observability dashboard templates — Vanessa Ortiz (Redwood) — deliver week 1 of pilot
+- Tracing instrumentation guide + sample spans — Ben Carter (Redwood) — deliver with onboarding scripts
+- S3 log export runbook & IAM checklist — Alex / Hightide (customer) + Diego (coord)
+- Success sheet (measurable gates) — attached (hightide_poc_success_metrics.xlsx)
+
+Suggested timeline: 3-week pilot post onboarding:
+Week 0 (kickoff): connectivity, API keys, skeleton dashboards
+Week 1: ingest traffic, baseline dashboards, export verification
+Week 2: ramp tests, tracing verification, cost analysis
+Week 3: final readout + decision criteria review
+
+Next steps: can you confirm S3 write access and a good time on Tue or Wed next week for the technical onboarding (30–45m)? Once we confirm, Vanessa will provision dashboard templates and Ben will share instrumentation snippets.
+
+Thanks —
+Diego Fernandez
+Enterprise Account Executive | Redwood Inference
+diego@redwood.com | +1 415-555-0123
+
+Attachments: hightide_poc_success_metrics.xlsx
+
+From: Alex Morgan <alex@hightide.ai>
+To: Diego Fernandez <diego@redwood.com>
+Cc: Jamie Liu <jamie@hightide.ai>
+Date: Fri, 25 Sep 2026 11:38:00 -0700
+Subject: Re: Post-call recap + proposed observability cadence for pilot
+
+Diego —
+
+Appreciate the crisp summary. A couple of clarifications from our side:
+- We can provide an S3 bucket but need an exact IAM policy template from you so our infra team can whitelist the principal.
+- Tracing: would you be able to surface span attributes for model quantization level and GPU type? Our infra lead wants to correlate slow requests with instance types.
+- Timeline: Tue or Wed next week works — prefer Tue morning (9:00–11:00 PT) for the onboarding.
+
+I’ll also loop in our security lead if you can send the network_arch_export.pdf and any minimal data flow / encryption notes.
+
+—Alex
+Alex Morgan | Head of AI Platforms, Hightide Systems
+alex@hightide.ai | +1 650-555-4488
+
+From: Diego Fernandez <diego@redwood.com>
+To: Alex Morgan <alex@hightide.ai>, Jamie Liu <jamie@hightide.ai>
+Cc: Vanessa Ortiz <vanessa@redwood.com>, Ben Carter <ben@redwood.com>
+Date: Mon, 28 Sep 2026 09:02:00 -0700
+Subject: Re: Post-call recap + proposed observability cadence for pilot
+
+Alex — thanks, noted. Attaching the initial network diagram and the template for dashboards (rdw-observability-template.json). Answers inline below.
+
+- IAM template: attached in runbook (network_arch_export.pdf includes the S3 policy snippet). We will also send a short Terraform example if that helps.
+- Tracing attributes: yes — we can include model_quant (e.g., q8_0, q4_0), gpu_type (a100/v100), and model_variant tag as span attributes. Ben will add span examples to the instrumentation guide.
+- Onboarding: Tue 2026-09-29 09:30 PT works for our infra engineer and Vanessa — request sent (calendar invite should arrive).
+
+Concrete success criteria (proposed, to be signed off):
+1) Latency: p99 for production-like sample workload <= 200ms for the primary route (95% of test runs)
+2) Observability coverage: dashboards show per-route p50/p90/p95/p99 and token-cost within 1 business day of data arrival
+3) Tracing fidelity: ability to trace request across ingestion -> model with model_quant and gpu_type attributes present in >= 95% of sampled traces
+4) Log export: daily S3 export with schema validated against our template and ability for Hightide to query logs within 24h
+5) Business signoff: Hightide engineering signs the POC readout doc and either requests an extension or approves progression to Dedicated procurement
+
+Ownership + timeline summary:
+- Week 0 (today - Fri): handshake & calendar, S3 access set by customer
+- Week 1: Vanessa (dashboards) + Ben (tracing) deliver templates + sample data
+- Week 2: Ramp & stress tests, Diego coordinates cost/output readout
+- Week 3: Final readout + decision
+
+I attached: network_arch_export.pdf and rdw-observability-template.json. I also pushed the success metrics sheet.
+
+Thanks —
+Diego Fernandez
+Enterprise Account Executive | Redwood Inference
+diego@redwood.com
+
+Attachments: network_arch_export.pdf, rdw-observability-template.json, hightide_poc_success_metrics.xlsx
+
+From: Ben Carter <ben@redwood.com>
+To: Alex Morgan <alex@hightide.ai>, Diego Fernandez <diego@redwood.com>
+Cc: Vanessa Ortiz <vanessa@redwood.com>, Monica Patel <monica@redwood.com>
+Date: Wed, 30 Sep 2026 09:05:00 -0700
+Subject: Re: Post-call recap + proposed observability cadence for pilot
+
+On Tue, 28 Sep 2026 at 09:02:00 -0700 Diego Fernandez <diego@redwood.com> wrote:
+> Concrete success criteria (proposed, to be signed off):
+> 1) Latency: p99 for production-like sample workload <= 200ms for the primary route (95% of test runs)
+> 2) Observability coverage: dashboards show per-route p50/p90/p95/p99 and token-cost within 1 business day of data arrival
+> 3) Tracing fidelity: ability to trace request across ingestion -> model with model_quant and gpu_type attributes present in >= 95% of sampled traces
+> 4) Log export: daily S3 export with schema validated against our template and ability for Hightide to query logs within 24h
+> 5) Business signoff: Hightide engineering signs the POC readout doc and either requests an extension or approves progression to Dedicated procurement
+
+Alex / team — quick note from instrumentation side: we will include a lightweight sampling strategy (1% baseline, adjustable) and a local debug flag for aggressive sampling during ramp windows. Ben will share the snippet in the onboarding call and the Terraform example for S3 IAM.
+
+If that matches your expectations, we’ll lock the success criteria and Vanessa will pre-populate the dashboards by EOD Tue.
+
+Cheers,
+Ben Carter
+Principal Systems Engineer | Redwood Inference
+ben@redwood.com
+
+

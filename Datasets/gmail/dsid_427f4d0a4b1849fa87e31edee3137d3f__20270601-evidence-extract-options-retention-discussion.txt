@@ -1,0 +1,105 @@
+Evidence extract & retention options for upcoming Finvero audit
+
+From: Alice Gomez <alice.gomez@finvero.com>
+To: Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: 
+Date: Tue, 1 Jun 2027 09:12:00 -0700
+Subject: Evidence extract request for scheduled audit (June 14)
+
+Hi Evelyn,
+
+Thanks again for the quick chat this morning. Our external auditors requested a packet of audit evidence covering access and system events for the period 2026-06-01 through 2027-05-31. Specifically they want: 1) login and admin activity for the account, 2) object-level access events (who accessed what and when), and 3) a sample of retention/deletion logs for purge events.
+
+Can you confirm what export formats you support, how long it takes to generate a full export for a 12‑month window, and whether we can request a residency-bound delivery (US-only S3) for ingestion into our GRC tooling? They mentioned they prefer NDJSON or gzipped CSV.
+
+Attached is the auditors' request template. Let me know if Redwood needs anything else or an official PO.
+
+Best,
+Alice Gomez
+Senior IT Auditor
+Finvero
+[attachment: auditor_request_template.pdf (pdf)]
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Dylan Brooks <dylan.brooks@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Cc: 
+Date: Tue, 1 Jun 2027 10:04:00 -07:00
+Subject: Re: Evidence extract request for scheduled audit (June 14)
+
+Team — looping you in. Finvero (external) needs a 12‑month audit packet in NDJSON/gz CSV, US‑only delivery to their S3, and examples of retention/deletion operations. They asked how long a full run takes and what formats we can produce.
+
+Quick thoughts:
+- We can produce NDJSON or gzipped CSV exports from the audit pipeline; default retention index holds 13 months of access/audit signals in hot storage.
+- For a full 12‑month window for a medium-sized account (approx ~1.2B events), estimate: export job (single run) 4–8 hours with our current async extractor, plus time to stage to S3 (depends on egress and bucket config).
+- Residency: we can deliver to a US-only S3 endpoint; will need a signed delivery policy and the bucket ARN.
+
+Karthik — can you confirm the current export throughput numbers and whether we need to apply any sampling for object-level access events? Dylan — please prepare the runbook and a minimal sample export (30 days) we can send this afternoon.
+
+Evelyn
+Evelyn Hart
+Head of Security & Compliance
+Redwood Inference
+[attachment: audit_extract_requirements.pdf (pdf)]
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Evelyn Hart <evelyn.hart@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Dylan Brooks <dylan.brooks@redwood.ai>
+Cc: 
+Date: Tue, 1 Jun 2027 13:17:00 -07:00
+Subject: Re: Evidence extract request for scheduled audit (June 14)
+
+Eve / team — short update on throughput and options.
+
+1) Throughput & sizing: Our extractor currently streams ~45 GB/min when operating with 8 workers and the default serialization to NDJSON. For a ~1.2B event window, that maps to roughly 5–7 hours to produce the full NDJSON payload (gzipped). We should budget 8–10 hours total end-to-end for staging and checksum verification.
+
+2) Formats: supported — NDJSON (preferred), gzipped CSV, and Parquet (columnar; useful if they plan to run large analytics). We can include a manifest file with checksums and a small schema dictionary.
+
+3) Object-level fidelity: We keep per-object access events at full fidelity for 365 days by default for hosted accounts. For accounts on Dedicated or Private, retention can be configured longer, but Finvero is on hosted with an extended retention add-on they purchased (+1 year). That means we can provide full fidelity for the requested window.
+
+4) Deletion/retention logs: We retain purge-event records (who triggered, what objects, timestamps) for 13 months in the audit index; we can include a filtered extract of those events.
+
+5) Delivery: US‑only S3 delivery is supported. We'll do a signed PUT into their bucket (we request a pre-authorized bucket policy) or else we can stage into our secure transient S3 and grant access. For their GRC ingestion, NDJSON gzipped is the safest.
+
+Action items:
+- Dylan: create a 30-day sample export (NDJSON gz) and upload it to the shared Drive link.
+- Marissa: draft the delivery statement and provide the signed delivery template the customer must accept (PO/legal).
+
+I can schedule the full run for Wed morning if we get the bucket info today.
+
+—Karthik
+Karthik Iyer
+Senior Systems Engineer, Inference Infrastructure
+From: Dylan Brooks <dylan.brooks@redwood.ai>
+To: Alice Gomez <alice.gomez@finvero.com>, Evelyn Hart <evelyn.hart@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Thu, 3 Jun 2027 15:28:00 -07:00
+Subject: Re: Evidence extract request for scheduled audit (June 14)
+
+Hi Alice — thanks for sending the template. We finished a 30‑day NDJSON sample and uploaded it to the Finvero shared folder: https://drive.redwood.ai/shared/Finvero-Audit-2027 (linked)
+
+Summary of sample: ~72M events (30 days), gzipped to 2.1 GB, schema file and manifest included, and a short README that explains field names and event types. Attached is the export playbook we followed — it documents the export window, retention mapping, and the checksum process.
+
+A few operational notes for the auditors:
+- Time range alignment: our export uses server UTC timestamps. If the auditors prefer their local timezone alignment, we can include both UTC and converted timestamps.
+- PII: the audit exports contain account identifiers and user IDs; we redact hashed tokens and never dump cleartext secrets.
+- Deletion proof: included in the package is a slice of purge events showing object IDs, initiator email, and deletion timestamps.
+
+Next steps: if Finvero confirms the S3 bucket ARN and provides a short CSV of expected auditors (for ACL), we can kick off the full 12‑month export Wednesday 06/09 and target completion by EOD 06/09 or morning 06/10 depending on egress.
+
+Regards,
+Dylan Brooks
+Security Operations Engineer
+Redwood Inference
+[attachment: redwood_export_playbook_v2.md (markdown)]
+
+On Tue, Jun 1, 2027 at 10:04 AM Evelyn Hart <evelyn.hart@redwood.ai> wrote:
+> Team — looping you in. Finvero (external) needs a 12‑month audit packet in NDJSON/gz CSV, US‑only delivery to their S3, and examples of retention/deletion operations. They asked how long a full run takes and what formats we can produce.
+>
+> Quick thoughts:
+> - We can produce NDJSON or gzipped CSV exports from the audit pipeline; default retention index holds 13 months of access/audit signals in hot storage.
+> - For a full 12‑month window for a medium-sized account (approx ~1.2B events), estimate: export job (single run) 4–8 hours with our current async extractor, plus time to stage to S3 (depends on egress and bucket config).
+> - Residency: we can deliver to a US-only S3 endpoint; will need a signed delivery policy and the bucket ARN.
+>
+> Karthik — can you confirm the current export throughput numbers and whether we need to apply any sampling for object-level access events? Dylan — please prepare the runbook and a minimal sample export (30 days) we can send this afternoon.
+>
+> Evelyn
+> Head of Security & Compliance
+> Redwood Inference
+> [attachment: audit_extract_requirements.pdf (pdf)]

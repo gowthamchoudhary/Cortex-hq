@@ -1,0 +1,112 @@
+Site-locking, tenant wipe assurances and acceptance criteria
+
+From: Olivia Grant <olivia.grant@latticepay.com>
+To: Mina Haddad <mina.haddad@redwood.com>
+Date: Tue, 20 Oct 2026 09:14:00 -0700
+Subject: Data locality and tenant wipe — clarifications requested
+
+Hi Mina,
+
+Thanks for taking the time on Friday. Before we move our procurement team forward, we need a short write-up confirming the following for Dedicated deployments:
+
+- What "site-locking" (region pinning) guarantees look like end-to-end — i.e., are backups, snapshots, and ephemeral caches ever replicated outside the pinned region?
+- The exact deletion / purge flow when we request a tenant wipe: who initiates, expected SLAs, and how you validate that no residual copies remain (snapshots, object storage, tape/archive).
+- Any required customer actions (e.g., submit a formal request, provide retention hold dates).
+
+We'd like a short summary and an example acceptance checklist we can give our legal and security teams. Also attaching a one-pager from our side with the controls the compliance team will expect.
+
+Appreciate it,
+Olivia
+
+Olivia Grant
+Security & Privacy, LatticePay
+olivia.grant@latticepay.com
+
+Attachment: latticepay-security-ask-20261019.pdf (pdf)
+From: Mina Haddad <mina.haddad@redwood.com>
+To: Olivia Grant <olivia.grant@latticepay.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.com>
+Date: Wed, 21 Oct 2026 11:02:00 -0700
+Subject: Re: Data locality and tenant wipe — clarifications requested
+
+Hi Olivia —
+
+Thanks for the clear list. Below is a concise response we can share with your legal/security teams; I also attached a customer-friendly acceptance checklist and our internal site-lock playbook (redacted for security).
+
+Summary (high level):
+- Region pinning: For Dedicated, a tenant is assigned to a single region (region-aware pool). Active compute, the KV cache, model KV stores, and object storage snapshots for that tenant remain within the pinned region by default.
+- Backups & snapshots: Automated backups for Dedicated are retained in the same region unless a cross-region backup policy is explicitly enabled by the customer. We do not enable cross-region replication without a written request and customer opt-in (documented via ticket).
+- Ephemeral caches: Transient caches are local to the serving cluster; eviction and rehydrate hops do not stage data in other regions.
+- Tenant wipe flow: 1) Customer submits formal wipe request via support portal (or signed email). 2) Engineering schedules a controlled wipe job on the pinned cluster; 3) We sweep primary storage, delete relevant snapshots, and then run a verification scrub that enumerates object/store keys and confirms tombstone markers.
+- SLAs and timing: Standard wipe completion target is 72 hours for datasets under 5TB; large datasets are on a case-by-case timeline (we state expected completion in the ticket).
+- Evidence & validation: Post-wipe we provide: (a) scrub log (listing object keys removed), (b) snapshot deletion audit entries, and (c) a signed attestation. For higher assurance customers we can provide a wipe-run-snapshot file with timestamped hashes.
+- Legal holds: If you place a retention/legal hold, we pause scheduled scrubs and archive the hold metadata; a separate authorized release is required to proceed.
+
+Attached: redwood_site_lock_playbook.pdf (customer redacted playbook), customer-acceptance-checklist.xlsx (checklist you can use).
+
+Next steps: If Procurement needs the exact wording for contract language (e.g., a clause on cross-region replication or wipe SLAs), loop them in and we can draft suggested contract text.
+
+Best,
+Mina Haddad
+Senior Solutions Architect, Redwood Inference
+mina.haddad@redwood.com
+Phone: +1 (415) 555-0122
+
+Attachments: redwood_site_lock_playbook.pdf (pdf), customer-acceptance-checklist.xlsx (xlsx)
+From: Mina Haddad <mina.haddad@redwood.com>
+To: Ben Carter <ben.carter@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>
+Date: Thu, 22 Oct 2026 08:35:00 -0700
+Subject: Fwd: Data locality and tenant wipe — clarifications requested
+
+Internal — forwarding the customer questions and my initial reply. Can you confirm the wipe verification artifacts we can provide for a standard Dedicated tenant wipe? Please include any runbooks and approximate times for a 1.2TB tenant (LatticePay size).
+
+Key asks from customer:
+- Explicit guarantee that snapshots/backups are not replicated outside the pinned region without opt-in.
+- A scrub/log artifact they can attach to their audit evidence.
+- Exact SLAs for wipe completion.
+
+Also, Ben: would we be able to include an extract of the scrub run (hashes + timestamps) as a text attachment? I know we usually redact some internals — advise on the level of detail safe to share.
+
+Thanks,
+Mina
+
+-- Forwarded message attached --
+From: Ben Carter <ben.carter@redwood.com>
+To: Mina Haddad <mina.haddad@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>
+Date: Fri, 23 Oct 2026 14:20:00 -0700
+Subject: Re: Fwd: Data locality and tenant wipe — clarifications requested
+
+Mina / Lauren — quick internal note on artifacts and timings.
+
+- Snapshots/backups: Confirmed — default behavior keeps snapshots in-region. Cross-region replication is off unless the customer explicitly requests it and signs the configuration change (we create a recorded work item that includes the requestor and justification).
+- Wipe verification artifacts: We can provide the following after a wipe completes:
+  * wipe-run-snapshot-<timestamp>.txt — contains a list of object keys deleted with SHA256 hashes and UTC timestamps (we redact internal hostnames).
+  * snapshot-deletion-audit.log — audit entries showing snapshot IDs and deletion timestamps.
+  * ticket-links and attestation: We attach the support ticket and a signed attestation from the ops lead.
+- Typical timing for a 1.2TB tenant: Plan for 24–36 hours to perform controlled deletion and verification on the pinned cluster, plus 12–36 hours to reconcile snapshot metadata and run the scrub across object storage depending on queueing. Our public guideline of 72 hours covers this window; we will communicate any longer timelines upfront.
+
+I attached an example scrub run extract for a prior internal customer (redacted) — you can send an extract of similar shape: hashes + keys + timestamps. Recommend: remove raw object paths and replace with stable IDs, include SHA256, and sign with ops.
+
+Ben
+Senior SRE Manager, Redwood Inference
+Attaching: wipe-run-snapshot-20261026.txt (txt)
+From: Olivia Grant <olivia.grant@latticepay.com>
+To: Mina Haddad <mina.haddad@redwood.com>, Procurement Team <procurement@latticepay.com>
+Date: Tue, 27 Oct 2026 16:02:00 -0700
+Subject: Re: Data locality and tenant wipe — clarifications requested
+
+Mina / Team — thank you.
+
+This is exactly what our compliance team needed. A couple of clarifying items from procurement:
+
+- Can you add a short contract addendum template stating "Redwood will not enable cross-region replication for the LatticePay Dedicated tenant without prior written consent from LatticePay" and a definition of "wipe completion" as "successful removal of primary objects and deletion of snapshots with provided attestation."
+- For the scrub-run extract, Procurement wants the sanitized example (no internal hosts) you mentioned — we will include that as an audit artifact.
+
+If you can drop the two items above into a single PDF we can circulate to legal and sign off on the SOW.
+
+Thanks again — will loop Procurement on next steps.
+
+Best,
+Olivia
+
+Attachment: procurement-approval-request-20261027.docx (docx)

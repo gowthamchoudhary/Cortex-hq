@@ -1,0 +1,136 @@
+Dedicated capacity: throughput carveout & uptime shield — Elara proposal
+
+From: Mateo Alvarez <mateo.alvarez@redwood.com>
+To: Elara Procurement <procurement@elara.health>
+Cc: Ben Carter <ben.carter@redwood.com>, Irene Choi <irene.choi@redwood.com>
+Date: Mon, 26 Oct 2026 15:12:00 -0700
+Subject: Dedicated capacity: throughput carveout & uptime shield — Elara proposal
+
+Hi Lucy / team,
+
+Thanks again for running the pilot with us — great progress. Attached is a short suggested addendum to the Dedicated Capacity SLA that addresses the specific throughput and queueing concerns you flagged during last week’s call. High-level items in the draft:
+
+- Guaranteed steady-state throughput per reserved GPU (tokens/sec) with a clear degradation policy for maintenance windows.
+- A 30-minute soft-failover window where requests are routed to a compatible, lower-cost model variant before credits kick in.
+- Token-based burst buffer (short-duration headroom) for spiky workloads; explicit burst budget and exhaustion behavior.
+- Observable metrics and monthly credits tied to sustained tail-latency regressions (>95th percentile).
+
+Attachments: SLA-draft-Elara-v3.pdf (pdf, 68 KB), queueing-diagram.png (png, 42 KB)
+
+Questions for you:
+1) Does Elara require firm per-region uptime (we currently guarantee region-specific 99.9% for Dedicated) or cross-region fallbacks are acceptable?
+2) Is the proposed 30-minute soft-failover acceptable versus a direct crediting model?
+3) Any additional regulatory constraints we should mention in the addendum?
+
+If it helps, Ben and Irene are on this thread for the technical and commercial details — they can propose alternate language.
+
+— Mateo
+Mateo Alvarez
+Enterprise Solutions
+Redwood Inference
+(attachment: SLA-draft-Elara-v3.pdf)
+
+---
+
+From: Lucy Chen <lucy.chen@elara.health>
+To: Mateo Alvarez <mateo.alvarez@redwood.com>
+Cc: Elara Procurement <procurement@elara.health>
+Date: Mon, 26 Oct 2026 18:07:00 -04:00
+Subject: Re: Dedicated capacity: throughput carveout & uptime shield — Elara proposal
+
+Thanks, Mateo — appreciate the quick turn.
+
+A few clarifications from our side after reviewing the draft:
+
+- Cross-region fallback is acceptable, but Elara needs a maximum failover time of 15 minutes to satisfy our patient-facing SLA. The 30-minute window is longer than our tolerance.
+- We need explicit language around queueing priority when multiple Elara services (real-time chat vs. nightly batch) compete on the same reserved pool — real-time must be prioritized.
+- For burst buffers: we’d like a mechanism to reserve a minimum of 20% of the burst budget for emergency patient workflows.
+
+I’ve attached our internal SLO spreadsheet that shows our percentiles and acceptable elasticity windows.
+
+Attachments: Elara-SLOs-annotated.xlsx (xlsx, 120 KB)
+
+Can Ben or Irene confirm what changing the soft-failover to 15 minutes would do to the crediting thresholds and cost?
+
+— Lucy
+Lucy Chen
+SRE Lead, Elara Health
+
+---
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Lucy Chen <lucy.chen@elara.health>
+Cc: Mateo Alvarez <mateo.alvarez@redwood.com>, Irene Choi <irene.choi@redwood.com>
+Date: Mon, 26 Oct 2026 19:45:00 -07:00
+Subject: Re: Dedicated capacity: throughput carveout & uptime shield — Elara proposal
+
+Lucy — quick answers, high level:
+
+- Switching the soft-failover from 30 -> 15 minutes increases the effective reserved headroom we must hold for cross-region capacity or accept more frequent model fallbacks. Practically, that shifts the credit trigger: instead of crediting after a sustained 30m regression we’d credit after 15m. That increases credit exposure ~1.6x in our back-of-envelope, because short outages become billable sooner.
+
+- Queueing priority: we can support per-tenant route priority and preemption rules in the reserved pool. Implementation outline: per-tenant priority tag, preemption thresholds, and a small dedicated fast lane for 'real-time' tokens. This is what the queueing-diagram tries to illustrate.
+
+- Emergency burst reservation (20% reserve for patient workflows): yes, we can reserve a protected fraction of the burst bucket, but that reduces the aggregate burst capacity for other workloads and would be reflected in the pricing appendix.
+
+Irene, can you add a short technical note on how this interacts with preemption and KV cache warming?
+
+— Ben
+Ben Carter
+Head of Commercial Strategy
+Redwood Inference
+
+(attachment: queueing-diagram.png)
+
+---
+
+From: Irene Choi <irene.choi@redwood.com>
+To: Ben Carter <ben.carter@redwood.com>, Lucy Chen <lucy.chen@elara.health>
+Cc: Mateo Alvarez <mateo.alvarez@redwood.com>
+Date: Tue, 27 Oct 2026 00:12:00 -07:00
+Subject: Re: Dedicated capacity: throughput carveout & uptime shield — Elara proposal
+
+Hi all — technical addendum below (excerpted for thread):
+
+On preemption & KV cache:
+- Preemption threshold: we define a tenant eviction threshold at 85% sustained utilization over a 5-minute rolling window. At that point lower-priority jobs are preempted and queued.
+- Cache warming: when a request is routed to a fallback model variant, KV cache warming occurs asynchronously. Cold starts for large context pins may add 40–120ms per request for the first N keys; we recommend an optional warm-start prefetch for mission-critical flows.
+- Headroom accounting: burst budgets are tracked as token-credits per-minute. Emergency reservation (20%) will be enforced at the token-accounting layer and visible in the Console as a reserved-burst balance.
+
+Operational notes:
+- Observability: we'll ship per-route 95/99/99.9 latency metrics to your Grafana instance via the metrics endpoint.
+- Credits: crediting will be triggered by sustained 95th percentile latency > agreed threshold for >= 15 minutes (if you accept the 15-minute window). Credits are calculated on per-hour reserved spend.
+
+If Elara signs off on the 15-minute soft-failover we’ll: (a) mark the SLA addendum accordingly, (b) update the pricing appendix for the added headroom reserve, and (c) enable the protected-burst flag on provision.
+
+— Irene
+Irene Choi
+Senior Systems Engineer, Redwood Inference
+
+---
+
+From: Mateo Alvarez <mateo.alvarez@redwood.com>
+To: Lucy Chen <lucy.chen@elara.health>
+Cc: Ben Carter <ben.carter@redwood.com>, Irene Choi <irene.choi@redwood.com>, Naomi Feldman <naomi.feldman@redwood.com>
+Date: Tue, 27 Oct 2026 09:04:00 -07:00
+Subject: Re: Dedicated capacity: throughput carveout & uptime shield — Elara proposal
+
+Lucy —
+
+Thanks for the clear feedback and the SLO sheet. Short summary and next steps:
+
+- We can tighten the soft-failover to 15 minutes. That will increase credit exposure and the monthly commitment in the pricing appendix; Ben will follow up with an updated quote.
+- Redwood will add per-tenant priority lanes and a protected 20% emergency burst reserve for the patient workflows. This will be enforceable via the protected-burst flag and visible in Console.
+- Irene will add the KV-warm start recommendation to the operational runbook; we’ll include the wording in section 2.3 of the addendum.
+- Action items:
+  - Ben: supply updated pricing and the revised pricing appendix (ETA: 48 hours).
+  - Irene: short runbook excerpt for warm-start and preemption thresholds to insert into SLA.
+  - Mateo: send final addendum for signature once Ben and Irene confirm.
+
+If that all looks correct I’ll prepare the final addendum and circulate a DocuSign link. Thanks — we’re happy to get this live for you.
+
+Best,
+— Mateo
+Mateo Alvarez
+Enterprise Solutions
+Redwood Inference
+(attachment: SLA-draft-Elara-v3.pdf)

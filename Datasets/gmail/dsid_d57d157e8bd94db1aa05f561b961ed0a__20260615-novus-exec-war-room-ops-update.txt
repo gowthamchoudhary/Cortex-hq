@@ -1,0 +1,137 @@
+URGENT: Novus Analytics throughput degradation — executive war-room
+
+From: Maya Gupta <maya.gupta@novus-analytics.com>
+To: laura_bennett <laura.bennett@redwood.com>, rachel_kim <rachel.kim@redwood.com>
+Cc: Aaron Lee <aaron.lee@novus-analytics.com>
+Date: Mon, 15 Jun 2026 09:12:23 -0700
+Subject: Production latency spikes: Novus - Redwood API
+
+Hi Laura / Rachel —
+
+We started seeing a sharp increase in p95 latency across our Redwood text-generation endpoint at ~08:50 PDT. Error rates (5xx) jumped from ~0.2% to 6.4% within 10 minutes and sustained for ~20 minutes. Throughput for our busiest routes dropped by ~30% as requests started timing out.
+
+Attached is a short CSV with the timeline (novus_latency_report_20260615.csv) and one screenshot of the error dashboard (screenshot_errors.png). Key notes:
+- 08:50–09:05: significant increases in queueing and GPU saturation on model shard A
+- Fallbacks to smaller model resulted in elevated 503s (we saw many requests retried)
+- This is customer-facing for our key production pipeline (inference for recommendations)
+
+Can Redwood confirm whether this is a routing/capacity issue on your side? We need an urgent status and expected time-to-recovery. Novus is preparing an internal incident call but would like Redwood on it ASAP.
+
+Thanks,
+Maya
+Maya Gupta
+Director of ML Platforms, Novus Analytics
+
+From: laura_bennett <laura.bennett@redwood.com>
+To: marcus_lin <marcus.lin@redwood.com>, rachel_kim <rachel.kim@redwood.com>, jonas_weber <jonas.weber@redwood.com>, evelyn_hart <evelyn.hart@redwood.com>, markus_klein <markus.klein@redwood.com>
+Cc: Maya Gupta <maya.gupta@novus-analytics.com>, Aaron Lee <aaron.lee@novus-analytics.com>
+Date: Mon, 15 Jun 2026 09:20:11 -0700
+Subject: Re: Production latency spikes: Novus - Redwood API
+
+Thanks Maya — we see the alert stream as well. Marcus, can you stand up a war-room and run the incident playbook? Rachel / Jonas, please prepare a customer-facing summary and escalation path. Evelyn / Markus — FYI and may need exec decision on emergency capacity/spending.
+
+Proposed immediate actions (please ack):
+1) Marcus: collect kernel / GPU metrics for shards A/B, check queue lengths, and identify whether this is autoscaler lag or a hotter-than-expected traffic fan-out.
+2) Marcus + Infra: trigger a temporary scale-up of the dedicated pool (burst) and enable routing fallback to the v2_small variant for non-mission-critical routes.
+3) Rachel: message Novus with the first ETA (we should aim for an initial update within 30–45 minutes).
+4) Jonas: flag deal/contract for emergency credits if recovery causes significant customer impact.
+
+I've created a short runbook for this event and attached it (proposed_runbook.md). War-room: meet in #ops-warroom-novus in 10 minutes (10:00 PDT).
+
+Laura Bennett
+Director, Customer Escalations
+Redwood Inference
+
+From: marcus_lin <marcus.lin@redwood.com>
+To: laura_bennett <laura.bennett@redwood.com>, rachel_kim <rachel.kim@redwood.com>, jonas_weber <jonas.weber@redwood.com>, evelyn_hart <evelyn.hart@redwood.com>, markus_klein <markus.klein@redwood.com>
+Cc: Maya Gupta <maya.gupta@novus-analytics.com>, Aaron Lee <aaron.lee@novus-analytics.com>
+Date: Mon, 15 Jun 2026 09:35:42 -0700
+Subject: Re: Production latency spikes: Novus - Redwood API
+
+On Mon, Jun 15, 2026 at 9:20 AM laura_bennett <laura.bennett@redwood.com> wrote:
+> Marcus: collect kernel / GPU metrics for shards A/B, check queue lengths, and identify whether this is autoscaler lag or a hotter-than-expected traffic fan-out.
+
+War-room update (initial triage):
+- Observed: two GPU hosts serving shard A reached sustained 98% memory utilization; KV-cache growth caused longer-than-expected token generation times.
+- Error signature: increased inference timeouts leading to cascading retries and 503 responses from the fallback router.
+- Root cause hypothesis: traffic pattern change (batch size and sequence length) + autoscaler not provisioning fast enough for the hot shard.
+
+Immediate mitigations we've initiated:
+- Provisioned two additional instances into the Dedicated pool (scaling event in progress, ~6–8 minutes to be in steady state).
+- Adjusted routing policy: heavy traffic routes will temporarily be routed to a compatible v2_small variant to reduce latency risk for critical requests.
+- Rate-limit tolerances increased for background/low-priority jobs to relieve pressure.
+
+We are monitoring; pushing live metrics to the war-room board. Will update in 10 minutes or sooner if we see recovery.
+
+Marcus
+SRE Lead, Serving Runtime
+Redwood Inference
+
+From: laura_bennett <laura.bennett@redwood.com>
+To: marcus_lin <marcus.lin@redwood.com>, rachel_kim <rachel.kim@redwood.com>, jonas_weber <jonas.weber@redwood.com>, evelyn_hart <evelyn.hart@redwood.com>, markus_klein <markus.klein@redwood.com>
+Cc: Maya Gupta <maya.gupta@novus-analytics.com>, Aaron Lee <aaron.lee@novus-analytics.com>
+Date: Mon, 15 Jun 2026 10:05:00 -0700
+Subject: War-room note: exec alignment + temporary credits authorization
+
+War-room live notes:
+- Status: partial recovery observed after scale-up and routing change. Error rate down from 6.4% to 1.1%; p95 latency improved but still ~20% over baseline for a subset of routes. Throughput recovering but not fully back to pre-incident levels.
+- Customer impact: Novus's recommendations pipeline experienced degraded throughput for ~45 minutes, affecting a small percentage of production users.
+
+Open asks:
+- Finance/Leadership: authorize emergency burst credits to cover the additional Dedicated capacity and any customer credits we may offer. Suggesting a temporary credit of up to $12k while we complete full impact assessment.
+- Product/SRE: continue monitoring for at least 4 hours; keep routing fallback enabled until we validate stability across 95th percentile traffic shapes.
+
+Action owners:
+- Marcus: continue metric collection and post-incident artifacts (logs, profilers) — due EOD.
+- Rachel: customer comms and credit coordination.
+- Jonas: negotiate commercial remediation if customer requests concession.
+
+Laura
+(Updating execs: Evelyn/Markus please confirm budget sign-off or advise the escalation path.)
+
+From: rachel_kim <rachel.kim@redwood.com>
+To: Maya Gupta <maya.gupta@novus-analytics.com>, Aaron Lee <aaron.lee@novus-analytics.com>
+Cc: laura_bennett <laura.bennett@redwood.com>, marcus_lin <marcus.lin@redwood.com>, jonas_weber <jonas.weber@redwood.com>
+Date: Mon, 15 Jun 2026 14:40:12 -0700
+Subject: Novus Incident update — recovery in progress
+
+Hi Maya / Aaron —
+
+Thanks again for flagging this morning and for joining the war-room. Quick status update:
+- Mitigation applied: Redwood scaled additional capacity and adjusted routing to reduce tail latency.
+- Current impact: error rates have dropped to ~0.4% across all routes, and throughput is at ~95% of baseline. We expect full stabilization within the next 90 minutes.
+- Next steps: Marcus will provide post-incident logs and a short root-cause summary by EOD.
+
+We understand the operational impact this had on Novus's pipeline. We're prepared to offer a credit to offset the interruption; Laura / Jonas are recommending a $10k credit to reconcile customer impact while we complete the incident review. Please let us know if that is acceptable or if you'd prefer an alternate form of remediation.
+
+I will keep this thread updated and will share the artifacts when available (logs, incidence timeline, proposed_runbook.md).
+
+Best,
+Rachel Kim
+Customer Success Manager, Redwood Inference
+
+From: laura_bennett <laura.bennett@redwood.com>
+To: marcus_lin <marcus.lin@redwood.com>, rachel_kim <rachel.kim@redwood.com>, jonas_weber <jonas.weber@redwood.com>, evelyn_hart <evelyn.hart@redwood.com>, markus_klein <markus.klein@redwood.com>
+Cc: Maya Gupta <maya.gupta@novus-analytics.com>, Aaron Lee <aaron.lee@novus-analytics.com>
+Date: Mon, 15 Jun 2026 18:30:05 -0700
+Subject: Post-incident summary & next steps (Novus Analytics)
+
+Team / Maya / Aaron —
+
+Thank you to everyone who joined the war-room. Final summary:
+- Root cause: traffic shape change + autoscaler provisioning lag on a hot model shard caused sustained GPU memory pressure, which produced longer inference latencies and retry storms.
+- Immediate remediation: scale-up + routing fallback reduced error rate and recovered throughput.
+- Impact window: ~08:50–09:40 PDT; majority of customer requests returned to baseline within ~50 minutes.
+
+Attachments: novus_latency_report_20260615.csv (timeline), proposed_runbook.md (post-incident actions and platform changes), screenshot_errors.png (alert capture).
+
+Agreed follow-ups (owners / ETA):
+1) Marcus — complete artifact collection (logs, kernel traces) and a short tech RCA — EOD tomorrow.
+2) Product — propose autoscaler tuning (hot-shard detection + faster scale-up) and formalize traffic-shape tests — draft in 2 weeks.
+3) Customer & Sales — finalize remediation: $10k credit proposed; Jonas to confirm commercial approval by EOD tomorrow.
+
+Maya / Aaron, we appreciate your patience. Please let us know if you want a dedicated post-mortem session with our engineering leads next week.
+
+Laura Bennett
+Director, Customer Escalations
+Redwood Inference

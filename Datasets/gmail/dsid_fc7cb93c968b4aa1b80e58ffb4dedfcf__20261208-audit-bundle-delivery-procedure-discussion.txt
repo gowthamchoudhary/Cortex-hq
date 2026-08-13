@@ -1,0 +1,104 @@
+Enterprise Audit Bundle: delivery, export format, and legal hold procedures
+
+From: Olivia Chen <olivia.chen@enterpriseco.com>
+To: Tessa Morgan <tessa_morgan@redwood.ai>
+Cc: EnterpriseCo Security <security@enterpriseco.com>
+Date: Mon, 7 Dec 2026 09:15:00 -0800
+Subject: Initial request: audit log exports, legal hold, and delivery SLA
+
+Hi Tessa,
+
+Thanks for taking this. As part of our procurement and security review we need a short write-up and confirmation on how Redwood will deliver audit log bundles and evidence for legal/forensic requests. Our security team is specifically asking for: 1) export formats supported (JSONL/Parquet/CSV), 2) whether exports include unredacted request/response payloads or only metadata, 3) manifest and integrity proofs (signed manifests / checksums), 4) delivery options (S3 presigned, direct SCP, or FedRamp-approved transfer), 5) expected SLA for large exports (full-account, 90 days of data), 6) retention change controls and legal hold handling, and 7) chain-of-custody / proofof-tamper process.
+
+We also need an example of the export schema and a sample delivery to validate our ingestion pipeline. Can you share a short playbook and a sample bundle within 48 business hours? If there are plan-level differences (Hosted vs Dedicated vs Private), please call them out.
+
+Thank you,
+
+Olivia Chen
+Head of Security Operations
+EnterpriseCo
+
+
+From: Tessa Morgan <tessa_morgan@redwood.ai>
+To: Olivia Chen <olivia.chen@enterpriseco.com>
+Cc: marissa_cole@redwood.ai, kimberly_park@redwood.ai
+Date: Mon, 7 Dec 2026 11:02:00 -0800
+Subject: Re: Initial request: audit log exports, legal hold, and delivery SLA
+
+Hi Olivia —
+
+Appreciate the clear list. Below is a concise summary of Redwood's capabilities and proposed next steps. I'll attach the export schema and a short SLA draft for review (attached: audit-export-schema-v1.xlsx, export-sla-draft-redwood.docx).
+
+Summary of capabilities (hosted / dedicated / private):
+- Formats: native JSONL for event streams; Parquet (columnar) and gzipped-CSV for bulk exports. We recommend Parquet for large datasets (cost + ingest efficiency).
+- Payloads: Exports are configurable per-customer. Default audit bundles include full metadata (request_id, timestamp, event_type, model_version, tenant_id, token_count). Unredacted request/response payloads (prompt/response bodies) are available on Dedicated and Private plans by consent and scoping (due to data-sensitivity). Hosted plans can be configured to include prompts under an elevated enterprise agreement and DPA addendum.
+- Integrity proofs: Every export produces a signed manifest (SHA-256 checksums per file) and an overall manifest signature using our workspace signing certificate. We can additionally provide an HMAC signature bound to a timestamped envelope.
+- Delivery: Options include S3 presigned URLs (preferred), SFTP/SCP to customer-managed endpoints, or direct transfer to a partner storage account. For Private deployments we provide direct networked mounts and can support air-gapped handoff.
+- SLA/Timing: For standard enterprise Hosted customers, full-account exports for 90 days are delivered within 48 business hours. For Dedicated customers (reserved capacity + export SLA add-on), we offer a 4-hour expedited export for datasets up to 5TB. For anything larger we provide staged exports with aggressive parallelization and a guaranteed 24-hour window.
+- Retention + legal hold: Retention windows are configurable per-tenant. Legal hold requests can be applied immediately (admin API) and prevent data deletion while flagged. We persist an immutable audit ledger for export events (who requested export, delivery URI, checksum, signer).
+- Chain of custody: Export manifests include a timestamp, signer identity, and checksum chain. We maintain internal audit entries for export job lifecycle (queued, started, chunk-complete, delivered). On request we will provide a signed evidence package (sample attached).
+
+Next steps we propose:
+1) We can deliver a redacted sample bundle and the schema within 24 hours for ingestion testing (attached schema).
+2) Schedule a 45-minute technical runbook call with our infra lead to walk through S3 ingestion and signatures.
+3) If acceptable, we'll update the SLA language to reflect expedited export windows and hand it off to procurement for the SOW.
+
+CC'd: Marissa (technical exports owner) and Kimberly (legal-preservation/SOC evidence). They will chime in on technical and contractual details.
+
+Best,
+
+Tessa Morgan
+Senior Solutions Engineer, Redwood Inference
+
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Olivia Chen <olivia.chen@enterpriseco.com>, Tessa Morgan <tessa_morgan@redwood.ai>
+Cc: kimberly_park@redwood.ai
+Date: Tue, 8 Dec 2026 08:20:00 -0800
+Subject: Re: Initial request: audit log exports, legal hold, and delivery SLA
+
+Hi Olivia —
+
+A few technical clarifications from the exports team to help you plan ingestion and verification:
+
+- Schema and fields: Exports include a strict schema: event_timestamp (ISO8601), request_id (UUID), sequence_number (monotonic per-tenant), event_type (inference.request | inference.response | model.update | policy.decision), model_version, tenant_id, user_id (if present), prompt_digest (SHA256), response_digest (SHA256), tokens_in/tokens_out, and optional raw_payload bundle when enabled. We will provide a canonical JSON Schema in the attached workbook.
+- Export types:
+  * Snapshot (point-in-time): single snapshot export of an account range; produces a manifest + N data files.
+  * Incremental delta: sequence-based ranges that can be replayed to reconstruct state; includes first_sequence and last_sequence in manifest.
+- File layout and compression: For >200MB files we produce parquet + snappy compression and gzip the transfer package. Filenames are timestamped with UTC and sequence ranges (e.g., audit-20261207-0001-of-004.parquet.gz).
+- Integrity and verification: Each data file has a SHA-256 checksum; the manifest lists these plus a signed manifest digest (RSA-2048 signature). We can provide a signed manifest timestamped by our audit KMS.
+- Encryption: Exports at rest and in transit are encrypted with AES-256 + optional KMIP/HSM-wrapped keys for Dedicated/Private customers. S3 deliveries can be to a customer-owned bucket with SSE-KMS.
+- Legal hold flow: When a legal hold is applied, deletion jobs skip flagged objects; holds are recorded in the audit ledger with operator, case id, and TTL (until release). Release requires two-person approval for Hosted enterprise customers or single-operator release in Private deployments (configurable).
+- Cost and quotas: Large full-account exports are charged as a one-time export job fee (est. $0.02/GB for Hosted default) and separate egress if S3 cross-region. Dedicated customers can subscribe to an export plan that includes N expedited exports per year.
+
+I'll prepare a sanitized sample export (redacted raw_payload) and the canonical JSON schema. If you want raw prompt text included for forensic use, let us know and we'll include it under an additional DPA appendix.
+
+Regards,
+
+Marissa Cole
+Principal Infra Engineer, Exports
+Redwood Inference
+
+
+From: Jason Patel <j.patel@procurement.enterpriseco.com>
+To: Tessa Morgan <tessa_morgan@redwood.ai>, Olivia Chen <olivia.chen@enterpriseco.com>
+Cc: EnterpriseCo Security <security@enterpriseco.com>, marissa_cole@redwood.ai, kimberly_park@redwood.ai
+Date: Tue, 8 Dec 2026 14:02:00 -0800
+Subject: Re: Initial request: audit log exports, legal hold, and delivery SLA
+
+Tessa / team —
+
+Thanks, this is helpful and addresses most of our questions. A couple of follow-ups from procurement so we can move toward SOW:
+1) Please deliver the redacted sample bundle and the signed evidence PDF by COB tomorrow (we need to validate checksum verification).
+2) Confirm the retention change approval flow and the SLA for restoring archived data to live queryable storage (if we request a restore of a 1-year archive, how long until it's available?).
+3) Please include language in the SLA draft that expedited exports (4-hour window) are subject to fair-use gates and provide the maximum dataset size covered.
+4) We need an estimate line in the SOW for the one-time export fee and a per-GB egress cost for cross-region transfers.
+
+Available time for the runbook call: Thu 12/10 09:00–12:00 PST or Fri 12/11 13:00–16:00 PST. Please share a calendar invite.
+
+If you can provide the sample bundle and the signed manifest (PDF) to security@enterpriseco.com and cc procurement, we'll proceed to formal SOW review.
+
+—Jason Patel
+Senior Procurement Manager
+EnterpriseCo
+

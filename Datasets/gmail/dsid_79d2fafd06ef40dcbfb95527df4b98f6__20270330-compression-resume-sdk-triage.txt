@@ -1,0 +1,106 @@
+Compression + streaming: truncated responses and SDK resume ask
+
+From: Devon Park <devon@cerebrolabs.ai>
+To: Mina Haddad <mina_haddad@redwood.ai>
+Date: Tue, 30 Mar 2027 09:12:00 -0700
+Subject: [Cerebro] Repeated truncation when client compresses payloads (urgent)
+
+Hi Mina,
+
+Quick heads up — since enabling gzip on our client side last week we started seeing intermittent truncated streaming responses coming from Redwood. Symptoms: the stream completes mid-JSON (client sees a partial final token and then a connection-close), and the SDK resume logic doesn't pick up a continuation so our ingestion pipeline treats the response as failed.
+
+Attached: a short capture from our staging run and the client SDK config we used. This was on a Dedicated instance (us-west) and only shows up when we enable compression + streaming, fine when compression is turned off.
+
+Impact: ~3-5% of long-response calls (prompts > 2k tokens) in our staging run. Repro steps included in the attached README. We can jump on a call if helpful — this is blocking a small portion of our pipeline.
+
+Thanks,
+Devon Park
+Platform Engineer, Cerebro Labs
+ops+redwood@cerebrolabs.ai
+
+---
+Attachment: cerebro_stream_traces.zip (log bundle, 1.2MB)
+Attachment: sdk-client-config.txt (plain text)
+From: Mina Haddad <mina_haddad@redwood.ai>
+To: Logan Wright <logan_wright@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>
+Cc: Devon Park <devon@cerebrolabs.ai>
+Date: Tue, 30 Mar 2027 10:04:00 -07:00
+Subject: Compression + streaming: truncated responses and SDK resume ask
+
+Logan / Jonas — looping you both in. Customer (Cerebro Labs) reports truncation only when client-side gzip is enabled and using streaming endpoints. They are on Dedicated (us-west). Attached traces show stream close without clear EOF token and the SDK resume path isn't triggered.
+
+Summary / ask:
+- Can runtime team triage whether compressed request bodies can interfere with streaming chunk boundaries or server-side streaming checkpointing?
+- Short-term: we need a mitigation we can push to the customer asap (workaround they can apply or a config flag in Dedicated).
+- Product ask: consider an SDK feature to include an idempotency/resume token or per-chunk sequence header to allow safe resumption when the client sees an unexpected close. This should be on the roadmap even if it lands after a runtime bugfix.
+
+Repro steps (from Devon):
+1) Use SDK v1.8 with streaming=true, enable gzip on request body.
+2) Send long prompt (2k-3k tokens).
+3) Observe ~3-5% truncation in staging logs; full response when gzip disabled.
+
+Attachments: cerebro_stream_traces.zip, sdk-client-config.txt (from customer).
+
+Proposed short-term workaround I suggested to customer: disable request compression or switch to non-streaming for that flow while we triage. Not ideal for their bandwidth.
+
+Could you confirm next steps? If this looks like runtime to you, can we get a triage owner and an ETA for a repro attempt?
+
+Thanks,
+Mina Haddad
+Sales Engineer, Redwood Inference
+mina_haddad@redwood.ai
+
+---
+> On Tue, 30 Mar 2027 at 09:12 Devon Park <ops+redwood@cerebrolabs.ai> wrote:
+> > Quick heads up — since enabling gzip on our client side last week we started seeing intermittent truncated streaming responses coming from Redwood...
+
+From: Logan Wright <logan_wright@redwood.ai>
+To: Mina Haddad <mina_haddad@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>
+Cc: Devon Park <ops+redwood@cerebrolabs.ai>
+Date: Tue, 30 Mar 2027 12:27:00 -07:00
+Subject: Re: Compression + streaming: truncated responses and SDK resume ask
+
+Thanks Mina — flagged to runtime. Quick notes after a first pass through the logs: the traces show a few interesting markers around chunk flushing and an unexpected FIN after a partial chunk. Two hypotheses:
+
+1) The server-side streaming assembler expects uncompressed chunk boundaries and some heuristics for chunk-size/flush; compressed payloads change the timing/size characteristics and could expose a race in the streaming buffer finalization path.
+2) There's an off-by-one in our chunk-reassembly path when clients send compressed bodies which results in a truncated SSE/stream being emitted before final bytes are flushed.
+
+Action items:
+- I'll open an internal Jira (INF-9821) and assign a triage owner.
+- Jonas, can you try to reproduce on a dedicated node with a synthetic client that mirrors Devon's config? If reproduced, capture minimal server-side logs and a tcpdump of the handshake/stream.
+- Mina, ask the customer to run a quick interim test: toggle compression to zlib vs gzip and report whether both show the issue (helps isolate the gzip-specific path).
+
+Short-term mitigation for the customer: as you suggested, disabling request compression is the fastest route. We may also ship a small SDK patch to add a "X-Resume-Sequence" header the server can echo in the response to help resume, but that will be behind a toggle and needs product signoff.
+
+I'll update INF-9821 with reproducer steps and put this as P1 for triage (customer impact is real).
+
+—Logan
+Senior Platform Engineer (runtime)
+logan_wright@redwood.ai
+
+---
+> On Tue, 30 Mar 2027 at 10:04 Mina Haddad <mina_haddad@redwood.ai> wrote:
+> > Logan / Jonas — looping you both in. Customer (Cerebro Labs) reports truncation only when client-side gzip is enabled and using streaming endpoints...
+
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Mina Haddad <mina_haddad@redwood.ai>, Logan Wright <logan_wright@redwood.ai>
+Cc: Devon Park <ops+redwood@cerebrolabs.ai>
+Date: Thu, 01 Apr 2027 15:45:00 -07:00
+Subject: Re: Compression + streaming: truncated responses and SDK resume ask
+
+Update after a repro attempt in our staging Dedicated cluster: we were able to reproduce with the customer's exact SDK config (gzip + streaming, long prompts). Root cause appears to be a timing window in the streaming assembler where compressed input delays final flush, while the connection close is interpreted as an immediate stream termination. The assembler then emits the partial buffer.
+
+What we're doing:
+- INF-9821 created and assigned to runtime-streaming (https://redwood.atlassian.net/browse/INF-9821).
+- Short-term patch (hotfix) to add an extra grace window on connection close to wait for pending compressed flushes: target staging roll 2027-04-05, prod/Dedicated patch 2027-04-10. This should eliminate the current truncation in most cases.
+- SDK feature ask: we'll add a proposal to the product backlog for a resume-token header + server echo and a small client-side resume flow. If product is onboard, this becomes a Q3 roadmap candidate.
+
+Mina — please relay the temporary workaround (disable request compression or switch to non-streaming) and give Devon the INF-9821 link. If they need an earlier workaround we can ship a small telemetry toggle to Dedicated nodes to extend the grace window immediately (requires CSA signoff).
+
+Jonas Weber
+Staff Engineer, Runtime
+jonas_weber@redwood.ai
+
+---
+> On Tue, 30 Mar 2027 at 12:27 Logan Wright <logan_wright@redwood.ai> wrote:
+> > Thanks Mina — flagged to runtime. Quick notes after a first pass through the logs...

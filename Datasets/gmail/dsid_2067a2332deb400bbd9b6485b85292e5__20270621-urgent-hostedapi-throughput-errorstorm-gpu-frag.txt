@@ -1,0 +1,145 @@
+Acme Analytics: Hosted API throughput outage & p99 regressions
+
+From: Tim Sullivan <tim.sullivan@acme.ai>
+To: Rachel Kim <rachel_kim@redwood.ai>
+Date: 2027-06-20T09:05:00-07:00
+Subject: Production latency spike — Acme Analytics
+
+Hi Rachel,
+
+We're seeing a massive spike in p95/p99 latency and an increase in 503s from the hosted API that powers our ingestion pipeline. The traffic volume is normal for us today, but tokens that usually return in ~200ms are hitting 3–7s and intermittently failing. Attached is a screenshot of the dashboard and one of the sample request traces.
+
+This is impacting our batch SLA for downstream models — can you escalate? We need an ETA for mitigation or a temporary workaround (e.g., fallback to older model).
+
+Thanks,
+Tim Sullivan
+Director of SRE, Acme Analytics
+Attachment: p99_screenshot_0620.png
+From: Rachel Kim <rachel_kim@redwood.ai>
+To: Tim Sullivan <tim.sullivan@acme.ai>
+Cc: Diego Fernandez <diego_fernandez@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: 2027-06-20T09:18:00-07:00
+Subject: Re: Production latency spike — Acme Analytics
+
+Tim — thanks for the heads up and the screenshot. Sorry you're hitting this. I'm escalating immediately.
+
+Plan for now (short):
+- Diego (runtime on-call) is looped in to triage the p99 spike and check for OOMs/memory fragmentation patterns.
+- We're going to open an incident channel and propose a 15-min call to align on mitigation (canary fallback + temporary capacity bump).
+- I'll confirm if a model-variant fallback is feasible without schema regressions.
+
+Can you share: a) a sample request id if you have one, and b) whether you can tolerate a short model variant fallback that might slightly change tokenization?
+
+I'll follow up with a meeting invite in the next 10 minutes.
+
+— Rachel
+Rachel Kim
+Account Executive, Redwood Inference
+redwood.ai
+From: Diego Fernandez <diego_fernandez@redwood.ai>
+To: Rachel Kim <rachel_kim@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Tim Sullivan <tim.sullivan@acme.ai>
+Date: 2027-06-20T09:32:00-07:00
+Subject: Re: Production latency spike — Acme Analytics
+
+On Jun 20, 2027, at 09:18 AM, Rachel Kim wrote:
+> Tim — thanks for the heads up...
+
+Quick triage notes from runtime: we see repeated memory growth on the inference workers serving Acme's model variant pool. Symptoms look like GPU memory fragmentation leading to transient allocations failing and triggering request-level retries — that explains the p99 tail and the 503 burst.
+
+What I've observed so far:
+- Multiple workers report CUDA OOMs but the host OS hasn't reclaimed pages due to fragmentation (see brief log snippet below).
+- Kernel eviction counts increased around 09:00 UTC.
+- No obvious model code change from our side; traffic profile hasn't changed significantly.
+
+Immediate mitigation options (pros/cons):
+1) Warm a few extra dedicated slots (fast, increases cost) — low risk.
+2) Canary to an older quantized model variant that has smaller peak memory (may slightly change outputs).
+3) Force periodic worker restarts every 5–10 minutes (stopgap; causes some disruption).
+
+Requesting: sample request-id and stack trace from your side (if available). I've uploaded a heap dump to internal Drive: runtime_heap_dump_0620.tar.gz and pasted a quick log excerpt here: 
+
+--- LOG EXCERPT ---
+[2027-06-20T16:59:23Z] worker-37 CUDA: alloc failed 72MB, free fragments 48MB, largest free 12MB -> OOM
+[2027-06-20T16:59:24Z] worker-37 retrying request id req-ACME-4512
+[2027-06-20T16:59:28Z] worker-42 eviction: kernel recompile triggered
+--- END ---
+
+I'll stand up a small extra pool (option 1) now and propose a canary rollout (option 2) if Acme approves.
+
+- Diego (runtime)
+Diego Fernandez
+Senior SRE, Redwood Inference
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Sean Gallagher <sean_gallagher@redwood.ai>, Rachel Kim <rachel_kim@redwood.ai>
+Cc: Diego Fernandez <diego_fernandez@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Tim Sullivan <tim.sullivan@acme.ai>
+Date: 2027-06-20T10:02:00-07:00
+Subject: Acme Analytics — escalation + request for exec support
+
+Sean — looping you in. Acme is seeing production p99 spikes and throughput drop that appear tied to GPU memory fragmentation in our hosted runtime. Tim has indicated this is affecting SLAs for several downstream customers.
+
+Impact estimate (initial):
+- Customer-facing batch jobs delayed, some failures (503).
+- High-touch account, strategic expansion underway (deal ACME-2025-DSK).
+
+Requesting your guidance on two items:
+- Approval for a short-term credit/waiver for SLA misses if we require one (customer may ask).
+- Executive note to Acme product/engineering to reassure them while we mitigate.
+
+Recommended customer-facing mitigation (we plan to propose):
+- Immediate: spin up extra isolated slots for Acme's pool and schedule a canary fallback to the lower-memory model variant.
+- Post-incident: run memory fragmentation fixes (kernel updates, defrag heuristics) and a 72-hour monitoring window.
+
+If you can greenlight a modest credit and a short exec note I will coordinate CS to send it.
+
+— Marissa
+Marissa Cole
+Account Lead — Strategic Customers, Redwood Inference
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Rachel Kim <rachel_kim@redwood.ai>
+Cc: Diego Fernandez <diego_fernandez@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Tim Sullivan <tim.sullivan@acme.ai>
+Date: 2027-06-20T11:15:00-07:00
+Subject: Re: Acme Analytics — escalation + request for exec support
+
+Thanks for the heads up — please proceed with the short-term mitigations Marissa outlined.
+
+Actions I authorize now:
+- Temporary credit for SLA misses up to $25k while we remediate (billing to review).
+- Immediate canary fallback to the older quantized model variant for Acme (if they accept minor quality delta).
+- Diego / runtime to prioritize kernel defragmentation heuristics and provide ETA for a non-disruptive fix.
+
+Please get me a 15–30 minute incident brief after the initial mitigation completes. Monica, prepare a short customer note acknowledging impact and next steps; keep messaging tight and technical.
+
+Sean Gallagher
+VP, Customer Success, Redwood Inference
+From: Rachel Kim <rachel_kim@redwood.ai>
+To: Tim Sullivan <tim.sullivan@acme.ai>
+Cc: Diego Fernandez <diego_fernandez@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Sean Gallagher <sean_gallagher@redwood.ai>
+Date: 2027-06-21T16:40:00-07:00
+Subject: Acme Analytics: Hosted API throughput outage & p99 regressions
+
+Tim — quick update and next steps (summary of actions we've taken):
+
+What happened (summary):
+- Root cause: memory fragmentation on several inference workers causing CUDA allocation failures -> retries -> p99 latency spikes and intermittent 503s.
+
+Actions taken (completed):
+- Warmed +5 dedicated slots for Acme pool (immediate capacity bump).
+- Launched canary to older quantized model variant; latency p99 improved in the canary group.
+- Collected heap dumps and logs (attached: runtime_heap_dump_0620.tar.gz, grafana snapshot).
+
+Planned next steps:
+- Diego will run kernel-level defragmentation heuristics and a worker restart cadence to reduce fragmentation risk (ETA: 24–36 hours).
+- We'll monitor the canary for 2 hours and expand if stable.
+- Monica will send a customer note summarizing impact + the temporary credit offer you requested.
+
+Meeting: incident sync scheduled for 16:55 PDT today — invite sent.
+
+If you can confirm you accept the model-variant canary for the short term, we'll expand immediately after the 2-hour stability check. Also please provide any sample request-ids you can share; Diego may use them to correlate traces.
+
+Thanks again for the patience — we'll keep this high priority.
+
+— Rachel
+Rachel Kim
+Account Executive, Redwood Inference
+Attachments: runtime_heap_dump_0620.tar.gz, p99_screenshot_0620.png, grafana_p99_scrub.txt

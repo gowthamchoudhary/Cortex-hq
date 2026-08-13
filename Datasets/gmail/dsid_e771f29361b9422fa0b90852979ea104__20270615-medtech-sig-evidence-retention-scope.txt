@@ -1,0 +1,167 @@
+SIG/CAIQ evidence request — MedTech: data retention & log archival exceptions
+
+From: Emily Ross <emily.ross@medtechhealth.com>
+To: Soojin Lee <soojin_lee@redwood.com>
+Cc: Compliance Ops <compliance@medtechhealth.com>
+Date: Tue, 15 Jun 2027 09:12:00 -0700
+Subject: SIG/CAIQ evidence request — data retention & log archival exceptions
+
+Hi Soojin,
+
+Thanks for taking this. Our security and legal teams are working through the SIG/CAIQ for our MedTech deployment (MedTech Health). A few items came up we need explicit confirmation/evidence for:
+
+- Current default retention windows at Redwood for: access logs (API + console), raw request payload logs, and telemetry/metrics.
+- If Redwood supports customer-specific exceptions for log retention (MedTech needs longer retention for a subset of access logs for regulatory audit). If yes, what is the approval path and typical SLAs.
+- Evidence we can map into SIG v2026: CAIQ answers and an attestation that deletion workflows are followed (high level) — ideally a PDF we can send to auditors.
+
+Can you also provide a small redacted sample of access logs (timestamp + event + uid) so our audit team can validate schema? We don't need payloads, just metadata.
+
+We need this by EOD next Friday (2027-06-25) to align with our internal audit window. Happy to join a quick call if it helps.
+
+Best,
+Emily
+Emily Ross
+Senior Security Program Manager
+MedTech Health
+
+---
+Attachment: SOC2-audit-schedule.pdf (external)
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Emily Ross <emily.ross@medtechhealth.com>
+Cc: Marcus Lin <marcus_lin@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Tue, 15 Jun 2027 11:03:00 -0700
+Subject: Re: SIG/CAIQ evidence request — data retention & log archival exceptions
+
+Hi Emily —
+
+Thanks for the clear list. Short answer: we can accommodate customer-scoped retention exceptions for specific log classes, but we need to confirm scope and legal/ops approvals. A couple quick clarifying Qs to help scope our response:
+
+1) Which log types do you want extended retention on (access logs, request payloads, or aggregated telemetry)?
+2) Is the ask for a permanent policy change or a time-bound exception for the upcoming audit?
+3) Any constraints on where those logs must reside (region, encryption key management, e.g., customer-managed CMKs)?
+
+I've attached our standard proposed-retention-exception-form to capture the request and approvals (see attachment). I'll loop in Marcus from Ops for feasibility and Karthik for deletion workflow details. If you prefer, we can book a 30-min sync tomorrow.
+
+Cheers,
+Soojin Lee
+Senior Manager, Trust & Safety
+Redwood Inference
+
+---
+Attachment: proposed-retention-exception-form.docx
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Soojin Lee <soojin_lee@redwood.com>, Emily Ross <emily.ross@medtechhealth.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>
+Date: Wed, 16 Jun 2027 08:20:00 -0700
+Subject: Re: SIG/CAIQ evidence request — data retention & log archival exceptions
+
+Emily, Soojin —
+
+Operational note from infra: our current default retention is as follows (production hosted API):
+
+- Raw request payloads containing full input: 30 days (default, redacted for customer requests).
+- Access logs (authentication events, request metadata): 90 days raw; we store aggregated access summaries for 365 days for usage analytics.
+- Telemetry/metrics: 24 months aggregated, per-project.
+
+For MedTech-style regulated audits, we typically offer a customer-specific exception that extends access logs retention to 24 months (raw metadata only, no customer payloads) subject to:
+
+- Approved exception form signed by customer's security and procurement + Redwood legal sign-off.
+- Logs stored in the requested region (us) and encrypted using Redwood-managed CMKs unless a customer-managed CMK is provisioned (additional onboarding time required).
+- Monthly redacted snapshots delivered to an S3 bucket or via secure transfer for your audit team.
+
+I've attached a tiny redacted sample of access log rows (access_logs_sample.csv) so you can confirm schema. Note: we are careful to strip PII and payloads.
+
+If this matches your need, we can move to approvals and a short runbook for how deletion happens after the exception is revoked.
+
+Thanks,
+Marcus
+Principal Engineer, Inference Platform
+Redwood Inference
+
+---
+Attachment: access_logs_sample.csv
+From: Emily Ross <emily.ross@medtechhealth.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Soojin Lee <soojin_lee@redwood.com>
+Cc: Legal Ops <legal-ops@medtechhealth.com>, Dr. Raj Singh <raj.singh@medtechhealth.com>
+Date: Wed, 16 Jun 2027 14:02:00 -0700
+Subject: Re: SIG/CAIQ evidence request — data retention & log archival exceptions
+
+Thanks Marcus — this is helpful. A few follow-ups from our legal and compliance teams:
+
+- We need an explicit statement that raw request payloads (customer inputs) will not be included in the extended retention exception. Can you confirm in writing?
+- Please provide a concise description (1–2 paragraphs) of the deletion workflow for logs when TTL expires or exception is revoked.
+- Confirm whether key rotation impacts the availability of historical logs for audit (if you rotate keys, do old logs remain accessible?).
+- We would like monthly redacted snapshots for the next 12 months delivered into an S3 bucket (we'll provide a cross-account role).
+
+I'll upload the SOC2-audit-schedule to our share and confirm exact dates. Our auditors also asked whether Redwood can provide a signed attestation to include with SIG/CAIQ responses.
+
+Can you get these items to us by EOD Friday? If not, propose an earlier sync — we can be flexible.
+
+Appreciate the quick turnaround.
+Emily
+
+---
+Attachment: SOC2-audit-schedule.pdf (internal copy from MedTech)
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Emily Ross <emily.ross@medtechhealth.com>, Marcus Lin <marcus_lin@redwood.com>
+Cc: Soojin Lee <soojin_lee@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>
+Date: Thu, 17 Jun 2027 10:40:00 -0700
+Subject: Re: SIG/CAIQ evidence request — data retention & log archival exceptions
+
+Emily —
+
+Confirming technical details you requested:
+
+- Raw request payloads: we will not include these in any extended retention. They are redacted at ingestion for hosted API customers who request deletion/TTLs.
+
+- Deletion workflow (high level):
+  1) TTL engine marks records for deletion at expiry;
+  2) Background job performs cryptographic destruction: keys that exclusively encrypt the object are rotated/zeroed and object metadata flagged deleted;
+  3) For backup snapshots, we maintain a 30-day tombstone window to support accidental restore requests, after which backups containing the object are purged following the same key removal process;
+
+- Key rotation: rotating CMKs does not affect ability to read historical logs if the rotation policy uses key versioning — we maintain key-encryption-key (KEK) metadata so we can decrypt historical blobs for audit. If a customer requests use of a customer-managed CMK and later revokes access, historical logs become unreadable to Redwood unless the key is re-provisioned. We'll document these behaviors in the attestation.
+
+- Delivery: we can produce monthly redacted snapshots to your S3 cross-account bucket. We'll include a hashed index file so auditors can verify integrity.
+
+If you want, I'll draft the 1–2 paragraph deletion workflow and include it in the attestation. Otherwise, propose a 30-min call Friday morning to finalize artifacts.
+
+Regards,
+Karthik Iyer
+Staff Software Engineer, Platform Security
+Redwood Inference
+
+---
+Related link: https://redwood.company.internal/runbooks/data-deletion-workflow
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Emily Ross <emily.ross@medtechhealth.com>
+Cc: Marcus Lin <marcus_lin@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>
+Date: Fri, 18 Jun 2027 16:43:00 -0700
+Subject: Re: SIG/CAIQ evidence request — data retention & log archival exceptions
+
+Emily, team —
+
+Summary / agreed next steps:
+
+1) Scope: Redwood will grant a customer-scoped retention exception for MedTech Health that extends access-log (metadata only) retention to 24 months. Raw request payloads will not be retained under the exception.
+
+2) Storage & encryption: Logs will be stored in the US region encrypted with Redwood-managed CMKs by default; customer-managed CMK is available but requires additional onboarding and legal review.
+
+3) Delivery: Redwood will push monthly redacted snapshots to the S3 cross-account role you provide for the next 12 months. Each snapshot will include an integrity index (SHA256 hashes).
+
+4) Deletion workflow & key rotation: Karthik will provide a 2-paragraph deletion workflow and a short note on key-rotation behavior for the attestation.
+
+5) Evidence: We will produce a signed attestation and SIG/CAIQ response package (PDF) and deliver by 2027-06-25. Attached is the draft responses doc (medtech_SIG_q1_responses.pdf) — please review and flag any edits.
+
+6) Approvals: Please sign the attached proposed-retention-exception-form and loop in your procurement/legal. Once we have the signed form, Redwood Legal will issue final approval and we will schedule the onboarding changes (expected 5–7 business days post-approval).
+
+I'll set up a 30-min call Monday to walk through the attestation and the S3 setup unless you prefer a different time.
+
+Thanks all for the quick collaboration.
+
+—
+Soojin Lee
+Senior Manager, Trust & Safety
+Redwood Inference
+
+---
+Attachments: medtech_SIG_q1_responses.pdf, proposed-retention-exception-form.docx

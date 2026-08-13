@@ -1,0 +1,159 @@
+Request: conditional log TTL variance and temporary escrow for ACME forensic window
+
+From: Lisa Wong <lisa.wong@acmehealth.com>
+To: Diego Fernandez <diego_fernandez@redwood.ai>
+Cc: legal@acmehealth.com, dpo@acmehealth.com
+Date: Mon, 12 Jan 2026 16:15:00 -0800
+Subject: Request: temporary extension of log retention for forensics (ACME)
+
+Diego —
+
+Quick note from our DPO team: we have an ongoing internal investigation that may require access to system logs dating back ~90 days. Our current contract with Redwood specifies a 30-day log retention window for non-production telemetry; can we discuss a one-time temporary variance to hold a copy of the relevant logs for an extra 60 days while the investigation completes?
+
+I've attached a short spreadsheet (ACME_DPO_log_scope.xlsx) that lists the event types and date ranges they care about. Security is willing to sign a short addendum if Redwood requires it.
+
+What's the minimal evidence you need from our side and what ops path would you run to avoid impacting your normal purge cadence?
+
+Thanks —
+Lisa Wong
+Director of Privacy Operations
+Acme Health
+
+From: Diego Fernandez <diego_fernandez@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 13 Jan 2026 09:03:00 -0800
+Subject: Fwd: Request: temporary extension of log retention for forensics (ACME)
+
+Forwarding the ACME ask — looks like a standard temporary-retain request but with some specifics on event types. Attaching their spreadsheet.
+
+Questions for legal & ops:
+- Kimberly: contractually, do we have latitude to grant a 60-day targeted retention for logs outside the standard TTL if they sign an addendum? Any approvals needed?
+- Neha: what are the operational steps to capture a safe, immutable snapshot of their requested events and keep it isolated from the normal purge flow? Cost estimate?
+
+I want to get back to Lisa by EOD with a Mutual Action Plan (timeline + what we need).
+
+—Diego
+Product Partnerships
+Redwood Inference
+
+On Mon, Jan 12, 2026 at 4:15 PM Lisa Wong <lisa.wong@acmehealth.com> wrote:
+> Diego —
+> 
+> Quick note from our DPO team: we have an ongoing internal investigation that may require access to system logs dating back ~90 days....
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Diego Fernandez <diego_fernandez@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Wed, 14 Jan 2026 11:27:00 -0800
+Subject: Re: Fwd: Request: temporary extension of log retention for forensics (ACME)
+
+Diego —
+
+High-level: we can do a targeted retention extension under a short addendum; typical approach is a 60-day special hold tied to specific event IDs and date ranges. Points to note:
+
+- DPA constraints: our standard DPA permits temporary holds for legal/forensic reasons if the customer provides an attestation and signs an amendment that limits scope and liability.
+- Data transfer/subprocessor: if any subprocessor (e.g., offsite backups managed by our infra partner) will retain a copy, we need explicit subprocessor notification/consent in the addendum.
+- Approvals: legal lead signoff + SOC/ops acceptance. No board-level approval for a single-customer 60-day hold.
+
+Draft language suggestions for SLA_addendum_draft.docx: limit to event types in ACME spreadsheet, require ACME to reimburse incremental storage cost, and set deletion verification steps at the end of the hold. I'll attach a redline when ready.
+
+Kimberly
+Senior Counsel, Privacy & Compliance
+Redwood Inference
+
+On Tue, Jan 13, 2026 at 9:03 AM Diego Fernandez <diego_fernandez@redwood.ai> wrote:
+> Forwarding the ACME ask — looks like a standard temporary-retain request but with some specifics on event types...
+
+From: Neha Kapoor <neha_kapoor@redwood.ai>
+To: Diego Fernandez <diego_fernandez@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Thu, 15 Jan 2026 08:46:00 -0800
+Subject: Re: Fwd: Request: temporary extension of log retention for forensics (ACME)
+
+Diego / Kim —
+
+Operationally we have two safe options that avoid touching the normal purge path:
+
+1) Isolated snapshot + immutable object store:
+  - Create an isolated snapshot of the S3-style objects that match the ACME event filters (we can use their spreadsheet to build the filter).
+  - Copy to our immutable bucket (WORM) in the US region and apply a tag 'acme_temp_hold_2026-01'.
+  - Keep retention metadata off the main index so normal TTL workers ignore it.
+  - Pros: simplest verification path for later deletion; minimal impact to normal KV log indexes.
+  - Estimated incremental storage cost: $1,200 per 30 days for the requested scope.
+
+2) Prefix-level delay + purge exemption flag:
+  - Exempt specific prefixes from the purge worker for up to 60 days by setting an exemption flag in service registry.
+  - Requires a short change in our purge scheduler and extra monitoring.
+  - Pros: faster restore for engineering-led forensics. Cons: slightly higher risk if exemption flag isn't removed on time.
+
+I recommend option (1) for auditability. If legal wants faster retrieval, we can do (1) + a short-term prefix exemption for same day restores.
+
+Operational checklist I'd need from ACME:
+- Formal attestation/email from DPO (Lisa) confirming scope.
+- Agreement to incremental storage reimbursement or PO.
+- Contact for secure transfer verification (SFTP/DR link).
+
+I'll open SUP-4521 for the work and can estimate an ops ETA once the addendum is signed.
+
+—Neha
+Sr. Ops Engineer, Data Lifecycle
+Redwood Inference
+
+On Wed, Jan 14, 2026 at 11:27 AM Kimberly Park <kimberly_park@redwood.ai> wrote:
+> Diego —
+> 
+> High-level: we can do a targeted retention extension under a short addendum...
+
+From: Diego Fernandez <diego_fernandez@redwood.ai>
+To: Lisa Wong <lisa.wong@acmehealth.com>
+Cc: dpo@acmehealth.com, legal@acmehealth.com, Kimberly Park <kimberly_park@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: Fri, 16 Jan 2026 10:12:00 -0800
+Subject: Re: Request: temporary extension of log retention for forensics (ACME)
+
+Lisa —
+
+Thanks for the spreadsheet. We can support a one-time 60-day targeted retention extension for the event classes you listed subject to the following minimal steps (proposed Mutual Action Plan):
+
+1) ACME to sign a short addendum (we've prepared a draft) that:
+   - Narrows the scope to events in the spreadsheet,
+   - Acknowledges incremental cost recovery, and
+   - Requires a deletion verification certificate when the hold ends.
+2) ACME to send a short attestation email from the DPO (dpo@acmehealth.com) confirming need.
+3) Ops to create an immutable snapshot in our WORM bucket and tag it 'acme_temp_hold_2026-01' (Neha will run this).
+4) Redwood will provide a deletion verification report within 7 days after the hold expires.
+
+Estimated cost: $2,400 for the full 60-day window (Neha's estimate incl. storage & snapshot ops).
+
+If that sounds good I'll loop in Kimberly to finalize addendum language and share the DocuSign link. We can target an execution + snapshot within 5 business days after signed addendum.
+
+Next steps: please reply with a one-line attestation and confirm whether you want Redwood to send DocuSign or you will initiate.
+
+Best —
+Diego Fernandez
+Product Partnerships
+Redwood Inference
+
+On Thu, Jan 15, 2026 at 8:46 AM Neha Kapoor <neha_kapoor@redwood.ai> wrote:
+> Diego / Kim —
+> 
+> Operationally we have two safe options that avoid touching the normal purge path...
+
+From: Lisa Wong <lisa.wong@acmehealth.com>
+To: Diego Fernandez <diego_fernandez@redwood.ai>
+Cc: dpo@acmehealth.com, legal@acmehealth.com
+Date: Tue, 20 Jan 2026 14:02:00 -08:00
+Subject: Re: Request: temporary extension of log retention for forensics (ACME)
+
+Diego / team —
+
+Thanks — ACME will sign. Confirming our attestation: the DPO confirms the request is for an ongoing investigation and agrees to the scope in the attached spreadsheet. We authorize Redwood to create an immutable snapshot and accept the incremental cost. Please send DocuSign for the addendum and the payment PO info.
+
+Lisa Wong
+Director of Privacy Operations
+Acme Health
+
+On Fri, Jan 16, 2026 at 10:12 AM Diego Fernandez <diego_fernandez@redwood.ai> wrote:
+> Lisa —
+> 
+> Thanks for the spreadsheet. We can support a one-time 60-day targeted retention extension for the event classes you listed subject to the following minimal steps...

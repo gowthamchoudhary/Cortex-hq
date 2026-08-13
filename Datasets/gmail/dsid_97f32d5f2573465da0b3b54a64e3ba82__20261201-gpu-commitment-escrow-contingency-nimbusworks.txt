@@ -1,0 +1,120 @@
+Dedicated capacity escrow & contingency plan for NimbusWorks
+
+From: Elena Park <elena@nullwave.io>
+To: Jonas Weber <jonas.weber@redwood.ai>
+Cc: procurement@nimbusworks.com
+Date: Sat, 28 Nov 2026 09:14:00 -0800
+Subject: Exploring dedicated capacity for model hosting (short list)
+
+Hi Jonas,
+
+Thanks for the demo last week — the latency profile was great. We need to lock down a dedicated capacity option for our retrieval-augmented generation pipelines. Two asks to start:
+
+1) A compact set of proposals for cluster sizing and minimum guaranteed GPUs that we can put in front of procurement (they prefer 2–3 options, clear cost/activation triggers).
+2) A suggested ramp schedule (60/30/10 or other patterns) plus any escrow/commit contingencies we should include for seasonality.
+
+Can you send a short options memo and include any attachments with cost examples? Procurement is looped on cc.
+
+Thanks,
+Elena Park
+Head of Infrastructure, NimbusWorks
+Elena@nullwave.io
+
+---
+Attachments: none (will accept attachments in follow-up)
+From: Jonas Weber <jonas.weber@redwood.ai>
+To: Elena Park <elena@nullwave.io>
+Cc: procurement@nimbusworks.com, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Mon, 30 Nov 2026 10:22:00 -0800
+Subject: Re: Exploring dedicated capacity for model hosting (short list)
+
+Hi Elena — appreciate the clear asks. Attached is a short options memo and an XLS with scenario math (scaling-scenarios.xlsx). Summary below — three discrete, procurement-friendly options with clear triggers and an escrow-style buffer we typically call a "commitment escrow."
+
+Option A — Baseline Soft-Floor (lowest upfront)- Cluster: 8x A100 equivalent (shared lane)- Min guaranteed GPUs: 4 (soft guarantee, 95% availability SLA)- Ramp: month 1 = 40% committed baseline / month 2 = 70% / month 3 = 100%- Escrow: 10% credit held to offset burst fees if usage spikes beyond commit during onboarding- Best for teams optimizing cash and allowing modest headroom
+
+Option B — Anchored Minimum (recommended for production)- Cluster: 12x A100 equivalent (dedicated partition)- Min guaranteed GPUs: 8 (hard guarantee, SLA-backed)- Ramp: month 1 = 60% / month 2 = 85% / month 4 = 100%- Escrow: 5% of monthly commit kept as operational buffer; auto-release after 90 days if no overage- Includes warm-start prewarmed nodes for <50ms cold-start degradation
+
+Option C — High-availability Slate (peak-critical workloads)- Cluster: 20x A100 equivalent (redundant across AZs)- Min guaranteed GPUs: 12 (hard guarantee + hot failover)- Ramp: tranche-based (50% activate at signing, remainder staged 30/60/90 days)- Escrow: 15% credit to cover sudden burst and cross-AZ failover costs- Recommended if you need predictable throughput under spikes and regional redundancy
+
+Technical notes (quick):
+
+- Minimum guaranteed GPUs define billing floor and prewarming policy; autoscale above the floor is allowed but billed per-token or per-GPU as configured.
+- Warm-start credits reduce tail latency during ramp periods — we include a measured warmup window to avoid cold-cache penalties.
+- For seasonal spikes we recommend a burst pool with explicit burst caps and a priced fallback to compatible quantized model variants.
+
+Next steps I suggest: pick preferred option (A/B/C) and indicate whether Nimbus wants an aggressive activation (faster ramp with higher escrow) or conservative (smaller escrow, longer ramp). I uploaded a worked example in the XLS showing cost delta across 6/12/24 month terms.
+
+Regards,
+Jonas Weber
+Senior Solutions Lead — Redwood Inference
+jonas.weber@redwood.ai
+
+---
+Attachments: scaling-scenarios.xlsx, nimbus_draft_slate.pdf
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Jonas Weber <jonas.weber@redwood.ai>, Elena Park <elena@nullwave.io>
+Cc: procurement@nimbusworks.com
+Date: Mon, 30 Nov 2026 14:01:00 -0800
+Subject: Re: Exploring dedicated capacity for model hosting (short list)
+
+Adding a couple of operational constraints from infra/serving: 
+
+- Minimums are enforced at the scheduler level as a "reserved pool". If you request a hard 8-GPU minimum, those GPUs are pinned and cannot be used by other tenants. Warm-start behavior happens on the pinned pool and KV caches are preserved across hot restarts.
+- If Nimbus expects large sequence-length variance (RAG with long contexts), recommend adding +1 GPU per 4 baseline GPUs to preserve throughput at tail latencies. The XLS shows per-seq-length delta — faster models can reduce footprint but increase cost per token.
+- Canary policy: we will include a canary lane (10% of traffic) for any model rollouts for first 14 days, with automatic rollback thresholds if token quality drops by measured delta.
+
+If you want, I can run the XLS with your typical sequence-length and p95 prompt sizes and return a tightened Option B that minimizes dollars while holding p95 latency.
+
+--
+Karthik Iyer
+Principal PM, Serving Runtime — Redwood Inference
+karthik.iyer@redwood.ai
+From: Elena Park <elena@nullwave.io>
+To: Jonas Weber <jonas.weber@redwood.ai>
+Cc: procurement@nimbusworks.com
+Date: Tue, 01 Dec 2026 09:02:00 -0800
+Subject: Re: Exploring dedicated capacity for model hosting (short list)
+
+Jonas/Karthik — thanks, that is extremely helpful. A couple quick clarifications from procurement: 
+
+- Procurement prefers a clear activation clause: what constitutes "month 1 = 60%" exactly? They want activation triggers and a calendar-based schedule we can include in the SOW.
+- How is escrow refunded or applied if we exceed commit vs if we underutilize? Need simple language for the contract.
+- Can you provide a firm cost delta for Option B between a 12-month vs 24-month term (we usually look at TCO over 24 months) — if you could pin that to our baseline 8k monthly inference minutes (see quoted numbers in XLS).
+
+If you can drop the revised Option B + explicit SOW clauses and a one-paragraph procurement-friendly escrow definition I can push this to my legal/procurement team today.
+
+Best,
+Elena
+
+On Mon, Nov 30, 2026 at 10:22 AM Jonas Weber <jonas.weber@redwood.ai> wrote:
+> Hi Elena — appreciate the clear asks. Attached is a short options memo and an XLS with scenario math (scaling-scenarios.xlsx). Summary below — three discrete, procurement-friendly options with clear triggers and an escrow-style buffer we typically call a \"commitment escrow.\"
+> 
+> [Jonas' summary omitted for brevity]
+> 
+> Regards,
+> Jonas Weber
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Elena Park <elena@nullwave.io>, Jonas Weber <jonas.weber@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Cc: procurement@nimbusworks.com
+Date: Tue, 01 Dec 2026 16:03:00 -0800
+Subject: Re: Exploring dedicated capacity for model hosting (short list)
+
+Elena — looping in with procurement guidance and an executive concession to accelerate contracting: if Nimbus signs a 24-month committed term on Option B we can reduce the escrow to 3% and provide one month of activation credit (applied against month 2). Suggested procurement phrasing below: 
+
+SOW activation language (suggested):
+
+"Month 1 (Activation): Customer will pay 60% of the monthly committed GPU units upon service activation (Activation Date). Month 2 payment will be adjusted by any activation credit and any measured overage/underutilization as defined below. Full committed baseline is expected by the end of Month 3 unless alternative schedule is agreed in writing."
+
+Escrow definition (suggested):
+
+"Commitment Escrow: A percentage of the monthly committed fees withheld by Redwood as an operational buffer to cover burst usage during onboarding or unplanned overages. Escrow funds are applied first to overage invoices up to the escrow amount. Any remaining escrow balance will be credited back to the Customer on a quarterly basis or upon early termination subject to final reconciliation."
+
+If that works, Jonas/Karthik — please produce: (1) revised Option B with 12 vs 24 month pricing table (simple redline in the attached XLS), (2) a short SOW paragraph we can drop-in, and (3) a one-paragraph technical note confirming warm-start credits and canary behavior. I'll commit to reviewing with execs once procurement confirms numbers.
+
+Thanks — Marissa Cole
+VP, Sales — Redwood Inference
+marissa.cole@redwood.ai
+
+---
+Attachments: none

@@ -1,0 +1,143 @@
+Implementation readiness & schema sanity check — post-demo next steps
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Sofie Jansen <sofie@finlytics.ai>, Alex Torres <alex.torres@finlytics.ai>
+Cc: Dev Patel <dev_patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Fri, 20 Nov 2026 14:02:00 -0800
+Subject: Implementation readiness & schema sanity check — post-demo next steps
+
+Hi Sofie / Alex —
+
+Thanks again for the demo time today, really appreciated the product walkthrough. Quick recap and proposed next steps to get the integration moving toward a pilot: 
+
+What we heard (priorities):
+- Reliable structured outputs for product extraction (id, title, price_cents, currency, attributes array).
+- Embeddings + a reranker for relevance tuning on search queries.
+- Strong auth and auditability requirements (SAML / enterprise SSO + audit logs).
+
+Immediate asks / decisions we need this week:
+1) Schema sign-off: we attached a small JSON prototype (finlytics-schema-prototype.json) with the fields you showed. Can you confirm the required vs optional fields and any nested objects we missed?
+2) SDK language for pilot: are you planning to use Python server-side or a JVM service? We’ll prioritize the SDK quickstart accordingly.
+3) Auth model: will you accept API-key with IP allowlist for the pilot, or do you need OAuth2 / token exchange (we can enable both but need to know constraints).
+4) Routing SLA: do you need single-region pinning or are multi-region fallbacks acceptable for availability?
+
+Technical notes for your team (cc’ing Dev):
+- We recommend configuring structured-output validation and a constraint-first decoding strategy (schema-driven parsing + deterministic decoding for critical fields).
+- For embeddings/rerankers we’ll propose an initial configuration: 1536-d embeddings, dense index via FAISS, and a small GPT-style reranker model tuned for recall precision tradeoffs.
+
+Next steps / owners:
+- FinLytics: confirm schema and SDK language (Sofie) — due EOD Tue 11/24 if possible.
+- Redwood (Dev): draft validation + retry pattern doc and a sandbox route for you to hit.
+- Redwood (Vanessa): schedule the architecture sync for next Wed.
+
+Attachments: finlytics-schema-prototype.json, finlytics-integration-checklist.xlsx
+
+Best,
+Vanessa Ortiz
+Enterprise AE | Redwood Inference
+vanessa_ortiz@redwood.ai
+Mobile: +1 (415) 555-0192
+
+From: Sofie Jansen <sofie@finlytics.ai>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Cc: Alex Torres <alex.torres@finlytics.ai>, security@finlytics.ai
+Date: Fri, 20 Nov 2026 15:18:00 -0800
+Subject: Re: Implementation readiness & schema sanity check — post-demo next steps
+
+Thanks, Vanessa — great summary. A few clarifications from our side: 
+
+- Schema: we mostly need id, title, price_cents, currency, availability_status, and attributes (free-form key/value pairs). price_cents must always be present. Images array is optional. I’ll mark required fields in the attached doc and upload an updated schema by Monday.
+- SDK: Python (FastAPI microservice) for the MVP; long-term we may add Java. Please prioritize a Python quickstart.
+- Auth: For the pilot we can do API-key with IP allowlist, but security@finlytics.ai will need the full list of where requests originate (we’ll need to confirm the IPs). For production we’ll require OAuth2 with our IdP.
+- Routing: single-region (us-west) preferred for latency predictability — fallbacks ok but prefer region pinning for the pilot.
+
+Also: for embeddings we’re leaning toward 1536 dims. We’ll ask Alex to share the existing similarity thresholds he uses today (he’s copied).
+
+Sofie
+Head of Integrations | FinLytics
+sofie@finlytics.ai
+
+On Fri, Nov 20, 2026 at 2:02 PM Vanessa Ortiz <vanessa_ortiz@redwood.ai> wrote:
+> [original message]
+
+From: Dev Patel <dev_patel@redwood.ai>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Sofie Jansen <sofie@finlytics.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Fri, 20 Nov 2026 18:03:00 -0800
+Subject: Re: Implementation readiness & schema sanity check — post-demo next steps
+
+Thanks — looping in a proposed technical checklist and recommended patterns so FinLytics has something concrete to review. High level items and pragmatic defaults: 
+
+1) SDK quickstart (Python)
+- Provide a pip package + example FastAPI route that proxies requests to Redwood.
+- Example shows: auth via X-API-Key header (pilot) and a note / code path for OAuth2 token exchange.
+
+2) Auth & audit
+- Pilot: API key with IP allowlist. Production: OAuth2 + IdP.
+- We will emit request_id and trace_id headers for each call; audit logs stored with retention 90 days for pilot (configurable).
+
+3) Routing and model fallbacks
+- Single-region pinning: set prefer_region=us-west1 in config.
+- Fallback policy: if preferred region unavailable, fallback to a cost-tiered variant in us-west or nearest region. Automatic transparent fallback with header X-Model-Fallback: true.
+
+4) Structured output reliability (schema + decoding) — detailed: 
+- Schema enforcement: use JSON Schema (we recommend Draft-07 for maturity/tools). We’ll provide a schema validator in the SDK that rejects responses that don’t pass.
+- Constrained decoding: for critical fields (id, price_cents, currency) use deterministic decoding settings: temperature=0, top_p=0.0, repetition_penalty high, and explicit format prompts ("Return exactly JSON object matching schema X").
+- Two-stage parse: (1) raw model output -> quick sanity regex checks (types, numeric ranges), (2) jsonschema validation. If stage (2) fails, try automated repair heuristics: strip trailing text, re-run constrained decode with tighter decoding, or request a short model clarification.
+- Retry patterns: exponential backoff with jitter for transient model errors; idempotency keys to prevent double ingestion. Make retry attempts up to 3 times by default then escalate to human review.
+- Logging: log raw_candidate, sanitized_candidate, final_parsed_object + validation_errors. Store diff for auditing.
+
+5) Embeddings + reranker
+- Default: 1536-d embeddings, L2-normalized, FAISS flat idx for pilot (fast to iterate).
+- Reranker: lightweight GPT-style reranker run on top N=15 candidates; return score + explanation token-span for high-confidence matches.
+
+6) Sandbox endpoints & test vectors
+- We’ll provision a sandbox route and seed with 20 sample payloads from FinLytics (Sofie/Alex to share).
+- SDK includes unit tests that run schema checks locally.
+
+Deliverables & ETA:
+- SDK quickstart + validator: ETA Mon 11/30 (PR + pip alpha).
+- Validation + retry pattern doc: draft by Tue 11/24 (Dev).
+- Sandbox route + initial index: Wed 12/2.
+
+Open questions for FinLytics:
+- Confirm which fields are absolutely required (Sofie said price_cents). Any other strict invariants we should treat as hard constraints?
+- Do you need deterministic IDs issued by Redwood, or will your system provide IDs?
+
+Attachments: finlytics-schema-prototype.json (we pulled your prototype into our test harness).
+
+Thanks,
+Dev Patel
+Senior Solutions Engineer | Redwood Inference
+dev_patel@redwood.ai
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Sofie Jansen <sofie@finlytics.ai>
+Cc: Dev Patel <dev_patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Mon, 23 Nov 2026 09:10:00 -0800
+Subject: Re: Implementation readiness & schema sanity check — post-demo next steps
+
+Perfect — thanks Dev and Sofie. I’ll schedule the architecture sync for Wed 12/2 at 10am PT and send a calendar invite (include FinLytics security and Alex). 
+
+Action owners: 
+- Sofie: finalize schema required/optional fields by EOD Tue (11/24).
+- Alex: share similarity thresholds and 20 sample items for sandbox by 11/27.
+- Dev: deliver validation + retry doc by Tue 11/24 (as noted).
+- Karthik / Marissa: I’ll loop in legal for standard pilot SOW and a short note on pilot pricing — Marissa will own pilot terms.
+
+If anything slips, call it out here and we’ll re-prioritize.
+
+Thanks,
+Vanessa
+Enterprise AE | Redwood Inference
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Sun, 21 Nov 2026 09:17:00 -0800
+Subject: Re: Implementation readiness & schema sanity check — post-demo next steps
+
+Looping in legal for a standard pilot SOW + credit ask. I’ll draft a 3-month pilot SOW with a $5k credit for trials and share by Monday.
+
+- Marissa
+Head of Sales Operations | Redwood Inference
+marissa_cole@redwood.ai

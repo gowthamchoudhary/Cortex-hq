@@ -1,0 +1,121 @@
+Post-demo: unit-of-work + batching/cache clarification and next experiments
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Amy Lin <amy@cloudnova.com>, Peter Cole <peter@cloudnova.com>
+Cc: Ben Carter <ben_carter@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Mon, 2 Nov 2026 15:10:00 -0700
+Subject: Post-demo: unit-of-work + batching/cache clarification and next experiments
+
+Hi Amy & Peter —
+
+Thanks again for taking the demo earlier today. Great questions from your infra team — appreciate the signal on latency targets and the 99th percentile SLOs you need for inference at peak. Recap + proposed next steps below so we’re aligned.
+
+Quick recap of what we showed:
+- Redwood Dedicated routing with autoscaling and topology for multi-tenant projects
+- Runtime batching + adaptive KV prefix caching; live demo used 512-token sequences and 12-token prompts
+- Fallback policy to LLM-compact variant when preemption occurs
+
+Open items we promised to quantify:
+1) Per-1M token unit economics comparing Redwood-hosted vs the hyperscaler you mentioned (their public endpoint/pricing) assuming: average request = 140 tokens in + 400 tokens out, cache hit rates at 0%, 30%, 60%
+2) Expected latency breakouts (cold start vs warmed), and how batching changes p50/p95 for your observed qps pattern
+3) A simple experiment plan you can run (or we can run together) to validate cache hit improvement when prefixing structured inputs (example: chat metadata injection)
+
+Proposed immediate next steps (please confirm):
+- I’ll attach a short workbook with baseline per-1M token math and a couple of sensitivity rows for batching and cache hit rates (attached).
+- Ben can run a permissive benchmark against your sample payloads (we discussed anonymized logs) — target: same sequences you use in production for a 30-minute window, we’ll report per-token latency and per-1M cost delta.
+- You (Amy/Peter) confirm a small test window and share the sanitized sample set + preferred time to run (we suggested Wed/Thu this week).
+
+If the numbers look promising we’ll follow with a one-day dedicated-capacity pilot and a short checklist for SOC/compliance paperwork.
+
+Attachments: redwood-infer-unit-econ-summary.xlsx (spreadsheet), cloudnova-demo-logs-20261102.zip (sample logs, redacted)
+
+Thanks —
+Kimberly Park
+Sr. Solutions Engineer | Redwood Inference
+kimberly_park@redwood.ai | +1 (415) 555-0134
+
+---
+Note: workbook uses our standard unit definition: 1 unit = 1k tokens; per-1M is scaled accordingly in sheet 'summary'
+From: Amy Lin <amy@cloudnova.com>
+To: Kimberly Park <kimberly_park@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Cc: Peter Cole <peter@cloudnova.com>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 3 Nov 2026 09:08:00 -0800
+Subject: Re: Post-demo: unit-of-work + batching/cache clarification and next experiments
+
+Thanks Kimberly —
+
+This looks actionable. Quick answers:
+- We can share a 30-min slice of production traffic sanitized (about ~18k requests, average payload like you described). I’ll attach an S3 link shortly.
+- Preferred run window: Thu 5 Nov, 02:00-04:00 PT (low traffic in APAC but still within our SLAs). Is that workable for you?
+- On the hyperscaler pricing: they quoted us a blended *per-request* price that’s hard to map to per-token because they include fixed model overhead; happy to share the redline spreadsheet we built if helpful.
+
+Two quick asks on your end to help our procurement:
+1) In the workbook can you include a row that treats the hyperscaler as "per-request + per-token" (we’ll paste their quoted values) so we can see the crossover points at different tokens-per-request distributions?
+2) Can Ben include an experiment that tracks effective cache hit rate when we prefix with a 40-byte session token vs no prefix? We want to validate whether your KV prefix caching is sensitive to tiny metadata variations.
+
+We’re ok to move forward with Thu morning — confirm and we’ll post the S3 link and a short statement of acceptance for a short-run pilot.
+
+—Amy
+Amy Lin
+Director, Platform Engineering | CloudNova Technologies
+amy@cloudnova.com
+
+> On Nov 2, 2026, at 3:10 PM, Kimberly Park <kimberly_park@redwood.ai> wrote:
+> > Thanks again for taking the demo earlier today...
+From: Ben Carter <ben_carter@redwood.ai>
+To: Amy Lin <amy@cloudnova.com>, Kimberly Park <kimberly_park@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Peter Cole <peter@cloudnova.com>
+Date: Wed, 4 Nov 2026 10:47:00 -0700
+Subject: Re: Post-demo: unit-of-work + batching/cache clarification and next experiments
+
+Amy —
+
+Thu 5 Nov 02:00-04:00 PT works for the bench. I’ll run two variants:
+A) Redwood-hosted endpoint (standard batching heuristics) using your sanitized sample set
+B) Redwood-hosted with explicit small-batch forcing (target batch sizes ~8-12 requests) to simulate your peak bursts
+
+Metrics I’ll capture and return in the post-run report:
+- per-request latency distribution (p50/p95/p99)
+- tokens emitted per request and tokens ingested per request
+- effective throughput (tokens/sec) and achieved batch sizes over time
+- cache hit ratio (KV prefix hits) and latency delta for cache hits vs misses
+- scaled per-1M token cost column matching Kimberly’s workbook assumptions
+
+On hyperscaler mapping: I’ll add a row in the workbook that maps their "per-request + per-token" quote into our per-1M token view so you can eyeball the break-even points.
+
+Deliverables and timing:
+- Run Thu 5 Nov 02:00-04:00 PT (we provision a small dedicated pool for the window)
+- Post-run results shared by EOD Fri 6 Nov with a short one-page analysis and the workbook filled in
+
+If you want us to also run a quick test calling their public endpoint from our runner (to validate their observable latency), say the word and we’ll include it in the report.
+
+Ben
+Ben Carter
+Head of Field Bench & Perf | Redwood Inference
+ben_carter@redwood.ai
+
+Attachment: planned-bench-config.txt (config stub)
+
+> On Tue, Nov 3, 2026 at 9:08 AM Amy Lin <amy@cloudnova.com> wrote:
+> > This looks actionable...
+From: Peter Cole <peter@cloudnova.com>
+To: Ben Carter <ben_carter@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Cc: Amy Lin <amy@cloudnova.com>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Thu, 5 Nov 2026 11:34:00 -0700
+Subject: Re: Post-demo: unit-of-work + batching/cache clarification and next experiments
+
+Ben / Kimberly —
+
+Thanks for the fast turnaround and the clear plan. S3 link with sanitized sample set is here: s3://cloudnova-samples/20261105/redacted-slice.json.gz (read-only). We accepted the small-run pilot; see short acceptance note attached to the HubSpot deal.
+
+One operational note: our procurement team wants an early estimate of committed pricing if we do a 3-month dedicated pilot (monthly commit). Can you put a conservative committed stub row in the workbook (e.g., 3-node pool @ reserved discount) so procurement has something to preliminarily review?
+
+We’re good to proceed with the Thu slot. Looking forward to the bench results.
+
+—Peter
+Peter Cole
+VP, Cloud Operations | CloudNova Technologies
+peter@cloudnova.com
+
+---
+Forwarded attachment: cloudnova-acceptance-shortnote.pdf (signed, stub)

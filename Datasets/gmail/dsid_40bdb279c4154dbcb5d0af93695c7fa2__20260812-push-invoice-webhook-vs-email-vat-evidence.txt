@@ -1,0 +1,102 @@
+Invoice delivery method: webhook push vs. email (VAT evidence & AP workflow)
+
+From: Elena Ramos <elena.ramos@greenfld.ai>
+To: Marcus Lin <marcus_lin@redwood.com>
+Date: Wed, 12 Aug 2026 09:18:00 -0700
+Subject: Invoice delivery & VAT evidence — options question
+
+Hi Marcus,
+
+Thanks for the demo yesterday — GreenField is excited to move forward. Our AP team is trying to lock down the exact invoicing flow so we can automate postings and VAT reconciliation. Two quick questions so I can brief procurement:  
+
+1) Can you push invoices to us via a webhook (JSON/XML push to our AP endpoint)? If so, can the payload include VAT identifiers and a machine-readable invoice (XML) as well as a human PDF?
+
+2) If webhook push isn't available, will Redwood support sending invoices via email to ap@greenfld.ai with an attached signed PDF and a copy to a portal? Do you have a guaranteed PDF naming convention and tax fields we can parse?
+
+Attached is a short requirements doc from our AP team (greenfield-einvoicing-requirements.pdf) and an example XML they expect (sample-invoice-GF-042.xml).
+
+We need this finalised before legal signs the SOW. Appreciate a quick confirmation of supported options and any known gaps for EU VAT evidence.
+
+Best,
+Elena Ramos
+Head of Procurement
+GreenField Analytics
+
+--
+Elena Ramos
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Elena Ramos <elena.ramos@greenfld.ai>
+Cc: 
+Date: Wed, 12 Aug 2026 10:05:00 -07:00
+Subject: Re: Invoice delivery & VAT evidence — options question
+
+Hi Elena — thanks for the clear notes and the attachments. Short answers up top:  
+
+• Yes, we support a push/webhook delivery option for invoices. Payloads can include a machine-readable XML, invoice metadata (VAT number, billing entity, tax breakdowns), and a separate PDF attachment link.  
+• We also support email delivery to your AP inbox as a fallback; emails include a PDF invoice and metadata in the message/body for automated parsing.
+
+A few implementation details and tradeoffs to call out:  
+- Webhook push (recommended): we POST to your endpoint and include both XML and a signed PDF URL. We can optionally include embedded base64 PDF when requested, but most customers prefer a signed S3/GCS URL plus a JSON invoice object so their ingestion pipeline handles retrieval.
+- Email: we deliver a standardized PDF filename (redwood-invoice-<invoice_id>-<date>.pdf) and include an XML attachment when requested. Email is simpler but has higher chance of being delayed/blocked by mail filters and is harder to reconcile for "machine guaranteed" delivery.
+- VAT evidence: for EU customers we can include explicit VAT identifiers and line-level tax amounts in the XML per your sample. We do not currently support PEPPOL endpoints natively; that would be a custom integration.
+
+Next steps I propose:  
+1) Can you confirm your preferred option (webhook vs. email + portal copies)?  
+2) If webhook, please provide a staging endpoint and the expected auth (basic token / mTLS / api-key).
+3) If email, confirm mailbox name and whether you want copies sent to the Redwood portal/drive.
+
+Looping in our billing ops team to surface constraints and schedule a short integration call.
+
+Thanks,
+Marcus Lin
+Account Executive, Redwood Inference
+marcus_lin@redwood.com
++1 (415) 555-0123
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Laura Bennett <laura_bennett@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Wed, 12 Aug 2026 10:06:00 -07:00
+Subject: Fwd: Invoice delivery & VAT evidence — options question
+
+Laura / Monica — forwarding GreenField's requirements. Key asks: webhook push with XML + PDF OR email delivery to ap@greenfld.ai. They need VAT IDs and line-level tax in machine-readable format. Attachments included. Can we support mTLS or api-key for webhook? If PEPPOL is requested later, flag for engineering as custom work.
+
+Can you:  
+- Confirm if our push payload schema matches their sample (attached).
+- Confirm whether we can attach base64 PDF inline if customer requires it (we generally avoid inline heavy attachments).
+- Flag any operational caveats for EU VAT evidence (retention, signed invoices, timestamping).
+
+Happy to set up a 30-min sync with GreenField.
+
+Thanks,
+Marcus
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Monica Patel <monica_patel@redwood.com>, Elena Ramos <elena.ramos@greenfld.ai>
+Date: Thu, 13 Aug 2026 11:02:00 -07:00
+Subject: Re: Invoice delivery & VAT evidence — options question
+
+Hi all — thanks for the clear thread. Quick operational answers and action items from billing ops:  
+
+1) Webhook support: yes — we can POST a JSON wrapper that contains a link to the signed PDF plus an embedded XML invoice. Authentication options: API key (recommended) or mTLS for customers that require mutual TLS. Please note mTLS requires a cert exchange and will add ~3–5 business days for setup depending on networking teams.
+
+2) Payload details: our current production schema includes fields for buyer_vat_number, seller_vat_number, tax_amounts (per-line), currency, invoice_issue_date, invoice_total, and a line_items array. The XML sample you provided maps cleanly to our XML export and we can provide a mapping doc before integration.
+
+3) Inline/base64 PDFs: we can support including a base64 PDF in the payload upon request, but we prefer providing a signed, short-lived URL to the PDF (better for large files and avoids bloating the payload). If your parser requires inline PDFs, we will enable it for GreenField as part of the onboarding checklist.
+
+4) Email fallback: if you choose email, we will deliver PDFs named: redwood-invoice-<invoice_id>-YYYYMMDD.pdf and include the XML as invoice-<invoice_id>.xml. We recommend also enabling a copy to your portal mailbox so you have a retrievable canonical copy. Emails are subject to standard SMTP delivery caveats (spam filters, quarantines).
+
+5) EU VAT evidence & retention: Redwood will include invoice-digitally-signed metadata and keep copies for audit for 7 years by default. If you need extended retention or a signed timestamp (qualified electronic signature), that's an add-on and we can provide pricing.
+
+Action items:  
+- Elena: share a staging endpoint and preferred auth (api-key or mTLS) — greenfld staging endpoint or credentials.
+- Marcus: set up a 30-minute integration call with GreenField + Billing Ops next week.
+- Monica: please prepare the mapping doc and the sample webhook payload (JSON + XML) and drop in the shared drive link.
+
+I'll attach the mapping doc draft and a sample JSON payload in a follow-up email.
+
+Laura Bennett
+Billing Operations Manager, Redwood Inference
+laura_bennett@redwood.com
+
+Attachments: mapping-draft-v1.pdf (will be added in follow-up)

@@ -1,0 +1,141 @@
+Aurora: urgent - spike in inference errors & latency (RCA delivery + action log)
+
+From: Amelia Sanders <amelia.sanders@aurorahealth.com>
+To: monica_patel@redwood.ai, rishi_malhotra@redwood.ai
+Cc: piotr.kowalski@aurorahealth.com, vendor-monitoring@aurorahealth.com
+Date: 2026-08-02T09:12:00-07:00
+Subject: High error rate & timeouts affecting Aurora patient-search (prod)
+
+Monica / Rishi —
+
+We saw a sudden uptick in 500s and tokenization errors from Redwood’s API starting ~08:48 UTC (02:48 PDT). The impact: our patient-search microservice saw a 30% failure rate for inference calls and sustained 2–3s added latency on successful requests. That affected our triage UI and caused several manual fallbacks.
+
+Attached are a short sample of request IDs and a CSV of query traces from our side (query_logs_20260802.csv). Can you confirm whether there was a model rollout, config change, or regional capacity issue on your side? This is currently a Sev 1 for us. We need an RCA and mitigation plan — and an exec-level contact for escalation.
+
+Amelia
+VP Product Ops, Aurora Health
+---
+Attachment: query_logs_20260802.csv (CSV, 124 KB)
+
+From: Monica Patel <monica_patel@redwood.ai>
+To: Amelia Sanders <amelia.sanders@aurorahealth.com>
+Cc: rishi_malhotra@redwood.ai, tessa_morgan@redwood.ai, lauren_bishop@redwood.ai
+Date: 2026-08-02T09:28:00-07:00
+Subject: Re: High error rate & timeouts affecting Aurora patient-search (prod)
+
+Amelia — thank you for the flags and the logs.
+
+We immediately opened an incident and routed it to the serving/infra on-call. Initial checks show an unexpected spike in queue depth for the GPU pool serving the model variant you’re pinned to. No automated rollout was triggered from our side; I’ve asked infra to investigate kernel-level errors and KV cache health.
+
+Next steps (short):
+- Immediate: we put a temporary routing rule to divert Aurora traffic to the warm standby pool (ETA 10–15m).
+- Investigation: infra will pull tracer logs and check for OOMs / kernel failures (Tessa leading).
+- Exec: looping in Rishi and Lauren for executive escalation and mitigation approvals.
+
+We’ll keep this thread updated with timestamps.
+
+— Monica
+Sr. Customer Success Manager, Redwood Inference
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Amelia Sanders <amelia.sanders@aurorahealth.com>, Piotr Kowalski <piotr.kowalski@aurorahealth.com>
+Cc: monica_patel@redwood.ai, tessa_morgan@redwood.ai, sean_gallagher@redwood.ai, lauren_bishop@redwood.ai
+Date: 2026-08-03T11:05:00-07:00
+Subject: Aurora incident — RCA draft, corrective actions, and owner commitments (DRAFT)
+
+Amelia / Piotr —
+
+Thanks again for your patience during yesterday’s outage window. Attached is our internal RCA draft plus an action log we propose to track to closure (aurora_rca_draft_v2.pdf). Summary below; full detail is in the attachment.
+
+Executive summary (TL;DR):
+- Root cause: a regression in the runtime’s memory reclamation path for VX kernels under a specific tokenization distribution (rare but reproducible). Under sustained bursts, the KV cache reclamation delayed background GC which increased queue latency; combined with opportunistic GC pauses, polite retries from your client amplified queue depth and produced elevated 5xx rates.
+- Impact window: 2026-08-02T08:48:00Z — 2026-08-02T09:36:00Z (production traffic to your model variant).
+- Immediate mitigations applied: traffic diverted to warm standby pool; temporary hardened retry policy; increased instance count in your dedicated pool.
+
+Action log (owners + ETA):
+1) Patch runtime GC regression (code + tests) — Owner: infra-eng (Tessa Morgan) — Target: 2026-08-10
+2) Deploy new kernel backoff heuristics to reduce queue amplification — Owner: serving-runtime (Sean Gallagher) — Target: 2026-08-12
+3) Post-deploy load test against Aurora-like token distributions & traffic spike replay — Owner: performance (Monica Patel) — Target: 2026-08-14
+4) Contract & SLA review for temporary credit and formalized interim SLOs — Owner: Rishi Malhotra / Lauren Bishop — Target: 2026-08-07
+5) Final RCA + exec recap meeting (required) — Owner: Rishi Malhotra — Target: 2026-08-06
+
+Attachments referenced: aurora_rca_draft_v2.pdf, interim_mitigation_playbook.docx.
+
+Ask from Aurora: please review the RCA draft and confirm any missing context or additional impact metrics you’d like us to include (e.g., patient search failure IDs, downstream error codes). We’ve also added a shared folder link for live tracking (Drive link in headers).
+
+We will treat this as a P1 engagement — Rishi is the exec sponsor and Lauren will coordinate any contract/credit discussions.
+
+— Rishi
+VP, Customer Reliability (acting), Redwood Inference
+---
+Attachment: aurora_rca_draft_v2.pdf (PDF, 412 KB)
+Attachment: interim_mitigation_playbook.docx (DOCX, 98 KB)
+
+From: Piotr Kowalski <piotr.kowalski@aurorahealth.com>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Cc: Amelia Sanders <amelia.sanders@aurorahealth.com>, lauren_bishop@redwood.ai
+Date: 2026-08-03T15:22:00-07:00
+Subject: Re: Aurora incident — RCA draft, corrective actions, and owner commitments (DRAFT)
+
+Rishi / team —
+
+Thanks for the swift analysis and the clear action list. A few notes from Aurora:
+- Please include the downstream failure code mapping (we saw 502s from our API gateway for some requests).
+- We need an interim SLA (latency and error rate targets) while fixes are underway and a proposal for a one-time operational credit for the impact window.
+- Can we accelerate the post-deploy load test window? Our release calendar has a big data migration on 2026-08-18; we’d like certainty before then.
+
+We’re available for an exec sync on 2026-08-06; please confirm attendees and a 30-min slot.
+
+Piotr
+Head of Platform Reliability, Aurora Health
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Amelia Sanders <amelia.sanders@aurorahealth.com>, Piotr Kowalski <piotr.kowalski@aurorahealth.com>
+Cc: monica_patel@redwood.ai, tessa_morgan@redwood.ai, sean_gallagher@redwood.ai, lauren_bishop@redwood.ai
+Date: 2026-08-04T10:40:00-07:00
+Subject: Re: Aurora incident — Revised commitments and interim plan
+
+Piotr / Amelia —
+
+Appreciate the feedback. Quick updates:
+- We will add a downstream failure-code appendix to the RCA (incl. observed 502/504 mappings and sample request-ids).
+- Interim SLA proposal (trial): 99.5% success rate for Aurora’s production route and p95 latency < 350ms for the model variant, effective immediately until fixes are deployed. We’ll provide a daily digest for the duration.
+- Credit proposal: Redwood proposes a one-time operational credit equivalent to 7 days of average billable usage during the impact window; Lauren and I will share a draft credit memo by 2026-08-05.
+- Load testing: Monica will accelerate the replay and aims to complete the Aurora-specific load validation by 2026-08-08 (new ETA).
+
+Planned exec sync: 2026-08-06 at 09:00 PDT. Attendees proposed: Rishi, Lauren, Monica, Tessa, Piotr, Amelia. Please confirm or suggest an alternate time.
+
+Action tracker (current statuses):
+- Patch runtime GC regression — In progress (Tessa) — ETA 2026-08-10
+- Kernel backoff heuristics — Planning (Sean) — ETA 2026-08-12
+- Accelerated load test — In progress (Monica) — ETA 2026-08-08
+- Credit memo — Drafting (Lauren/Rishi) — ETA 2026-08-05
+
+We’ll keep daily 09:00 PDT updates to this thread until the exec recap meeting and final RCA.
+
+— Rishi
+VP, Customer Reliability (acting), Redwood Inference
+
+From: Lauren Bishop <lauren_bishop@redwood.ai>
+To: Amelia Sanders <amelia.sanders@aurorahealth.com>, Piotr Kowalski <piotr.kowalski@aurorahealth.com>
+Cc: rishi_malhotra@redwood.ai, monica_patel@redwood.ai, tessa_morgan@redwood.ai, sean_gallagher@redwood.ai
+Date: 2026-08-04T17:42:00-07:00
+Subject: Re: Aurora incident — Finalized interim credit & next steps
+
+Amelia / Piotr —
+
+Follow-up after today’s engineering checkpoints: Lauren here (Head of Revenue Ops). We’ve finalized the credit memo and attached a short note that outlines the interim SLA and the credit calculation. Summary: Redwood will issue a one-time operational credit equivalent to 7 days of average billable usage for the impacted model routes (applies to Aug invoice). We also commit to the interim SLA Rishi proposed; metrics will be shared daily via the Drive link.
+
+Next steps to close the loop:
+- We’ll send the formal credit T&Cs by 2026-08-05 (DocuSign link).
+- Engineering to provide daily digest and a post-deploy report after the 08/10–08/12 changes.
+- Exec recap meeting confirmed: 2026-08-06 09:00 PDT (calendar invite sent).
+
+If Aurora is comfortable with the interim agreement, we’ll mark the escalation as mitigated pending the post-deploy validation and final RCA.
+
+Thank you again for the collaboration — we know this had customer impact and appreciate the partnership while we close fixes.
+
+— Lauren Bishop
+Head of Revenue Operations, Redwood Inference
+---
+Attachment: credit_memo_aurora_20260804.pdf (PDF, 28 KB)

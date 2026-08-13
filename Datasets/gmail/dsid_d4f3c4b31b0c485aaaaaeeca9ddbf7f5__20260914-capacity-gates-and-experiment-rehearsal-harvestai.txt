@@ -1,0 +1,130 @@
+Capacity gates & rehearsal plan for HarvestAI Hosted→Dedicated cutover
+
+From: Priya Natarajan <priya@redwood.com>
+To: Karthik Iyer <karthik@redwood.com>, Ben Carter <ben@redwood.com>, Aditya Rao <aditya@redwood.com>
+Cc: 
+Date: Tue, 14 Sep 2026 09:12:00 -0700
+Subject: Draft capacity gates + rehearsal checklist for HarvestAI (for review)
+
+Team —
+
+Attached a first-pass plan for the HarvestAI Hosted→Dedicated migration. High-level goals: validate sizing under production traffic patterns, exercise fallback to hosted lanes, and validate SLA guardrails (latency & throughput).
+
+Key asks from infra/delivery:
+- Confirm the three candidate sizing profiles in the spreadsheet (p2-small, p2-medium, p1-heavy) reflect real KV-cache and prefix distributions for their seed traffic.
+- Verify the preflight rehearsal checklist covers the SLO smoke tests (99th p50/p95 targets) and routing fallbacks.
+- Estimate a dry-run window (2–3h) where we can run replayed traffic at 50% and 100% load.
+
+I plan to send the customer-facing rehearsal invite once we have internal signoff today. Please comment inline on the sheet and the checklist by 14:30 PT.
+
+Attachments: harvestai-sizing-profiles.xlsx, preflight-rehearsal-checklist.md
+
+— Priya
+Priya Natarajan
+Senior Solutions Manager, Redwood Inference
+priya@redwood.com
+Redwood Inference
+
+From: Priya Natarajan <priya@redwood.com>
+To: Alice Mercer <alice@harvestai.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Ben Carter <ben@redwood.com>
+Date: Tue, 14 Sep 2026 10:05:00 -0700
+Subject: Capacity gates & rehearsal plan for HarvestAI Hosted→Dedicated cutover
+
+Alice —
+
+Thanks again for the sync this morning. We drafted a short rehearsal plan and a set of candidate sizing profiles for your environment; both are attached. The rehearsal is intended as a low-risk dress rehearsal to validate three things before the swap window: correctness under typical prefixes, end-to-end latency SLOs, and our fallback behavior to hosted when reserved capacity is saturated.
+
+Proposed timeline:
+- Internal preflight: Tue 2026-09-21 09:00–12:00 PT (dry-run, non-customer traffic)
+- Customer rehearsal (joint): Wed 2026-09-22 10:00–12:00 PT (replayed traffic from your staging traces)
+- Cutover target: Sat 2026-09-25 (final window TBD after rehearsal)
+
+Two quick notes:
+1) We recommend running the 50% load pass first followed by a 100% pass only if the SLOs hold.
+2) We’ll collect per-route latencies, token-cost deltas, and KV-cache hit rates during the run.
+
+Could you confirm whether Wed 09/22 10:00–12:00 PT works for your ops team? Also, please attach a small anonymized trace (1–2k requests) if you can — that will let Ben and Karthik validate the profile mappings before the rehearsal.
+
+Attachments: harvestai-sizing-profiles.xlsx, preflight-rehearsal-checklist.md
+
+Best,
+— Priya
+
+From: Alice Mercer <alice@harvestai.com>
+To: Priya Natarajan <priya@redwood.com>
+Cc: HarvestAI Platform <platform@harvestai.com>
+Date: Tue, 14 Sep 2026 12:30:15 -0700
+Subject: Re: Capacity gates & rehearsal plan for HarvestAI Hosted→Dedicated cutover
+
+Priya —
+
+Appreciate the plan. Wed 09/22 10:00–12:00 PT works for our ops folks. I’ll ask our infra lead to share an anonymized trace by EOD tomorrow (15th). Couple of clarifications from our side:
+
+- The profiles look reasonable but we have a set of long-context flows (avg 2.5k tokens) that historically bump memory. Can your team confirm which profile you expect those to map to?
+- For the fallback behavior: can you provide a quick note on how user-visible errors will appear when we hit reserved capacity and fall back to hosted? We need to surface that in our customer comms plan.
+
+Once we have the trace I’ll loop in our security lead for a quick review of any telemetry that touches PII (we’ll scrub it before sending).
+
+Thanks,
+Alice Mercer
+Head of Platform, HarvestAI
+alice@harvestai.com
+
+From: Ben Carter <ben@redwood.com>
+To: Alice Mercer <alice@harvestai.com>, Priya Natarajan <priya@redwood.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Aditya Rao <aditya@redwood.com>
+Date: Wed, 15 Sep 2026 08:22:00 -0700
+Subject: Re: Capacity gates & rehearsal plan for HarvestAI Hosted→Dedicated cutover
+
+Alice / Priya —
+
+Thanks — quick technical answers from our side:
+
+1) Long-context flows (≈2.5k tokens): map these to the p1-heavy profile. That profile reserves larger KV cache and uses the quantization profile we discussed (q4-mix). I’ve annotated the spreadsheet with expected memory footprints and per-GPU rps at both 50% and 100% replay.
+
+2) Fallback behavior: when reserved capacity is saturated, routing will automatically try the next compatible model pool (hosted API) with a soft-fail policy. From a user perspective you will see increased latency for affected requests and in rare cases (if hosted is also saturated) a 503 with a JSON payload: {"error":"temporarily_unavailable","message":"Please try again momentarily"}. We’ll surface a per-request header x-rw-fallback: hosted in your logs so you can instrument client-side behavior.
+
+3) Acceptance criteria for the rehearsal (suggested):
+- 95th percentile latency stays within 1.5x of hosted baseline for top 10 routes at 100% replay
+- KV-cache hit rate delta < 8% vs hosted baseline
+- No silent data path regressions in request/response traces
+
+I’ve attached an SLA acceptance doc (sla-acceptance-criteria.pdf) and a short notes column in the spreadsheet.
+
+—Ben
+Ben Carter
+Lead Performance Engineer, Redwood Inference
+ben@redwood.com
+
+From: Priya Natarajan <priya@redwood.com>
+To: Alice Mercer <alice@harvestai.com>
+Cc: Ben Carter <ben@redwood.com>, Karthik Iyer <karthik@redwood.com>, Aditya Rao <aditya@redwood.com>
+Date: Thu, 16 Sep 2026 16:04:00 -0700
+Subject: Re: Capacity gates & rehearsal plan for HarvestAI Hosted→Dedicated cutover
+
+Alice —
+
+Thanks for the quick confirmations. We received your trace and the security team’s initial greenlight on the scrubbed sample — appreciate the cooperation. Finalized timeline below and I’ve dropped the rehearsal link and runbook:
+
+- Internal preflight: Tue 09/21 09:00–12:00 PT (internal only)
+- Joint rehearsal: Wed 09/22 10:00–12:00 PT — Meeting link: https://meet.company/harvestai-rehearsal (please add ops + security)
+- Cutover window candidate: Sat 09/25 02:00–05:00 PT (we will confirm after rehearsal)
+
+Action items:
+- HarvestAI: confirm attendee list for 09/22 and share any additional long-tail route names you want explicitly tracked (alice@harvestai.com)
+- Redwood Delivery (Karthik/Ben): run the 50% pass in preflight and share the report by EOD Tue 09/21
+- Priya: I’ll prepare the customer-facing comms template and the rollback playbook and circulate by EOD Fri 09/17
+
+Links & attachments:
+- Runbook (shared): https://drive.company/shared/HarvestAI-dedicated-runbook
+- HubSpot deal: https://hubspot.company/record/HVT-3245
+- Attachments: harvestai-sizing-profiles.xlsx, preflight-rehearsal-checklist.md, sla-acceptance-criteria.pdf
+
+Looking forward — we’ll treat this as a lightweight, targeted rehearsal to de-risk the swap and make the cutover decision data-driven.
+
+— Priya
+Priya Natarajan
+Senior Solutions Manager, Redwood Inference
+priya@redwood.com
+Redwood Inference

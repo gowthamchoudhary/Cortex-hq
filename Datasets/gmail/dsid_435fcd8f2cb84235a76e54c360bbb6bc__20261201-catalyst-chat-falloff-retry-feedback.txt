@@ -1,0 +1,114 @@
+Catalyst: intermittent 429/5xx spike affecting streaming chat completions
+
+From: Samir Patel <samir@catalystai.com>
+To: Jonas Weber <jonas.weber@redwood-inference.com>
+Date: Mon, 30 Nov 2026 09:12:23 -0800
+Subject: Urgent: 429/5xx spike on live chat (streaming completions)
+
+Jonas —
+
+We started seeing a sharp increase in 429s and interleaved 5xx responses on our production chat sessions around 08:45 PST. Clients are hitting their own 6s timeouts and our frontend is kicking in aggressive retries which appears to be amplifying the problem (retry storm).
+
+Symptoms:
+- ~18% of streaming chunks return 429; ~4% 500/503.
+- Idle stream disconnects after ~30s of silence; clients often open a new connection and immediately retry.
+- Several clients observe partial completions (fragmented) and then a final 5xx.
+
+Impact: major customer-facing bot flows degraded, user-visible latency spiked from ~250ms to 2–6s on completions. This is on our Dedicated deployment (US-west).
+
+I attached logs and a screenshot from our monitoring dashboard. We need immediate help — is this something on your side (runtime/kernel selection/fallback) or a capacity issue? Please escalate as needed; our CS/ops team is on standby.
+
+Attachments: [attachment: catalyst_error_log_2026-11-30.txt (text/plain)], [attachment: screenshot-429.png (image/png)]
+
+—Samir
+Head of Platform, Catalyst AI
+
+From: Jonas Weber <jonas.weber@redwood-inference.com>
+To: Laura Bennett <laura.bennett@redwood-inference.com>, Aditya Rao <aditya.rao@redwood-inference.com>, Marissa Cole <marissa.cole@redwood-inference.com>
+Date: Mon, 30 Nov 2026 09:25:05 -08:00
+Subject: Fwd: Urgent: 429/5xx spike on live chat (streaming completions)
+
+Team — forwarding Catalyst's report. High priority. Quick notes:
+- Symptoms match an observed 429 hotspot we saw in the US-west allocation this morning (see PD-INC-1234).
+- Hypothesis: client retry amplification + transient queue saturation on the streaming mux layer; possible KV-cache feedback leading to idle-stream GC.
+
+Ask:
+1) Aditya — can SRE check queue/backpressure metrics and recent kernel selection changes on us-west serving pool? See PagerDuty link below.
+2) Marissa — CS-run with Catalyst to implement immediate client-side mitigations: disable exponential retry on incomplete stream, extend keepalive/heartbeat, and fallback to non-streaming short-poll for affected routes.
+3) Laura — loop in growth/exec if we cannot stabilize in the next 90 minutes.
+
+I scheduled a triage call for 09:45 PST. Attaching Catalyst logs from Samir for immediate review.
+
+Attachments: [attachment: catalyst_error_log_2026-11-30.txt]
+Related: https://pagerduty.com/incidents/PD-INC-1234
+
+—Jonas
+Senior Sales Engineer, Redwood Inference
+
+From: Aditya Rao <aditya.rao@redwood-inference.com>
+To: Jonas Weber <jonas.weber@redwood-inference.com>, Laura Bennett <laura.bennett@redwood-inference.com>, Marissa Cole <marissa.cole@redwood-inference.com>
+Date: Mon, 30 Nov 2026 09:44:40 -08:00
+Subject: Re: Fwd: Urgent: 429/5xx spike on live chat (streaming completions)
+
+On Mon, Nov 30, 2026 at 09:25 AM Jonas Weber wrote:
+> Team — forwarding Catalyst's report. High priority.
+
+Quick triage update from infra:
+- We saw a 2x increase in incoming streaming connections in the us-west pool starting 08:32–08:50. CPU on a subset of pods spiked and several worker threads hit KV cache GC thresholds.
+- A recent micro-update to the idle-stream eviction policy (rolling out yesterday) reduced keepalive for long-silent streams — that correlates with the idle disconnects Catalyst mentioned.
+
+Immediate mitigations applied (09:40):
+- Rolled back idle eviction change for us-west to previous policy.
+- Increased pod count on the affected pool by +20% and enabled emergency autoscaling triggers.
+- Pushed a server-side throttle tweak that soft-503s new streams when queue depth > threshold to reduce downstream queue blowup (we'll monitor).
+
+Please advise Catalyst to temporarily disable client aggressive retry bursts and set keepalive to 60s. We'll continue to monitor PD incident PD-INC-1234.
+
+—Aditya
+SRE Lead, Redwood Inference
+
+From: Jonas Weber <jonas.weber@redwood-inference.com>
+To: Samir Patel <samir@catalystai.com>
+Cc: Marissa Cole <marissa.cole@redwood-inference.com>, Aditya Rao <aditya.rao@redwood-inference.com>
+Date: Mon, 30 Nov 2026 10:02:15 -08:00
+Subject: RE: Urgent: 429/5xx spike on live chat (streaming completions)
+
+Samir —
+
+Thanks for the quick report and logs. Short update from our triage call: we've identified an operational factor that likely contributed to the spike — a recent idle-stream eviction tweak rolled out yesterday reduced keepalives and increased disconnects which, combined with clients that immediately retry, caused queue amplification.
+
+What we did so far:
+- Rolled back the idle eviction policy in the us-west pool (impact should be immediate).
+- Temporarily scaled the serving pool +20%.
+- Applied a soft-throttle for new streams above queue-depth threshold to break tight retry loops.
+
+Immediate actions for Catalyst (recommended client changes, low risk):
+1) Increase HTTP/WS ping/keepalive to 60s.
+2) Cap retries to max 2 per request with exponential backoff starting at 500ms (avoid immediate bursts).
+3) If feasible, fall back to short-poll non-streaming completions for the most latency-sensitive routes during the window.
+
+We will keep your team updated. I'm copying Marissa (CS) and Aditya (SRE) for follow-up. Please confirm whether you can apply the client-side changes; Marissa can coordinate a short deployment/patch from our playbook.
+
+—Jonas
+Senior Sales Engineer, Redwood Inference
+
+From: Marissa Cole <marissa.cole@redwood-inference.com>
+To: Jonas Weber <jonas.weber@redwood-inference.com>, Aditya Rao <aditya.rao@redwood-inference.com>, Laura Bennett <laura.bennett@redwood-inference.com>
+Date: Tue, 1 Dec 2026 15:47:00 -08:00
+Subject: Post-incident note: Catalyst stabilization + next steps
+
+Team — final note after handoff:
+- Catalyst confirmed applying client-side mitigations at ~11:10 PST on Nov 30 and reported a steady drop in 429s to baseline levels by 11:35 PST. Our rollback + autoscale actions held while we monitored.
+- Root contributing factors: (1) idle eviction policy change reduced keepalive, (2) client retry storms amplified transient saturation, (3) queue soft limits reached on a subset of workers.
+
+Next steps (owners):
+- Aditya: create a short-term automated alert for keepalive GC deltas + queue depth anomalies (due 2026-12-03).
+- Jonas/Marissa: coordinate with Catalyst product to add a recommended client retry policy to their SDK docs and include an SDK flag to fallback to non-streaming completions for specific endpoints (due 2026-12-08).
+- Laura: prep an exec-facing one-pager summarizing impact, customer risk, and compensation ask if Catalyst requests credits (due 2026-12-02).
+
+Attached: draft incident timeline for exec review. If any execs want a quick sync, I'm free 09:00–11:00 PST tomorrow.
+
+Attachments: [attachment: incident-timeline-draft.pdf]
+
+—Marissa
+Director, Customer Success, Redwood Inference

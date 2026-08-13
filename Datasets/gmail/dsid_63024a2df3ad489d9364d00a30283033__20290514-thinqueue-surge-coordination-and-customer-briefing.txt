@@ -1,0 +1,131 @@
+ThinQueue surge — triage, product asks, and customer readout
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Irene Choi <irene.choi@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Soojin Lee <soojin.lee@redwood.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 14 May 2029 09:12:00 -0700
+Subject: ThinQueue surge observed by Checkoutly — p95 up, increased retries
+
+Team,
+
+Heads up — Checkoutly (prod-us) reported a sharp p95 latency jump starting ~08:50 PDT and elevated retry rates across their gen-api endpoints. Their ops channel pasted a handful of traces (see Ops Slack) and we see correlated queue length growth on ThinQueue shards servicing that tenant.
+
+Initial ask: can we stand up a short bridge and confirm whether this is work-congestion (hot shard) vs a runtime regression?
+
+What I can see:
+- QPS: up ~2.6x baseline for their tenant over the last 25m
+- Queue depth: sustained > 500 on two ThinQueue workers servicing us-west-2
+- No other tenants show the same shard-level skew yet
+
+Irene — can you run the customer readout once we know mitigation steps? Marissa, cross-check any recent routing changes.
+
+-Ben
+Senior Solutions Engineer
+Redwood Inference
+
+---
+
+From: Irene Choi <irene.choi@redwood.com>
+To: Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Soojin Lee <soojin.lee@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 14 May 2029 09:28:00 -07:00
+Subject: Re: ThinQueue surge observed by Checkoutly — p95 up, increased retries
+
+Thanks Ben — starting a bridge now (Bridge link: https://zoom.redwood/bridge-ops-2349).
+
+Immediate asks:
+1) Soojin, please capture the ThinQueue worker logs + KV eviction metrics for the two shards (attach).
+2) Karthik, can the routing layer pin Checkoutly away from the overloaded workers (soft-handoff) without a full rollout? If not, we need a fallback plan to route them to the reserve pool.
+3) Marissa, prepare a short customer-facing note that acknowledges we saw a queue surge and that we're investigating mitigations — no technical detail beyond the status unless Karthik and Soojin approve.
+
+I will coordinate the bridge and draft the readout once we have the mitigation chosen.
+
+Irene Choi
+Director, Customer Reliability
+Redwood Inference
+
+---
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Irene Choi <irene.choi@redwood.com>, Ben Carter <ben.carter@redwood.com>, Soojin Lee <soojin.lee@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 14 May 2029 10:02:00 -07:00
+Subject: Re: ThinQueue surge observed by Checkoutly — p95 up, increased retries
+
+Summary from infra analysis:
+- Root cause hypothesis: rapid fanout from a single high-QPS checkout route at Checkoutly caused disproportionate per-shard KV cache churn. When the cache misses increased, worker execution path dropped into slower fallback kernels and per-request latency increased, producing backpressure on ThinQueue.
+- Evidence: attached microtraces show >60% cache miss rate on the two hot workers, and runtime counters show increased fallback kernel usage at the same timestamps. (attachment: checkoutly-kv-sample-20290514.txt)
+
+Short-term mitigations we can enact within 15–30m:
+A) Soft-handoff: mark the two hot workers as 'draining' and route new Checkoutly traffic to reserve pool. This reduces cold-start penalty because reserve pool has warmed KV for common prefixes.
+B) Aggressive KV prefetch: temporarily raise prefetch window for Checkoutly prefixes (requires a small config flip, low risk).
+C) Rate-smoothing: apply a 10% client-side smoothing at the router to reduce instantaneous fanout spikes.
+
+I recommend we do A + B immediately; C as a fallback if we still see >20% p95 delta after the first wave.
+
+I attached a debug tar with the microtraces and a short difflog.
+
+-Karthik
+Engineering Lead, Serving Runtime
+Redwood Inference
+
+Attachment: checkoutly-kv-sample-20290514.txt (sample KV access patterns and trace excerpts)
+
+---
+
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Irene Choi <irene.choi@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 14 May 2029 10:15:00 -07:00
+Subject: Re: ThinQueue surge observed by Checkoutly — p95 up, increased retries
+
+On the bridge now. Confirming Karthik's data — I've pushed the drain marker on the two hot workers and validated that the router is moving new sessions to reserve pool. Early numbers (10m after action):
+- Checkoutly p95: down from 1.6s -> 820ms
+- Retry rate: down ~48%
+- Queue depth on hot workers: trending down but still above baseline (expected while in-flight tasks drain)
+
+I've uploaded the full worker logs and eviction counters: debug-tarball-20290514.tgz (attached here).
+
+Operational notes for customer readout:
+- We executed a routing drain for a small subset of workers and adjusted KV prefetch for Checkoutly prefixes.
+- We observed immediate improvement in p95 and retry rate; we will continue to monitor for 2 hours and follow up with an RCA if there is persistent variance.
+
+Soojin Lee
+SRE Lead
+Redwood Inference
+
+Attachment: debug-tarball-20290514.tgz
+
+---
+
+From: Irene Choi <irene.choi@redwood.com>
+To: Alex Ramos <alex.ramos@checkoutly.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Soojin Lee <soojin.lee@redwood.com>, Taylor <taylor@checkoutly.com>
+Date: Tue, 14 May 2029 11:00:00 -07:00
+Subject: UPDATE: Short-term mitigation completed for Checkoutly ThinQueue surge (May 14)
+
+Alex,
+
+Quick update from the bridge — we saw the p95 latency spike you reported and executed a short-term mitigation. High-level summary below; technical details available on request.
+
+What happened
+- At ~08:50 PDT we detected a rapid increase in Checkoutly traffic that caused increased KV cache churn on two ThinQueue workers. That led to higher per-request runtime cost and queueing.
+
+What we did (completed at 10:10 PDT)
+- Drained the two overloaded workers and routed new Checkoutly traffic to a warmed reserve pool.
+- Temporarily increased KV prefetch for Checkoutly prefixes to reduce cold misses.
+
+Impact observed (10m post-actions)
+- p95 latency improved from ~1.6s to ~820ms
+- Retry rate reduced by ~48%
+
+Next steps
+- We will monitor the tenant for 2 hours and follow up with a short RCA.
+- Karthik's team will evaluate a longer-term change: better hot-shard detection and targeted prefix warming in the routing layer (product ask / roadmap candidate).
+
+Attachments: debug-tarball-20290514.tgz (logs), checkoutly-kv-sample-20290514.txt (trace excerpt)
+
+If you want a technical walkthrough on the bridge, we're happy to schedule 30 minutes later today.
+
+Thanks,
+Irene Choi
+Director, Customer Reliability
+Redwood Inference
+

@@ -1,0 +1,121 @@
+Incident ledger: postmortem, action prioritization for QBR
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: SRE Rotation <sre-rotation@redwood.com>
+Date: 2027-11-21T09:12:00-08:00
+Subject: Incident ledger: postmortem, action prioritization for QBR
+
+Team —
+
+Attached is the finalized postmortem for the 11/20 KV-cache eviction incident (incident_postmortem_20271120.pdf). Short summary: between 01:03–01:26 UTC we observed persistent cache-thrashing on a subset of Dedicated clusters which increased 95th latency by ~230ms and caused elevated 429s for about 15% of production traffic for 23 minutes. Root cause: an inadvertent config change that disabled the soft-entry guard, compounding a burst of long sequences and causing accelerated KV GC.
+
+What we did (already completed):
+- Rolled back the configuration within 7 minutes and restored normal cache behavior.
+- Scoped impacted clusters and re-provisioned one pool that had sustained degradation.
+- Short-term mitigations added to runtime to reject pathological prefixes (see runbook_kvcache_update.md).
+
+Outstanding asks for QBR alignment (please accept ownership in-thread with ETA):
+1) Permanent fix for soft-entry guard and additional unit tests (owner: SRE) — target Nov 28.
+2) Canary/rollback automation for Dedicated config changes (owner: Platform Infra) — target Dec 5.
+3) Customer-facing SLA remediation proposal and credit path for affected accounts (owner: Finance + Sales) — target Nov 24.
+4) Runbook + run drills for KV eviction recovery (owner: Reliability Docs) — target Nov 30.
+
+I've attached an action tracker (action_tracker_qbr_20271121.xlsx) and linked the internal doc and HubSpot record for Acme Analytics. Please reply with owners and firm ETAs by EOD 2027-11-22 — we need a clean slate for the QBR runbook and the slides.
+
+Thanks — this incident is lower-severity than the April outage but it highlights a recurring gap in change guardrails we need to close before the next quarter.
+
+Vanessa Ortiz
+VP, Reliability & Operations
+Redwood Inference
+
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Cc: SRE Rotation <sre-rotation@redwood.com>
+Date: 2027-11-21T10:03:00-08:00
+Subject: Re: Incident ledger: postmortem, action prioritization for QBR
+
+On 2027-11-21 09:12, Vanessa Ortiz wrote:
+> Attached is the finalized postmortem for the 11/20 KV-cache eviction incident...
+
+Acknowledged. Marcus here — we'll take (1) and coordinate with Platform on (2).
+- Hannah: please lead the soft-entry guard fix and add unit tests.
+- Marissa: please own the canary automation test plan and the dedicated-cluster rollout validation.
+
+ETA: soft-entry guard PR by Nov 26, canary automation spec by Nov 30, implementation targeted for Dec 5.
+
+I'll update the action tracker shortly.
+
+Best,
+Marcus
+Sr Dir, Platform Engineering
+
+
+From: Hannah Schmitt <hannah_schmitt@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-11-21T11:10:00-08:00
+Subject: Re: Incident ledger: postmortem, action prioritization for QBR
+
+On Sun, Nov 21, 2027 at 09:12 AM Vanessa Ortiz <vanessa_ortiz@redwood.com> wrote:
+> Outstanding asks for QBR alignment (please accept ownership in-thread with ETA):
+
+I'll take point on the soft-entry guard fix. Quick clarifying question for Marcus/Vanessa: do you want the fix gated by a Dedicated-only canary or should we rollout on Hosted first (smaller blast radius due to autoscaling)? My inclination is Dedicated canary -> Hosted canary -> global, because Dedicated clusters were primarily impacted. That also gives us better validation of the eviction behavior under longer-lived sessions.
+
+Hannah
+Staff SRE
+
+
+From: Julia Chen <julia.chen@acme-analytics.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Cc: Acme Analytics Support <support@acme-analytics.com>
+Date: 2027-11-21T13:02:00-08:00
+Subject: Re: Incident ledger: postmortem, action prioritization for QBR
+
+Vanessa —
+
+Thanks for the postmortem and the quick rollback. Acme saw increased 429s during our morning sync and that impacted two customer demos. We're looking for two things: 1) a clear timeline for a permanent fix, and 2) a proposal for SLA credit (we're eligible under Section 4.2). Please route any credit requests to our procurement team (procurement@acme-analytics.com).
+
+Also: can you confirm whether any customer data was exposed during the incident? Our security team needs confirmation for their record.
+
+Regards,
+Julia Chen
+Head of Platform, Acme Analytics
+
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+To: Julia Chen <julia.chen@acme-analytics.com>
+Cc: Marcus Lin <marcus_lin@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>, Finance Billing <finance-billing@redwood.com>
+Date: 2027-11-21T14:05:00-08:00
+Subject: Re: Incident ledger: postmortem, action prioritization for QBR
+
+Julia —
+
+Thanks for flagging the customer impact and for the procurement contact. Short answers:
+- Timeline: Hannah and Marcus are targeting a PR for the permanent fix by Nov 26 and we expect completed canary rollout by Dec 5. We will update HubSpot (linked) and the action tracker as milestones hit.
+- SLA credit: Finance Billing has been cc'd and will reach out with the formal credit path for Acme. In the meantime, please forward any procurement contact emails to finance-billing@redwood.com and we'll expedite. (Related HubSpot: https://hubspot.com/records/ACME-3421)
+- Data exposure: No customer data exposure detected. Our review of request/response logs and access logs shows no lateral access during the event; security has been involved and will publish a short attestation by Nov 24.
+
+We'll keep you posted and confirm the attestation when it's available. Apologies again for the disruption — we know demos are high-impact.
+
+Best,
+Vanessa Ortiz
+VP, Reliability & Operations
+Redwood Inference
+
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-11-21T17:45:00-08:00
+Subject: Re: Incident ledger: postmortem, action prioritization for QBR
+
+Quick update for visibility — I've updated the action_tracker_qbr_20271121.xlsx with the owners/ETAs below: 
+- Soft-entry guard fix: Hannah Schmitt — PR by 2027-11-26 (in progress)
+- Canary automation spec: Marissa Cole — spec complete 2027-11-30
+- SLA credit coordination: Finance — outreach started 2027-11-21
+- Runbook + drills: Reliability Docs — draft 2027-11-28, drill scheduled 2027-11-30
+
+Links included in the tracker and the QBR prep folder. If anyone needs me to split or reassign items, ping me and I'll rework the sheet.
+
+—Stephanie
+Director, Reliability Programs

@@ -1,0 +1,135 @@
+Benchmarking playbook + MAP: hybrid GPU sizing (A100 / H100 / L40S, MIG vs full)
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Lindsey Harper <lindsey@acme.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Mon, 20 Sep 2027 09:12:00 -0700
+Subject: Benchmarking playbook + MAP: hybrid GPU sizing (A100 / H100 / L40S, MIG vs full)
+
+Lindsey —
+
+Following up from last week's demo, attaching a proposed MAP and the benchmarking playbook we would run during the evaluation window. High-level goals: validate TTFT (time-to-first-token), steady-state throughput at target concurrency, and latency tail (p95/p99) across three hardware profiles: A100 (40GB), H100 (80GB), and L40S (48GB), plus MIG vs full-GPU segmentation where applicable.
+
+Key test matrix (attached as tabbed sheet):
+- Workloads: short-chat (prompt 512 tokens), long-context (16k), embedding-only batch jobs.
+- Metrics: TTFT, token/sec (steady-state), p50/p95/p99 latency, memory pressure (KV cache utilization), and cost per 1M tokens.
+- Variants: full-GPU runs vs 1/2/1/4/7-way MIG slices (where supported) on A100/H100, and quantized vs FP16 runs.
+- Acceptance criteria: TTFT <= 200ms for short-chat on low-latency route; throughput sufficient for 50 concurrent short-chat sessions with 95th latency < 300ms (or agreed SLA).
+
+Proposed timeline (MAP milestones):
+1) Confirm test harness and workloads (this week) — redwood provides harness and scripts.
+2) Quick run (2 days) to spot major regressions and validate env (we ran a short quick-run already; see later message).
+3) Full 5-day evaluation across all variants (start next Monday).
+4) Consolidated report & recommended fleet mix + procurement-ready sizing (3 business days after run).
+
+I've attached acme-map-benchmark-playbook-v1.xlsx which includes the exact commands, dataset pointers (anonymized request traces you provided), and pass/fail gates. Please review and confirm stakeholder list + any additional workloads you want included.
+
+Attachments: acme-map-benchmark-playbook-v1.xlsx (workbook)
+
+Thanks,
+Soojin
+Soojin Lee
+Senior Solutions Engineer, Redwood Inference
+soojin_lee@redwood.ai
+
+From: Lindsey Harper <lindsey@acme.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>
+Cc: Acme Procurement <procure@acme.ai>
+Date: Mon, 20 Sep 2027 11:03:00 -07:00
+Subject: Re: Benchmarking playbook + MAP: hybrid GPU sizing (A100 / H100 / L40S, MIG vs full)
+
+Thanks Soojin — high level looks good. A couple quick asks from our side before you start:
+- Can the harness capture request-level request IDs + sample outputs for quality checks (we'll run our eval suite against those)?
+- SOC2 / audit logging requirements — we'll need the run to include audit-level logs for at least the runs used for decisioning.
+- Please include cost modeling for on-demand vs reserved capacity for the recommended fleet mix.
+
+Procurement looped in here — we need a skeleton PO path and expected delivery lead time for dedicated capacity if we decide to go that route.
+
+Also happy to do a 30-min alignment call tomorrow morning. 9:30am PT works for me.
+
+—Lindsey
+Head of Platform Engineering, Acme AI
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Lindsey Harper <lindsey@acme.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Acme Procurement <procure@acme.ai>
+Date: Tue, 21 Sep 2027 08:50:00 -07:00
+Subject: Re: Benchmarking playbook + MAP: hybrid GPU sizing (A100 / H100 / L40S, MIG vs full)
+
+Perfect — we'll capture request IDs and sample outputs and emit an audit bundle for the decision runs. Cost modeling (on-demand vs 12/36-month reserved) will be in the final sizing workbook.
+
+Per the plan, we already executed a 6-hour quick-run (sanity) on a mixed cluster to validate the harness. Summary (quick-run):
+- Setup: single-node tests on H100 (full), A100 (full) and L40S. Small MIG slices were mocked on A100.
+- Short-chat TTFT median: H100=160ms, A100=210ms, L40S=240ms.
+- Long-context (16k) TTFT: H100=320ms (with KV warm), A100=420ms, L40S=410ms. H100's larger L2 and streaming optimizations reduced TTFT on long-context notably.
+- Throughput at 50 concurrent short-chat sessions: H100 sustained 52 sessions at p95=280ms; A100 sustained 46 sessions at p95=350ms; L40S sustained 60 sessions but at p95=420ms (higher tail variance).
+- Quick notes: MIG (1/4 split) on A100 showed good density for embedding-only and low-latency dev traffic, but tail latency increased under bursty chat patterns.
+
+I attached bench-quickrun-hybrid-results.csv with the raw run metrics and the harness logs (anonymized request IDs). We'll include the audit package for the decision-grade runs.
+
+Proposed next step: full 5-day evaluation starting Monday 2027-09-27. Can you confirm? Also confirm attendee list for the final readout (perf, infra, procurement).
+
+Attachments: bench-quickrun-hybrid-results.csv
+
+—Soojin
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Lindsey Harper <lindsey@acme.ai>
+Date: Wed, 22 Sep 2027 10:15:00 -07:00
+Subject: Re: Benchmarking playbook + MAP: hybrid GPU sizing (A100 / H100 / L40S, MIG vs full)
+
+Looping in some performance takeaways and a recommended fleet split for Acme (draft):
+- Observations from quick-run: H100 consistently reduces TTFT on long-context workloads (larger SRAM and HBM access patterns), while L40S offers better cost/token for high-throughput embedding batches but with increased latency tail for chat-style workloads.
+- KV cache: set KV prefetch threshold for long-context to avoid stalls on A100; H100 execution path benefits from tile-level streaming which lowered TTFT in our tests.
+
+Draft recommended fleet mix (for an initial committed capacity purchase):
+- 40% H100 nodes (low-latency routes / long-context production)
+- 35% L40S nodes (batch embeddings & background throughput-heavy jobs)
+- 25% A100 nodes used with 1/2 MIG slices for dev/test and low-cost warm pools
+
+Rationale: H100 buys low-latency headroom and better long-context TTFT; L40S lowers unit cost for throughput; A100 MIG provides flexible density for staging and low-priority workloads.
+
+I've attached recommended-sizing-mix-20270922.xlsx with a procurement-ready breakdown (units, expected commit tiers, estimated monthly cost for 12/36 month commit). Also included are suggested autoscaling knobs and a safe fallback policy (route to L40S for best-effort degraded mode).
+
+If Acme procurement wants a PO sketch, we can convert the workbook to a formal quote.
+
+—Rishi
+Director, Runtime Performance, Redwood Inference
+
+From: Acme Procurement <procure@acme.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Lindsey Harper <lindsey@acme.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Thu, 23 Sep 2027 09:02:00 -07:00
+Subject: Re: Benchmarking playbook + MAP: hybrid GPU sizing (A100 / H100 / L40S, MIG vs full)
+
+Thanks for the detailed workbook — procurement here is generally comfortable with the mix but needs two final pieces before we trigger a PO:
+1) Expected lead time (weeks) for reserved capacity (H100/L40S) once contract and invoice are signed.
+2) A short risk table: what happens if H100 supply has a 4-8 week delay (fallback plan and financial impact).
+
+We like the hybrid approach; please add the two items into the sizing workbook and we'll reconvene. Also please include the DocuSign template for the commitment so we can prep internal approvals.
+
+—Procurement (Acme)
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Acme Procurement <procure@acme.ai>, Lindsey Harper <lindsey@acme.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Gabe Torres <gabe@cloudvendor.com>
+Date: Thu, 23 Sep 2027 15:42:00 -07:00
+Subject: Re: Benchmarking playbook + MAP: hybrid GPU sizing (A100 / H100 / L40S, MIG vs full)
+
+Thanks — attached is an updated workbook with the two procurement items filled: expected lead times (H100: 6-10 weeks in our current channel; L40S: 2-4 weeks) and a risk mitigation table (fallback to reserved L40S + temporary burst on on-demand H100 in other region, plus prorated credit if supply misses an SLA).
+
+I've also created a short MAP milestone checklist and a DocuSign template link to accelerate approvals. Summary milestones and target close timeline:
+- 2027-09-27: Start full 5-day evaluation (engineering kickoff).
+- 2027-10-04: Consolidated results, recommended fleet mix delivered to Acme stakeholders.
+- 2027-10-06: Procurement signoff and PO submission window opens.
+- 2027-10-18: Target live reservation provisioning (if PO and invoice complete).
+
+DocuSign template: https://app.docusign.com/templates/Acme-Redwood-MAP
+Jira readout ticket: https://redwood.atlassian.net/browse/SALE-1249
+
+Attachments: acme-map-benchmark-playbook-v1.xlsx, bench-quickrun-hybrid-results.csv, recommended-sizing-mix-20270922.xlsx
+
+Please reply with approval to proceed with the 09/27 evaluation and we'll lock resources.
+
+—Soojin

@@ -1,0 +1,132 @@
+Realtime inference degradation — customer bridge + remediation plan
+
+From: rishi_malhotra@redwood.com
+To: karthik_iyer@redwood.com, monica_patel@redwood.com
+Cc: marissa_cole@redwood.com
+Date: 2026-12-05T09:12:00-08:00
+Subject: Realtime API: Observed latency spike and some 5xxs — investigating
+
+Karthik / Monica —
+
+We started seeing a sustained latency increase and a small but growing rate of 5xx responses on the Realtime /generate endpoint around 08:40 PST (see attached snapshot). Error percentage peaked at ~8% for a 5-minute window; some requests are timing out at the gateway.
+
+Initial triage shows:
+- Autoscaler triggered unusually often for the GPU pool (logs attached).
+- One model shard reported KV cache miss storms and memory pressure.
+- No signs of control-plane throttling.
+
+I've flagged this as SEV-2 and have an engineer (Marissa) on the bridge. Can we stand up a customer-facing bridge and send an update to Streamline ops? They are on a high-throughput inference workload and may notice impact.
+
+I've attached: error_snapshot_20261205.txt.
+
+Rishi
+Senior SRE, Redwood Inference
+
+From: karthik_iyer@redwood.com
+To: sarah.lin@streamline.ai
+Cc: monica_patel@redwood.com, marissa_cole@redwood.com, rishi_malhotra@redwood.com
+Date: 2026-12-05T09:28:00-08:00
+Subject: Re: Realtime API: Observed latency spike and some 5xxs — investigating
+
+Sarah —
+
+Thank you for the quick flag via chat. I’m Karthik, your Customer Success lead at Redwood. I wanted to reach out with the first customer-facing update while our team investigates.
+
+What we know so far:
+- Impact: A subset of Realtime /generate requests for Streamline.ai are experiencing elevated latency and intermittent 5xx errors. We see increased tail latency and intermittent failures primarily for sequences >1k tokens.
+- Scope: Affecting ~12% of traffic in your production cluster during the window starting ~08:40 PST. Not all tenants or model versions are impacted.
+- Current action: SRE and runtime teams have an active bridge (engineers: Marissa, Rishi). We’ve enabled a temporary routing policy to steer eligible traffic to a lower-sequence-length-optimized model variant to reduce error rate while we investigate.
+
+Immediate mitigation we’re applying now:
+1) Route traffic with sequence-length > 1k to the fallback model variant (tmp-opt-1.0) for the next 2 hours.
+2) Increase continuous batching threshold and reduce max batch size for the impacted pool to avoid cache pressure.
+3) Keep the realtime bridge open for updates; recording and notes will be shared.
+
+Customer impact and ETA:
+- Expected reduction in 5xxs within 15–30 minutes post-routing change.
+- We will provide hourly updates and a summary of root cause and next steps by EOD PST.
+
+Bridge & notes:
+- Bridge: https://zoom.us/j/9876543210?pwd=bridge
+- Quick agenda attached (bridge-agenda.pdf).
+- Ticket: JIRA-INC-7890
+
+We’re treating this as a high priority and will follow up with an executive summary and remediation timeline. If you have an urgent window or need a dedicated escalation lane, let me know and I’ll bring in additional leadership.
+
+Apologies for the disruption — we’ll get you detailed context in the next update.
+
+Best,
+Karthik Iyer
+Head of Customer Success, Redwood Inference
+karthik_iyer@redwood.com
++1 (415) 555-0199
+
+From: sarah.lin@streamline.ai
+To: karthik_iyer@redwood.com
+Cc: ops@streamline.ai, devops@streamline.ai
+Date: 2026-12-05T09:42:00-08:00
+Subject: Re: Realtime API: Observed latency spike and some 5xxs — investigating
+
+Karthik —
+
+Thanks for the prompt update and the bridge link. Our ops are seeing retries from our side and some downstream request errors. Two quick asks:
+1) Will any data be retained on your side for failed requests (we need to confirm no PII was logged)?
+2) If SLA credits will be evaluated, what's the expected timeline for a formal incident report?
+
+We’ll join the bridge.
+
+—Sarah
+Sarah Lin
+Head of ML Ops, Streamline.ai
+
+From: karthik_iyer@redwood.com
+To: sarah.lin@streamline.ai
+Cc: monica_patel@redwood.com, marissa_cole@redwood.com, rishi_malhotra@redwood.com
+Date: 2026-12-05T10:05:00-08:00
+Subject: Re: Realtime API: Observed latency spike and some 5xxs — investigating
+
+Sarah —
+
+Short answers to your asks:
+1) Data retention for failed requests: By default, transient error logs and metrics are retained in our monitoring pipeline for debugging (error_snapshot_20261205.txt attached). We do not persist request payloads in plain text in logs. If you’d like, we can run a targeted search for any fields flagged as PII and provide a confirmation.
+2) Incident report timeline: We will share an initial incident report and remediation summary within 24 hours (prelim-root-cause-draft.md link will be shared once the bridge closes) and a full postmortem (including timeline, root cause analysis, and corrective actions) within 5 business days. If SLA credit assessment is desired, we’ll include the impact calc and claim process in that postmortem.
+
+Immediate next steps I’ve coordinated:
+- Keep fallback routing in place for 2 hours; monitoring team to watch error % and latency tail.
+- Engineering will exercise a targeted cache warm and restart for the affected shard overnight if the error pattern persists.
+- Post-bridge: we’ll provide bridge recording, a set of temporary routing steps you can apply if you want to temporarily pin traffic (temporary-routing-steps.txt).
+
+We appreciate your patience while we resolve this. I’ll post the EOD update no later than 17:00 PST with a preliminary RCA.
+
+Karthik
+
+From: marissa_cole@redwood.com
+To: sarah.lin@streamline.ai, karthik_iyer@redwood.com, monica_patel@redwood.com, rishi_malhotra@redwood.com
+Date: 2026-12-06T14:35:00-08:00
+Subject: Post-incident follow-up: status, preliminary findings, and invite to RCA review
+
+Team —
+
+Thank you again for joining yesterday’s bridge. This is a consolidated follow-up with our preliminary findings and next steps.
+
+Summary of mitigation and impact:
+- Mitigation taken: temporary routing to tmp-opt-1.0 reduced observed 5xxs from ~8% to <1.5% within 20 minutes. Continuous batching and reduced batch-size stopped the cache pressure pattern we observed.
+- Impact window: 08:40–09:10 PST on 2026-12-05. Streamline.ai saw ~9% of requests affected during the peak window; duration for any single user request was typically <2 minutes (retries included).
+
+Preliminary root cause (draft):
+- A combination of increased tail token lengths from a recent customer workload spike and a kernel memory fragmentation issue in one of the optimized attention kernels led to repeated cache invalidations on a model shard. The resulting memory pressure triggered intermittent failures on that shard and increased scheduling churn in the GPU pool.
+
+Next steps / remediation plan:
+1) Engineering action: apply a patch to the runtime kernel to address fragmentation (target: staged rollout in 48–72 hours).
+2) Platform action: enhance model-variant fallback rules to proactively route heavy-tail-sequence traffic to our conservative execution path.
+3) Customer options: we can apply temporary pins or provide the routing guidance in temporary-routing-steps.txt if you want direct control.
+
+We’ve uploaded: bridge-recording-20261205.mp4, prelim-root-cause-draft.md to the shared Drive folder: https://drive.google.com/drive/folders/1a2b3c_postmortem_streamline
+
+Would you prefer a review call to go through the postmortem draft or should we proceed to finalize and circulate the formal postmortem (5 business day timeline)?
+
+Regards,
+Marissa Cole
+Principal Runtime Engineer, Redwood Inference
+marissa_cole@redwood.com
+Attachment: prelim-root-cause-draft.md

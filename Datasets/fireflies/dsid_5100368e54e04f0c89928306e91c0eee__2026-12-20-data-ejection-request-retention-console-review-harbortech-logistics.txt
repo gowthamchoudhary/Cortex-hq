@@ -1,0 +1,93 @@
+Data ejection & request retention console review - HarborTech Logistics
+
+Walkthrough of Redwood Console request-storage toggles, selective telemetry ejection, PII redaction rules, and policy-driven retention. Customer cares about minimal retained request data, SOC2/KMS, and ability to redact / egress logs to their S3 for audits.
+Meeting header: 2026-12-20 16:00 UTC | Duration: 47 min | Attendees: Lena Ortiz (Redwood AE), Samir Patel (Redwood SE), Jules Kwan (Redwood Product), Maya Chen (HarborTech CISO), Ethan Park (Platform Eng), Ravi Malhotra (PM), Priya Singh (Legal)
+
+Summary section (auto): quick demo of console toggles for request retention and redaction, discuss legal/ residency, confirm pilot scope and next steps.
+
+00:00 Lena Ortiz: Hey everyone, thanks for joining, afternoon, morning depending on where you are. quick intros?
+00:07 Maya Chen: Maya Chen, CISO at HarborTech. We've got a tight bar for PII retention and need to see redaction end-to-end.
+00:12 Ethan Park: Ethan, platform engineering. I'll be the person integrating and running tests.
+00:16 Ravi Malhotra: Ravi, product, focus on latency and cost tradeoffs.
+00:20 Priya Singh: Priya, legal - here for compliance constraints, data residency notes.
+00:24 Lena Ortiz: Great, from Redwood I'm Lena, AE; Samir will do the product deep dive and demo; Jules is on product to answer policy questions.
+00:33 Samir Patel: Hi all. We'll show Console toggles: route-level storage, selective ejection, regex redaction, KMS settings, and how Optimize recommends less-retentive configs. This is a working demo so you may see some UI lag.
+00:47 Maya Chen: Perfect. high-level ask: we cannot store full request text beyond 7 days for European shipments and some US customers. need to redact account numbers and PII before it lands in logs. Also want proof of deletion for audits.
+01:05 Samir Patel: Totally reasonable. Walkthrough: first, request-storage at route level. you can set retention policy per route: none, ephemeral, 7d, 30d, or custom. we'll show ephemeral and selective ejection where we drop full request bodies but keep metadata tokens for billing.
+01:25 Samir Patel: (screen share) Console > Apps > HarborTech-pilot > Routes. here's our sample webhook route. Notice the toggle 'Request Storage' — off = store nothing, ephemeral = store for the duration of request processing only, On with retention = full stored logs.
+01:42 Ethan Park: Is 'ephemeral' zero copies on disk or just short-lived temp? we need to ensure it never persists to S3.
+01:48 Samir Patel: Good question. ephemeral means no long-term object store. The runtime uses in-memory buffers and KV caches for processing, those are not written to durable object storage. We also offer an option 'eject-to-customer-s3' which you control. If it's off, nothing is exported.
+02:10 Maya Chen: And encryption? we require customer-managed keys for anything that touches our data.
+02:15 Samir Patel: We support KMS integration. Under Settings > Keys you can attach a KMS alias. For hosted, Redwood encrypts at rest with our keys by default, but for Private/Dedicated you can mount your key and we restrict KMS access to the environment. Jules, want to add?
+02:28 Jules Kwan: just to be explicit: for Dedicated and Private deployments we can integrate AWS KMS or HSM. For hosted, bring-your-own-key is on the roadmap but available via a managed customer key partner — we can add that to the pilot SOW.
+02:40 Priya Singh: We also need immutable audit trail of deletions - auditors want proof that logs were purged.
+02:45 Samir Patel: We have an Audit Log feature: deletion events, who performed them, and a tamper-evident record. It can be exported and signed. That lives separate from request storage and is retained per org policy.
+02:57 Ravi Malhotra: what about automatic redaction? can we define regexes to scrub credit card or account numbers?
+03:05 Samir Patel: Yes, under Policy > Redaction you can create rules. Let's demo.
+03:10 Samir Patel: (navigates) Add Rule: name "Acct-number-scrub", scope: routes matching /shipments/*, pattern: "(Acct|Account)[:=]\s?\d{8,12}" - action: replace with [REDACTED]. you can test against sample payloads here.
+03:33 Ethan Park: Nice. Does that run client-side before the request is sent to the model or server-side?
+03:39 Samir Patel: Server-side in the gateway before persisting or forwarding. we also have pre-send hooks if you want to do client-side scrubbing in the SDK, but policy-driven server redaction is good for safety nets.
+03:52 Maya Chen: Are those regexes evaluated at line speed? we cannot add significant latency.
+03:57 Samir Patel: They're compiled into optimized matchers; in our tests match+replace adds under 6-12ms median per request for typical payloads. If you have high QPS we recommend batching or moving to the Dedicated pool.
+04:14 Ethan Park: And for audit we need to capture pre-redaction hashes so we can prove what existed without storing PII. do you support deterministic hashing or salted digests?
+04:23 Samir Patel: Yes - on the same rule you can set 'hash-before-redaction' which computes a SHA-256 digest and stores only the digest in the log. We can also salt per-tenant. That gives you deterministic but irreversible mapping for verification.
+04:40 Priya Singh: acceptable if salts are under our control?
+04:43 Jules Kwan: For Dedicated/private we can store the salt in your KMS/HSM so only you can verify. For hosted, salts are stored in our secure vault, but enterprise offering includes tenant-controlled salts. We'll note that in SOW.
+04:58 Samir Patel: Next, selective telemetry ejection: you can configure sample rate and route filters for telemetry export. For example, export 100% for support routes, 0% for payments. This reduces exposure.
+05:15 Ravi Malhotra: how granular? per-route? per-customer? per-user?
+05:18 Samir Patel: All three. We have attribute-based policies: route, org, header-based. You can also set dynamic rules via tags.
+05:26 Maya Chen: show me an example for European shipments only.
+05:29 Samir Patel: Sure - create a policy: condition: request.headers.X-Region == EU || payload.flags.country == "DE|FR|ES"; action: retention = 7d, eject = false, redaction = strict. (applies filter).
+05:46 Ethan Park: Great. What about the API? we need to toggle at deployment time from infra as code.
+05:52 Samir Patel: There's a management API. Quick curl sample: curl -X POST https://api.redwood.ai/v1/orgs/ht/routes/shipments:patch -d '{"retention":"ephemeral","redaction":[{"name":"Acct-number-scrub","hash_before":true}] }' -H 'Authorization: Bearer ...' We also provide terraform provider for route-level policy.
+06:18 Maya Chen: we'll need RBAC - only specific personas can change retention.
+06:22 Samir Patel: RBAC is under Settings > Access. Roles: Admin, Security, DevOps, Auditor. You can create custom roles and tie to SSO groups via SCIM.
+06:33 Priya Singh: SCIM sync with Okta?
+06:36 Samir Patel: Yes, SAML SSO and SCIM provisioning for groups.
+06:40 Lena Ortiz: jumping in - quick pause for a real-world constraint: HarborTech wants to keep embeddings off-request but still need similarity search for internal product features. Any options?
+06:50 Samir Patel: You can disable embedding storage entirely or route embeddings to a customer-managed vector DB. Redwood Optimize can suggest quantization to reduce storage if you need to keep embeddings but want lower cost. For privacy, route embeddings to your own VPC DB.
+07:06 Ethan Park: If we route to our VPC DB, does Redwood see them at all?
+07:10 Samir Patel: No, if you configure VPC egress and direct streaming to your DB, Redwood's hosted retention can be set to ephemeral and we never persist those vectors. For Dedicated/private it's fully under your network control.
+07:22 Maya Chen: show me the logs and audit UI for a deletion event.
+07:26 Samir Patel: (navigates) Audit > Actions. here's a sample deletion event: actor: "Ethan Park", action: delete_request_records, target: route/shipments, timestamp, change-id. You can click and download a signed attestment.
+07:45 Ethan Park: signed with what?
+07:47 Samir Patel: a timestamped signature from our audit service; we also provide a chain-of-custody export. For higher assurance we can arrange attestations backed by HSM keys.
+07:58 Priya Singh: For the pilot, we need to run a redaction test where we send 500 sample requests including edge cases and get a post-redaction report. can Redwood do that?
+08:07 Samir Patel: yes, we can run a test harness. Ask Ethan to drop the sample payloads in the shared S3/drive. We'll map rules and run the scrub, then produce summary: hits, misses, latency impacts.
+08:20 Lena Ortiz: we'll also include a small perf benchmark; Redwood offered to run a 1k QPS simulated run for the shipments route to measure redaction overhead and latencies.
+08:28 Ravi Malhotra: cost question: if we choose ephemeral for most routes but onboard Dedicated for high QPS, how does that change unit cost?
+08:36 Jules Kwan: Dedicated decouples you from per-token hosted pricing. You get reserved GPU capacity; cost becomes capacity + some per-request overhead. For storage, Dedicated allows you to route to your own object store which lowers hosted storage charges. We'll send a cost model spreadsheet.
+08:50 Maya Chen: any gotchas around GDPR deletion requests? we need to prove erasure across backups and caches.
+08:57 Samir Patel: We mark deletions in the metadata store and our backup process supports retention-aware scrubbing. For full proof we recommend Dedicated + your KMS salt so only you can map hashed content. We'll include deletion attestations in exports for legal.
+09:12 Ethan Park: is there an option to mask in-flight in the SDK so the data never reaches Redwood tokens?
+09:18 Samir Patel: yes, client-side masking hooks exist in SDKs. But we recommend defense-in-depth: client mask + server redaction.
+09:25 Maya Chen: small note — our legal team will request a network topology showing where logs could flow.
+09:30 Lena Ortiz: we'll attach a network flow diagram and the security whitepaper.
+09:34 Samir Patel: Also note the Optimize module: it can analyze your call patterns and suggest where to flip retention to ephemeral to save cost with low impact on debugging. it's non-invasive. We'll demo quickly.
+09:46 Samir Patel: (Console > Optimize) here's a heatmap: high debug routes in blue, low risk in green. clicking a bucket gives suggested retention flips and estimated monthly savings. you can apply changes directly or run as dry-run.
+10:05 Ravi Malhotra: can it auto-apply after approval?
+10:08 Samir Patel: There's an approval workflow: proposed change -> security review -> scheduled apply. All audit logged.
+10:15 Maya Chen: ok. For pilot success criteria: 1) redaction rules remove PII in 95%+ of sample cases, 2) latencies under 20ms added per request for EU shipments at target QPS, 3) deletion attestations generated for sample sets.
+10:30 Lena Ortiz: noted. we'll add those to pilot SOW.
+10:35 Priya Singh: need contractual language about inability to reconstitute redacted data and SLAs for deletion.
+10:40 Lena Ortiz: we'll loop legal.
+10:43 Maya Chen: one off question - the console showed ability to redact JSON keys. can you redact nested JSON fields?
+10:49 Samir Patel: yes, policy supports JSON path extraction and redaction by JSONPath (e.g., $.payment.card.number) as well as regex. We'll demo a quick test.
+10:59 Samir Patel: (runs live test) sending sample with nested payment.card.number -> redacted to [REDACTED] and digest stored as SHA256. you can see the test result and the matched rule.
+11:17 Ethan Park: nice. any known limitations?
+11:20 Samir Patel: edge cases: large free-form user text where PII is embedded in natural language can create false negatives; we recommend combining regex + ML-based PII detection. Redwood offers an ML PII model as an add-on for higher recall.
+11:35 Maya Chen: add-on pricing?
+11:37 Lena Ortiz: we'll include pricing in the follow-up.
+11:39 Ravi Malhotra: ok last thing - support model fallbacks. if the primary model is offline and we fallback to a different model, do retention policies follow?
+11:46 Samir Patel: policies are route-based and follow the request regardless of model variant. The runtime will honor the policy before model selection.
+11:53 Maya Chen: perfect.
+11:55 Lena Ortiz: quick recap and next steps: Lena send SOC2 + whitepaper + network diagram; Samir provision sandbox and run redaction test once Ethan uploads sample payloads; team to review pilot SOW and sign-off by 2026-12-30; schedule pilot week of 2027-01-04.
+12:18 Maya Chen: that works. Thanks everyone.
+12:21 Priya Singh: thanks.
+12:22 Lena Ortiz: end.
+
+Auto-generated action-items: see metadata.
+
+Questions captured: "Can regex redaction run at line speed?" "Can we hold salts in our KMS?" "Can Optimize auto-apply retention changes?"
+
+References shared in chat: Security whitepaper (link shared in follow-up), Sandbox invite link (will be sent), Cost model spreadsheet (to be attached).

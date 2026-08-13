@@ -1,0 +1,144 @@
+Pilot commercial structure: slab tiers, commit map, and quantization safeguards
+
+From: Tom Jenkins <tom.jenkins@opsly.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Cc: procurement@opsly.ai, Elaine Park <elaine.park@opsly.ai>
+Date: Fri, 4 Sep 2026 09:12:00 -0700
+Subject: Pilot packaging + target pricing for Opsly
+
+Vanessa —
+
+Thanks for the demo last week. Opsly is excited about the latency numbers you showed; we think Redwood is a good fit, but we need to be pragmatic about unit economics. Procurement is targeting ~35% effective discount across the first 12 months for a pilot-to-production path.
+
+Three asks from our side to move forward quickly:
+- A simple slab-tier commercial that maps to expected usage peaks (chat sessions/day) and guarantees 'no-surprise' overages.
+- Recommended quantization profile(s) you think are safe for our use case (customer-facing assistants, mid-length prompts, ~1.2k avg tokens/session) and any expected latency regressions.
+- A short-term SLA or performance commitment for the pilot (P50/P95 targets) and a clearly priced option to step up to Dedicated if the pilot scales.
+
+I attached our rough forecast and can share a legal contact if we get to terms. Curious whether you can meet the 35% target via discounts alone, or if you prefer credits + performance rebates.
+
+Best,
+Tom
+Tom Jenkins
+Head of Engineering, Opsly
+
+---
+Attachment: opsly_poc_forecast.csv (referenced in body)
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Tom Jenkins <tom.jenkins@opsly.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Connor Obrien <connor.obrien@redwood.ai>
+Date: Fri, 4 Sep 2026 11:07:00 -07:00
+Subject: Re: Pilot packaging + target pricing for Opsly
+
+Tom —
+
+Thanks for the clear asks and for sharing the forecast. Quick summary of what we can do and why I think a blended approach will get you the best results:
+
+1) Commercial framework (proposal):
+- 3-slab commit map for the 12-month pilot: Starter (0-50k sessions/mo), Scale (50k-250k), Peak (+250k).
+- Instead of a single deep upfront discount, we propose: 30% upfront credits applied to the first 6 months + an adjustable rebate (up to additional 10%) tied to quantization + caching improvements that meet agreed TTI/T95 targets.
+- If you convert to Dedicated within 9 months, we’ll credit back unused pilot credits toward first-month Dedicated commit.
+
+2) Batching/caching + KV guidance:
+- Prioritize KV cache for interactive sessions (chat warm starts). We’ll reserve a small hot-cache lane to keep most user sessions at low tokens-per-inference.
+- Configure dynamic batching with a 30–80ms wait window for background/async workloads; keep interactive path at 10–15ms batching to preserve TTI.
+
+3) Quantization recommendation:
+- For the initial pilot, we recommend the mixed-int8-safe profile (see attached quant_profiles.md). It typically yields ~2.1–2.8x token cost savings versus fp16 with <5% utility delta on classification/assistant metrics for the families we tested.
+- We’ll run a rolling A/B on 10% traffic to detect regressions; automatic fallback to fp16 on regressions >2% on your defined evals.
+
+4) SLA and escalation:
+- Proposed pilot SLOs (hosted): P50 = 80–120ms, P95 = 250–350ms depending on load band. These are measurable in Console and tied to the rebate eligibility.
+
+I’ve attached a starter cost model and a draft term sheet (proposed_term_sheet_v1.pdf). If this sounds reasonable, happy to do a quick call Monday to align on usage profile and finalize a DocuSign.
+
+Thanks —
+Vanessa Ortiz
+Account Lead, Redwood Inference
+---
+Attachments: opsly_poc_cost_model.xlsx; quant_profiles.md; proposed_term_sheet_v1.pdf
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Tom Jenkins <tom.jenkins@opsly.ai>
+Cc: Connor Obrien <connor.obrien@redwood.ai>
+Date: Fri, 4 Sep 2026 12:45:00 -07:00
+Subject: Re: Pilot packaging + target pricing for Opsly
+
+Tom / Vanessa —
+
+Quick technical notes to supplement Vanessa’s commercial plan:
+
+- Quant profiles: our mixed-int8-safe profile does per-layer selection; in practice we suggest Q4_SAFE for attention/kvcache and INT8 for MLPs. That preserves decoder stability while giving substantial reductions. See the attached quant_profiles.md for microbenchmarks.
+- Latency tradeoffs: expect 10–18% lower P50 with mixed-int8 vs fp16 at small batch sizes, but at very high concurrency P95 can widen if we do not allocate extra GPU slots. The rebate we’ve proposed should cover the small ops cost to reserve those slots during pilot spikes.
+- KV cache: enable prefix caching for session-based flows (we can store 1–2 previous messages in hot cache). This yields a 20–40% token-cost reduction for typical assistant patterns (you mentioned ~1.2k tokens/session).
+
+If you want, we can push a short perf test against your sample prompts to give you an expected cost/latency curve for both mixed-int8 and fp16. That output can be slotted into the rebate trigger.
+
+—Karthik
+Principal Inference Engineer, Redwood Inference
+
+From: Elaine Park <elaine.park@opsly.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Cc: Tom Jenkins <tom.jenkins@opsly.ai>, procurement@opsly.ai
+Date: Mon, 7 Sep 2026 08:04:00 -07:00
+Subject: Re: Pilot packaging + target pricing for Opsly
+
+Vanessa/Karthik —
+
+Appreciate the detail. Procurement sees the 30% credits + up-to-10% rebate structure as a good start, but they still need an effective 35% discount on our FY1 spend to get approval. A few clarifying Qs:
+
+- If we hit Scale slab (50k-250k) consistently, can the rebate be paid quarterly instead of waiting until 12 months?
+- What exact telemetry will you use to evaluate the quant A/B? We need transparency into the eval suite and thresholds before we sign.
+- For SLAs, Opsly needs a firm P95 target for interactive path; can you commit to a P95 ceiling if we agree to a 6mo commit at the Scale slab?
+
+Also, legal prefers a simple term sheet we can review — the DocuSign link you provided doesn’t include the rebate metric definitions. Can you upload an updated version with the evaluation rubric?
+
+Thanks,
+Elaine
+VP, Procurement, Opsly
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Elaine Park <elaine.park@opsly.ai>, Tom Jenkins <tom.jenkins@opsly.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Connor Obrien <connor.obrien@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: Wed, 9 Sep 2026 15:20:00 -07:00
+Subject: Re: Pilot packaging + target pricing for Opsly
+
+Elaine —
+
+Concrete answers and a commercial counter: we want to keep the structure simple so there’s no back-and-forth during procurement approvals. Proposed changes below are intended to hit Opsly’s effective target while preserving predictable economics for Redwood:
+
+- Rebate cadence: we can move to quarterly rebate settlement for any earned rebate once the evaluation triggers are met for that quarter.
+- Evaluation rubric: Karthik will share a short eval spec by tomorrow. The A/B will run on 10% traffic slices; we’ll publish the eval suite results to a shared Drive folder and include the exact thresholds (utility delta, regression windows, sample size).
+- Firm P95: For Scale slab (with a 6-month firm commit) we can guarantee P95 <= 350ms for the interactive path; if we miss, we’ll convert the missed SLOs into additional credits applied to the following quarter. This is in the updated term sheet.
+
+Commercial counter (final):
+- 30% pilot credit up front; quarterly rebate up to 10% (so combined max 40% effective in quarter where rebate is earned).
+- A 6-month firm commit to the Scale slab for Opsly to qualify for the firm P95 guarantee.
+- If Opsly converts to Dedicated during the 6-month commit, we’ll apply unused pilot credits to the first month of Dedicated and provide a 5% onboarding credit.
+
+Next steps: I’ll upload an updated term sheet with the rebate metric definitions (DocuSign ready). Karthik — please attach the eval spec and a small perf-run proposal so Opsly can approve the A/B. Connor and Marcus, please confirm the ops/deployment notes so we can be precise about the P95 calculation (hosted vs Dedicated boundaries).
+
+If that’s acceptable, Tom/Procurement, can we lock a signature target of next Wednesday?
+
+Thanks —
+Vanessa Ortiz
+Account Lead, Redwood Inference
+
+From: Connor Obrien <connor.obrien@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Elaine Park <elaine.park@opsly.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: Wed, 9 Sep 2026 15:42:00 -07:00
+Subject: Re: Pilot packaging + target pricing for Opsly
+
+Elaine / Vanessa —
+
+Operational clarifications:
+- P95 boundary: we’ll measure from Redwood API ingress to final token emitted (end-to-end) for hosted runs. For Dedicated we’ll include the small on-prem network hop if you self-host; the term sheet spells out the measurement point.
+- Spike capacity: to protect P95 during pilot spikes we recommend enabling our burst pool (small incremental hourly rate). During the Scale slab commit we’ll reserve 10% extra ephemeral capacity to keep tail latencies stable; cost of reservation is reflected in the attached cost model.
+- Instrumentation: we’ll provision a shared Console dashboard with token-level cost, per-route P50/P95, and the A/B split traffic markers Karthik referenced. Opsly will have read-only access and we’ll export quarterly reports for rebate settlement.
+
+We’re good to finalize the doc once Karthik uploads the eval spec and Vanessa confirms the DocuSign update.
+
+—Connor
+Head of Customer Ops, Redwood Inference

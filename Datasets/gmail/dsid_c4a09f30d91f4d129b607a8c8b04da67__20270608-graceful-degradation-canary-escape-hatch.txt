@@ -1,0 +1,106 @@
+Canary graceful-degradation + temporary SLA carveout (escape hatch approval)
+
+From: Samuel Nguyen <samuel.nguyen@novacorp.com>
+To: stephanie_nguyen@redwood.ai
+Cc: ops+prod@novacorp.com
+Date: Tue, 8 Jun 2027 09:12:00 -0700
+Subject: Re: Production rollout question and SLA implications
+
+Hi Stephanie,
+
+We’re preparing to switch ~10% of NovaCorp web traffic to the Redwood v2 inference profile next week for a small A/B. Before we proceed, our SREs raised a concern: your SLA (99.9% uptime; p95 < 500ms) is contractually gated. If the canary introduces transient latency spikes, procurement wants an explicit mitigation plan that keeps our end-user impact below the tolerances — automatic failover, version pin, and an escape hatch we can call from our end.
+
+Can you confirm Redwood can: 1) automatically revert traffic to the previous model within 2 minutes on threshold breach; 2) provide a pinned fallback model endpoint we can route to; and 3) accept a one-week carveout to try this A/B with explicit rollback triggers? We’ll need that documented to sign off internally.
+
+Thanks,
+Sam
+Samuel Nguyen
+Director, Platform Engineering | NovaCorp
+
+
+From: stephanie_nguyen@redwood.ai
+To: Samuel Nguyen <samuel.nguyen@novacorp.com>, ops+prod@novacorp.com
+Cc: karthik_iyer@redwood.ai, monica_patel@redwood.ai
+Date: Tue, 8 Jun 2027 11:03:00 -07:00
+Subject: Re: Production rollout question and SLA implications
+
+Hi Sam — thanks for the clear asks. We can support the A/B but will need a temporary, scoped exception to the SLA to make the pilot safe from an operational perspective. High level proposal (summary below). I’m copying Karthik (serving/runtime) and Monica (customer ops/legal) to align approvals and the exact language for the carveout.
+
+Proposal (short):
+- Traffic: 10% A/B to v2 for 72 hours, then evaluate.
+- Auto-failover: Redwood runtime will detect the following within the canary window and trigger automatic rollback:
+  * error-rate > 1.5% over a 2-minute sliding window OR
+  * p95 latency degradation > 2x baseline for 3 consecutive 1-minute buckets.
+- Revert SLA: Automatic revert executed within 2 minutes of trigger; gradient backoff to zero traffic if revert fails to stabilize.
+- Pinned fallback: We’ll provision a read-only pinned endpoint to the v1 variant (stable) you can route to manually if desired.
+- Monitoring & access: We’ll grant NovaCorp a shared dashboard (token-level traces) and a webhook for alerts.
+- Exception length: 7 days from first traffic shift; formal exception form attached and required signatures before cut.
+
+Next steps: Karthik to confirm feasibility and the exact instrumentation. Monica to confirm customer-facing exception language. If we all agree, Steph (me) will sign the exception and schedule the rollout with NovaCorp’s SRE start time.
+
+Best,
+Stephanie Nguyen
+Head of Sales Engineering, Redwood Inference
+
+
+From: karthik_iyer@redwood.ai
+To: stephanie_nguyen@redwood.ai, Samuel Nguyen <samuel.nguyen@novacorp.com>, ops+prod@novacorp.com
+Cc: monica_patel@redwood.ai
+Date: Tue, 8 Jun 2027 13:27:00 -07:00
+Subject: Re: Production rollout question and SLA implications
+
+Folks — technical confirmation and playbook notes below. Attaching the canary playbook (redwood_canary_playbook_v1.pdf).
+
+Feasibility: Yes — runtime supports automated rollback and pinned endpoints. Implementation details:
+- Detection: we’ll run a short-lived SLO-checker that evaluates error-rate and latency windows (as Stephanie outlined). The checker emits a signal to the routing tier; routing will execute a weighted shift back to v1 with exponential backoff if necessary.
+- Revert time: warm path restores traffic to v1 within ~90–120s in lab; in production plan conservatively assumes 2 minutes.
+- Fallback pin: we’ll create a customer-scoped pinned endpoint (stable-v1-novacorp) that bypasses canary routing and serves the locked model.
+- Safety nets: health-checked pre-warm on the pinned instance, KV cache warm-up strategy to avoid cold-start latency spikes, and staged traffic reductions (10% -> 5% -> 0% if repeated failures).
+- Observability: we’ll publish a Tableau-like dashboard for p50/p95/p99 and request/err-rate. Webhook subscriptions for your pager are supported.
+
+Operational caveats:
+- The temporary SLA carveout is required because automatic rollback relies on our detection thresholds and the pinned fallback; during the 7-day window the SLA will be scoped to exclude incidents caused by the canary traffic shift if the auto-failover rules were in effect and executed.
+- If NovaCorp elects to use manual pin routing, the carveout must still be processed (we need the legal acknowledgment).
+
+I recommend the following acceptance criteria for the 72-hour run:
+- No user-visible errors above 0.5% overall
+- p95 within 1.5x baseline after 1 hour post-shift
+- Post-run retro and metric export within 48 hours
+
+Karthik
+Principal Infra Engineer, Redwood Inference
+
+
+From: monica_patel@redwood.ai
+To: stephanie_nguyen@redwood.ai, karthik_iyer@redwood.ai, Samuel Nguyen <samuel.nguyen@novacorp.com>
+Date: Wed, 9 Jun 2027 10:18:00 -07:00
+Subject: Re: Production rollout question and SLA implications
+
+Thanks — I’ve reviewed the proposed carveout language. Two quick legal/ops points:
+1) Exception form: please complete the attached SLA-exception-request-form.docx. We need the following filled: start/end date, exact triggers, fallback endpoint name, and the approver signatures (NovaCorp technical lead + Redwood exec).
+2) Liability cap: carveout will explicitly exclude SLA credits for incidents caused by the canary while auto-failover rules were enabled. We will not alter the baseline SLA outside the 7-day window.
+
+I can approve the carveout once the form is returned and the NovaCorp SRE confirms the start window. If you’d like, I can draft a short two-paragraph addendum for procurement to sign that summarizes the operational controls.
+
+—Monica
+Director, Customer Operations & Legal (Redwood Inference)
+
+
+From: stephanie_nguyen@redwood.ai
+To: Samuel Nguyen <samuel.nguyen@novacorp.com>, ops+prod@novacorp.com
+Cc: karthik_iyer@redwood.ai, monica_patel@redwood.ai
+Date: Thu, 10 Jun 2027 17:03:00 -07:00
+Subject: Re: Production rollout question and SLA implications
+
+Sam — quick confirmation: we’re aligned. Action items for tomorrow morning (UTC):
+- NovaCorp: sign and return the SLA-exception-request-form (I attached a pre-filled copy) and confirm SRE start time.
+- Redwood (Karthik): provision pinned endpoint stable-v1-novacorp and share dashboard/webhook details.
+- Redwood (Monica): draft the two-paragraph addendum and finalize liability carveout language.
+
+We’ll hold the rollout until we have the signed form in hand; plan remains 10% traffic for an initial 72 hours with auto-failover thresholds as specified.
+
+Thanks everyone — will follow up after signatures.
+
+Best,
+Stephanie
+Head of Sales Engineering, Redwood Inference

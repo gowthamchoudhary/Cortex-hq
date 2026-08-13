@@ -1,0 +1,125 @@
+HelioHealth private cluster — execution sprint & site survey coordination
+
+From: Alex Johnson <alex.johnson@heliohealth.com>
+To: rachel.kim@redwood.com
+Cc: 
+Date: 2028-06-01T09:12:00-07:00
+Subject: Private cluster kick-off + site inventory
+
+Rachel —
+
+Thanks again for the walkthrough yesterday. We're ready to move from discovery to an operational plan for a private on-prem Kubernetes cluster. High-level ask: can Redwood provide a short execution sprint (deliverables, owners, and the minimum cluster requirements) plus a proposed network/CIDR plan we can share with our infra team?
+
+I've attached our preliminary site inventory (basic rack counts, network uplinks, power) — it is incomplete but should help. Procurement will loop in for contract questions next.
+
+Can you also confirm whether Redwood requires a private registry or pull-through cache on our side for images, and if HSM/KMS integration will need any on-site appliances?
+
+Thanks,
+Alex
+Alex Johnson
+Director, Cloud Platform
+HelioHealth
+[Attachment: helio_site_inventory.xlsx (xlsx)]
+From: rachel.kim@redwood.com <rachel.kim@redwood.com>
+To: Alex Johnson <alex.johnson@heliohealth.com>
+Cc: marissa.cole@redwood.com, ben.carter@redwood.com, neha.kapoor@redwood.com
+Date: 2028-06-01T10:05:00-07:00
+Subject: Re: Private cluster kick-off + site inventory
+
+Alex — thanks for the inventory. This is helpful; I pulled a few initial gaps (missing switch uplink mapping and exact NVMe bay counts) and flagged them inline.
+
+Summary: we recommend a 3-week execution sprint split into two phases (Preflight + Build & Validation). Deliverables and owners (high level):
+
+- Week 1 (Preflight): site inventory validation (Helio infra), CIDR allocation & firewall rules (Redwood network owner: Ben), storage class decisions (Onsite vs. SAN) and KMS plan (Neha).
+- Week 2 (Build): cluster provisioning (control plane HA 3 nodes, kubeadm-based or RKE2 per preference), nodepool rollout (control, inference/gpu, worker-ssd, worker-block), private registry cache deployment, and initial monitoring/alerting config (Marissa).
+- Week 3 (Validation & Handover): perf smoke tests (latency & token throughput), failover exercises, backup and restore validation, and runbook handover.
+
+Minimum cluster sizing (starting point, adjustable after inventory):
+- Control plane: 3 x mCPU-heavy nodes (16 vCPU, 64GB RAM) with local boot SSDs.
+- Inference/GPU pool: 2-4 nodes depending on model footprint (A100/RTX-class); we can accommodate heterogenous GPUs but prefer uniform instance types for predictable scheduling.
+- Worker-ssd: 3 nodes with local NVMe (for KV cache and ephemeral logs) — use local NVMe for prefix/KV caching to keep token latency low.
+- Worker-block: 3 nodes attaching to SAN/CSI block storage for persistent volumes (model weights, embeddings DB).
+
+Storage guidance:
+- KV/prefix cache: local NVMe (ephemeral) with replication at app layer.
+- PVs (models, DBs): block CSI (encrypted) backed by SAN or cloud-connected NVMe. Use ReclaimPolicy=Retain for model volumes to avoid accidental data loss during node deletion.
+- Shared artifacts/backups: S3-compatible object store or NFS gateway depending on Helio ops preference (we tend to recommend object store for durability).
+
+Networking notes:
+- CIDR plan: we suggest a /22 pod CIDR and a /24 service CIDR per cluster to avoid overlap with Helio WAN. See attached network_cidr_plan.png for proposed allocations.
+- Egress: prefer routed VPC peering with forced-tunnel for egress to Helio firewall; BGP-managed peer for multi-homing if Helio has multiple uplinks.
+- Private registry: recommended (pull-through cache) to improve reliability; we can run an on-prem cache in the cluster or use a pre-approved registry behind Helio firewall.
+- KMS/HSM: Redwood integrates with external KMS via standard PKCS#11 or cloud KMS endpoints. If Helio prefers an HSM appliance, note that will add an on-site hardware requirement and a short window for key provisioning and testing.
+
+Security & operational controls:
+- Node taints and tolerations to isolate GPU workloads.
+- ResourceQuota per namespace and LimitRanges for token-heavy workloads.
+- Admission controls: PodSecurity, ImagePolicyWebhook for registry allowlist, and network policies (default deny).
+- Audit logs: we will ship audit events to your SIEM (TLS+mutual auth).
+
+Attachments: redwood_deploy_sprint.pdf (detailed sprint plan) and network_cidr_plan.png (CIDR diagram). Please confirm which week Helio can host a site survey; we recommend the week of Jun 12 for an on-site switch/uplink walk and rack checks.
+
+Next steps for Helio:
+1) Share switch uplink-to-rack mapping and exact NVMe bay counts in the inventory spreadsheet.
+2) Approve the CIDR suggestions or provide existing allocations to avoid overlap.
+3) Confirm HSM preference (cloud KMS vs. on-prem appliance).
+
+I'll follow up with a calendar invite for an internal Redwood preflight sync (Ben/Marissa/Neha) to coordinate owners.
+
+—Rachel Kim
+Senior Solutions Engineer, Redwood Inference
+[Attachments: redwood_deploy_sprint.pdf, network_cidr_plan.png]
+From: marissa.cole@redwood.com <marissa.cole@redwood.com>
+To: rachel.kim@redwood.com, ben.carter@redwood.com
+Cc: neha.kapoor@redwood.com
+Date: 2028-06-02T08:30:00-07:00
+Subject: Re: HelioHealth private cluster — execution sprint & site survey coordination
+
+Rachel / team — quick notes from the ops perspective:
+
+- Canary and rollback: we'll schedule canary nodepools (1-2 small instances) for model-serving rollout, plus automatic rollback thresholds based on p50/p95 token latency regressions.
+- GPU pools: add a dedicated preemptible burst lane if Helio can tolerate some eviction during off-peak for cost optimization; otherwise reserve capacity.
+- Storage QoS: we should surface IOPS targets per PV class (e.g., model-weights PV: 10k IOPS baseline) so Infra can size SAN LUNs accordingly.
+- Image pull policy: set to IfNotPresent on pinned images and use image manifest digests in prod to avoid drift.
+
+I'll build the Runbook section for monitoring alerts and add explicit failover steps. Ben — I'll need the exact firewall rule snippets for the peering flows so I can include them in the sprint doc.
+
+Marissa
+Principal SRE, Redwood Inference
+From: Alex Johnson <alex.johnson@heliohealth.com>
+To: rachel.kim@redwood.com
+Cc: procurement <procurement@heliohealth.com>, marissa.cole@redwood.com
+Date: 2028-06-02T16:10:00-07:00
+Subject: Re: HelioHealth private cluster — execution sprint & site survey coordination
+
+Rachel —
+
+This looks good. I've filled the missing switch uplink mapping and NVMe counts in the attached updated inventory. Procurement is copied; they have a few questions around hardware acceptance testing and warranty windows which we'll table for the contract thread.
+
+We can host the site survey the week of Jun 12 (prefer June 13-14). Can Redwood confirm an on-site lead for the switch walk and a runbook owner for the failover exercises? Also, we prefer HSM appliance (vendor: SafeKey HSM) for keys — can Redwood run an integration test with that?
+
+Thanks,
+Alex
+[Attachment: helio_site_inventory_updated.xlsx (xlsx)]
+From: neha.kapoor@redwood.com <neha.kapoor@redwood.com>
+To: Alex Johnson <alex.johnson@heliohealth.com>
+Cc: rachel.kim@redwood.com, marissa.cole@redwood.com, ben.carter@redwood.com
+Date: 2028-06-03T14:40:00-07:00
+Subject: Re: HelioHealth private cluster — execution sprint & site survey coordination
+
+Alex — great, thanks for the update and for attaching the completed inventory.
+
+Confirming next steps from Redwood:
+- On-site lead: Ben Carter (ben.carter@redwood.com) will do the switch/uplink walk on Jun 13.
+- Runbook owner: Marissa will own failover exercises and monitoring verification.
+- HSM integration: we can test SafeKey HSM — I'll coordinate key exchange and test vectors. Expect ~2 business days of integration work during the Build phase.
+
+Action items for Helio before Jun 13:
+1) Finalize the physical rack layout (PDF) and confirm power redundancy per rack.
+2) Provide FQDNs/IPs for any internal registry endpoints you want to use, or approve Redwood's registry cache plan.
+3) Share contact for onsite facility security to coordinate badge access for Redwood engineers.
+
+I'll create a short preflight checklist and drop a calendar invite for Jun 12 internal sync (Redwood only) to validate owners and test scripts.
+
+-Neha Kapoor
+Security & Integrations PM, Redwood Inference

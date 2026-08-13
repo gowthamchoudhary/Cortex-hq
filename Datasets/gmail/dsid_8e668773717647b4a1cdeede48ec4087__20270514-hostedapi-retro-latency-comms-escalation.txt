@@ -1,0 +1,124 @@
+Unplanned p95/p99 spike impacting FinovatePay — status & next steps
+
+From: Samantha Yoo <sam.yoo@finovatepay.com>
+To: marcus.lin@redwood.ai, ops@redwood.ai
+Date: Fri, 14 May 2027 08:12:00 -0700
+Subject: Severe tail latency from Hosted API since 07:40 PDT — urgent
+
+Hi team,
+
+We started seeing a sharp increase in p95/p99 latency against your hosted text-generation endpoint at ~07:40 PDT. Our dashboards show p95 jumped from ~340ms to ~1.2s and p99 from ~550ms to ~8.4s. This is causing request timeouts in our payment authorization path (sync calls); we've had ~12 customer-facing failures in the last 30 minutes.
+
+Request details we captured:
+- Endpoint: POST /v1/generate (model: redwood/gpt-medium-2027)
+- Average tokens/generation: 420 (long sequences)
+- QPS from our side: 3.6 (steady)
+- Example request id: fp-20270514-7a2b
+
+We need an ETA and an interim mitigation (rate-limited fallback or model variant) — our ops lead is on standby. Please treat as Sev2 for us.
+
+Thanks,
+Samantha
+Senior SRE, FinovatePay
+
+---
+
+(Quoted)
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: ops@redwood.ai, engineering@redwood.ai
+Cc: laura.bennett@redwood.ai, monica.patel@redwood.ai
+Date: Fri, 14 May 2027 08:18:00 -07:00
+Subject: Fwd: Severe tail latency from Hosted API since 07:40 PDT — urgent
+
+Forwarding FinovatePay escalation. Vanessa/ops team — can you triage immediately? Priorities: 1) confirm customer impact and scope, 2) publish statuspage entry, 3) implement short-term mitigation (route to lower-latency variant / enable prefix caching / reduce batch max_seq).
+
+I attached the customer error logs they sent and our recent SLO graphs for quick reference. Monica — please prep CS comms once we have a mitigation ETA; loop in account exec if needed.
+
+On Fri, 14 May 2027 at 08:12, Samantha Yoo <sam.yoo@finovatepay.com> wrote:
+> We started seeing a sharp increase in p95/p99 latency...
+
+Attachments: finovate_error_samples.txt (text), slo_graph_20270514.png (image)
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: marcus.lin@redwood.ai, laura.bennett@redwood.ai, monica.patel@redwood.ai
+Cc: soojin.lee@redwood.ai, ops@redwood.ai
+Date: Fri, 14 May 2027 08:42:00 -07:00
+Subject: Re: Fwd: Severe tail latency from Hosted API since 07:40 PDT — update
+
+Quick update from Ops:
+- Observed a tail-latency spike across one GPU cluster in us-west-2 starting ~07:38 PDT. p99 correlated with an SQS backlog we use to stage long-sequence requests for batching; backlog rose 5x after a transient network partition to that cluster.
+- Immediate mitigations applied at 08:30 PDT: 1) routed traffic for long-seq workloads to an alternate cluster in us-east-1, 2) lowered max_batch_seq from 1024 -> 512 for 30m, 3) enabled model-variant fallback (redwood/gpt-medium-2027-quant) for high-latency requests.
+- Customer-facing effect: error rates dropped to baseline by ~08:36 PDT, p99 back to ~600ms by 08:45 PDT. We posted an interim status update: https://status.redwood.ai/incidents/20270514-latency-spike
+
+Next steps we are running: full KV-cache warm rehydration and post-incident trace collection. Attaching an initial timeline.
+
+Vanessa
+Sr. Ops Manager
+
+Attachments: incident_timeline_20270514.xlsx (spreadsheet)
+
+From: Markus Klein <markus.klein@redwood.ai>
+To: marcus.lin@redwood.ai, vanessa.ortiz@redwood.ai, laura.bennett@redwood.ai
+Cc: monica.patel@redwood.ai
+Date: Fri, 14 May 2027 09:05:00 -07:00
+Subject: Re: Fwd: Severe tail latency — exec eyes on
+
+Thanks for the quick action. Please prepare an executive one-pager by EOD that includes:
+- brief root cause hypothesis,
+- customer impact numbers (requests failed, minutes degraded),
+- mitigations applied and current status,
+- proposed short-term customer remediation (credit, SLA flexibility), and
+- owners + deadlines for follow-ups.
+
+Monica, please coordinate the customer comms and confirm whether FinovatePay needs a formal credit; loop in account team.
+
+M.K.
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Samantha Yoo <sam.yoo@finovatepay.com>
+Cc: monica.patel@redwood.ai, laura.bennett@redwood.ai
+Date: Fri, 14 May 2027 09:22:00 -07:00
+Subject: Re: Severe tail latency from Hosted API since 07:40 PDT — status & next steps
+
+Hi Samantha — thanks again for flagging and for the logs. Short summary:
+- We saw an infrastructure-induced backlog in us-west-2 that caused batching to amplify tail latency for long-sequence requests.
+- Mitigations (applied at 08:30 PDT): traffic reroute to alternate cluster, reduced batch max_seq, and enabled model-variant fallback.
+- Current status: p99 reduced to ~600ms, error rates back to baseline. Full trace analysis is in progress.
+
+We have a public incident entry with live updates: https://status.redwood.ai/incidents/20270514-latency-spike
+
+Proposed next steps:
+1) We will schedule a technical postmortem with your SREs (proposed window Mon 2027-05-17 10:00 PDT). Please confirm availability.
+2) We will share the incident timeline and preliminary action items by EOD today.
+3) If you prefer an interim credit while we complete the full RCA, Monica will coordinate.
+
+Apologies for the disruption — we take tail latency very seriously.
+
+— Marcus
+Principal Product Manager, Redwood Inference
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: vanessa.ortiz@redwood.ai, laura.bennett@redwood.ai, soojin.lee@redwood.ai, markus.klein@redwood.ai, monica.patel@redwood.ai
+Date: Sat, 15 May 2027 11:03:00 -07:00
+Subject: Post-incident summary & owner action items (FinovatePay latency 20270514)
+
+Post-incident summary (preliminary RCA):
+Root cause: an autoscale and networking transient in us-west-2 caused an SQS staging queue backlog. The backlog interacted with our batching kernel selector when sequences exceeded ~320 tokens, producing larger-than-expected batches and long tail kernel execution times.
+Impact window: 07:38-08:45 PDT on 2027-05-14.
+Customer impact: FinovatePay saw ~12 failed auth calls and elevated p99 (peak ~8.4s) for ~27 minutes.
+Mitigations completed: traffic reroute, lowered batching limits, enabled fallback quantized variant, warmed KV caches.
+Immediate action items:
+- (Vanessa) Implement a guard in our autoscaler to reject sudden backlog growth >3x in 2m unless manual approval — owner: vanessa.ortiz; target: 2027-05-21
+- (Soojin) Add a kernel-selection integration test that simulates large sequences under transient network latency — owner: soojin.lee; target: 2027-05-28
+- (Laura) Create a runbook for long-sequence customer fallbacks and ensure status page template exists — owner: laura.bennett; target: 2027-05-18
+- (Monica) Confirm FinovatePay credit decision and send formal comms — owner: monica.patel; target: 2027-05-16
+- (Markus) Proposal: schedule quarterly chaos exercises against our queuing layer — owner: markus.klein; review by 2027-06-15
+
+Attachments: slo_graph_20270514.png, incident_timeline_20270514.xlsx
+
+We'll finalize the full RCA next week and publish a customer-facing postmortem. Closing the incident in status once all action items are tracked.
+
+Marcus
+Principal Product Manager
+Redwood Inference

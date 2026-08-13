@@ -1,0 +1,102 @@
+Deployment path clarification and next steps
+
+From: Marissa Cole <marissa@redwood.inference.com>
+To: Jordan Li <jordan.li@acme-enterprise.com>
+Cc: Rishi Malhotra <rishi@redwood.inference.com>, Vivek Kulkarni <vivek@redwood.inference.com>
+Date: Mon, 02 Mar 2026 15:10:00 -0700
+Subject: Deployment path clarification and next steps
+
+Jordan — thanks again for the call earlier. Quick recap and proposed next steps so we have a single source of truth: 
+
+Recap of constraints you mentioned on the call:
+- SSO: Okta SAML + SCIM provisioning required; user groups map to product roles.
+- KMS/HSM: customer-managed key requirement (FIPS 140-2 level required) for model keys and any persisted embeddings.
+- Logging/retention: legal requires 7 years of immutable audit logs (WORM-capable storage).
+- Data residency: US-only processing and logs to be retained within US region.
+- Compliance artifacts: SOC 2 evidence and access to audit logs during annual audits.
+
+Initial qualification thoughts:
+- Redwood Dedicated (reserved capacity) covers predictable throughput and strong isolation, but our standard Dedicated offering does not include a customer-managed HSM in the control plane by default. We can evaluate an enterprise add-on, but it typically requires a Private deployment pattern (Private VPC/on-prem) for full HSM key control.
+- Redwood Private (Private VPC / on-prem) is architected to support customer-managed KMS/HSM, private control plane, and stricter logging retention controls — this is the safer path if HSM + 7-year WORM retention are non-negotiable.
+
+Proposed next steps:
+1) Technical workshop (60–90m) between your infrastructure/security engineers and our SEs to validate SCIM mapping, KMS/HSM options, and retention architecture. Suggested times: Tue 2026-03-10 10:00–11:30 PT or Wed 2026-03-11 09:00–10:30 PT. Please confirm.
+2) I'll share our SOC2 summary and an initial mutual action plan (MAP) workbook to capture open items — attaching SOC2_report_2025.pdf and initial-maps-and-MAP.xlsx.
+3) Rishi will lead a short gap analysis post-workshop to confirm whether Dedicated + enterprise add-on could meet the HSM requirement or whether Private is required.
+4) Procurement: can you introduce the procurement contact so we can align on timelines/contract needs (SLA, data residency, export controls)?
+
+Attachments: SOC2_report_2025.pdf (pdf, stub), initial-maps-and-MAP.xlsx (xlsx, stub)
+
+Thanks — looking forward to the workshop.
+
+—
+Marissa Cole
+Account Executive, Redwood Inference
+marissa@redwood.inference.com
++1 (415) 555-0132
+https://redwood.ai
+From: Jordan Li <jordan.li@acme-enterprise.com>
+To: Marissa Cole <marissa@redwood.inference.com>
+Cc: Procurement Team <procurement@acme-enterprise.com>
+Date: Mon, 02 Mar 2026 16:05:00 -0700
+Subject: Re: Deployment path clarification and next steps
+
+Thanks Marissa — that recap is spot on. A few clarifications from our side before scheduling the workshop: 
+- HSM: We require customer-managed keys with an HSM that supports key export restrictions (no key export). Our security team flagged this as a blocker unless the vendor provides a deployed HSM model that we control or integrates with our cloud HSM (AWS CloudHSM).
+- Logging: 7-year retention must be immutable (WORM) and accessible during audits; logs should include token-level request IDs and admin activity.
+- SCIM/Okta: We have a documented SCIM onboarding flow — attaching acme-sso-requirements.pdf.
+
+Procurement has also asked for an answer to whether Dedicated can be scoped to meet the HSM requirement, or whether Private is the only path. If Private is required, we need an estimate of expected timeline and an outline of responsibilities (Redwood vs Acme) for customer-managed KMS/HSM integration.
+
+Happy to do the workshop on 3/10 10:00 PT. I’ll include our infra lead on the call once we lock the time.
+
+-Jordan
+Jordan Li
+Director, Platform Engineering — Acme Enterprise
+jordan.li@acme-enterprise.com
+
+From: Marissa Cole <marissa@redwood.inference.com>
+To: Jordan Li <jordan.li@acme-enterprise.com>
+Cc: Rishi Malhotra <rishi@redwood.inference.com>, Vivek Kulkarni <vivek@redwood.inference.com>
+Date: Tue, 03 Mar 2026 08:00:00 -0700
+Subject: Re: Deployment path clarification and next steps
+
+Jordan — appreciate the specifics, this is useful. Quick answers and what we’ll cover in the workshop: 
+
+1) HSM / KMS options:
+- Private (recommended): supports customer-managed KMS/HSM (including integration with AWS CloudHSM or on-prem HSM appliances). In this model, the control plane can be placed inside your VPC and key material never leaves your HSM. This is the pattern we recommend when customers require non-exportable keys and FIPS-validated HSMs.
+- Dedicated (possible with caveats): Dedicated provides reserved GPU pools and tenant isolation, but by default keys are managed by Redwood unless we do a bespoke enterprise integration. In some past deals we’ve implemented a hybrid where key wrapping is done by customer KMS, but that requires additional engineering and contract terms — it’s often more complex and slower than Private.
+
+2) Logging & retention:
+- Private gives us the most control to support WORM storage with 7-year retention inside your chosen cloud region. We can present the architecture options in the workshop (S3 Object Lock, Vault + append-only logs, or a managed WORM solution).
+
+3) Responsibilities and timeline (high level):
+- Redwood: SE-led design, integration support for SCIM and KMS, deliver deployment artifacts and runbook; provide SOC2 artefacts and assist during auditor access windows.
+- Acme: provision VPC peering / network config, grant CloudHSM + KMS access, approve runbook, and host/approve WORM storage config.
+- Timeline: typical Private engagement from kickoff to prod ~8–12 weeks depending on procurement and HSM procurement lead times.
+
+Attachments provided again: SOC2_report_2025.pdf, initial-maps-and-MAP.xlsx (filled with initial scope items). I’ll add a short checklist we’ll use in the workshop.
+
+Confirming workshop: Tue 2026-03-10 10:00–11:30 PT works for us. Please send calendar invite with the infra/security participants and procurement.
+
+—
+Marissa Cole
+Account Executive, Redwood Inference
+
+From: Vivek Kulkarni <vivek@redwood.inference.com>
+To: Jordan Li <jordan.li@acme-enterprise.com>, Marissa Cole <marissa@redwood.inference.com>
+Cc: Rishi Malhotra <rishi@redwood.inference.com>
+Date: Tue, 03 Mar 2026 09:24:00 -0700
+Subject: Re: Deployment path clarification and next steps
+
+Jordan — quick note from me as VP of Solutions: if the HSM + 7-year immutable logs are firm requirements, Private is the lowest-risk path. Rishi (cc’d) will run the gap analysis post-workshop and produce a short RFC comparing Dedicated+enterprise-add-on vs Private (security, cost delta, timeline).
+
+Operationally, please expect the following from Redwood if you choose Private: SE-led integration, an infra runbook we jointly approve, and a short on-site/remote runbook validation session prior to cutover. If procurement wants an estimated TCO delta between Dedicated and Private ahead of contracting, we can produce that after the workshop.
+
+Marissa — looping in our legal/contract team after the workshop will help accelerate any addendums for HSM/KMS clauses.
+
+Thanks — Vivek
+Vivek Kulkarni
+VP, Solutions — Redwood Inference
+
+

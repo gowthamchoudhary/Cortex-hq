@@ -1,0 +1,132 @@
+Post-call: Peregrine integration recap — routing & policy next steps
+
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Anna Kline <anna.k@peregrine.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-05-10T14:12:00-07:00
+Subject: Post-call: Peregrine integration recap — routing & policy next steps
+
+Anna — thanks again for the sync earlier. Short recap and proposed next steps so we can align engineering work: 
+
+Summary of needs (what we heard)
+- Primary use: real-time candidate reranking for search and conversational assistants (embedding + rerank pipeline).
+- Targets: p99 generation latency <= 180ms for prompt+rerank path; throughput ~300 qps peak, ~50 qps baseline.
+- Strict data controls for customer PII; Peregrine prefers VPC/private deployment but open to Dedicated for proof-of-concept.
+- Must support structured tool calling to your internal data connectors and a reranker that accepts embeddings+context.
+
+Technical asks we should address next
+1) SDK + auth: you want Node + Python quickstarts, and guidance on short-lived tokens / KMS-backed rotation.
+2) Routing & policy: latency-first routing for interactive paths, cost-optimized fallback chain for offline/batch scoring.
+3) Embeddings & reranker: offline embeddings store + online cross-encoder rerank; need batch/stream tradeoffs.
+4) Observability: per-route token/cost breakdown and tail-latency tracing for production alerts.
+
+Attachments: I included a concise integration playbook and a sample routing diagram (see attached).
+
+Proposed next steps / owners
+- Marissa (SE) to send recommended routing configs, sample SDK commands, and a minimal auth flow (this week).
+- Peregrine to provide staging SRE contact and ephemeral creds we can test against (staging endpoint or VPC peering details).
+- Jordan to schedule a focused engineering call (SRE + infra + PM) for Tue 5/12.
+
+Can you confirm priority of the items above (1–4) and share who on your side will own staging access? If the priorities are correct, we’ll ship an initial routing policy and an SDK quickstart by EOD Friday.
+
+Thanks,
+Jordan
+Account Executive | Redwood Inference
+jordan.blake@redwood.ai | +1 (415) 555-0191
+
+Attachments: redwood-integration-playbook.pdf (7 pages), peregrine-routing-diagram.png (PNG, 1.2MB)
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Anna Kline <anna.k@peregrine.ai>, Jordan Blake <jordan.blake@redwood.ai>
+Date: 2026-05-10T17:03:00-07:00
+Subject: Re: Post-call: Peregrine integration recap — routing & policy next steps
+
+Hi Anna / Jordan — digging into the technical plan and calling out concrete suggestions so your engs have a starting point. Longish email but I wanted to be explicit about tradeoffs.
+
+1) SDK + auth
+- Languages: we’ll provide quickstarts for Python (Requests + official SDK) and Node (fetch + SDK).
+- Auth: short-lived API keys via our token service + KMS-backed signing recommended for private deployments. For Dedicated/VPC we support customer-managed KMS (bring-your-own) so you can rotate without touching app code.
+- Token rotation: recommend 1h TTL for service tokens; client tokens can be 15m if you run in-browser components.
+
+2) Routing and policy (core ask)
+- Primary route (interactive rerank): model: rw-redwood-13b-v2 (fp16) in us-east. Policy: latency-primary — route to lowest-latency zone; p99 SLO 180ms.
+- Fallback chain: if primary unavailable or p99 approaching SLO, fall back to rw-redwood-7b-q4a (quantized) for degraded but acceptable output.
+- Cost-based tiering: background/batch re-ranks should be routed to cheaper compute (7b quant) or queued for batch windows (off-peak).
+- Region failover: config policy to prefer us-east, fallback us-west, then eu-central (only if data residency allows).
+
+3) Embeddings + reranker pattern
+- Store embeddings in your vector DB (we have connectors for Milvus, Pinecone, and self-hosted PostgreSQL + pgvector).
+- Scoring: candidate retrieval via ANN -> cross-encoder reranker call at request time for top-K (K=20 suggested). Cross-encoder uses rw-redwood-7b-xattn for cost-sensible quality; for highest-quality can switch to 13b-v2 on canary.
+- KV/prefix cache: enable prefix KV caching for repeated context to reduce tokenization cost on short prompts.
+
+4) Structured tool calling
+- Use our function-calling schema to allow safe invocations of your connector layer. We can provide schema templates and sample request/response validators.
+
+Deliverables I’ll send by Friday
+- example routing policy JSON (to drop into the Console or via infra-as-code)
+- SDK quickstart repo link and sample auth flow
+- minimal cost/latency projection table for the proposed models and expected qps
+
+Questions for you
+- For the reranker: are you willing to accept a small quality delta during canary (13b -> 7b quant) for much lower cost?
+- Do you require on-prem deployment for initial POC or is Dedicated acceptable to start?
+
+Link: sample repo + playbook (attached). I’ll also include an annotated diagram of the routing chain in the playbook.
+
+—Marissa
+Solutions Engineer | Redwood Inference
+marissa.cole@redwood.ai
+
+Attachment: redwood-integration-playbook.pdf
+From: Anna Kline <anna.k@peregrine.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, SRE Team <sre@peregrine.ai>
+Date: 2026-05-11T09:34:00-07:00
+Subject: Re: Post-call: Peregrine integration recap — routing & policy next steps
+
+Thanks Jordan & Marissa — this is helpful. A few clarifying points from product/infra: 
+
+1) SDKs: Python + Node are perfect. Can you include a minimal Docker example for the Node quickstart? Our infra runs services in containers so that helps adoption.
+2) Auth/KMS: we use AWS KMS and prefer short-lived credentials issued from our internal token broker. Does Redwood support AWS KMS for key wrapping, or do you require Redwood-managed KMS for Dedicated?
+3) Fallbacking: acceptable to test 13b -> 7b-quant for canary, but we need a quality threshold (we’ll provide 50 labeled eval prompts to verify).
+4) Observability: we need request-level IDs propagated through the reranker so our tracing can correlate token costs with traces. Is that supported?
+
+SRE question (cc’d SRE): for the VPC option, what peering/egress patterns do you need? We can provision a peering connection or a private link — what do you recommend for minimal latency?
+
+Next steps from Peregrine
+- I’ll share the 50 eval prompts and a staging SRE contact (sre@peregrine.ai).
+- We can host a SRE-to-SRE call — Tue 5/12 10:00 PT works for our team. Please send an invite.
+
+Thanks,
+Anna
+Head of Product | Peregrine Analytics
+anna.kline@peregrine.ai
+
+---
+On Mon, May 10, 2026 at 2:12 PM Jordan Blake <jordan.blake@redwood.ai> wrote:
+> (previous message omitted)
+
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Anna Kline <anna.k@peregrine.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, SRE Team <sre@peregrine.ai>
+Date: 2026-05-12T09:03:00-07:00
+Subject: Re: Post-call: Peregrine integration recap — routing & policy next steps
+
+Anna — great, thanks for the quick turn. Confirming items and owners, and I sent a calendar invite for Tue 5/12 10:00 PT (attached).
+
+Action list
+- Peregrine: share 50 eval prompts + staging SRE contact (Anna) — owner: Anna (Peregrine) — due: 2026-05-11 EOD (noted you already flagged this).
+- Marissa: push initial routing_policy.json and SDK quickstart Docker sample to the repo and link in thread — due: 2026-05-14.
+- Jordan: follow up on Dedicated vs VPC playbook and procurement checklist — due: 2026-05-15.
+
+Technical notes (answers)
+- AWS KMS: yes, we support BYOK via AWS KMS for Dedicated/VPC deployments. We can provide instructions for configuring key wrapping and token signing.
+- Request IDs: include an X-Request-ID header that we propagate across calls; tracing hooks are supported in our SDKs so your tracing can join spans.
+- Peering/egress: for minimal latency we recommend a VPC peering connection to our private endpoint in us-east-1; PrivateLink is supported if you need more controlled egress. SEs will review during SRE call.
+
+I attached the calendar invite and the routing diagram for quick reference. Looking forward to the SRE call.
+
+Best,
+Jordan
+Account Executive | Redwood Inference
+
+Attachments: cal-invite-20260512.ics, peregrine-routing-diagram.png

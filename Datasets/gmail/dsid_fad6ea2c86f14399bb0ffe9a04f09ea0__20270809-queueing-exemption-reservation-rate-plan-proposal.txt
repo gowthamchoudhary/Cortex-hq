@@ -1,0 +1,116 @@
+Request: Temporary queueing exemption + reservation rate plan for ClearHarbor POC
+
+From: Elena Martinez <elena@clearharbor.com>
+To: vanessa_ortiz@redwood.ai
+Cc: Nguyen Tran <nguyen@clearharbor.com>
+Date: Mon, 02 Aug 2027 11:08:00 -0400
+Subject: POC throughput pattern and request for temporary queueing exemption
+
+Vanessa —
+
+Thanks again for the demo last week. ClearHarbor is excited to start the 4-week POC in mid-August. A quick bit of context on our workload so we can be precise in the ask: during the POC we will run a replay of a four-week production trace compressed into ~36 hours to accelerate validation. Peak QPS during the replay will hit short bursts of 2,000 QPS for 3–6 minute intervals, then drop back to an average of ~150 QPS. The replay is not latency-sensitive for the short bursts (we can tolerate 300–400ms p95) but we need predictable throughput to finish the validation window on schedule.
+
+Specific request: for the POC window (Aug 16–19) can Redwood provide a temporary queueing exemption that: 1) permits short burst concurrency above the standard reserved-GPU soft cap, and 2) guarantees an aggregate token throughput floor so our workers don’t experience backpressure that stalls the replay? We are happy to accept a scoped SLA amendment and a one-time overage credit if needed.
+
+I attached the compressed replay profile and our capacity plan. Happy to jump on a quick call tomorrow to walk through.
+
+—Elena
+Head of Platform, ClearHarbor Cloud
+
+Attachments: CH-Capacity-plan-v2.pdf (pdf, 212KB)
+
+From: vanessa_ortiz@redwood.ai
+To: Elena Martinez <elena@clearharbor.com>
+Cc: stephanie_nguyen@redwood.ai, karthik_iyer@redwood.ai, monica_patel@redwood.ai
+Date: Mon, 02 Aug 2027 13:42:00 -0400
+Subject: Re: POC throughput pattern and request for temporary queueing exemption
+
+Elena —
+
+Appreciate the detail and the replay profile. I’ve looped in Stephanie (sales / commercial), Karthik (runtime / capacity), and Monica (solutions) so we can coordinate an operational plan and a narrow SLA amendment for the POC window.
+
+High-level thoughts:
+- We can evaluate a time-bound carveout that allows short burst concurrency above the tenant’s reserved-GPU soft cap, but we need to define a hard throttle to protect multi-tenant stability.
+- Karthik can model whether prefix/KV cache warmup and pre-warming policy will keep your p95 in the 300–400ms band for the burst windows. If not, we’ll propose an aggregate throughput-floor (tokens/sec) that we commit to for the replay.
+- Commercial: a one-time overage/credit or an add-on reservation may be simplest for billing. Stephanie — can you prepare a scoped SOW + amendment if we align on the technical guardrails?
+
+Next steps: Karthik, can you confirm feasibility by EOD tomorrow? Elena / Nguyen — can you share the exact timezone-aligned replay window (start/end) and the tokenization parameters (avg tokens per request) so we can run numbers?
+
+Thanks — Vanessa
+Director, Strategic Accounts, Redwood Inference
+
+From: karthik_iyer@redwood.ai
+To: vanessa_ortiz@redwood.ai, Elena Martinez <elena@clearharbor.com>
+Cc: monica_patel@redwood.ai, stephanie_nguyen@redwood.ai
+Date: Tue, 03 Aug 2027 09:17:00 -0400
+Subject: Re: POC throughput pattern and request for temporary queueing exemption
+
+Vanessa / Elena —
+
+Quick technical readout after looking at the attached replay:
+- The replay has a tight burst distribution: 6-minute top windows at 2k QPS, median payload ~320 tokens/request. If we accept burst concurrency above your current reserved vGPU soft cap, the dominant cost and risk is queue buildup on shared scheduler slots, not GPU memory.
+- Two mitigation options that are feasible within the POC timeframe:
+  1) Time-bound reservation carveout: allocate an additional 2 reserved GPU equivalents (rGEs) for 18 hours spanning the replay bursts. This gives headroom and keeps p95 latency < 250ms for cached prefixes.
+  2) Queueing exemption + throughput floor: keep current reservation but implement a temporary high-priority burst queue that drains at X tokens/sec (we’d need your average tokens per second target). This will cause transient priority preemption for lower-tier tenants — acceptable for a short window but we require an operational rollback plan.
+
+Operational constraints we need:
+- Exact replay start/end (timezone) and a 30-minute pre-warm window for model / prefix cache priming.
+- Maximum acceptable p95 during bursts (you mentioned 300–400ms). If you’re OK with 400ms p95, option (2) looks doable with modest risk.
+
+I propose we run a short replay test on Aug 12 (2 hours scaled) to surface any cache-warmup regressions. If that passes, we push the full replay Aug 16 with one of the two options.
+
+I’ll draft the operational checklist and the rollback playbook and attach to the SLA amendment.
+
+—Karthik
+Sr. Infra Engineer, Redwood Inference
+
+From: Nguyen Tran <nguyen@clearharbor.com>
+To: vanessa_ortiz@redwood.ai
+Cc: Elena Martinez <elena@clearharbor.com>, stephanie_nguyen@redwood.ai, karthik_iyer@redwood.ai
+Date: Wed, 04 Aug 2027 01:03:00 +0700
+Subject: Re: POC throughput pattern and request for temporary queueing exemption
+
+Thanks all — confirmed windows below (US time):
+- Warmup: Aug 15 22:00 PDT – Aug 15 22:30 PDT
+- Replay burst: Aug 16 02:00 PDT – Aug 16 20:00 PDT (we will compress four weeks into ~18 hours, bursts expected across that range; main heavy bursts: 02:15–05:30, 09:00–10:00, 15:00–16:00)
+
+Avg tokens/request: 320
+Target aggregate tokens/sec during peak: ~640k tokens/sec (equates to ~2k QPS * 320 tokens)
+Acceptable p95 during bursts: up to 400ms (we are optimizing for overall validation throughput rather than strict latency)
+
+We agree to the Aug 12 short test. We can sign a scoped POC amendment and accept an overage credit model. Attached a short deck with the compressed schedule.
+
+—Nguyen
+Lead SRE, ClearHarbor Cloud
+
+Attachments: CH-Capacity-plan-v2.pdf
+
+From: vanessa_ortiz@redwood.ai
+To: Elena Martinez <elena@clearharbor.com>, Nguyen Tran <nguyen@clearharbor.com>
+Cc: stephanie_nguyen@redwood.ai, karthik_iyer@redwood.ai, monica_patel@redwood.ai
+Date: Mon, 09 Aug 2027 18:42:00 -0400
+Subject: Re: POC throughput pattern and request for temporary queueing exemption
+
+Elena / Nguyen —
+
+Thanks — based on Karthik’s analysis and your traffic numbers, we’ll proceed with the following agreed technical and commercial package for the POC:
+
+1) Technical carveout (Aug 16 02:00 PDT – Aug 16 20:00 PDT)
+   - Temporary allocation: +2 reserved GPU equivalents (rGEs) for the 18-hour window (pre-warm included).
+   - Pre-warm window: Aug 15 22:00 PDT – 22:30 PDT (model prefix cache priming).
+   - Latency target during bursts: p95 <= 400ms. If p95 exceeds 500ms for more than two contiguous 5-minute intervals, Redwood will trigger the rollback plan and notify ClearHarbor.
+
+2) Commercial / billing
+   - Scoped POC amendment: bill by-day for the +2 rGEs during the 18-hour window at the reserved add-on rate. If actual invoice exceeds the agreed cap by >25%, Redwood will credit ClearHarbor an overage buffer credit up to one day of rGE charges.
+
+3) Operational safeguards
+   - We will run a 2-hour scale test on Aug 12 (start time TBD) to validate cache warmup and telemetry.
+   - Redwood will monitor token throughput and p95 in real-time and provide a shared dashboard link.
+   - Rollback: immediate drain of burst queue + removal of carveout if stability issues detected.
+
+Next: Stephanie — can you draft the POC amendment and Send for Signature? Monica — please prepare the checklist and the dashboard link (INF-1234). Elena / Nguyen — let us know preferred Aug 12 test time.
+
+Looking forward — Vanessa
+Director, Strategic Accounts
+
+Attachments: redwood-sla-exception-draft.docx (docx, 48KB)

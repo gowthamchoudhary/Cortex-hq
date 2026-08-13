@@ -1,0 +1,128 @@
+Medineo unit-cost QA + MAP sprint: clarifying caching/batching assumptions
+
+From: Jordan Ellis <jordan@medineo.com>
+To: stephanie_nguyen <stephanie@redwood.ai>; marissa_cole <marissa@redwood.ai>
+Cc: karthik_iyer <karthik@redwood.ai>
+Date: Tue, 12 Mar 2024 09:08:00 -0700
+Subject: MAP + unit-cost check: initial traffic profile and asks
+
+Hi Stephanie / Marissa,
+
+Thanks again for the demo last week. We want to accelerate to an April close and need a short, focused MAP that includes a unit-economics sanity pass for our expected usage. I attached a small traffic profile (CSV) and high-level product flows that drive generation requests. Key asks: 
+
+- Can Redwood validate tokens/$ at the request level for our profile (search + assist flows)?
+- Confirm caching behaviours you recommend (prefix vs. full-response cache) and realistic hit rates for our traffic.
+- Batching expectations at 99th pct vs p50 (we care about tail latency for producers).
+
+Our procurement lead wants the MAP milestones in a single spreadsheet and a target contract signature date of 2024-04-02. Sharing Anika from our advisory firm on this thread; she will coordinate the SOW draft.
+
+Attachment: medineo_profile_v1.csv (traffic snapshot)
+
+Jordan
+Director of Product, Medineo
+
+From: stephanie_nguyen <stephanie@redwood.ai>
+To: Jordan Ellis <jordan@medineo.com>
+Cc: marissa_cole <marissa@redwood.ai>, karthik_iyer <karthik@redwood.ai>, Anika Rao <anika@consultingfirm.com>
+Date: Wed, 13 Mar 2024 10:35:00 -0700
+Subject: Re: MAP + unit-cost check: initial traffic profile and asks
+
+Jordan — thanks for the profile. Quick read-through and a suggested plan below. I want to keep the initial MAP sprint narrow so we can give procurement confidence on units/$ and gating criteria.
+
+Proposed 7-day MAP sprint (deliverables in parentheses):
+- Day 1: Kick + confirm traffic slices (MAP_timeline_v1.xlsx)
+- Day 2–3: Modeling pass (medineo_unit_model_v1.csv) — tokens per request by flow, baseline batching assumptions (continuous batching, max latency 80ms for p50, 250ms for p95)
+- Day 4: Ops runbook (prefetch/caching TTL recommendations + fallback policies)
+- Day 5: Exec readout + signoff criteria for procurement (SLA/rollback triggers)
+
+Questions that will materially change the model:
+1) Do you expect stable prompt templates (high prefix reuse) or highly dynamic user prompts? Prefix reuse drives caching hit rate and the tokens/$ substantially.
+2) Are you comfortable with a canary rollout that quantizes model to int8 in prod for cost savings (we'll show quality delta)?
+3) Any hard latency SLA at the customer-facing endpoint (we'll use that to bound batching window).
+
+I attached a short note (stephanie_econ_notes.txt) outlining our default caching assumptions. Can Marissa run the modeling pass and produce a CSV of tokens/request by flow and simulated batching/caching sensitivity? Karhtik — can you include an ops risk note on batching tail effects?
+
+I'll schedule a 30-min sync after Day 3.
+
+—Stephanie
+Sr. Solutions Engineer, Redwood Inference
+
+From: marissa_cole <marissa@redwood.ai>
+To: stephanie_nguyen <stephanie@redwood.ai>, Jordan Ellis <jordan@medineo.com>
+Cc: karthik_iyer <karthik@redwood.ai>, Anika Rao <anika@consultingfirm.com>
+Date: Thu, 14 Mar 2024 15:12:00 -0700
+Subject: Re: MAP + unit-cost check: initial traffic profile and asks
+
+Attaching initial modeling outputs and a simple scenario matrix. Summary highlights below — see attached medineo_unit_model_v1.csv and map_timeline_v1.xlsx.
+
+Quick summary (baseline assumptions in CSV):
+- Avg tokens/request: Search 340 tokens, Assist 1,100 tokens (includes system + typical user)
+- Cacheable prefix fraction: 55% (we assumed templated prompts for 2 of 3 flows)
+- Effective tokens after cache hit: 75 tokens (prefix token cost removed)
+- Batching assumptions: continuous batching with 16ms aggregation window for p50, 90ms for p95; simulated p95 throughput degradation when concurrency > 400 rps per pod
+- Tokens per $ (baseline, hosted): 1,150 tokens/$ for FP32 baseline; int8 quantized path ~2.6x tokens/$ (quality delta <1% BLEU on our small eval)
+
+Notes / risks:
+- If prefix reuse is <30%, cost rises ~1.8x — caching sensitivity is the dominant lever.
+- Prefetching responses for anticipated prompts can improve effective tokens/$ but requires product changes (added complexity).
+
+Attachments: medineo_unit_model_v1.csv, map_timeline_v1.xlsx
+
+Marissa
+Product Analytics, Redwood Inference
+
+From: Medineo Procurement <procurement@medineo.com>
+To: stephanie_nguyen <stephanie@redwood.ai>, marissa_cole <marissa@redwood.ai>
+Cc: Jordan Ellis <jordan@medineo.com>, Anika Rao <anika@consultingfirm.com>
+Date: Fri, 15 Mar 2024 08:21:00 -0700
+Subject: Re: MAP + unit-cost check: initial traffic profile and asks
+
+Thanks — procurement here. A few clarifying points before we lock the MAP: 
+
+1) Please confirm whether Redwood's unit $ model assumes prefetching or any async response generation that would change billing patterns. We need line-of-sight on per-request cost under worst-case cache miss.
+2) What are the rollback/latency SLAs if you enable batching aggressivly? We need to know if an ingress spike could push latencies above our acceptable thresholds.
+3) Can we see a single-sheet MAP with milestones, owners, and acceptance criteria? Jordan proposes signature by 2024-04-02 — is that feasible if the cost modeling shows >1.5x delta vs your baseline?
+
+Please include any supporting docs in Drive.
+
+Procurement Analyst
+Medineo Health
+
+From: karthik_iyer <karthik@redwood.ai>
+To: Medineo Procurement <procurement@medineo.com>; stephanie_nguyen <stephanie@redwood.ai>; marissa_cole <marissa@redwood.ai>
+Cc: Jordan Ellis <jordan@medineo.com>
+Date: Fri, 15 Mar 2024 11:46:00 -0700
+Subject: Re: MAP + unit-cost check: initial traffic profile and asks
+
+Procurement / Jordan — quick operational note on batching and latency risk: 
+
+- Our baseline model used a conservative continuous batching window tuned for p95 latency targets. However, at tail concurrency levels (spikes > 500 rps per region) aggressive batching can increase p99 latency by up to 2x if you do not have autoscale headroom. Mitigations:
+  * Canary: route 5% traffic to a dedicated small pool with quantized model (int8) and measure quality & latency for 48–72 hrs.
+  * Autoscale buffer: reserve burst capacity or set a soft limit that triggers fallback to a lower-cost but lower-latency model variant.
+  * Cache TTLs: prefer prefix-level caching with short TTL (30s–2m) for high-frequency prompts instead of full-response caching for dynamic flows.
+
+I'll attach a short mitigation note (karthik_batching_mitigation.pdf) with a suggested autoscale config and a checklist to include in the MAP.
+
+Karthik
+Engineering Lead, Inference Ops
+
+From: stephanie_nguyen <stephanie@redwood.ai>
+To: Jordan Ellis <jordan@medineo.com>, Medineo Procurement <procurement@medineo.com>
+Cc: marissa_cole <marissa@redwood.ai>, karthik_iyer <karthik@redwood.ai>, Anika Rao <anika@consultingfirm.com>
+Date: Fri, 15 Mar 2024 14:02:00 -0700
+Subject: Re: MAP + unit-cost check: initial traffic profile and asks
+
+Jordan / team — thanks all for the quick turn. Proposed next steps (I updated map_timeline_v1.xlsx):
+
+- Today: Marissa to push updated cost assumptions (cost_assumptions_v2.csv) including explicit worst-case cache-miss column.
+- Mon (Day 1 of sprint): Confirm templates & sample prompts for caching test (owner: Medineo Product)
+- Tue–Wed: Modeling + canary config (owner: Redwood - Marissa / Karthik)
+- Thu: Ops runbook + failure-mode acceptance criteria (owner: Redwood)
+- Fri: Readout; procurement decision gate (owner: Medineo / Procurement)
+
+If cost delta in worst-case (full miss, no quantization) is >1.5x baseline, we will add a gating requirement: either a 2-week product change to increase prefix reuse or a committed reserved capacity discount tier to make the economics palatable.
+
+I'll prepare a single-sheet MAP and share a Drive link by EOD. If everyone is aligned, Jordan / procurement — can you confirm the 2024-04-02 target?
+
+—Stephanie
+Sr. Solutions Engineer, Redwood Inference

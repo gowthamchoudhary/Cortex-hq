@@ -1,0 +1,154 @@
+Partner evidence staging protocol for SOC2 & pen tests
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: ShieldBridge Security <security@shieldbridge.com>, Acme PenTest Ltd <pt-team@acmept.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Fri, 3 Apr 2027 08:04:00 -0700
+Subject: Partner evidence staging protocol for SOC2 & pen tests
+
+Hi team —
+
+Following our recent sync, we need to establish a short-lived, auditable path for partner-delivered evidence (pen-test reports, scan artifacts, SOC2 artifacts) to land in a staging environment that Redwood can pull into our GRC platform. Goal is: secure transport, clear manifest, predictable retention, and minimal manual handling.
+
+Two initial questions for ShieldBridge / Acme:
+- Preferred ingestion method: SFTP (with per-upload manifest) or HTTPS pre-signed links?
+- Can you provide a sample artifact schema (file types, recommended metadata: sha256, timestamp, environment, scope)?
+
+High-level constraints on our side:
+- We need an immutable manifest file alongside each batch (CSV or JSONL) that includes hashes and source identifiers.
+- Retention on staging is 90 days by default; anything longer requires an escalation to Legal.
+- For encrypted bundles we can accept an encrypted tar if you provide a public key (we will not host private keys).
+
+I attached a one-page proposal (staging-proposal-v0.1.pdf). Can you reply with preferences and any blockers? I’ll loop in ops and security once we have direction.
+
+Thanks,
+Karthik
+Karthik Iyer
+Head of Partner Integrations, Redwood Inference
+karthik.iyer@redwood.com
++1 415-555-0123
+
+Attachment: staging-proposal-v0.1.pdf (summary, 2 pages)
+From: ShieldBridge Security <security@shieldbridge.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Sergio Alvarez <sergio.alvarez@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Fri, 3 Apr 2027 10:15:00 -0700
+Subject: Re: Partner evidence staging protocol for SOC2 & pen tests
+
+Hi Karthik —
+
+Thanks for the clear outline. ShieldBridge prefers HTTPS pre-signed links for smaller deliverables (reports, JSON logs) and SFTP for bulk artifacts (traces, pcap, raw scans). We can produce a manifest in CSV or JSONL — CSV is our default. Sample fields we include: filename, sha256, file_size_bytes, artifact_type, scan_date_utc, originating_host, scope_id.
+
+A few clarifications from our side:
+- Encryption: we can encrypt with your public PGP key, or we can upload to an S3 bucket and provide pre-signed links that expire in 48 hours.
+- Retention: 30-day default on our end; we can extend on request but need an SLA.
+- Audit trail: we will include upload logs; we’d like confirmation on whether Redwood will store the artifact hashes in your GRC and whether you need the original filenames preserved.
+
+We have a short security questionnaire we typically ask partners to fill; attaching the questionnaire as a link here: https://shieldbridge.com/partner-q/abcd.
+
+Happy to do a brief call next week to finalize the mechanics.
+
+— Alex Moreno
+Operations Manager, ShieldBridge Security
+security@shieldbridge.com
+Attachment: shieldbridge-questionnaire.pdf (link provided)
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>, Soojin Lee <soojin.lee@redwood.com>
+Date: Fri, 3 Apr 2027 13:02:00 -0700
+Subject: Fwd: Partner evidence staging protocol for SOC2 & pen tests
+
+Marissa / Ben / Soojin —
+
+Forwarding ShieldBridge response. They prefer a hybrid approach (pre-signed links for small reports, SFTP for bulk). They can encrypt with a public PGP key or use pre-signed S3 links.
+
+Can Ops and Security confirm the following ASAP:
+1) Can we accept a CSV manifest and store the hashes in our GRC?
+2) Do we have a standard retention override process for partner artifacts >90 days?
+3) Who will own on-call when uploads arrive (ops alias or Ben)?
+
+If we can get answers today I’ll respond with a proposed runbook.
+
+Thanks,
+Karthik
+
+> On Fri, Apr 3, 2027 at 10:15 AM ShieldBridge Security <security@shieldbridge.com> wrote:
+> ...
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>, Ben Carter <ben.carter@redwood.com>, Soojin Lee <soojin.lee@redwood.com>
+Cc: Sergio Alvarez <sergio.alvarez@redwood.com>
+Date: Sat, 4 Apr 2027 09:30:00 -0700
+Subject: Re: Partner evidence staging protocol for SOC2 & pen tests
+
+Thanks for the context — I sketched a pragmatic ops plan below.
+
+Summary (proposed):
+- Ingestion methods: Accept both. Small artifacts (<50MB) via pre-signed HTTPS links into a secured S3 staging bucket; large artifacts via SFTP to a per-partner folder.
+- Manifest: evidence_manifest_v1.csv (attached) with fields: filename, sha256, size_bytes, artifact_type, scan_date_utc, scope_id, uploader, retention_days. Manifest must be uploaded alongside artifacts (same timestamp).
+- Encryption: Partners may encrypt with our PGP public key (we will publish this to the secure drive) OR use server-side encryption on the S3 bucket.
+- Access & retention: Default staging retention 90 days. To request >90 days, partner submits a retention request form (linked) and Legal approves.
+- Handoff & processing: Once a manifest is ingested, Ops will run a validation job (verify hashes, check schema). Valid batches trigger an entry in our GRC via API. Failed batches open a ticket to the partner with failure reasons.
+
+Owners & contacts:
+- Upload monitoring / validation: Ben Carter (ops) — ben.carter@redwood.com
+- GRC ingestion / mapping: Soojin Lee (security integrations) — soojin.lee@redwood.com
+- Partner escalation & contract questions: Sergio Alvarez (partner ops) — sergio.alvarez@redwood.com
+
+Attached: evidence_manifest_v1.csv, sftp-instructions.txt, signed-nnda.pdf (DocuSign link below).
+
+Next steps for Karthik: share the public PGP key (if we want that route) and propose a kickoff slot.
+
+-Marissa
+Marissa Cole
+Senior Manager, Security Integrations, Redwood Inference
+marissa.cole@redwood.com
+
+Attachments: evidence_manifest_v1.csv (schema), sftp-instructions.txt (server/user/example), signed-nnda.pdf (executed)
+Related link: https://drive.redwood.com/shared/partner-evidence-staging
+
+From: Sergio Alvarez <sergio.alvarez@redwood.com>
+To: ShieldBridge Security <security@shieldbridge.com>, Acme PenTest Ltd <pt-team@acmept.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>, Soojin Lee <soojin.lee@redwood.com>
+Date: Sun, 4 Apr 2027 15:20:00 -0700
+Subject: Re: Partner evidence staging protocol for SOC2 & pen tests
+
+Alex / ShieldBridge team —
+
+Appreciate the quick reply. Confirming Redwood can accept both transport methods. A couple technical notes from Security Integrations (Soojin is on copy):
+- Keying: We will publish a Redwood PGP public key for partners who want to encrypt bundles. Alternatively we accept S3 pre-signed links with server-side encryption AES-256.
+- KMS & audit: For encrypted bundles we will not accept external key material. Partners should encrypt with our public key only. We will log every manifest ingestion with timestamp and uploader IP for audit purposes.
+- Validation: On ingestion we will verify sha256; mismatches will result in rejection and ticketing.
+
+Please confirm if ShieldBridge teams are okay with: 48-hour pre-signed link expiry for small files and SFTP credentials rotated monthly for bulk transfers. Also confirm if Acme PenTest can produce the CSV manifest as Marissa outlined.
+
+If those are fine, can we schedule a 30-minute kickoff Tuesday or Wednesday (link: https://cal.redwood.com/sergio/30)?
+
+Regards,
+Sergio Alvarez
+Director, Partner Operations, Redwood Inference
+sergio.alvarez@redwood.com
+
+
+From: Alex Moreno <security@shieldbridge.com>
+To: Sergio Alvarez <sergio.alvarez@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Acme PenTest Ltd <pt-team@acmept.com>
+Date: Mon, 5 Apr 2027 14:12:00 -0700
+Subject: Re: Partner evidence staging protocol for SOC2 & pen tests
+
+Sergio / Karthik —
+
+All good on our end. ShieldBridge accepts the hybrid flow:
+- 48-hour pre-signed links for small artifacts (reports, JSON logs)
+- SFTP for bulk artifacts, with monthly-rotated credentials
+- We will produce the CSV manifest in the schema Marissa provided and will include sha256 for each file.
+
+We will encrypt large bundles with your public PGP key. Sending our PGP public key as an attachment (shieldbridge-pubkey.asc). We also accept the DocuSign NNDA signing flow — please send the DocuSign link and we’ll get that executed before the kickoff.
+
+Proposed kickoff: Tue Apr 6 09:00 PT — I’ll accept if that works for your team.
+
+Thanks,
+Alex Moreno
+Operations Manager, ShieldBridge Security
+security@shieldbridge.com
+Attachment: shieldbridge-pubkey.asc (PGP public key, 1KB)
+Related: DocuSign link: https://na1.docusign.net/ENV/abcd1234

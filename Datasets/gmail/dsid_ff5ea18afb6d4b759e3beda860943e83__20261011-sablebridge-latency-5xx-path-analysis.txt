@@ -1,0 +1,123 @@
+SableBridge: sudden throughput regression and spike in 5xx — path analysis
+
+From: Alex Porter <alex.porter@sablebridge.com>
+To: Irene Choi <irene.choi@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-10-11T08:12:00-07:00
+Subject: SableBridge experiencing throughput drop + 5xx surge to Redwood API
+
+Hi Irene,
+
+We're seeing a sharp regression in request throughput to Redwood across our peak window (10/11 07:50–08:05 PDT). Latency climbed from ~120ms to 800–2,000ms and 5xx rates jumped to ~18% for our inference route (region: us-west-2). Attached is a Grafana snapshot and a short pcap we took while reproducing.
+
+A few notes from our side:
+- Errors correlate with a handful of upstream SYN resets from a proxy cluster IP range (listed in the pcap).
+- Our cloud provider reported a transient peering maintenance at ~07:58 but claims it should be isolated.
+- We also observed intermittent DNS NXDOMAIN responses for service-domain.sablebridge.internal during the window.
+
+This is causing active degradation for our customers — can you triage urgently? We can provide traceroutes / flow logs if useful.
+
+Attachments: grafana-latency-heatmap-1008.png (image), tcpdump-snippet-10-11.pcap (pcap)
+
+Thanks,
+Alex
+Alex Porter
+Head of Infra, SableBridge
+
+From: Irene Choi <irene.choi@redwood.ai>
+To: Alex Porter <alex.porter@sablebridge.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Rishi Malhotra <rishi.malhotra@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: 2026-10-11T08:25:00-07:00
+Subject: Re: SableBridge experiencing throughput drop + 5xx surge to Redwood API
+
+Alex — thanks for the quick ping and attachments. I’ve looped Rishi and Ben to look at the network traces and Grafana. High level next steps from our side:
+
+- Rishi: start with DNS and peering logs / route tables (we suspect a partial route flap or AS path change).
+- Ben: check the proxy-layer and LB health for any abnormal 5xx patterns and retry behaviors.
+- Marissa: I’ve CC’d you because this is causing customer-visible impact — please keep SableBridge updated on timing.
+
+Alex: can you please run a few traceroutes (to our public egress IPs and service FQDN) and send flow logs for 07:45–08:10 PDT? Also confirm whether you saw any BGP announcements from your provider during that window.
+
+I’ll coordinate a short war room and update within 30 mins.
+
+—Irene
+Irene Choi
+Senior Customer Reliability Manager, Redwood Inference
+
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Irene Choi <irene.choi@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Alex Porter <alex.porter@sablebridge.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-10-11T08:46:00-07:00
+Subject: Re: SableBridge experiencing throughput drop + 5xx surge to Redwood API — initial findings
+
+Quick summary of what I see from our telemetry and control plane:
+
+- DNS: multiple short-lived NXDOMAIN/NODATA responses from one of SableBridge's resolver IPs (~07:57–08:00). Our authoritative side shows no config changes.
+- Routing: a transient change in the AS path for egress to SableBridge's NAT range at 07:58 that correlated with increased RTTs. Not a full BGP withdrawal but an alternate, slower path.
+- Proxy / Firewall: our edge logs show an elevated count of TCP RSTs tied to the same SableBridge proxy ASN for the same window. Some connections were reset mid-stream, which explains partial 5xxs and large tail latencies.
+
+Immediate mitigation options (short term):
+- We can temporarily pin SableBridge traffic to an alternate egress POP for the next 60–90 minutes to drain the affected path (requires your consent).
+- Increase DNS caching TTL on our side for the SableBridge-related CNAMEs to reduce resolver load during the bounce window.
+
+I’ve uploaded a packet snippet and the route-change diff to the incident dashboard: https://redwood.app/ops/incident/INC-8427 and opened NET-1189 to track permanent fixes.
+
+Attaching: sablebridge-traceroute-usc-west2.txt (extracted by our probe), tcpdump-snippet-10-11.pcap (subset)
+
+—Rishi
+Rishi Malhotra
+Lead Network Reliability Engineer, Redwood Inference
+
+From: Alex Porter <alex.porter@sablebridge.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>, Irene Choi <irene.choi@redwood.ai>
+Cc: SableBridge Infra <infra@sablebridge.com>
+Date: 2026-10-11T09:05:00-07:00
+Subject: Re: SableBridge experiencing throughput drop + 5xx surge to Redwood API — traceroutes attached
+
+Thanks Rishi — attaching the traceroutes and our flow logs. We did see a BGP AS path change reported to us by the provider at 07:58; they claim it was a maintenance rollback that affected one transit and rerouted via a longer AS chain.
+
+Quick answers:
+- We’re happy to have you redirect traffic to an alternate egress POP if that’s the quickest mitigation.
+- We’ll also push a short-term change to our resolver fleet to ensure stable upstream behavior, but we want Redwood to handle any client-side DNS caching you can to avoid churn.
+
+Attachments: sablebridge-traceroute-usc-west2.txt, sablebridge-flowlog-07-58.json
+
+—Alex
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Alex Porter <alex.porter@sablebridge.com>, Irene Choi <irene.choi@redwood.ai>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: 2026-10-12T09:10:00-07:00
+Subject: Re: SableBridge experiencing throughput drop + 5xx surge to Redwood API — customer impact / credits request
+
+Alex — appreciate the data and your patience. FYI, SableBridge’s SREs told our CS team that several customers opened tickets and public monitoring hit their SLAs. Customer success has flagged this as high-impact — they’re asking about a goodwill credit and a formal incident update.
+
+From a commercial perspective, recommended immediate steps:
+- Agree a short-term credit (SLA window 07:50–08:15 PDT). We’ve seen demand for a 25% goodwill on that window in similar cases; recommend offering 20% to balance precedent and relationship.
+- Provide a tight post-mortem within 72 hours and a mitigation plan for routing/DNS hardening.
+
+Irene / Rishi / Ben — can you confirm what we can commit to customer-wise? Alex: we propose an exec sync at 12:30 PDT today to run through the RCA and customer messaging.
+
+Thanks,
+Marissa Cole
+Enterprise Account Executive, Redwood Inference
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Irene Choi <irene.choi@redwood.ai>, Rishi Malhotra <rishi.malhotra@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Alex Porter <alex.porter@sablebridge.com>
+Date: 2026-10-12T15:34:00-07:00
+Subject: Re: SableBridge incident — executive decision and next steps
+
+Team / Alex — thanks for the fast work here. Decision points:
+
+- Goodwill credit: approve 20% for the impacted window (07:50–08:15 PDT). Finance to prepare adjustments; Marissa will confirm external wording.
+- Short-term mitigation: Rishi to coordinate egress pinning to the agreed alternate POP for 48 hours and implement increased client-side DNS caching for the SableBridge CNAMEs.
+- Post-mortem: engineering to deliver a technical RCA and action plan within 72 hours; include a root cause timeline and the permanent remediation plan (NET-1189).
+- Customer communication: Marissa / Irene to draft a joint executive note for Alex’s execs.
+
+Irene / Rishi: please include runbook updates so this can be automated for any repeated peering flaps. Ben, please confirm whether any L7 retry rules need changing to avoid amplifying backend pressure.
+
+Let’s have a short exec sync at 12:30 PDT tomorrow (invite to follow). Thanks all — keep the updates flowing in the incident dashboard: https://redwood.app/ops/incident/INC-8427
+
+—Vivek
+Vivek Kulkarni
+VP, Customer Reliability, Redwood Inference

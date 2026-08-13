@@ -1,0 +1,118 @@
+SLO alignment + canary plan for FastFin integration
+
+From: Camila Reyes <camila.reyes@redwood.ai>
+To: Jake Thompson <jake.thompson@fastfin.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Evelyn Hart <evelyn_hart@redwood.ai>
+Date: 2026-04-12T15:23:00-07:00
+Subject: SLO alignment + canary plan for FastFin integration
+
+Hi Jake — thanks again for the product demo earlier. Quick recap and the asks we agreed on so we can align the MAP (mutual action plan):
+
+Summary of perf goals you mentioned on the call:
+- Latency: p95 <= 150 ms; p99 <= 350 ms for 512-token avg responses (streaming enabled)
+- Streaming granularity: server should deliver first chunk <= 200 ms after request start, subsequent chunks <= 100 ms
+- Throughput: sustained 300 requests/min for peak window (10-minute spike), with burst capacity to 1,200 rpm for short periods
+- Concurrency: target 180 concurrent active sessions (endpoints holding open streaming connections)
+- Error budget: initial target <1% errors across canary window
+
+Immediate asks / next steps:
+1) Please confirm the three goals above (latency/throughput/concurrency) and add any workload constraints (payload sizes, avg tokens, typical prompt templates).
+2) Confirm whether FastFin requires E2E TLS + customer-managed KMS for key storage (I believe you said yes for KMS, but want to confirm).
+3) Would you like Redwood to run a scoped performance canary using your dev credentials and a sanitized prompt set? We can follow the canary runbook attached.
+
+Attachments: slo-checklist.xlsx (SLO checklist & test matrix), canary-runbook.md (playbook + acceptance criteria)
+
+Proposed meeting: 30-min canary planning session w/ Rishi (engineering) and Evelyn (CS) — are you available Tues 4/14 10am PT or Wed 4/15 11am PT?
+
+Thanks,
+Camila
+Account Exec | Redwood Inference
+camila.reyes@redwood.ai | +1 415-555-0127
+
+From: Jake Thompson <jake.thompson@fastfin.com>
+To: Camila Reyes <camila.reyes@redwood.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Evelyn Hart <evelyn_hart@redwood.ai>, contracts@fastfin.com
+Date: 2026-04-12T18:02:00-07:00
+Subject: Re: SLO alignment + canary plan for FastFin integration
+
+Thanks Camila — great recap. A few clarifications from our side: 
+- Confirm KMS: yes, we need customer-managed keys (we'll share the KMS ARNs).
+- Payloads: typical prompt + context averages ~700 tokens (we have a 2,048 token cap in production). Please treat the 512-token figure as conservative; aim for 700 tokens median, 1,800 tokens 95th percentile.
+- Concurrency: 180 is correct for current MVP, but plan sizing for 250 concurrency for safety.
+
+On the canary: we want Redwood to run the canary against our staging workload. Two asks before we greenlight:
+1) A short written canary plan (runbook + rollback criteria) we can review (legal/ops need it for approval).
+2) A rough cost estimate for a 72-hour canary at the proposed scale (with burst capacity) so procurement can prepare a PO.
+
+Also adding contracts@fastfin.com to keep procurement looped.
+
+—Jake
+Jake Thompson
+Head of Platform Engineering | FastFin Payments
+jake.thompson@fastfin.com | +1 646-555-9810
+
+From: Camila Reyes <camila.reyes@redwood.ai>
+To: Jake Thompson <jake.thompson@fastfin.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Evelyn Hart <evelyn_hart@redwood.ai>
+Date: 2026-04-13T09:11:00-07:00
+Subject: Re: SLO alignment + canary plan for FastFin integration
+
+Jake — noted on the token distribution and concurrency buffer. I've attached an updated runbook (canary-runbook.md) and an SLO checklist (slo-checklist.xlsx) that includes the rollback criteria and acceptance thresholds. High level we propose: 
+
+Canary summary (proposal)
+- Window: 72 hours with staged ramp: 10% -> 30% -> 60% -> 100% over first 18 hours; hold 24 hours at 100% before analysis.
+- Acceptance: p95 <= 150 ms and p99 <= 400 ms (given 700-token median), error rate <1.0%, and CPU/GPU utilization within agreed limits.
+- Rollback triggers: sustained p99 > 500 ms for 30+ minutes OR error >3% in a 15-minute window.
+- Data & access: Redwood will only use a sanitized subset of prompts; logs and perf traces will be shared to your staging S3 (or your choice of storage) with strict TTL.
+
+Cost estimate (ballpark)
+- We expect the 72-hour canary at your profile to consume ~1.8 GPU-days across our fleet (mixed A100/V100-equivalent capacity). Estimated cost range (usage + monitoring + support): $9k–$13k. Final quote after we pin exact concurrency profile and model variant.
+
+Proposed next steps:
+- You to confirm acceptance thresholds (I suggested p99 <= 400 ms).
+- Legal/procurement to confirm PO path (contracts@...).
+- Schedule planning call: I can do Wed 4/15 11am PT. Rishi/Evelyn will lead the technical plan.
+
+Camila
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Jake Thompson <jake.thompson@fastfin.com>, Camila Reyes <camila.reyes@redwood.ai>
+Cc: Evelyn Hart <evelyn_hart@redwood.ai>
+Date: 2026-04-15T08:38:00-07:00
+Subject: Re: SLO alignment + canary plan for FastFin integration
+
+Jake — quick engineering note on the test profile so we align tooling: 
+- For realistic replay we need: distribution of prompt lengths (median 700, 95th 1,800), streaming enabled with 100ms chunking, and a representative mix of short/long completions.
+- We'll run two parallel test modes: steady-state traffic (to validate throughput & batching) and spike tests (to validate autoscale and burst capacity).
+- Batching behavior: Redwood's runtime will batch similar sequence-length requests; please identify any prompts that must be locked to single-request (no batching) for correctness.
+
+Action item for FastFin: share a 24-hour anonymized request sample (timestamps + token counts + streaming on/off flags) — we only need metadata, not PII. If you can't share sample traffic, we'll create a synthetic profile based on the med/95/99 numbers you provided.
+
+I'll be on the Wed 4/15 11am PT call to walk through the runbook and the exact load generator parameters.
+
+Thanks,
+Rishi
+Staff SWE, Performance | Redwood Inference
+
+From: Jake Thompson <jake.thompson@fastfin.com>
+To: Camila Reyes <camila.reyes@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Evelyn Hart <evelyn_hart@redwood.ai>, contracts@fastfin.com
+Date: 2026-04-18T10:44:00-07:00
+Subject: Re: SLO alignment + canary plan for FastFin integration
+
+Thanks all — fast answers below.
+- We reviewed the runbook and checklist. Acceptance criteria look good, with two small tweaks: make the p99 target <= 400 ms (you had both 350 & 400 in threads) — we lock to 400; and extend the hold window at 100% to 36 hours for extra confidence.
+- Procurement: contracts@fastfin.com will prep a short PO. We expect final approval by the end of the week if the cost estimate holds.
+- Data: we'll generate and share an anonymized 24-hour traffic CSV by EOD Monday (no PII).
+
+Decision criteria (for our internal execs):
+1) Canary passes acceptance thresholds across the 36-hour hold window.
+2) No more than 0.5% client-facing errors; internal rate alerts ok up to 1%.
+3) Cost within the quoted band (+/- 15%).
+
+Camila — please send the final runbook PDF and a one-page summary of the canary acceptance criteria (for exec review) — Rishi can include the load generator parameters.
+
+I'll be on the Wed 4/15 planning call (and we'll share the traffic CSV).
+
+—Jake
+

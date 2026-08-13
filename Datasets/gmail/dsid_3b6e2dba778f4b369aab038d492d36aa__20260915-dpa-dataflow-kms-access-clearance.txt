@@ -1,0 +1,119 @@
+Questions: DPA, key ownership, subprocessors & data flow for private deployment
+
+From: Jordan Lee (Security, AcmeCorp) <jordan.lee@acmecorp.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Procurements <procure@acmecorp.com>
+Date: Tue, 15 Sep 2026 08:12:00 +0000
+Subject: DPA / key ownership / subprocessors for private deployment
+
+Hi Hannah,
+
+Thanks for the demo last week — Acme is interested in a Private deployment (VPC-hosted or on-premise) for a POC. Before we move forward with procurement, our security and legal teams need clarity on a few items so we can complete an internal RFI:
+
+- Key ownership: can Acme provide and control customer-managed KMS/HSM keys, and will Redwood ever have access to plaintext keys or decrypted data?
+- Subprocessors: please provide the current list (including cloud infra, monitoring, logging, support vendors) and details on any non-US subprocessors that would require data transfer assessments.
+- Data flow: for VPC vs on-prem, we need a diagram/description of what Redwood may see (logs, metadata, model cache) and any circumstances where Redwood personnel could access customer data (e.g., incident response, debug).
+- DPA: a draft DPA or redlines would be great — we have a few standard clauses around data retention and deletion, and cross-border transfers.
+
+I attached the Acme security RFI for reference. Can you respond by Thursday so we can include answers in our vendor evaluation?
+
+Appreciate it,
+Jordan Lee
+Security Operations
+AcmeCorp
+
+Attachment: Acme_Security_RFI_Sept2026.pdf
+From: Hannah Schmitt <hannah.schmitt@redwood.ai>
+To: Jordan Lee <jordan.lee@acmecorp.com>
+Cc: Procurements <procure@acmecorp.com>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: Tue, 15 Sep 2026 10:01:00 +0000
+Subject: Re: DPA / key ownership / subprocessors for private deployment
+
+Hi Jordan — thanks for the clear list. Quick summary up front: yes, for Private deployments Acme can bring customer-managed keys (KMS/HSM) and Redwood will not have access to plaintext keys or be able to decrypt request payloads when customer-managed keys are in use. I attached an annotated DPA that maps to the items you asked about.
+
+Below are concise answers; I'll loop in legal and infra for a couple of technical confirmations.
+
+- Key ownership and control: Supported. Options: (1) VPC private deployment with customer KMS (BYOK) integrated via Cloud KMS or HSM; (2) Fully on-prem package where keys and storage remain in your network. In both cases, Redwood does not store plaintext keys. Access to any cached material encrypted with customer keys requires the customer key — our services cannot decrypt without customer-managed key access.
+
+- Subprocessors: Attached is the current list (we will follow the DPA notification cadence for changes). Typical subprocessors include cloud hosting, monitoring, and observability providers; some support vendors may operate in EU/US regions — I'll have legal provide the CSV.
+
+- Data flow / operator access: For VPC deployment, Redwood control plane manages orchestration but does not possess keys; runtime nodes in the VPC handle decryption when authorized by your KMS. For on-prem, the runtime runs in your environment and plaintext never leaves your network. In normal operations, Redwood engineers do not access request payloads; access is limited to anonymized telemetry and aggregated metrics. Emergency access policies require a documented process and customer authorization (or lawful process).
+
+- DPA: Attached is an annotated draft mapping clauses to your questions. Please flag redlines.
+
+Next steps: Vivek (legal) and Laura (infra) are on this thread to add legal redline guidance and confirm the technical isolation model. Happy to jump on a short call if helpful.
+
+Best,
+Hannah Schmitt
+Enterprise Sales
+Redwood Inference
+
+Attachment: Redwood_DPA_annotated.pdf
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Jordan Lee <jordan.lee@acmecorp.com>, Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Procurements <procure@acmecorp.com>, Laura Bennett <laura.bennett@redwood.ai>
+Date: Tue, 15 Sep 2026 11:25:00 +0000
+Subject: Re: DPA / key ownership / subprocessors for private deployment
+
+Jordan, Hannah — thanks. A few legal clarifications and an ask to infra:
+
+- DPA: see inline comments in the attached annotated DPA. Key items: (a) we accept BYOK and will add language that Redwood will not retain plaintext keys; (b) we propose a 30-day subprocessors notification window and the right for Acme to object to new subprocessors on reasonable grounds for critical data processing.
+
+- Subprocessors: attached is the latest export of subprocessors; it includes region, purpose, and contact for each vendor. If any of the listed vendors process EU personal data and you require SCCs or EU transfer mechanisms, flag those and we will provide appropriate SCC addenda.
+
+- Escalation / emergency access: Laura, can you confirm that with customer-managed keys our operators cannot decrypt customer payloads or model cache? Also describe the process for lawful-intercept or subpoena requests (we should confirm notification timelines).
+
+I attached: subprocessors_list_latest.csv for your review.
+
+Thanks,
+Vivek Kulkarni
+Head of Legal
+Redwood Inference
+
+Attachment: subprocessors_list_latest.csv
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Jordan Lee <jordan.lee@acmecorp.com>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Procurements <procure@acmecorp.com>
+Date: Wed, 16 Sep 2026 09:10:00 +0000
+Subject: Re: DPA / key ownership / subprocessors for private deployment
+
+Jordan / team — technical confirmation below. High level: when Acme supplies and manages keys, our service components cannot decrypt customer data without the key material presented by your KMS. Practical details: 
+
+- VPC deployment: the runtime nodes that process requests are provisioned inside your VPC and authenticate to your KMS for per-request decryption. Redwood control-plane maintains orchestration metadata but does not receive plaintext payloads. Our logs capture request IDs, latencies, and non-sensitive metrics; payloads are not logged.
+
+- On-prem deployment: runtime and persistent storage remain on your infrastructure; Redwood staff access is limited to what you grant for debug sessions.
+
+- Operator access / emergency: We do not have standing access to decrypt content protected by customer keys. In the rare event of lawful process (subpoena/court order) where Redwood is compelled to assist, we notify customers promptly unless prohibited. If Acme requires an escrow or break-glass mechanism, we can discuss a mutually agreed technical escrow with strict access controls and audit logs (this would be an exceptional, documented arrangement).
+
+- Transfers: Our subprocessors list indicates a small set of support vendors with EU-based processing for telemetry only; core compute and storage for Private deployments stay in customer region when required by contract. If you need SCCs or specific transfer mechanisms, we can add them to the DPA.
+
+For SOC2 / evidence, here's a summary link to our compliance artifacts — this is a secure view: https://drive.redwood.com/soc2/summary-2026 (let me know if you need a more formal report).
+
+Happy to walk through the runtime diagram on a call. Proposed next step: 30-minute technical + legal sync Thursday 16:30 UTC.
+
+Best,
+Laura Bennett
+Director, Infrastructure
+Redwood Inference
+From: Jordan Lee (Security, AcmeCorp) <jordan.lee@acmecorp.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Cc: Procurements <procure@acmecorp.com>
+Date: Wed, 16 Sep 2026 14:00:00 +0000
+Subject: Re: DPA / key ownership / subprocessors for private deployment
+
+Thanks — that addresses most of our questions. A couple quick follow-ups before we schedule procurement:
+
+1) Please confirm the subprocessors CSV contains vendor locations (it did in the file preview) and note any that initiate transfers out of the EU.
+2) We would like a short smoke-test plan to validate that our BYOK integration prevents Redwood from accessing decrypted payloads (steps we can run during the POC).
+
+Procurements — once we have the final DPA and a brief runbook for the smoke-test we can proceed to DocuSign and PO.
+
+Jordan Lee
+Security Operations
+AcmeCorp
+
+On Wed, 16 Sep 2026 at 09:10, Laura Bennett <laura.bennett@redwood.ai> wrote:
+> Jordan / team — technical confirmation below. High level: when Acme supplies...
+> [quoted for context]
+
+""

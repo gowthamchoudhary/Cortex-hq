@@ -1,0 +1,122 @@
+Mosaic Health — integration patterns & tool-calling follow-up
+
+From: Tessa Morgan <tessa.morgan@redwood.com>
+To: Alex Chen <alex.chen@mosaichealth.com>
+Cc: Jordan Blake <jordan.blake@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Fri, 15 Jan 2027 10:12:00 -0800
+Subject: Follow-up: integration patterns & specific asks from demo
+
+Hi Alex —
+
+Thanks again for the conversation this morning. Quick recap and proposed next steps so we can align the technical pilot:
+
+Recap (from notes):
+- Mosaic is evaluating Redwood for patient-facing summarization and a backend clinical search reranker.
+- Primary tech stack: Python services + Node.js frontend; SSO via OIDC (Auth0) for clinicians.
+- Must support tool/function calling for two tool types: calendar (scheduling invites into your EMR calendar) and internal search (querying the existing reranker microservice).
+- Security: need audit logs, token scoping, and optional on-prem bundle later this year.
+
+Asks / next steps:
+1) Can you confirm languages for the SDK pilot (Python, Node)?
+2) Any perf SLOs for the reranker path (latency targets per query)?
+3) Who on your side owns the reranker API (contact and example endpoint)?
+4) We'll propose two integration patterns below and pick one for a 2-week pilot: a) lightweight proxy + tool definitions (fast) or b) direct server-side tool handlers with queued retries (more resilient).
+
+Attached: Mosaic-ActionPlan.pdf (high-level timeline).
+
+I'll loop Marcus to scope throughput/quantization constraints and Jordan to schedule a short architecture workshop.
+
+Thanks —
+Tessa Morgan
+Enterprise Sales
+Redwood Inference
+Attachments: Mosaic-ActionPlan.pdf (1 page)
+
+From: Alex Chen <alex.chen@mosaichealth.com>
+To: Tessa Morgan <tessa.morgan@redwood.com>
+Cc: Jordan Blake <jordan.blake@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Fri, 15 Jan 2027 16:30:00 -0800
+Subject: Re: Follow-up: integration patterns & specific asks from demo
+
+Tessa —
+
+Great summary, thanks. Quick answers inline:
+
+1) SDK languages: Python first (backend), Node for a small frontend helper.
+2) Reranker SLOs: 95th percentile <= 150ms for single-query rerank (we can tolerate occasional spikes up to 300ms).
+3) Reranker owner: Priya Singh (priya@paycore.io) owns the microservice; API currently basic auth behind VPN (we could open a staging endpoint).
+4) For pilot we prefer the proxy + tool-def approach to validate functionality quickly; heavier server-side handlers for production later.
+
+Security note: We need explicit details on how Redwood issues scoped tokens for tool calls (least privilege), and whether audit logs include per-tool invocation payload hashes.
+
+Attaching: mosaic-stack-diagram.png — lightweight diagram of current setup.
+
+Best,
+Alex Chen
+Director, Clinical Apps
+Mosaic Health
+Attachments: mosaic-stack-diagram.png (PNG, 480KB)
+
+From: Tessa Morgan <tessa.morgan@redwood.com>
+To: Alex Chen <alex.chen@mosaichealth.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Jordan Blake <jordan.blake@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Sat, 16 Jan 2027 09:18:00 -0800
+Subject: Re: Follow-up: integration patterns & specific asks from demo
+
+Alex — thanks for the quick clarifications. Based on your answers, here's a short technical proposal (high level) for the pilot and things we'll demo in the workshop.
+
+Pilot goal (2 weeks): validate tool-calling UX for clinician flows (calendar + reranker) and prove we can meet the reranker latency SLO in staging.
+
+Proposed integration pattern A — Proxy + Tool Definitions (recommended for pilot):
+- Architecture: Redwood-hosted inference routes calls to a small Mosaic proxy (deployed in staging) using mTLS + short-lived scoped tokens. Proxy is responsible for:
+  - translating tool-calls into your internal reranker API,
+  - invoking calendar API in EMR, and
+  - performing auth to your internal systems.
+- Tool definitions: JSON schema-driven definitions stored in Redwood Console; gateway verifies return types and structured output before forwarding to client.
+- Error handling: proxy returns normalized errors; Redwood will retry idempotent calls (configurable backoff); non-idempotent ops (calendar invites) use confirm/compensate pattern (two-step commit).
+- Observability: each tool call will emit a trace id; audit log contains call metadata (tool id, requester, timestamp) and a content hash for payload immutability.
+
+Proposed integration pattern B — Server-side handlers (production target):
+- Handlers live in Mosaic infra as server-side functions subscribed to tool events.
+- Redwood will deliver structured tool payloads to an authenticated webhook; handlers respond with success/failure and details.
+- Supports parallel tool fan-out and complex compensating transactions; recommended for latency-sensitive heavy load after pilot.
+
+Specific asks for engineering prep:
+- Please provide a staging reranker endpoint (w/ example query) and sample response schema.
+- Confirm if EMR calendar accepts iCal invites or needs a proprietary payload.
+- List allowed IP ranges for the proxy to avoid VPN blockers.
+
+Marcus will evaluate throughput/quant profiles we should use in the pilot (tokenization, quantized model suggestion for dev). Jordan will propose times for a 90-minute workshop next week.
+
+I'll also include a short doc on error-handling patterns (attached).
+
+Thanks —
+Tessa Morgan
+Enterprise Sales | Redwood Inference
+Attachments: redwood-tooling-patterns.pdf (3 pages)
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Alex Chen <alex.chen@mosaichealth.com>, Tessa Morgan <tessa.morgan@redwood.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Wed, 20 Jan 2027 09:05:00 -0800
+Subject: Re: Follow-up: integration patterns & specific asks from demo
+
+Alex —
+
+Thanks for the details. Per Tessa's note, proposing two workshop slots (pick one):
+- Thursday 2027-01-21 10:00–11:30 PT — architecture + auth deep-dive (recommended)
+- Friday 2027-01-22 14:00–15:30 PT — hands-on pilot kickoff (config + test endpoints)
+
+Agenda (90m):
+1) 15m: review staging topology & auth (OIDC scopes, token lifetimes)
+2) 25m: tool definitions & structured output schema (calendar, reranker)
+3) 25m: error-handling patterns & compensating flows (idempotency discussion)
+4) 15m: next steps — staging endpoints, pilot acceptance criteria, milestone dates
+
+Pre-reqs for the call: please share the staging reranker endpoint and an example token scope that your IdP will accept for server-to-server (we can also support client-side OIDC flows for delegated calls).
+
+If those slots don't work, tell us alternatives and we'll adjust.
+
+Best,
+Jordan Blake
+Solutions Architect | Redwood Inference

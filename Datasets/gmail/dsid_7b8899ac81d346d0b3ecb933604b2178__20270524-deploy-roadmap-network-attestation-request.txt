@@ -1,0 +1,177 @@
+CloudLink Health — deployment roadmap + network attestation request
+
+From: Jack Wu <jack.wu@cloudlink.health>
+To: Rachel Kim <rachel_kim@redwood.ai>
+Cc: infra@cloudlink.health
+Date: Mon, 24 May 2027 09:12:00 -0700
+Subject: Private deploy intake — CloudLink Health (initial ask)
+
+Hi Rachel,
+
+Thanks for the walkthrough last week. We're ready to start the private deployment intake for our VPC-connected deployment. High level asks:
+
+- We need a short list of the network and security artifacts Redwood requires to validate the environment prior to tenant activation.
+- We plan to deploy in us-west-2 and will use our managed transit gateway + NAT.
+- Requesting target timeline: ~3 weeks to go-live after evidence handoff.
+
+Can you send the onboarding checklist and the minimum evidence set? Also: is there a templated MAP or statement of work we should sign?
+
+Attached: none yet — we'll prepare a CIDR list/export.
+
+Best,
+Jack Wu
+Head of Infrastructure
+CloudLink Health
+jack.wu@cloudlink.health
+
+From: Rachel Kim <rachel_kim@redwood.ai>
+To: Jack Wu <jack.wu@cloudlink.health>
+Cc: Ben Carter <ben_carter@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>, infra@cloudlink.health, procurement@cloudlink.health
+Date: Mon, 24 May 2027 10:03:00 -0700
+Subject: Re: Private deploy intake — CloudLink Health (initial ask)
+
+Hi Jack — great to hear. I've pasted a compact onboarding checklist below (we'll provide the full MAP and an intake spreadsheet in Drive). I'll also flag a few items that commonly cause delays.
+
+Quick onboarding checklist (prereqs we need to validate):
+
+1) Networking
+- Egress CIDR list (CSV) and which prefixes will be SNAT'd via TGW/NAT (we need exact /24+/16 granularity).
+- Inbound rules: list of service FQDNs/ports that require whitelisting (if any).
+- BGP peering: do you plan active peering to Redwood edge? If yes, provide ASN and proposed BGP session parameters.
+
+2) Identity & keys
+- Customer-managed KMS key ARN for data-at-rest encrypted volumes (if using CMK).
+- Service account email and roles (least privilege IAM policy we provided).
+
+3) Security attestations
+- SOC 2 summary (PDF) + contact for compliance follow-up.
+- Data residency confirmation (selected region + backups).
+
+4) Access & deployment
+- Jumpbox/bastion access window and jump host IP(s) for day-0 debugging.
+- SSH public key(s) or SSM role to be configured for access.
+
+5) Operational items
+- Expected QPS and average request/seq lengths for sizing.
+- Maintenance blackout windows for initial week of testing.
+
+Common delay points:
+- Missing exact egress CIDRs (we can't validate NAT SNI rules without these).
+- KMS key ownership mismatch (CMKs must allow Redwood service principal).
+- Procurement redlines (DocuSign link required for MAP)
+
+Next steps from Redwood:
+- We'll upload the MAP and intake spreadsheet to the Drive folder linked below by EOD.
+- Ben will pick up the initial network validation once we get the CIDR CSV and SOC brief.
+
+Deliverables from your side:
+- CIDR CSV (egress + management)
+- SOC 2 summary + compliance contact
+- Signed MAP (procurement)
+
+I'll follow up with a short internal task assignment.
+
+Thanks,
+Rachel Kim
+Principal Solutions Engineer
+Redwood Inference
+rachel_kim@redwood.ai
+
+Attachments: onboarding-checklist-summary.txt (inline)
+Links: https://drive.redwood.com/drive/folders/1a2b3c-CLH-onboarding
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Rachel Kim <rachel_kim@redwood.ai>
+Cc: Kimberly Park <kimberly_park@redwood.ai>
+Date: Mon, 24 May 2027 11:21:00 -0700
+Subject: Internal: CLH network validation kickoff
+
+Rachel / Kim —
+
+I'll take lead on the network preflight once the CIDR file and SOC summary land. Quick notes for my runbook:
+
+- Validate egress CIDRs against our allowlist templates and map to expected hostname SNI paths.
+- Confirm outbound TCP 443 permitted to redwood-edge endpoints (we'll give the exact FQDN list).
+- If CLH wants active BGP peering, we need their ASN and an IP plan (we prefer passive fallback if peering not ready).
+- We'll request a short packet-capture window (10m) through their NAT during smoke test to confirm NAT translation behavior.
+
+I'll create a checklist item in the shared Drive and request access from Jack.
+
+Ben
+Principal Infra Ops
+Redwood Inference
+
+--On Mon, May 24, 2027 at 10:03 AM Rachel Kim <rachel_kim@redwood.ai> wrote:
+> Hi Jack — great to hear. I've pasted a compact onboarding checklist below (we'll provide the full MAP and an intake spreadsheet in Drive). I'll also flag a few items that commonly cause delays.
+
+From: Jack Wu <jack.wu@cloudlink.health>
+To: Rachel Kim <rachel_kim@redwood.ai>
+Cc: infra@cloudlink.health, procurement@cloudlink.health
+Date: Tue, 25 May 2027 08:49:00 -0700
+Subject: Re: Private deploy intake — CloudLink Health (initial ask)
+
+Thanks Rachel — attaching the CIDR export and our SOC-2 one-pager. Answers inline: 
+
+- Egress CIDRs: attached as cloudlink-egress-cidrs.csv (management and app egress separated).
+- BGP: we will not do active peering for the initial pilot; we'll use NATed egress and a set of static prefixes.
+- KMS: we will provide a CMK ARN; security will need to add Redwood's service principal to the key policy.
+- Traffic profile: ~800 qps peak for the first month, mostly short sequences (avg 60 tokens).
+- Timeline: aiming for evidence handoff by May 27.
+
+Attached: cloudlink-egress-cidrs.csv (text/csv), cloudlink-soc2-summary.pdf (application/pdf)
+
+Jack
+Head of Infrastructure
+CloudLink Health
+
+--On Mon, May 24, 2027 at 10:03 AM Rachel Kim <rachel_kim@redwood.ai> wrote:
+> Quick onboarding checklist (prereqs we need to validate):
+>
+> 1) Networking
+> - Egress CIDR list (CSV) and which prefixes will be SNAT'd via TGW/NAT (we need exact /24+/16 granularity).
+
+From: Rachel Kim <rachel_kim@redwood.ai>
+To: Jack Wu <jack.wu@cloudlink.health>, Ben Carter <ben_carter@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Cc: infra@cloudlink.health
+Date: Thu, 27 May 2027 09:14:00 -0700
+Subject: Re: CloudLink Health — deployment roadmap + network attestation request
+
+Jack — received the CSV and SOC brief, thanks. Progress update:
+
+- Network validation: Ben completed CIDR mapping and confirmed 4 egress /24s will be used for app traffic and two /24s for management. No inbound allowlist required for day-0.
+- KMS: Kimberly reached out to your security lead to coordinate key policy; pending confirmation that Redwood principal is allowed.
+- Sizing: engine sizing recommendation attached (small pool for pilot).
+- MAP/procurement: procurement@cloudlink.health, we shared the DocuSign MAP link; please confirm who will sign.
+
+Next actions & dates:
+- May 27 afternoon: compliance call to validate SOC questions (scheduled 15:00 PDT).
+- May 28: brief smoke test window (we'll request NAT packet capture between 10:00–10:15 PDT).
+- May 31: target go/no-go decision for pilot activation.
+
+Attachments: signed-mutual-action-plan.docx (stub awaiting signature), engine-sizing-recommendation.txt
+
+Thanks everyone — will confirm the calendar invites in a separate message.
+
+Rachel Kim
+Principal Solutions Engineer
+Redwood Inference
+
+--On Tue, May 25, 2027 at 08:49 AM Jack Wu <jack.wu@cloudlink.health> wrote:
+> Thanks Rachel — attaching the CIDR export and our SOC-2 one-pager. Answers inline: 
+
+From: infra@cloudlink.health <infra@cloudlink.health>
+To: Rachel Kim <rachel_kim@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Date: Thu, 27 May 2027 16:03:00 -0700
+Subject: Re: CloudLink Health — deployment roadmap + network attestation request
+
+Rachel / Ben / Kim —
+
+All good on our side. We've updated the DOCS folder with the signed MAP (DocuSign completed) and a short runbook for the NAT translation pattern. The runbook includes the SNAT mapping and times when the NAT will rotate.
+
+Attachments: cloudlink-egress-cidrs.csv (updated), signed-mutual-action-plan.docx, cloudlink-nat-runbook.txt
+
+We'll be available for the packet-capture window on May 28 at 10:00 PDT.
+
+Thanks,
+CloudLink Infrastructure Team
+infra@cloudlink.health

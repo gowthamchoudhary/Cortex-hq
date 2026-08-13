@@ -1,0 +1,105 @@
+VPC sidecar telemetry handoff / SIEM & tracing runbook
+
+From: Chris Weber <chris.weber@acme-payments.com>
+To: Priyom Das <priyom_das@redwood.ai>
+Cc: Splunk Integration <splunk-integ@splunk.com>
+Date: 2028-03-15T09:12:00-07:00
+Subject: Re: Initial ask - private VPC telemetry / SIEM handoff
+
+Hi Priyom,
+
+Thanks again for the demo last week. We're starting the security review for the private deployment and need to lock down how logs, metrics, and traces will leave our VPC. A few asks from our side:
+
+- Preferred export modes (push vs pull) if egress is restricted to internal collectors only.
+- Supported protocols for SIEM ingest (HEC over TLS, syslog/tcp-tls, OTLP/gRPC).
+- How tracing hooks will be attached to the request path (sidecar vs in-process SDK).
+- Evidence we can provide to our auditors: sample mapping for Splunk fields, TLS cert rotation notes, and any minimal firewall rules.
+
+Can you point us to a short runbook or architecture sketch we can use for the procurement audit?
+
+Thanks,
+Chris
+Security Architect
+Acme Payments
+[Attachment: acme-siem-mapping.xlsx]
+From: Priyom Das <priyom_das@redwood.ai>
+To: Chris Weber <chris.weber@acme-payments.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.ai>, Vivek Kulkarni <vivek_kulkarni@redwood.ai>, Splunk Integration <splunk-integ@splunk.com>
+Date: 2028-03-15T11:03:00-07:00
+Subject: Re: Initial ask - private VPC telemetry / SIEM handoff
+
+Chris — thanks, this is exactly the right time to align. High-level answers up front, and I'm attaching a concise handoff pack. See the diagram and checklist attached.
+
+Quick summary (TL;DR):
+- Export model: sidecar push to customer-local collector (recommended) or push to a dedicated Redwood forwarder inside their VPC. Pull (polling) is supported only for metrics if you run a Prometheus scrape target in the VPC.
+- Protocols: OTLP/gRPC for traces/metrics (preferred for reliability), HEC over TLS for Splunk events, and optional syslog/tcp-tls for legacy SIEM pipelines. All endpoints support mTLS.
+- Tracing: sidecar-based automatic instrumentation (Envoy + OTEL sidecar) for inference service traffic; we also support an in-process OTEL SDK where customers prefer fewer containers. Sidecar approach isolates instrumentation and simplifies cert mgmt.
+- Egress: we assume no public egress. Sidecar talks to a private collector endpoint (customer-provided) over internal VPC routes or via a peered Redwood forwarder in the same VPC.
+
+Security/operational notes:
+- mTLS for all telemetry -> automatic cert rotation via ACME-like controller or KMS-signed short-lived certs.
+- Batch windows: sidecar batches small traces immediately, aggregates logs for up to 30s (configurable) to limit burst egress.
+- Schema mapping: we can provide a sample transform that maps Redwood token-level events to Splunk's event model and includes a stable event_type and request_id for correlation.
+
+Next steps I propose:
+1) Lauren — can you capture the required firewall rules (CIDR + ports) for the forwarder vs sidecar patterns?
+2) Vivek — can you prepare the evidence checklist (TLS cipher list, rotation cadence, audit logs) for Acme's compliance team?
+3) Chris — can you confirm whether Acme will host a local collector (preferred) or wants Redwood to deploy a forwarder into their VPC?
+
+Attached: redwood-sidecar-diagram.png, evidence-checklist-20280315.pdf
+
+—Priyom
+Solutions Engineer, Redwood Inference
+[Attachment: redwood-sidecar-diagram.png]
+From: Lauren Bishop <lauren_bishop@redwood.ai>
+To: Priyom Das <priyom_das@redwood.ai>, Chris Weber <chris.weber@acme-payments.com>
+Cc: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+Date: 2028-03-16T08:27:00-07:00
+Subject: Re: VPC sidecar telemetry handoff / SIEM & tracing runbook
+
+Chris / team — adding network specifics for the two recommended patterns. I'm keeping this short; happy to expand to a one-pager with diagrams.
+
+Pattern A — Sidecar -> customer collector (recommended):
+- Flow: inference pod -> OTEL sidecar (localhost) -> TLS to 10.0.12.45:4317 (OTLP/gRPC) or 10.0.12.46:8088 (Splunk HEC).
+- Firewall: allow outbound TCP to collector IPs on ports 4317 (OTLP), 8088 (HEC). No public NAT required.
+- DNS: use an internal hostname with mTLS SAN matching the cert (collector.acme.internal).
+- Authentication: mutual TLS enforced; clients present certs issued by customer's internal PKI or Redwood short-lived certs negotiated through a bootstrap API.
+- Network policy: set egress limits on the pod to only the collector CIDRs; restrict healthcare/PII-exfil targets explicitly.
+
+Pattern B — Redwood forwarder in customer VPC (when customers prefer not to run collectors):
+- Flow: inference pod -> OTEL sidecar -> forwarder (hosted as a managed EC2/GCE/VM) -> local SIEM or routed to Redwood's private peering.
+- Firewall: allow inbound from cluster subnets to forwarder instance on OTLP/HEC ports; forwarder requires additional IAM role and placement notes.
+
+Latency/cost tradeoffs: sidecar->local collector gives best latency and avoids cross-account routing; forwarder simplifies onboarding but requires monitoring of forwarder scaling and queueing.
+
+I also want to call out tracing hooks: set sampling at the ingress LB to ensure the root span is created with the customer's trace-id header. Sidecar should propagate B3/traceparent headers and emit request_id for downstream correlation with logs.
+
+Happy to run a short tabletop with Acme's security team to walk the firewall rules.
+
+—Lauren
+Network Security Lead, Redwood Inference
+From: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+To: Chris Weber <chris.weber@acme-payments.com>, Priyom Das <priyom_das@redwood.ai>, Lauren Bishop <lauren_bishop@redwood.ai>
+Date: 2028-03-17T14:22:00-07:00
+Subject: Re: VPC sidecar telemetry handoff / SIEM & tracing runbook
+
+Chris — attaching the evidence pack and a minimal checklist for procurement. Quick notes:
+
+- Evidence included: cipher suite list, sample audit log entry with schema, cert rotation runbook (how to rotate certs in two-step with zero downtime), and a sample Splunk field mapping (see acme-siem-mapping.xlsx).
+- For auditors: we recommend providing a scoped read-only Splunk user that can access the example index we propose; that avoids sharing raw buckets.
+- Implementation timeline (estimate): 2 weeks to stand up sidecars + internal collector + one integration test (HEC ingest). If Acme wants a managed forwarder it adds 3–5 days for infra + HLD sign-off.
+- Risk notes: if the customer requires absolute zero-public-egress, we require either a local collector or a forwarder in the same VPC. In that mode we will not request any outbound public endpoints and all telemetry is over private VPC/internal peering.
+
+Action items tracked:
+- Chris: confirm collector choice (local collector or Redwood forwarder).
+- Chris: share the CIDR for the collector and the internal hostname for cert SAN.
+- Priyom: I will upload the evidence pack to the drive folder and share the HubSpot note (Deal 84321).
+
+Attachments: evidence-checklist-20280315.pdf, acme-siem-mapping.xlsx
+
+Thanks — Vivek
+Head of Product Operations, Redwood Inference
+[Forwarded message header below]
+
+On Fri, Mar 16, 2028 at 08:27 AM Lauren Bishop <lauren_bishop@redwood.ai> wrote:
+> (see above)

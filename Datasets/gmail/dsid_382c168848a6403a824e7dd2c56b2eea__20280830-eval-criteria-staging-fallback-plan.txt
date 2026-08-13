@@ -1,0 +1,99 @@
+Eval acceptance criteria & staging fallback plan
+
+From: Michael Grant <michael_grant@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>, Priyom Das <priyom_das@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Beth Simmons <beth.simmons@betacorp.com>
+Date: 2028-08-30T09:12:00-07:00
+Subject: Eval acceptance criteria & staging fallback plan
+
+Team —
+
+We're getting close to the promptset v2 canary (BetaCorp). I want to lock the acceptance criteria and the staging fallback behavior before we cut the canary next week. High level asks from Product and CS: predictable quality, and a clear fallback so BetaCorp's UX doesn't degrade.
+
+Proposed acceptance gates (staging canary):
+- Delta in core-intent accuracy: <= 1.5 percentage points drop vs baseline on the canonical 6-intent set.
+- Hallucination rate (measured by our QA rubric): no net increase > 1.0% on the sampled set.
+- Latency: p95 token latency increase <= 20ms for 16k context requests.
+- Regression on top-1 response quality (human eval): mean rating drop <= 0.2 on 5-point scale.
+
+Fallback policy (if any gate trips in staging or during initial canary):
+1) Immediate canary pause and roll forward to safe-model (promptset v1) for traffic > canary fraction.
+2) If safety/hallucination spike observed in production, automatic route to fallback by routing policy and notify on-call + BetaCorp.
+3) Owner-led rollback if fixes need code changes — target 24h mitigation window.
+
+I attached the initial AB plan and the promptset file for reference. Please do three things by EOD Monday (Sep 1):
+- Owners: volunteer for metric ownership and alert thresholds.
+- Measurement plan: confirm the exact eval harness and sample size.
+- Canary fraction + escalation contacts for BetaCorp.
+
+Attachments: promptset-v2.csv, ab-plan.docx
+
+Thanks —
+Michael
+Michael Grant
+Lead, Product (Platform)
+Redwood Inference
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Michael Grant <michael_grant@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>, Priyom Das <priyom_das@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Beth Simmons <beth.simmons@betacorp.com>
+Date: 2028-08-30T14:05:00-07:00
+Subject: Re: Eval acceptance criteria & staging fallback plan
+
+Thanks Michael — quick clarifications and a suggested addition.
+
+On the metrics:
+- The "core-intent accuracy" needs a canonical definition: are we using intent label agreement or end-to-end task success? I recommend intent label agreement on the curated 1,200-sample seed set.
+- For hallucination, I'd like to add an automated proxy (named-entity hallucination rate) + a small human spot-check sample. If the automated proxy increases by >0.8% we trigger immediate human review.
+
+Sampling & harness:
+- Suggest 500 unique queries (stratified across intents) for staging eval pass; we can run nightly.
+- I'll attach a short eval-harness-spec.md with the sampling plan and the metrics we need in telemetry.
+
+Operational ask: who will own the alert and the initial triage? I can take the first 48h triage (marissa_cole) if PrioDas owns the remediation tasks.
+
+Quoted for context:
+> "Fallback policy (if any gate trips in staging or during initial canary):"
+
+Marissa
+Marissa Cole
+Senior PM, Evals
+
+From: Beth Simmons <beth.simmons@betacorp.com>
+To: Michael Grant <michael_grant@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>, Priyom Das <priyom_das@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, security@betacorp.com
+Date: 2028-08-31T08:18:00-07:00
+Subject: Re: Eval acceptance criteria & staging fallback plan
+
+Thanks — this looks reasonable. A couple of BetaCorp specifics:
+- Canary fraction: start at 5% for 24h, then 20% for 48h if no regressions.
+- Monitoring: we require an SLA-backed alert to our SRE if hallucination proxy exceeds 1.0% during canary. Can Redwood submit an endpoint for real-time telemetry or will we tap into the telemetry link?
+- For legal/compliance, copying security@betacorp.com; they may request an artifact showing the tests run (logs + the eval harness results).
+
+We appreciate Marissa volunteering for triage. Please loop our SRE (Iccie) if you need access to their metrics dashboard.
+
+Beth
+Beth Simmons
+Director, Product Integrations
+BetaCorp
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Michael Grant <michael_grant@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>, Priyom Das <priyom_das@redwood.com>
+Cc: Beth Simmons <beth.simmons@betacorp.com>
+Date: 2028-09-01T10:02:00-07:00
+Subject: Re: Eval acceptance criteria & staging fallback plan — owners & next steps
+
+Summary and owners (action items):
+- Metric owners: Marissa -> quality metrics & eval harness; Priyom -> telemetry + alerting; Grace -> human spot-check coordination with CS.
+- Canary plan: 5% for 24h -> 20% for 48h (BetaCorp approved). Engineering will enable automatic routing to promptset-v1 for any hallucination-proxy > 1.0% (PrioDas to implement).
+- Sampling: run the 500-query staging harness nightly for 3 nights prior to canary. Marissa to confirm seed set by EOD Mon.
+- Rollback window: 24h remediation target; on-call will be notified automatically.
+
+Docs & links: https://drive.google.com/open?id=1a2b3c-eval-acceptance (eval-harness-spec.md + canary playbook). Jira: SUP-1428 created for tracking.
+
+I'll pick up the infra ticket to wire the routing rule and the metric alerting (ETA: Sep 5). Marissa, PrioDas — if you can confirm owners and the final seed set, I'll schedule the canary for Sep 7.
+
+Karthik
+Karthik Iyer
+Principal Engineer, Serving Runtime
+Redwood Inference

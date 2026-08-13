@@ -1,0 +1,97 @@
+Preserve incident artifacts & clarify access during P0 latency surge
+
+From: Sarah Flynn <sarah.flynn@fastinsure.com>
+To: lauren_bishop <lauren_bishop@redwood.com>
+Cc: operations@fastinsure.com
+Date: Mon, 19 Apr 2027 09:12:00 -0700
+Subject: Production latency surge — please preserve logs and confirm access
+
+Hi Lauren,
+
+We hit a sustained latency increase and elevated 5xx rate across our policy-enrollment flows starting ~08:45 PDT this morning. Users are seeing timeouts and retries that cause duplicate charges; our Ops team is pausing enrollments.
+
+We need Redwood to: 1) confirm you will preserve any runtime logs/traces/kv snapshots for the window 2027-04-19 08:30–09:30 PDT; 2) provide an export format and who from Redwood will have access to raw artifacts; and 3) state retention policy for these artifacts and whether any PII will be present. Our legal team also asked for a minimal evidence manifest (which I've attached).
+
+Please treat this as P0 — we expect an exec-level acknowledgement and a chain-of-custody statement for any evidence exported.
+
+Thanks,
+Sarah Flynn
+Head of Platform Ops, FastInsure
+-----
+Attachment: evidence_manifest.csv (short manifest of customer-observed ids and timestamps)
+From: lauren_bishop <lauren_bishop@redwood.com>
+To: Sarah Flynn <sarah.flynn@fastinsure.com>
+Cc: rishi_malhotra <rishi_malhotra@redwood.com>, monica_patel <monica_patel@redwood.com>, aditya_rao <aditya_rao@redwood.com>
+Date: Mon, 19 Apr 2027 09:25:14 -0700
+Subject: Re: Production latency surge — please preserve logs and confirm access
+
+Hi Sarah — thanks for the heads up and the manifest. I’ve escalated this to on-call and Legal; we will not delete or rotate logs for the timeframe you specified while we collect evidence.
+
+Immediate actions we are initiating now (summary):
+- Snapshot: we will create immutable snapshots of runtime traces, request logs, scheduler and autoscaler events, and KV cache metadata covering 2027-04-19 08:30–09:30 PDT.
+- Access: snapshots will be stored in an evidence bucket with ACLs limited to the on-call team (rishi_malhotra), the incident lead (lauren_bishop), and our security liaison (aditya_rao).
+- Redaction: we will perform a PII scan before any external export; if PII is detected we will share a redacted export and an internal, access-controlled artifact for FastInsure Legal under NDA.
+- Chain-of-custody: we will produce a simple manifest (.csv) recording who exported which file and when.
+
+Rishi — can you confirm ETA for snapshot + whether the latency samples in the attached manifest match the traces we’re taking?
+
+Sarah — I will nominate an exec contact for FastInsure to sign off on handoff when we have the artifacts ready.
+
+Best,
+Lauren Bishop
+Director, Customer Engineering
+Redwood Inference
+-----
+Note: I attached the customer's manifest back into our thread for traceability.
+From: rishi_malhotra <rishi_malhotra@redwood.com>
+To: lauren_bishop <lauren_bishop@redwood.com>, Sarah Flynn <sarah.flynn@fastinsure.com>
+Cc: aditya_rao <aditya_rao@redwood.com>, monica_patel <monica_patel@redwood.com>
+Date: Mon, 19 Apr 2027 09:48:37 -0700
+Subject: Re: Production latency surge — please preserve logs and confirm access
+
+Lauren/Sarah — on-call here. Quick technical confirmation and plan: 
+
+1) What we are preserving now (immutable snapshots):
+   - api-request-logs (full headers + response codes) for the service cluster serving FastInsure (svc-fastinsure-prod) covering 2027-04-19T15:30:00Z–2027-04-19T16:30:00Z (UTC stamps).
+   - runtime traces (OpenTelemetry spans) sampled at 100% for the window above; we will capture full spans that include trace_id and timing info.
+   - KV cache metadata (keys hashed) and cache miss histograms. We will not export raw secret values.
+   - scheduler/autoscaler event logs and pod/container restart traces.
+
+2) Format & export:
+   - Primary export will be gzipped JSON (latency-sample-20270419.json.gz) plus a signed manifest (evidence_manifest_signed.csv).
+   - For customer Legal review we will provide: (a) redacted JSON with PII removed, (b) a separate internal archive with original artifacts accessible only under our legal-approved process.
+
+3) PII / retention notes: 
+   - Our standard production request logs may include non-sensitive customer identifiers (obfuscated ids). We will run the PII detection tool (PIIScan v2) and record findings in the manifest.
+   - Retention freeze: we will disable automatic log rollover for the affected clusters for 14 days unless Legal requests a longer hold.
+
+4) Chain-of-custody: we will log the following fields in evidence_manifest_signed.csv: filename, SHA256, created_at (ISO), exported_by, access_list. Exports will be signed with our internal code-signing key and time-stamped.
+
+ETA: I will push the snapshot to the evidence bucket and publish manifest by 2027-04-19T11:30 PDT (~2 hours). If we need faster turnaround for the redacted package, say so and we’ll prioritize.
+
+Technical caveat: to preserve full OT spans we will temporarily increase disk retention on the tracing pipeline; this has been approved by Infra for this incident.
+
+-Rishi
+Sr. SRE, Redwood Inference
+-----
+Attachment: latency-sample-20270419.json (sample of request traces omitted from thread for size)
+From: monica_patel <monica_patel@redwood.com>
+To: Sarah Flynn <sarah.flynn@fastinsure.com>
+Cc: lauren_bishop <lauren_bishop@redwood.com>, rishi_malhotra <rishi_malhotra@redwood.com>, aditya_rao <aditya_rao@redwood.com>
+Date: Wed, 21 Apr 2027 16:40:00 -0700
+Subject: Re: Production latency surge — please preserve logs and confirm access
+
+Sarah — quick update from Customer Success and next steps so Legal has a single point of contact: 
+
+- Evidence delivered: we uploaded the gzipped export and signed manifest to the evidence folder linked above on 2027-04-19T11:18 PDT. Files: latency-sample-20270419.json.gz, evidence_manifest_signed.csv, preservation_instructions.pdf.
+- Access model: FastInsure Legal may request a temporary access token (valid 72 hours) to download the redacted export from the evidence bucket. To request token please email legal@redwood.com with the file list and a contact.
+- Retention: Redwood will hold the preserved artifacts for 14 days under retention freeze. If FastInsure requests an extension, we will escalate to our Legal Ops for formal legal hold.
+- Next ask: please confirm who at FastInsure will be our exec-approver for evidence handoff and whether you want us to provide a notarized chain-of-custody (we can provide a signed manifest and timestamping — notarization would require an external provider).
+
+We will keep the thread open until evidence handoff is complete. Happy to hop on a short call if you prefer walkthrough of artifacts.
+
+Best,
+Monica Patel
+Customer Success Manager, Redwood Inference
+-----
+Forwarded message: On Mon, 19 Apr 2027 09:12:00 -0700 Sarah Flynn wrote: (see above)

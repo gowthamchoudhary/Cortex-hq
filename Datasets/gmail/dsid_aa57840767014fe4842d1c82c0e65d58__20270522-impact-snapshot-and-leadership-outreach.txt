@@ -1,0 +1,143 @@
+Service integrity update & leadership outreach — Cobalt Analytics
+
+From: Alyssa Chen <alyssa.chen@cobaltanalytics.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Cc: Tom Reed <tom.reed@cobaltanalytics.com>
+Date: 2027-05-22T09:12:00-07:00
+Subject: Production latency spike impacting inference jobs
+
+Vanessa —
+
+We started seeing a heavy spike in tail latency on our inference calls to the Redwood API beginning ~08:40 PDT this morning. Roughly 20% of requests are timing out or returning 5xx errors; it’s impacting our real-time scoring pipeline and causing downstream queue buildup.
+
+Key details from our side:
+- First observed: 2027-05-22 08:42 PDT
+- Error type: 504 / 502 / occasional truncated responses
+- Impact: ~20% of requests affected, primarily during peak minutes (09:00–09:15 PDT)
+- Affected models: rdx-compat/gt-13b (pinned)
+
+We’ve restarted our workers and confirmed the issue is not internal to our app. Can you confirm whether there’s a known outage or throttling on your end and open a bridge? Our execs are asking for an assessment and ETA.
+
+Thanks — we’re available for a bridge now but can join at the time you propose.
+
+Alyssa Chen
+Head of ML Engineering
+Cobalt Analytics
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Alyssa Chen <alyssa.chen@cobaltanalytics.com>, Tom Reed <tom.reed@cobaltanalytics.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: 2027-05-22T09:26:00-07:00
+Subject: RE: Production latency spike impacting inference jobs
+
+Alyssa — thank you for the heads up and the details. I’m escalating immediately.
+
+Action plan (now):
+- I’ve kicked off an internal bridge and invited SRE and Engineering leadership. Bridge link: https://meet.redwood.ai/bridge-vanessa-4593 (attached instructions).
+- Marcus and SRE team are pulling logs and host metrics; initial hypothesis is a regional routing degradation affecting a subset of pods serving the rdx-compat family.
+- We’ll provide a customer-facing summary and ETA within 60 minutes.
+
+Please join the bridge if you can: link above; otherwise I’ll post updates here. I’ll draft an executive-facing update for your stakeholders and share it for approval.
+
+Attachments: bridge-joining-instructions.txt
+
+Vanessa Ortiz
+Director, Customer Reliability
+Redwood Inference
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Marcus Lin <marcus.lin@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: 2027-05-22T10:05:00-07:00
+Subject: DRAFT: Customer-facing update for Cobalt Analytics — please review
+
+Team —
+
+Below is a short, executive-facing note I’m preparing to send to Cobalt’s leadership (Alyssa/Tom). Please review for accuracy and tone; I want to make sure we’re transparent without overcommitting. Add edits inline or reply all. I will send once Marcus signs off on the technical steamline.
+
+--- DRAFT MESSAGE ---
+Subject: Redwood Inference — interim update on production degradation (May 22)
+
+Hi Alyssa / Tom —
+
+We’re very sorry for the disruption you’re seeing this morning. Summary: between ~08:40–09:20 PDT we observed an elevated rate of errors and increased tail latency for requests routed to the rdx-compat/gt-13b serving cluster that impacted approximately 18–22% of your inference calls.
+
+What we’re doing now:
+- SREs have isolated the issue to a regional control-plane routing misconfiguration after a recent autoscaling rollout; a fix is being deployed to affected routing cells to restore normal serving behavior.
+- We have applied a temporary routing bypass for Cobalt’s traffic which is already reducing error rates for a subset of requests.
+- We’re continuing to replay and validate cached requests to ensure correctness before fully bringing traffic back to the optimized path.
+
+ETA and commitments:
+- Target: full restoration to baseline latency within 2 hours; we will provide a status update in 45 minutes with concrete metrics.
+- Post-incident: we will provide a detailed timeline, root cause analysis, and proposed hardening steps (including a configuration rollback plan and additional pre-deploy checks).
+
+Next steps for Cobalt:
+- Optional: we can schedule a 1:1 technical debrief (30–45 min) once we complete the root cause analysis.
+- We will also open a billing review for impacted tokens if the incident materially affected throughput; we’ll follow up with proposed credits.
+
+Again, we apologize for the impact. We’re treating this as a Sev-1 for your account and have leadership engaged.
+
+Thanks for your patience —
+Vanessa Ortiz
+Director, Customer Reliability
+Redwood Inference
+---
+
+Notes/questions: Marcus — is the ‘regional control-plane routing misconfiguration’ wording accurate / too speculative at this stage? Stephanie — any concerns about the compensation language? Ben — please confirm we’ll route the billing follow-up to CS.
+
+Attachments: incident_timeline_v1.pdf (internal timeline, DO NOT SHARE)
+
+Vanessa
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: 2027-05-22T11:02:00-07:00
+Subject: RE: DRAFT: Customer-facing update for Cobalt Analytics — please review
+
+Vanessa —
+Quick read and LGTM. Two small edits I’d suggest before sending to the customer:
+1) Change "regional control-plane routing misconfiguration" -> "routing configuration regression introduced during a recent autoscaler rollout" (more precise).
+2) Drop the phrase "we will replay cached requests" — we can say "we are validating existing cached state and traffic paths" instead.
+
+Compensation language: fine to mention we’ll propose credits; Ben, please confirm CS will own the billing review.
+
+Marcus
+Head of SRE
+Redwood Inference
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Alyssa Chen <alyssa.chen@cobaltanalytics.com>, Tom Reed <tom.reed@cobaltanalytics.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: 2027-05-22T16:43:00-07:00
+Subject: Redwood Inference — interim update on production degradation (May 22)
+
+Hi Alyssa / Tom —
+
+Update and apology from Redwood Inference.
+
+Summary: between ~08:40–09:20 PDT we observed an elevated rate of errors and increased tail latency for requests routed to the rdx-compat/gt-13b serving cluster that impacted approximately 18–22% of your inference calls. We understand the disruption this caused to your real-time scoring pipeline and are sorry for the impact.
+
+What we did and immediate mitigation:
+- Root cause: a routing configuration regression introduced during a recent autoscaler rollout caused a subset of routing cells to direct traffic inefficiently, increasing queueing and leading to intermittent 5xx responses.
+- Mitigation: we applied a targeted rollback and temporary routing bypass for Cobalt’s traffic; error rates have dropped to baseline for most traffic and latency is returning to normal.
+- SRE action: we are validating existing cached state and traffic paths to ensure correctness before removing the bypass fully.
+
+Current status and ETA:
+- Service is substantially recovered at this time; we expect to restore all traffic to normal routed paths within the next 90 minutes following validation.
+- We will send a full post-incident timeline and RCA within 72 hours, including proposed hardening and a configuration rollback plan to prevent recurrence.
+
+Next steps:
+- Optional: schedule a 30–45 minute technical debrief once the RCA is complete (please indicate availability).
+- Ben Carter (cc’d) will follow up on billing impact and propose a credit if throughput was materially impacted.
+
+We recognize this fell short of the experience you expect from Redwood. If you’d prefer a live briefing now, we’ll keep the bridge open for the next hour.
+
+Sincerely,
+Vanessa Ortiz
+Director, Customer Reliability
+Redwood Inference
+
+Attachments: bridge-joining-instructions.txt
+
+On Fri, May 22, 2027 at 11:02 AM Marcus Lin <marcus.lin@redwood.ai> wrote:
+> Vanessa —
+> Quick read and LGTM. Two small edits I’d suggest before sending to the customer:...

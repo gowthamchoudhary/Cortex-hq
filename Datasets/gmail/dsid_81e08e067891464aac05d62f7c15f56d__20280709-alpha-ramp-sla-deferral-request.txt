@@ -1,0 +1,136 @@
+Alpha Ramp: request to defer standard uptime SLA until stabilization window
+
+From: Samantha Jones <samantha.jones@deltahealth.com>
+To: rafael.mendes@redwood.com, laura.bennett@redwood.com
+Cc: procurement@deltahealth.com
+Date: 2028-07-08T16:12:00-07:00
+Subject: Alpha Ramp: request to defer standard uptime SLA until stabilization window
+
+Hi Rafael / Laura,
+
+We're starting our alpha integration for the Clinical Triage Embedder (v0-alpha) next week and the engineering team has flagged a couple of risks related to the experimental quantized encoder we're testing. Specifically:
+
+- We expect intermittent latency spikes during cache warmup and early model updates.
+- Traffic will be routed from a small cohort of production users, but we want the safety to run through a controlled alpha.
+
+Given that, Procurement is asking whether Redwood can temporarily relax the standard uptime/latency SLA for the alpha ramp window so we can proceed without triggering service credits or breach language during the first stabilization period. Our ask: defer the 99.9% uptime commitment to a lower provisional floor for the first 14 days of the alpha (we're open to a mutually agreed % and clear rollback criteria).
+
+Important constraints from our side:
+- We must have a documented rollback plan and daily status check-ins.
+- Any lowered SLA needs a clear end date or automatic reassessment trigger.
+- Security/compliance audits still need full telemetry and request logs.
+
+Can you confirm whether Redwood can accept a temporary SLA deferral, and if so what the proposed floor, duration, and mitigations would look like?
+
+Thanks,
+Samantha Jones
+Head of Platform Partnerships
+DeltaHealth
+
+[Attachment: alpha-integration-readiness.pdf (PDF, 420KB)]
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Samantha Jones <samantha.jones@deltahealth.com>
+Cc: laura.bennett@redwood.com, procurement@deltahealth.com
+Date: 2028-07-08T17:03:00-07:00
+Subject: Re: Alpha Ramp: request to defer standard uptime SLA until stabilization window
+
+Hi Samantha — thanks for the clear ask and the heads up. We can support a provisional SLA posture for the alpha ramp, but we want to lock in operational mitigations so the customer experience and safety nets are explicit.
+
+Proposed approach (initial suggestion):
+- Temporary uptime floor: 95% for a 14-calendar-day alpha stabilization window.
+- Latency guardrail: exempt P99 up to 1.2s during the window; require P50 <= 250ms where possible.
+- Automatic fallback: traffic routed to a stable fallback model variant (no experimental quantization) if P99 exceeds 1.2s for 6 consecutive minutes.
+- Daily status: 15-minute sync M-F; on-call paging if >3% traffic error rate in any hour.
+- Telemetry: full request/response logs retained for 90 days; redacted KV traces shared with DeltaHealth for audit.
+
+I'm attaching a short proposal that lays the timeline and rollback criteria out for legal review. If the proposed floors are too permissive we can tighten them — looking for internal input below.
+
+Best,
+Rafael Mendes
+Senior Sales Engineer, Redwood Inference
+rafael.mendes@redwood.com | +1 (415) 555-0123
+
+[Attachment: alpha-sla-proposal.pdf (PDF, 78KB)]
+
+-----Original message-----
+On 2028-07-08 16:12, Samantha Jones wrote:
+> We're starting our alpha integration for the Clinical Triage Embedder (v0-alpha) next week ...
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: rafael.mendes@redwood.com
+Cc: laura.bennett@redwood.com, priyom.das@redwood.com
+Date: 2028-07-08T19:15:00-07:00
+Subject: Re: Alpha Ramp: request to defer standard uptime SLA until stabilization window
+
+Rafael — quick technical read: thanks for the draft. A few thoughts from runtime/capacity side:
+
+- 95% uptime feels quite permissive for an alpha with production-facing users. Can we meet them in the middle at 99.0% uptime for the 14-day window and lean on routing/fallbacks? That reduces exposure for DeltaHealth and keeps us honest operationally.
+- Agree on the fallback model variant, but we should make the fallback automatic and opt-in on Delta's side for the first 48 hours so they can observe behavior.
+- Recommend an explicit traffic cap (e.g., 5k QPS or x% of their baseline) during days 1–3 with gradual ramping to avoid cascades.
+
+I'll sketch a routing diagram and include it here.
+
+Marcus
+Principal Infra Engineer, Redwood Inference
+
+[Attachment: canary-routing-diagram.svg (SVG)]
+
+> On 2028-07-08 17:03, Rafael Mendes wrote:
+> > Proposed approach (initial suggestion):
+> > - Temporary uptime floor: 95% for a 14-calendar-day alpha stabilization window...
+From: Priyom Das <priyom.das@redwood.com>
+To: rafael.mendes@redwood.com, marcus.lin@redwood.com, laura.bennett@redwood.com
+Date: 2028-07-09T08:30:00-07:00
+Subject: Re: Alpha Ramp: request to defer standard uptime SLA until stabilization window
+
+Team — a few product/ops comments from the canary and optimize side: 
+
+- Technical mitigations to include in the exception:
+  * Circuit-breaker at 75% of provisioned concurrency with automatic shed to fallback.
+  * KV cache warmup policy: pre-warm top 10% of prefixes for the cohort before open traffic.
+  * Prefix-based caching and sticky routing for baseline users to reduce cold-starts.
+- Telemetry: add an 'alpha-stability' tag to every trace so we can run automated regressions against the eval set nightly.
+- Window: recommend 14 days but tie automatic reassessment to a daily stability score; if the 3-day rolling stability score >= 0.9 for three consecutive days, we can escalate to standard SLA early.
+- Billing: expect a small dedicated-capacity delta; recommend offering a one-time credit if P99 breaches occur beyond agreed fallback events (this eases procurement signoff).
+
+Attaching the test plan and suggested ramp schedule. I'll sync with Marcus on the routing knobs.
+
+—Priyom
+Principal Product Manager, Redwood Optimize
+priyom.das@redwood.com
+
+[Attachment: alpha-test-plan.xlsx (XLSX, 64KB)]
+
+> On 2028-07-08 19:15, Marcus Lin wrote:
+> > 95% uptime feels quite permissive for an alpha ...
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Samantha Jones <samantha.jones@deltahealth.com>
+Cc: laura.bennett@redwood.com, marcus.lin@redwood.com, priyom.das@redwood.com, procurement@deltahealth.com
+Date: 2028-07-09T10:02:00-07:00
+Subject: Re: Alpha Ramp: request to defer standard uptime SLA until stabilization window
+
+Samantha — thanks, team — and thanks everyone for the rapid input. Summary and proposal for DeltaHealth: 
+
+Agreed temporary terms (proposed for formal legal review):
+- Duration: 14-calendar-day alpha stabilization window starting from first production traffic day.
+- Uptime floor: 99.0% for the window (compromise from initial ask).
+- Latency guardrails: exempt P99 up to 1.2s during the window; require P50 <= 300ms.
+- Automatic fallback: immediate route to fallback model when P99 > 1.2s for 6 consecutive minutes.
+- Traffic controls: a soft cap for days 1–3 (5k QPS or 15% of baseline), automated ramp thereafter per the attached schedule.
+- Observability & audit: full telemetry with 'alpha-stability' tag; logs retained 90 days.
+- Reassessment: daily stability score; if 3-day rolling stability >= 0.9 for three days we revert to standard SLA early.
+- Billing: Redwood will offer a one-time credit mechanism if agreed fallback conditions are not invoked and P99 breaches are attributable to our runtime.
+
+Next steps: 
+1) Samantha / Procurement: confirm DeltaHealth accepts the above as a basis for legal exception language.
+2) Redwood Legal/Product: I'll route the alpha-sla-proposal.pdf + the routing diagram + test plan to legal for drafting the exception clause (tagging laura).
+3) Engineering (Marcus/Priyom): finalize routing knobs and on-call runbook.
+
+Samantha — please confirm and we'll push the exception draft by EOD tomorrow.
+
+Regards,
+Rafael Mendes
+Senior Sales Engineer, Redwood Inference
+rafael.mendes@redwood.com | +1 (415) 555-0123
+
+[Attachment: alpha-sla-proposal.pdf (PDF, 78KB)]

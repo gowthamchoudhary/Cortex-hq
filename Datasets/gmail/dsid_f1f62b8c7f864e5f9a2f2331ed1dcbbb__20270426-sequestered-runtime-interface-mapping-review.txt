@@ -1,0 +1,127 @@
+Sequestered runtime interface mapping — MediCore private deploy
+
+From: jonas.weber@redwood.inference
+To: alex.sutherland@medicorehealth.com
+Cc: irene.choi@redwood.inference, marissa.cole@redwood.inference
+Date: 2027-04-26T09:12:00-07:00
+Subject: Sequestered runtime interface mapping — MediCore private deploy
+
+Alex —
+
+Thanks for the time earlier. Attached are the first-pass artifacts we promised:
+- medi_core_network_diagram_v3.pdf (application/pdf)
+- sequestered-runtime-interface-matrix.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+
+High-level ask:
+1) Confirm the requirement to restrict outbound egress to partner APIs only (list of domains/IPs) vs. allowing customer-managed blackhole for unknown destinations.
+2) Call out any mandatory KMS/HSM routing constraints (we currently assume customer KMS via private peering).
+3) Identify any telemetry/observability endpoints you cannot accept leaving the tenant boundary.
+
+Notes on the diagram:
+- Control plane (green) will live in your on-prem control cluster with an authenticated reverse-proxy to Redwood control plane components running in the VPC.
+- Data plane (blue) will be strictly tenant-owned runtime nodes; we propose a sidecar proxy per pod for KV cache demarcation and egress enforcement.
+- We’ve annotated the diagram with per-interface TLS expectations and client auth.
+
+Next steps: please review and send back any "must-haves" by EOD Wed so we can finalize the canary topology for the review call.
+
+Thanks,
+Jonas Weber
+Senior Solutions Architect
+Redwood Inference
+jonas.weber@redwood.inference
+(415) 555-0124
+
+From: alex.sutherland@medicorehealth.com
+To: jonas.weber@redwood.inference
+Cc: procurement@medicorehealth.com, cloudops@medicorehealth.com
+Date: 2027-04-26T11:05:00-07:00
+Subject: Re: Sequestered runtime interface mapping — MediCore private deploy
+
+Jonas / team —
+
+Thanks — quick read-through and a few immediate items from our security and procurement side. I attached our acceptance checklist for private deployments: medicore_acceptance_criteria_20270426.pdf (application/pdf).
+
+Top concerns:
+- Telemetry: we cannot allow any tenant telemetry (metrics/traces) to be forwarded off the tenant cluster unless explicitly listed and approved.
+- Egress: we will accept outbound to a fixed list of partner IPs and domains; we need an explicit CIDR/IP list for your edge + a fallback blackhole route.
+- KMS: customer-managed keys are mandatory for encryption-at-rest for the data plane. We require HSM-backed key material; please confirm routing and peering plan for our KMS.
+- Audit evidence: SOC2 + network path captures (pcap-ish or flow logs) for initial acceptance.
+
+We can discuss operational rollouts in the architecture call — procurement has a timeline in the attached spreadsheet (medicore_procurement_timeline.xlsx).
+
+Proposed call times next week look good, will confirm after procurement weighs in.
+
+— Alex Sutherland
+Head of CloudOps, MediCore Health
+alex.sutherland@medicorehealth.com
+
+From: irene.choi@redwood.inference
+To: alex.sutherland@medicorehealth.com, jonas.weber@redwood.inference
+Cc: marissa.cole@redwood.inference
+Date: 2027-04-27T09:34:00-07:00
+Subject: Re: Sequestered runtime interface mapping — MediCore private deploy
+
+Alex — thanks for the checklist and timeline. Following up with a proposed set of architecture adjustments based on your constraints. Attachment: mdc-qa-answers-20270427.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document).
+
+Summary of proposed changes (control plane / data plane separation):
+- Control plane placement: Keep control-plane components in your control cluster behind the customer-managed reverse proxy. We will authenticate to the control plane over mTLS; no data plane tokens will be present in the control channel.
+- Data plane isolation: Tenant runtime nodes will be physically/virtually isolated per your tenancy requirements. We propose a sidecar-based egress filter that enforces an allowlist and performs per-request authz for outbound flows.
+- KV cache demarcation: Sidecar will maintain a local KV cache; cache persistence will live on customer storage volumes. Redwood runtime will only hold ephemeral keys and will never persist tenant secret material.
+- KMS routing: We will support an HSM-backed KMS via private peering (BGP or direct connect). Need confirmation of the KMS endpoint IPs and whether your HSM requires private circuit ACLs.
+- Telemetry: Provide an option to disable collection entirely or push to a customer-owned observability endpoint inside the tenant boundary.
+
+Action items for MediCore: please confirm the KMS endpoint and indicate if you require a hardware-backed attestation (e.g., PKCS#11 profile certs). Once we have that we will update the diagram and regenerate the interface matrix.
+
+Irene Choi
+Director, Product Infrastructure
+Redwood Inference
+irene.choi@redwood.inference
+
+From: marissa.cole@redwood.inference
+To: alex.sutherland@medicorehealth.com, irene.choi@redwood.inference, jonas.weber@redwood.inference
+Date: 2027-04-27T14:20:00-07:00
+Subject: Re: Sequestered runtime interface mapping — MediCore private deploy
+
+Alex — adding ops-run notes and acceptance criteria to make the rollout clearer from our side.
+
+Operational constraints / readout items:
+- Canary plan: we propose a tenant-level canary (10% traffic) for 48 hours with SLO/latency baselines measured against golden routes.
+- Rollout gating: QA pass, security attestation, KMS proof-of-rotation, e2e traffic proof (flow logs), and a signed runbook are required before expanding to full throughput.
+- Disaster fallback: If the sidecar egress fails open, we will default to blackhole and fail requests with a 502 to avoid data leakage.
+- Cert rotation: we will provide a cert-rotation plan for both control and data plane certs; please indicate how frequently your HSM rotates CA material so we can align.
+
+References: added a short ops checklist to the Drive folder linked in the thread. Also: HubSpot deal and acceptance criteria are linked here: https://app.hubspot.com/deal/DEAL-2027-MC-0191
+
+Would you be able to join a 60-minute architecture review on Thurs 2027-04-29 at 10:00 PT? If that doesn't work please propose two other windows.
+
+Thanks,
+Marissa Cole
+Director, Customer Reliability
+Redwood Inference
+marissa.cole@redwood.inference
+
+From: alex.sutherland@medicorehealth.com
+To: marissa.cole@redwood.inference, irene.choi@redwood.inference, jonas.weber@redwood.inference
+Cc: procurement@medicorehealth.com, cloudops@medicorehealth.com
+Date: 2027-04-28T15:42:00-07:00
+Subject: Re: Sequestered runtime interface mapping — MediCore private deploy
+
+Marissa / Irene / Jonas —
+
+Thanks for the clarifications. Procurement and CloudOps are aligned broadly with the control/data split and the sidecar approach, with two small asks before we sign off for the canary:
+1) Egress IPs: we require the outbound surface to be reduced to two ingress-egress IPs for the first 90 days so we can update our perimeter ACLs. Please provide the IPs or a staging-range.
+2) Cert rotation schedule: we need a written cert-rotation commitment that includes max-allowed lifetime and an emergency rotation playbook.
+
+I attached a short procurement timeline and our internal acceptance checklist for reference (medicore_procurement_timeline.xlsx). Once Redwood provides the requested IPs and a cert rotation doc we will confirm the Thu 10:00 PT slot for the architecture review.
+
+FW: On Tue, Apr 27, 2027 at 09:34, irene.choi@redwood.inference wrote:
+> Alex — thanks for the checklist and timeline. Following up with a proposed set of architecture adjustments based on your constraints. Attachment: mdc-qa-answers-20270427.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document).
+>
+> Summary of proposed changes (control plane / data plane separation):
+> - Control plane placement: Keep control-plane components in your control cluster behind the customer-managed reverse proxy. We will authenticate to the control plane over mTLS; no data plane tokens will be present in the control channel.
+> - Data plane isolation: Tenant runtime nodes will be physically/virtually isolated per your tenancy requirements. We propose a sidecar-based egress filter that enforces an allowlist and performs per-request authz for outbound flows.
+
+— Alex Sutherland
+Head of CloudOps, MediCore Health
+alex.sutherland@medicorehealth.com
+

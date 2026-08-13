@@ -1,0 +1,121 @@
+AtlasData deployment plan — SLA, topology, and ops next steps
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: Lena Ortiz <lena.ortiz@atlasdata.com>, Tom Kline <tom.k@atlasdata.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-05-09T15:02:00-07:00
+Subject: AtlasData deployment plan — SLA, topology, and ops next steps
+
+Hi Lena / Tom —
+
+Great to meet earlier. Quick recap from our call plus proposed next steps so we all have the same plan. I focused the write-up on the items you said were highest priority: predictable 99th pct latency for inference, cost predictability for bursty ETL windows, and simplified incident handoffs to your platform team.
+
+Summary of pain and goals from your side (as discussed):
+- Peak batch processing windows produce high variance in per-request latency (30–300ms observed).
+- Current on-prem GPUs are underutilized off-peak; you want predictable spend and a safety net for spikes.
+- Compliance note: audit logs for inference requests must be retained for 12 months.
+
+Proposed technical approach (high-level):
+- Model choice: run the open-source text-qa model you validated (tuned-qa-v2) quantized to int8 for baseline cost; fall back to fp16 variant during ultra-low-latency SLO windows.
+- Topology: primary Dedicated pool in us-west with autoscale policy capped to 12 nodes + a warm standby in us-east for cross-region fallback. KV prefix caching for hot prompts to reduce token compute.
+- SLOs: target 95th=120ms, 99th=220ms for 0–2k rps; during nightly ETL bursts (2k–6k rps) we suggest a temporary relaxed 99th=400ms but with automatic canary and circuit-breaker to route to a cheaper model variant if sustained.
+- Observability & ops: token-level cost dashboard, per-model latency heatmaps, and a runbook for failover that integrates with your PagerDuty service.
+
+Attachments: I attached a short risk/requirements PDF and an ops checklist (see attached).
+
+Next steps / asks:
+1) Lena: confirm the 12-month log retention and whether KMS integration will be Redwood or Atlas-managed.
+2) Tom: can your infra team share the current peak RPS histogram and a sample request size distribution by EOD Friday? that will let Marissa and I finalize batch sizing.
+3) Ben / Marissa: we’ll produce a two-page deploy topology and a proposed rollout plan for canary -> staged -> GA.
+
+If this matches your recollection I’ll turn it into a short MSA addendum draft and a technical runbook you can hand to infra.
+
+Thanks,
+Jonas
+--
+Jonas Weber | Enterprise AE, Redwood Inference
+jonas.weber@redwood.com | +1 (415) 555-0193
+
+
+From: Lena Ortiz <lena.ortiz@atlasdata.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Tom Kline <tom.k@atlasdata.com>
+Date: 2027-05-09T17:48:00-07:00
+Subject: Re: AtlasData deployment plan — SLA, topology, and ops next steps
+
+Jonas —
+
+Thanks for the clear notes, this aligns with our internal discussion. A few clarifications:
+- Confirmed: 12-month retention. We will be bringing our own KMS; can you send the required key policies and integration doc?
+- Peak RPS: during heavy ETL windows we see short spikes up to ~5.5k for ~8–12 minutes, then back down. Typical daytime steady state is 800–1,200 rps.
+- Request size distribution: 60% small (<256 tokens), 30% medium (256–1k), 10% large (>1k).
+
+Action: Tom will push the histogram and a sample payload set to the shared Drive by tomorrow. Also, procurement asked for a short list of SLAs and an estimated committed spend for a 6-month pilot.
+
+One more ask: on audit logs — do you have an example field-level schema you store for inference events? we need to map to our privacy policy.
+
+Regards,
+Lena Ortiz
+Head of Platform Engineering | AtlasData
+Lena.Oritz@atlasdata.com
+
+On May 9, 2027, at 15:02, Jonas Weber <jonas.weber@redwood.com> wrote:
+> Great to meet earlier...
+
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Lena Ortiz <lena.ortiz@atlasdata.com>, Jonas Weber <jonas.weber@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Cc: Tom Kline <tom.k@atlasdata.com>
+Date: 2027-05-10T08:30:00-07:00
+Subject: Re: AtlasData deployment plan — SLA, topology, and ops next steps (technical appendix)
+
+Lena / team —
+
+Thanks for the data callouts, Lena. I put together a short technical appendix with numbers we’ll use to size Dedicated pools and the autoscale policy. Key excerpts below; attaching the full ops checklist as an Excel for your infra and procurement teams.
+
+Sizing assumptions (derived from your distribution):
+- Baseline throughput target: 1,200 rps steady state -> ~6 GPU T4-equivalent nodes with continuous batching (batch windows tuned to 40–80ms to control tail latency).
+- Burst sizing: to cover 5.5k spikes with 99th <= 400ms, we estimate needing a burst headroom of ~18 GPU-equivalent units if using int8; using fp16 variant increases GPU need by ~40%.
+- KV cache hit-rate: with a warm cache for the top 10% of prompts we expect a 22–30% reduction in token compute which reduces steady GPU counts.
+
+SLO mapping and enforcement:
+- Canary: 100 concurrent requests canonical test harness -> measure 95/99/99.9 pctiles for 30 minutes. If 99th exceeds 220ms -> block GA and trigger config change (larger batch window or model variant).
+- Fallback policy: sustained (>3m) queue depth increase triggers routing to the fp16-faster-variant until autoscale completes or a manual rollback.
+
+Operational runbook highlights:
+- Incident detection: heatmap anomaly (5%+ deviation from baseline 30-min median) triggers automated alert to PagerDuty team Atlas-Infra-PD.
+- Audit logs: Redwood will persist stamped events with fields: timestamp, request_id, model_id, model_variant, input_tokens, output_tokens, latency_ms, region, customer_key_id. These are compatible with 12-month retention and can be exported as newline-delimited JSON to your S3 when required.
+
+Deliverables I’ll produce by EOD:
+1) One-page topology diagram (png) for infra.
+2) Autoscale policy draft (YAML) tuned to your histograms.
+3) Short MSA addendum draft with the 6-month pilot pricing bands.
+
+Attachments: redwood-ops-checklist.xlsx (full page-by-page runbook) and a short PDF we discussed earlier.
+
+-Marissa
+--
+Marissa Cole | Solutions Engineer, Redwood Inference
+marissa_cole@redwood.com | +1 (650) 555-0168
+
+> On May 9, 2027, Lena Ortiz <lena.ortiz@atlasdata.com> wrote:
+> > Jonas —
+> >
+> > Thanks for the clear notes...
+
+
+From: Tom Kline <tom.k@atlasdata.com>
+To: Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2027-05-10T10:18:00-07:00
+Subject: Re: AtlasData deployment plan — SLA, topology, and ops next steps
+
+Jonas / Marissa —
+
+Received the appendix, looks good at a glance. I uploaded the RPS histogram and a sample of 1,000 requests to the Drive folder you shared (link above). Procurement also wanted to know: for the 6-month pilot, is there a minimum commit we should expect for reserved capacity pricing? Ben — can you own the procurement intro and a short quote?
+
+We approve Redwood to start the topology diagram and the autoscale draft; once Ben shares a preliminary quote we’ll schedule the procurement call.
+
+Thanks,
+Tom
+Platform Ops | AtlasData
+procurements@atlasdata.com

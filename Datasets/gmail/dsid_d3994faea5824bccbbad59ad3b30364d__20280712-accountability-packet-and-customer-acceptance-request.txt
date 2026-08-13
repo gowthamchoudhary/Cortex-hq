@@ -1,0 +1,148 @@
+Accountability packet and customer acceptance request: service disruption on 2028-07-11
+
+From: Mina Haddad <mina@redwood.com>
+To: Elena Morales <elena@finres.com>, support@finres.com
+Cc: David Kim <david@redwood.com>
+Date: 2028-07-12T13:05:00-07:00
+Subject: Accountability packet and customer acceptance request: service disruption on 2028-07-11
+
+Elena —
+
+Thanks again for your patience while we completed our technical review. Attached is a concise accountability packet that summarizes what happened on 2028-07-11, why it happened, how we fixed it, and the actions we will take to prevent recurrence. High level summary here: 
+
+- Incident window: 2028-07-11 03:47 - 2028-07-11 05:12 UTC (elevated 5xx and session failures affecting approximately 4% of requests routed to your dedicated pool).
+- Impact: Increased latency and token-generation failures for customer sessions pinned to pool B. No customer data was exfiltrated; logs show failed inference requests only.
+- Root cause (short): A faulty KV-cache invalidation path in our recent streaming optimization rollout caused premature eviction of active prefix entries across a subset of dedicated instances, leading to cache thrashing and downstream tokenization errors under specific sequence-length distributions.
+
+What we are delivering with this email (attachments and links):
+- Forensic logs bundle (forensic-logs-20280711.zip) — scrubbed logs and timeline for your security and compliance team.
+- Annotated timeline (timeline-annotated-20280712.csv) — message-by-message sequence with internal correlation ids.
+- Mitigation checklist (mitigation-checklist-20280712.pdf) — short-term and medium-term fixes with owners and due dates.
+- Shared drive folder with screenshots, playbook extracts, and the patch diff: https://drive.redwood.com/shared/finres/incident-20280711
+
+Immediate mitigations (completed within 90 minutes of detection):
+1) Emergency rollback of the streaming optimization binary to the previous stable build (completed at 04:10 UTC) — owner: David Kim.
+2) Applied hotfix to restore stable KV eviction policy on the impacted Dedicated pool (completed at 04:45 UTC) — owner: Mina Haddad / runtime team.
+3) Temporarily increased request routing headroom away from pool B while we validated the fix (04:15–05:00 UTC).
+
+Planned next steps (owners and ETA):
+- Code patch and regression tests merged to main with expanded sequence-length coverage — owner: David Kim — ETA: 2028-07-18.
+- Backfill monitoring: new KPIs for KV eviction rate + per-session error distributions — owner: Marissa Cole — ETA: 2028-07-20.
+- Post-deployment canary across dedicated pools with extended telemetry and rollback gates — owner: Evelyn Hart — ETA: 2028-07-22.
+
+We know you will want evidence for audit and for any internal postmortem — the forensic bundle contains the logs and a mapping from your session ids to our internal correlation ids. If there are additional artifacts your security/compliance team needs, tell us and we’ll prioritize.
+
+A couple of asks from our side so we can close this loop cleanly:
+- Please confirm whether the attached package satisfies FinRes’ audit requirements or if you need additional log retention.
+- Would you prefer a technical walk-through with our runtime engineers or a short executive readout? We can schedule both (30–60m) — suggest times and we’ll coordinate.
+
+We are also preparing a goodwill credit for the impacted window and will follow up with a formal calculation and approval.
+
+Apologies again for the disruption — we own this and are committed to preventing recurrence.
+
+Best,
+
+Mina Haddad
+Senior Customer Reliability Lead
+Redwood Inference
+[attachment: forensic-logs-20280711.zip (log bundle)]
+[attachment: timeline-annotated-20280712.csv]
+[attachment: mitigation-checklist-20280712.pdf]
+From: Elena Morales <elena@finres.com>
+To: Mina Haddad <mina@redwood.com>
+Cc: support@finres.com
+Date: 2028-07-12T15:28:00-07:00
+Subject: Re: Accountability packet and customer acceptance request: service disruption on 2028-07-11
+
+Mina —
+
+Thanks for the detailed packet and quick turnaround. A few immediate questions from our SRE and Legal teams: 
+
+1) SLA credit: We need the calculation method and the proposed credit amount. Please include the timeframe and metric you will use to calculate the credit.
+2) Evidence: The forensic bundle is useful — can you confirm retention dates for the logs you shared and whether you can provide raw request traces for five sample session ids (we'll provide ids after you confirm PII handling)?
+3) Root cause detail: Can you confirm whether the faulty eviction path was introduced in an internal-only optimization (i.e., not user-facing) and whether it was behind a feature flag?
+
+We'd like to schedule a 45-minute engineering walk-through next week (preferably July 16–17 morning PST). Please propose 2 slots.
+
+Thanks — happy to take the call with our head of platform (CC'd: support@finres.com).
+
+Regards,
+
+Elena Morales
+Head of Platform Engineering
+FinRes Financial
+
+From: Mina Haddad <mina@redwood.com>
+To: Elena Morales <elena@finres.com>, support@finres.com
+Cc: David Kim <david@redwood.com>, Marissa Cole <marissa@redwood.com>, Evelyn Hart <evelyn@redwood.com>
+Date: 2028-07-13T09:12:00-07:00
+Subject: Re: Accountability packet and customer acceptance request: service disruption on 2028-07-11
+
+Elena — thank you, and great questions. Short answers up front, then details below.
+
+- SLA credit: We will calculate credit based on impacted successful token-rate (per your contract metric), prorated for the measured degradation window 03:47–05:12 UTC on 2028-07-11. Initial proposal: 30% of the invoice for the affected hourly window(s), pending leadership approval. We will send a formal calculation by 2028-07-14.
+- Evidence/retention: The logs in the bundle will be retained for 90 days from the incident date. We can provide 5 raw request traces after you provide the session ids; traces will be redacted to remove customer-sensitive payloads and provided under a mutual NDA addendum if you prefer.
+- Root cause details: The path was introduced as part of an internal streaming optimization (not user-visible) and it was behind an optimization gating mechanism but not behind an explicit customer-facing feature flag. The gating allowed the new eviction path to reach production via a runtime config that we failed to validate for dedicated pools. We are changing that gating model to prevent release to any dedicated pool without an explicit rollout flag and additional canary checks.
+
+Attachments in this follow-up: annotated timeline (timeline-annotated-20280712.csv) and our proposed SLA credit calculation template (attached to the shared drive link).
+
+Suggested call slots (PST):
+- Tue 2028-07-16, 9:00–9:45 AM PST
+- Wed 2028-07-17, 10:30–11:15 AM PST
+
+Internal owners (for clarity):
+- Formal credit calculation + finance sign-off — Marissa Cole — due 2028-07-14.
+- Regression tests + code patch — David Kim — due 2028-07-18.
+- Monitoring and alerting changes — Evelyn Hart — due 2028-07-20.
+
+If that looks good I'll lock the call for Tue 9:00 PST unless you prefer the other slot.
+
+Best,
+
+Mina
+
+On Sat, Jul 12, 2028 at 13:05 Mina Haddad <mina@redwood.com> wrote:
+> Elena —
+> 
+> Thanks again for your patience while we completed our technical review. Attached is a concise accountability packet...
+
+From: Mina Haddad <mina@redwood.com>
+To: Marissa Cole <marissa@redwood.com>, David Kim <david@redwood.com>, Evelyn Hart <evelyn@redwood.com>
+Date: 2028-07-14T11:40:00-07:00
+Subject: Internal: approval needed for SLA credit and evidence handoff (FinRes)
+
+Team — quick internal note as prep for the customer call and formal communication. Copying summary and asks: 
+
+1) Marissa — can you confirm finance approval cadence for a 30% credit on affected windows? If lower/higher, please provide a recommended amount and rationale by 2028-07-14 EOD. We need a line item to send to the customer and a pointer to the DocuSign workflow.
+
+2) David — please ensure the regression PR includes at least three sequence-length test vectors that previously triggered the eviction path. Share the PR link before the call.
+
+3) Evelyn — confirm the new alert thresholds you plan to add to telemetry and whether we can expose a trimmed summary for FinRes' SRE team after the patch.
+
+I will be on the customer call Tue 9:00 PST to walk through the packet. I expect we will get a sign-off or at least acceptance to validate the fix with their SREs.
+
+Thanks — Mina
+
+[attachment: credit-calculation-template.xlsx]
+From: Elena Morales <elena@finres.com>
+To: Mina Haddad <mina@redwood.com>
+Cc: support@finres.com
+Date: 2028-07-15T09:42:00-07:00
+Subject: Re: Accountability packet and customer acceptance request: service disruption on 2028-07-11
+
+Mina/Team —
+
+Thanks for the packet and the quick clarifications. The proposed call time (Tue 2028-07-16 9:00 PST) works for us — please send calendar invite. We accept the plan to: 
+
+- proceed with the regression and monitoring work described;
+- receive the five sample traces once redaction/NDA is confirmed;
+- review the formal SLA credit calculation on 2028-07-14 and finalize by 2028-07-18.
+
+We appreciate the transparency and look forward to the technical walkthrough. Please include the runtime engineer(s) who authored the hotfix on the call.
+
+Regards,
+
+Elena Morales
+Head of Platform Engineering
+FinRes Financial
+[attachment: confirm-call-availability.txt]

@@ -1,0 +1,115 @@
+App integration handoff — tactical SDK & endpoint migration plan
+
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Elena Morales <elena@omnify.ai>
+Cc: Monica Patel <monica_patel@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Wed, 24 Feb 2027 09:12:00 -0800
+Subject: App integration handoff — tactical SDK & endpoint migration plan
+
+Hi Elena —
+
+Congrats again on the contract — excited to get Omnify into production. Monica (CS) and Ben (AE) are copied to own the implementation and commercial touchpoints. I want to kick off a focused, 2-week technical handoff to get your app calling our hosted endpoints and then prepare the Dedicated migration window.
+
+High-level run: (attached checklist + snippets)
+- Week 0 (this week): quick sync to align scope + exchange keys and IP allowlist
+- Week 1: SDK integration + retries/timeouts tuned for your traffic profile; basic observability hooked
+- Week 2: endpoint migration rehearsal + cutover plan to dedicated / fallback strategy
+
+Immediate asks from our side:
+1) Can you share sample request rates (RPS) and average prompt length for your highest-volume route? A ballpark is fine.
+2) Confirm the person who will hold the service account for allowlisting (IP + JWT public key).
+3) Are you using any in-house batching/queueing that might affect timeouts?
+
+I attached an integration checklist and a ZIP with SDK samples (Node/Python/cURL). Below is a recommended minimal retry/backoff pattern and timeout guidance you can drop into your client right away.
+
+Sample guidance (minimal):
+- Connect timeout: 3s, read timeout: 30s for single-token low-latency calls. For streaming, set read timeout to 90s and keep-alive on socket.
+- Retries: 3 attempts with exponential backoff (base 250ms -> 500ms -> 1s). Retry only on 429, 503, 504 and network errors. Do not retry on 4xx except 429.
+
+Example (Node, axios):
+const axios = require('axios');
+const client = axios.create({ baseURL: 'https://api.redwood.ai/v1', timeout: 30000, headers: { Authorization: `Bearer ${process.env.REDWOOD_KEY}` } });
+
+// Minimal retry interceptor (psuedocode)
+client.interceptors.response.use(null, async (err) => {
+  const status = err.response ? err.response.status : null;
+  if ([429,503,504].includes(status) || !err.response) {
+    // exponential backoff up to 3 tries
+  }
+  throw err;
+});
+
+Please let me know a good time for a 30-minute kickoff tomorrow or Friday. Monica will schedule once you confirm availability.
+
+Best,
+Naomi
+Naomi Feldman | Sr. GTM Lead, Redwood Inference
+
+From: Monica Patel <monica_patel@redwood.ai>
+To: Naomi Feldman <naomi_feldman@redwood.ai>, Elena Morales <elena@omnify.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Thu, 25 Feb 2027 10:34:00 -0800
+Subject: Re: App integration handoff — tactical SDK & endpoint migration plan
+
+Thanks Naomi — tagging in the implementation owner and tech lead from our side (Karthik) for the SDK-specific run. Elena — happy to lead the implementation schedule and do the checkpoints. Proposed cadence: three working sessions (45m each):
+
+1) Kickoff + keys/allowlist (this week) — confirm tokens, IPs, and role mapping
+2) SDK pairing session (share screen) — walk through sample endpoints (Node + Python) and validate end-to-end call
+3) Pre-cutover dry run — exercise error conditions (429 spike, network flaps) and validate fallback to hosted model variants
+
+We will provide:
+- A small test harness (bash + k6 script) to replay your traffic at 10/50/100 RPS (we can modify thresholds).
+- A short runbook for endpoint migration: how to pin model versions, traffic split, and rollback steps.
+
+Timeouts & rate limit handling (practical defaults we use with customers):
+- Client connect: 2s, call-level timeout: 25s for unbatched requests. Streaming: 120s.
+- Rate limit headers: Respect X-RateLimit-Remaining and backoff immediately when remaining < 10% of bucket. Use token-bucket smoothing on your side to avoid spikes.
+- Batching: If you send many short prompts, batch up to 8 inputs or 2048 tokens per request (whichever hits first) to reduce unit cost. We can precompute an optimal batch size after we see payload distribution.
+
+Attachments: integration-checklist.xlsx (requested fields filled), sample-sdk-snippets.zip (Node/Python/cURL), omni-mig-runbook.pdf (draft).
+
+Can you confirm:
+- sample RPS and average prompt length?
+- who is our allowlist contact?
+
+Thanks — I’ll add concrete times after Elena replies.
+
+-Monica
+Monica Patel | Customer Success Manager, Redwood Inference
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Naomi Feldman <naomi_feldman@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Elena Morales <elena@omnify.ai>
+Date: Fri, 26 Feb 2027 13:51:00 -0800
+Subject: Re: App integration handoff — tactical SDK & endpoint migration plan
+
+Quick commercial note: the Dedicated migration window (targeted in Week 3 per SOW) requires a short traffic ramp and a signed amendment for reserved capacity. I see legal sent the amendment draft yesterday — Elena, if you can sign the DocuSign link we included in the related links, we’ll confirm the slot.
+
+One implementation caution: if Omnify expects sustained >40 RPS with average payloads >1k tokens, we should plan for immediate autoscale headroom or a burst policy to avoid 429s during cutover. Karthik, flag any infra limits that could require pre-provisioning.
+
+Ben
+Ben Carter | Account Executive, Redwood Inference
+
+From: Elena Morales <elena@omnify.ai>
+To: Monica Patel <monica_patel@redwood.ai>, Naomi Feldman <naomi_feldman@redwood.ai>
+Cc: DevOps Team <devops@omnify.ai>, James O'Neill <james.oneill@omnify.ai>
+Date: Mon, 28 Feb 2027 15:03:00 -0800
+Subject: Re: App integration handoff — tactical SDK & endpoint migration plan
+
+Thanks all — good plan. Quick answers:
+- Peak RPS today for our summarization route is ~28 RPS with median prompt ~850 tokens; spike tests go to ~65 RPS for 30s in load tests.
+- Allowlist contact: James O'Neill (copied). He will provide the CIDR blocks and the public key for JWT verification.
+- We will sign the amendment today (routing to legal).
+
+Next steps:
+- Monica: please send proposed times for the kickoff pairing session tomorrow (preferred) or Wednesday.
+- Karthik: happy for you to propose any pre-provision thresholds — we can provision burst headroom if needed.
+
+Also, one small ask on retries: we have an internal queue that retries at the application level already. Would you recommend we disable client-side automatic retries to avoid duplicate requests once your gateway acknowledges receipt?
+
+> On Thu, 25 Feb 2027 at 10:34, Monica Patel <monica_patel@redwood.ai> wrote:
+> > Rate limit headers: Respect X-RateLimit-Remaining and backoff immediately when remaining < 10% of bucket. Use token-bucket smoothing on your side to avoid spikes.
+>
+My take: yes, avoid duplicative client-side retries if your app-layer is already managing deduplication; prefer idempotency keys for create-type operations (not generation requests). For idempotent-ish flows (embeddings, reranking), include a deterministic request id and keep the retry at the app-layer.
+
+Elena
+Senior Product Manager, Omnify AI

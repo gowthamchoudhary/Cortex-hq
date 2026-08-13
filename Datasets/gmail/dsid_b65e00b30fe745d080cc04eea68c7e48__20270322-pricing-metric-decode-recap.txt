@@ -1,0 +1,104 @@
+Re: Clarifying pricing units — tokens vs chars vs requests (post-demo recap)
+
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Sara Jensen <sara.jensen@averytech.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Mon, 22 Mar 2027 13:05:00 -0700
+Subject: Clarifying pricing units — tokens vs chars vs requests (post-demo recap)
+
+Hi Sara,
+
+Thanks again for taking the demo this morning. Per our conversation, I wanted to put a short, concrete recap on the pricing questions we walked through so your procurement and engineering teams have a single reference. Fast read below + next steps at the bottom.
+
+1) What we bill for (high level)
+- Billed unit: tokens. Redwood bills generation and context tokens processed by the model.
+- Requests: API calls (requests) are not billed as a meter by itself, but they matter for concurrency/throughput planning and may affect cost indirectly through higher required capacity.
+- Characters: we show characters in some analytics dashboards to help you estimate client-side text sizes, but characters are not the billing primitive.
+
+2) How tokens map to characters (rough guidance)
+- English average: ~4 tokens per 15 characters (roughly 3–5 characters per token depending on language and punctuation).
+- Practical rule: multiply token estimate by ~4 to get characters; we’ll provide a short conversion table.
+
+3) Prompt caching vs billed tokens
+- Cache behavior: if a request hits our prompt-prefix cache and we can reuse cached KV state, you still see a billed reduction because fewer decode tokens are generated.
+- Important nuance: the billing system charges for the tokens actually processed by the model. If a full prompt is sent but the runtime short-circuits because of an exact cache hit (no model decode), billed tokens can be zero for the decode portion; however request-level overhead, routing, and any pre/post processing are not billed as tokens.
+- Example: a 1,200-token prompt with an exact cache hit for the first 1,000 tokens that returns a cached continuation for the next 200 — billed tokens reflect only the model work performed. We’ll provide a worked example for Avery’s sample traffic.
+
+4) Unit economics you asked about ($/1M tokens target)
+- You mentioned a target of $X per 1M tokens for model inference during the call. We discussed multiple levers: model family (open vs tuned), quantization profile, and batching.
+- For your current usage profile (high concurrency, many short calls), batching has limited upside; prefix KV caching and smaller model variants are the biggest levers.
+
+5) Reporting & transparency
+- We provide token-level breakdowns by route and by token type (prompt vs completion).
+- We can export a one-week sample CSV keyed by request_id so your billing team can map to internal logs.
+
+Next steps (action items):
+- Redwood: send a one-page worked example mapping Avery’s sample traffic to billed tokens and an estimated $/1M based on a couple of model/quantization scenarios (Evelyn) — attached is a skeleton.
+- Avery: confirm a sample of 1,000 representative requests (anonymized) and a target budget range to model against.
+- Coordinate a short follow-up with procurement: Wed 24 Mar, 10:00–10:30 PT (proposed) to discuss commercial terms.
+
+If that lines up with what you heard, I’ll circulate the worked example + a short FAQ on tokens vs characters vs request counts.
+
+Thanks,
+Evelyn
+
+--
+Evelyn Hart
+Account Executive, Redwood Inference
+Phone: (555) 322-1198
+Redwood Inference
+
+Attachments: Redwood_Pricing_Summary.pdf (pricing scenarios), PromptCaching-FAQ.docx
+
+---
+From: Sara Jensen <sara.jensen@averytech.com>
+To: Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: procurement@averytech.com
+Date: Mon, 22 Mar 2027 16:44:00 -0700
+Subject: Re: Clarifying pricing units — tokens vs chars vs requests (post-demo recap)
+
+Thanks Evelyn — this is very helpful. A couple quick clarifications from our side:
+
+- The procurement team wants to see a baseline cost for a 1M token monthly bucket and then sensitivity for +/-20%. Can you show both the raw $/1M token and our weekly expected invoice delta?
+- On caching: when you say "exact cache hit," is that full prompt equality only, or do you support prefix/subsequence caching for similar prompts? Our product generates prompts with stable header + variable user input.
+
+We’ll try to compile a 1k-anonymized-request sample by EOD tomorrow. Wed 10am PT works for the follow-up.
+
+--
+Sara
+Senior Product Manager | Avery Tech
+
+---
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Evelyn Hart <evelyn.hart@redwood.ai>, Sara Jensen <sara.jensen@averytech.com>
+Date: Tue, 23 Mar 2027 08:01:00 -0700
+Subject: Re: Clarifying pricing units — tokens vs chars vs requests (post-demo recap)
+
+Quick note on caching nuance:
+- Redwood supports two main cache modes relevant to your pattern:
+  * Exact prompt-level caching (fastest, highest hit-rate when you have repeated identical prompts)
+  * Prefix-aware KV caching: this allows reuse of internal KV state for common prefixes (i.e., the stable header) and only decodes the variable suffix. This often yields ~50–80% decoded-token reduction depending on how much of the prompt is stable.
+- Karthik: happy to run a couple of microbenchmarks against your anonymized sample and show expected billed-token deltas.
+
+--
+Karthik
+Head of Solutions, Redwood Inference
+
+---
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Sara Jensen <sara.jensen@averytech.com>, Karthik Iyer <karthik_iyer@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Tue, 23 Mar 2027 16:18:00 -0700
+Subject: Re: Clarifying pricing units — tokens vs chars vs requests (post-demo recap)
+
+Appreciate the quick responses and the sample commitment, Sara. Per Karthik’s offer, we’ll:
+- Run a 1k-sample pass to estimate billed tokens under three configs (baseline model, quantized model, prefix-cache-optimized).
+- Return a spreadsheet with: raw tokens, billed tokens (after cache), implied $/1M tokens at Redwood published rates, and weekly invoice delta for the Avery baseline.
+
+I’ll share the invite for Wed 10am PT and drop the deliverable in the HubSpot record and your Drive folder before the call. If procurement wants a draft MSA redline prior to the call, loop them into this thread and we’ll pull legal in.
+
+Best,
+Evelyn
+
+--
+Evelyn Hart
+Account Executive, Redwood Inference

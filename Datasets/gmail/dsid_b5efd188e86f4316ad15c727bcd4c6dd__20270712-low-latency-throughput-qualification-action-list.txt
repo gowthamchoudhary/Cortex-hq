@@ -1,0 +1,120 @@
+Low-latency throughput qualification & next steps for PulseHealth
+
+From: Dylan Brooks <dylan.brooks@redwood.ai>
+To: Maria Lopez <maria.lopez@pulsehealth.ai>, Cameron Taylor <cameron.taylor@pulsehealth.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: Mon, 12 Jul 2027 15:05:00 -0700
+Subject: Low-latency throughput qualification & next steps for PulseHealth
+
+Thanks again for the demo today — great talk-through of the PulseHealth realtime triage flow. Per our discussion, I wanted to capture a concise post-call recap, a focused set of performance targets we agreed to validate, and the immediate next steps so we can run the pilot efficiently.
+
+Recap / goals (from today's discovery)
+- Primary SLO: end-to-end p95 perceived latency ≤ 150 ms for a 512-token exchange (user->model->streamed tokens to client).
+- Throughput: sustained 100–140 requests/sec at peak windows; typical baseline 30–40 req/sec.
+- Concurrency: 60 concurrent active streams expected during peak bursts.
+- Streaming behavior: incremental token streaming (SSE/websocket) is required — clients render partial results immediately.
+- Typical prompt/output sizes: avg prompt ~120 tokens, avg generated ~200 tokens, worst-case prompt up to ~1024 tokens.
+
+Dedicated capacity sizing considerations we discussed
+- GPU candidates: H100 (best latency/throughput for long contexts), A100-80GB (stable p95 at mid concurrency), L4 (cost-effective for smaller models).
+- Reserved throughput goal: we should size for sustained token/sec capacity to cover 140 req/sec × avg (350 tokens/request) ≈ 49k tokens/sec; we recommend planning headroom (×3) during pilot for burst tolerance.
+
+Immediate next steps (ask list)
+1) You: share a small prompt set (10–20 representative calls) and 24h traffic sample if possible.
+2) Redwood: run a 2-week dedicated pilot in your VPC (or private VPC peering) measuring p50/p95/p99, end-to-end streaming latency, and token throughput. We'll baseline H100 vs A100 and provide a recommended reserved pool size.
+3) Scheduling: propose a sizing sync next Tues 07/20 to finalize pilot config and sign a short PO to reserve pilot capacity.
+4) Logistics: include procurement contact so we can send the pilot agreement and estimated committed tokens/pricing.
+
+Attachments: I attached the initial perf matrix and a short SLO validation plan: pulse_perf_matrix.xlsx, slo-validation-plan.pdf.
+
+If these targets look right, we'll queue the pilot and confirm a concrete schedule by end of day Wed.
+
+Thanks —
+Dylan Brooks
+Sales Engineer | Redwood Inference
+dylan.brooks@redwood.ai | +1 (415) 555-0197
+
+From: Maria Lopez <maria.lopez@pulsehealth.ai>
+To: Dylan Brooks <dylan.brooks@redwood.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>; procurement@pulsehealth.ai
+Date: Tue, 13 Jul 2027 09:22:00 -0400
+Subject: Re: Low-latency throughput qualification & next steps for PulseHealth
+
+Thanks — this is helpful. A couple of clarifying points before we finalize the pilot scope: 
+
+1) The 150 ms p95 target — is that the client-perceived end-to-end time (including our network hop)? We run the UI in our east coast region; network adds ~20–40 ms typical. We need clarity whether the SLO you intend to validate is measured inside the VPC (server-to-server) or truly user-observed.
+
+2) Does Redwood plan to validate the SLO on Hosted API as well as Dedicated? For compliance we'll likely pick Dedicated (VPC) but it's useful to know the delta in latency we should expect.
+
+3) For sizing, please include an estimated committed monthly token quantity and a pilot pricing estimate. Procurement is CC'd — please send any short PO/agreement templates.
+
+4) Streaming is essential for us (UI renders partial responses). We will provide a prompt sample set and a 24-hour request trace extract.
+
+If you can confirm the measurement assumptions and outline the recommended GPU mix (and how that affects p95 at our target sizes), we can greenlight the pilot schedule.
+
+Best,
+Maria Lopez
+Head of Product — PulseHealth
+maria.lopez@pulsehealth.ai | +1 (617) 444-8821
+
+From: Dylan Brooks <dylan.brooks@redwood.ai>
+To: Maria Lopez <maria.lopez@pulsehealth.ai>, Cameron Taylor <cameron.taylor@pulsehealth.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>, procurement@pulsehealth.ai
+Date: Tue, 13 Jul 2027 11:45:00 -0700
+Subject: Re: Low-latency throughput qualification & next steps for PulseHealth
+
+Maria — great questions. Short answers up front, then details: 1) The 150 ms p95 we quoted is end-to-end when the model is served inside your VPC (dedicated) and the client is in the same region — it includes model inference and streaming serialization but excludes the last-mile client render. For hosted endpoints there is additional network transit; expect +20–60 ms depending on region.
+
+2) We'll validate on Dedicated (your VPC) for the pilot to give you production-representative numbers. We can also run a hosted baseline for comparison, but the dedicated results will be binding for the SLA decision.
+
+3) Pilot pricing / committed tokens: for the 2-week dedicated pilot we typically provide a capped trial invoice based on reserved cards. For a rough estimate (subject to exact traffic): pilot reserved pool of 4 H100s → estimated 14M tokens/day capacity headroom (burstable) — we'll send a precise committed token worksheet once we get the 24h trace.
+
+GPU tradeoffs (summary)
+- H100: best for high concurrency + long contexts. Lower p95 at high batch sizes and with fp8 optimizations; best candidate to hit 150 ms p95 at 512 tokens under 60 concurrency.
+- A100-80GB: steady performer, slightly higher p95 at the same concurrency but more predictable across model variants. Good fallback pair with H100.
+- L4: significantly cheaper but optimized for smaller models/shorter contexts; not recommended if you must hit <150 ms p95 for 512 tokens at 60 concurrency.
+
+Our recommended starting config for the pilot
+- Reserve: 4×H100 in your dedicated pool (we'll also run an A100 comparison run).
+- Objective: measure end-to-end p50/95/99 for 512-token exchanges, streaming latency (first-byte and tail), and sustained token/sec at 140 req/sec burst.
+- Fallback/autoscale policy: configure an A100-backed burst group if we see sustained queueing > 200ms per token.
+
+Next steps
+- You: share the prompt set + 24h trace (by EOD Wed).
+- Redwood: we'll provide an updated SLO validation worksheet with committed-token estimate and a PO template.
+- Scheduling: suggest 07/20 for a 30-min pilot kickoff; we can spin infra 48 hours after PO/approval.
+
+On the trace/samples — could you include representative slow-paths (longer generation examples) so we can validate worst-case tail behavior?
+
+Onwards —
+Dylan
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Dylan Brooks <dylan.brooks@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: Tue, 13 Jul 2027 14:02:00 -0700
+Subject: Internal: initial perf matrix + quick notes
+
+Internal note — dropping the perf matrix here so Dylan can share the key bits with PulseHealth. See attached: pulse_perf_matrix.xlsx. Key highlights: 
+- Baseline: H100 x4 projected to achieve ~160–220 req/sec sustained for 512-token median outputs at concurrency 60 with p95 under 150 ms (measured in our internal sim with 1.05x safety factor).
+- A100 x6 can match throughput but with higher p95 under identical concurrency (roughly +20–35 ms).
+- L4 not suitable for guaranteed p95 <150 ms at 512 tokens for high concurrency; good for cost-sensitive non-realtime workloads.
+- Notes on streaming: we instrument first-byte and token-emit latency separately; first-byte on H100 typically <40ms, token-emit pacing dominates for long responses.
+
+I'll push a compact table for the pilot worksheet (card count -> expected tokens/sec -> p95 estimate) into the Drive link so Procurement and Product can see numbers.
+
+-Ben
+Senior Solutions Engineer | Redwood Inference
+
+From: Cameron Taylor <cameron.taylor@pulsehealth.ai>
+To: Dylan Brooks <dylan.brooks@redwood.ai>, Maria Lopez <maria.lopez@pulsehealth.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>, procurement@pulsehealth.ai
+Date: Thu, 14 Jul 2027 15:30:00 +0000
+Subject: Re: Low-latency throughput qualification & next steps for PulseHealth
+
+Thanks — that all sounds reasonable. We can provide the 24h trace and the prompt set by EOD tomorrow. Procurement asked me to confirm an expected pilot start window; is it realistic to start infrastructure spin on 07/22 if we sign the short pilot PO by 07/20? Also: can you include a brief runbook in the PO that lists rollback/fallback behavior if the pilot misses the p95 target?
+
+If you can confirm the timeline and include the pilot PO + runbook (short form), I'll route to procurement for a quick signature. Looking forward to the pilot.
+
+Cameron Taylor
+Director of Engineering — PulseHealth
+cameron.taylor@pulsehealth.ai | +1 (917) 333-9921

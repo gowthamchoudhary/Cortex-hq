@@ -1,0 +1,143 @@
+Access provisioning gap analysis for private control plane (SAML / SCIM)
+
+From: Sara Holden <sara.holden@acmecorp.com>
+To: Olga Petrov <olga.petrov@redwood.com>
+Cc: Javier Ortega <javier@identityworks.io>, procurement@acmecorp.com
+Date: 2027-06-10T09:12:00-07:00
+Subject: Access provisioning gap review for private control plane
+
+Hi Olga —
+
+Thanks again for walking us through the Private Control Plane demo yesterday. We ran an internal checklist this morning and flagged a few items that need clarification before the security review can sign off:
+
+1) Role mapping: we need a canonical mapping between our Azure AD groups and Redwood runtime roles (admin, deployer, viewer). Specifically: what attributes do you require in the SAML assertion (group, role, app_role)? Is group membership evaluated for nested groups?
+
+2) SCIM provisioning: how does Redwood handle delta updates vs. bulk imports? Our SCIM provider expects PATCH semantics; we need to confirm whether provisioning connector can safely update account_email and manager fields without creating duplicates.
+
+3) Service accounts and cross-VPC access: for the control plane agent in our VPC, do you recommend a dedicated service account with short-lived certs, or a long-lived API key? We prefer ephemeral credentials.
+
+4) Audit & retention: sample export of audit log entries with identity fields (role, subject, originating-ip) & retention windows.
+
+I attached a short spreadsheet with our proposed group-to-role mapping (column comments). Can you review and indicate any gaps? Also looping in Javier (our IdP consultant) — he may propose an alternative attribute mapping.
+
+Would appreciate a quick call this week (30m) to resolve the mapping and SCIM behavior so our InfoSec can close the loop.
+
+Thanks,
+Sara Holden
+Head of IT Security | AcmeCorp
+Mobile: +1 415-555-0192
+
+Attachments:
+- acmecorp-group-mapping-proposal.xlsx (attachment stub)
+
+From: Olga Petrov <olga.petrov@redwood.com>
+To: Sara Holden <sara.holden@acmecorp.com>
+Cc: Dev Patel <dev.patel@redwood.com>, Mina Haddad <mina.haddad@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: 2027-06-10T11:03:00-07:00
+Subject: Re: Access provisioning gap review for private control plane
+
+Sara —
+
+Appreciate the clear list. Quick replies inline and action items at the bottom.
+
+1) Role mapping / SAML attributes:
+- Required assertion attributes: subject (NameID), email, and one of: groups OR roles. We support both boxed and multi-valued group claims. For our role engine we look for either the `roles` claim (preferred) as an array of strings, or the `groups` claim if you prefer AD groups.
+- Nested groups: Redwood evaluates membership based on the flattened effective membership your IdP emits. If your IdP does not flatten, we recommend emitting a `roles` claim derived from group resolution.
+
+2) SCIM provisioning semantics:
+- We support SCIM 2.0 PATCH (incremental) and bulk import. PATCH will update attributes in place; we match users by `externalId` if provided, falling back to `userName` (email). Avoid changing userName/email frequently — use `externalId` for stable identity.
+
+3) Service accounts / credentials:
+- Strong recommendation: short-lived JWTs from your IdP or a short-lived certificate for the control plane agent. We provide an agent token exchange flow (OIDC client_credentials with rotating client_secret) — avoids long-lived API keys. Dev has a short runbook attached.
+
+4) Auditing:
+- We can export audit logs to your S3 or GCS bucket and include identity fields. Default retention is 90 days; enterprise retention add-on supports 13 months. We can provide an export sample.
+
+Action items:
+- Dev: attach SCIM delta diagram + example PATCH payload and a note on `externalId` matching (see attached).
+- Marcus: confirm our recommended SAML attribute names and provide the attribute-mapping template for Acme to copy.
+- Sara / Javier: please confirm whether your IdP will emit `roles` or `groups` and whether `externalId` is available for users.
+
+I attached: redwood-saml-attribute-mapping.xlsx (template), scim-provisioning-delta-diagram.png, idp-metadata-acmecorp.xml (placeholder).
+
+I can do a 30m slot Thursday 10–10:30am PT if that works.
+
+—Olga
+Olga Petrov
+Principal Solutions Engineer | Redwood Inference
+olga.petrov@redwood.com | +1 212-555-0147
+
+Attachments:
+- redwood-saml-attribute-mapping.xlsx (attachment stub)
+- scim-provisioning-delta-diagram.png (attachment stub)
+- idp-metadata-acmecorp.xml (attachment stub)
+
+From: Dev Patel <dev.patel@redwood.com>
+To: Olga Petrov <olga.petrov@redwood.com>, Sara Holden <sara.holden@acmecorp.com>
+Cc: Mina Haddad <mina.haddad@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: 2027-06-11T08:47:00-07:00
+Subject: Re: Access provisioning gap review for private control plane
+
+On Thu, Jun 10, 2027 at 11:03 AM Olga Petrov <olga.petrov@redwood.com> wrote:
+> I attached: redwood-saml-attribute-mapping.xlsx (template), scim-provisioning-delta-diagram.png, idp-metadata-acmecorp.xml (placeholder).
+
+Sara / Javier —
+
+Adding a few technical clarifications from the runtime side:
+
+- SCIM PATCH example (we support SCIM JSON Patch):
+  PATCH /scim/v2/Users/2819-...
+  [
+    {
+      "op": "replace",
+      "path": "name.familyName",
+      "value": "Holden"
+    },
+    {
+      "op": "add",
+      "path": "roles[-]",
+      "value": "redwood-deployer"
+    }
+  ]
+
+- User matching: prefer `externalId` set to your internal UUID. If not available, we match on `userName` (email) but treat that as mutable — changing email will create an alias record unless `externalId` is present.
+
+- SAML nameid-format: we accept `emailAddress` or `persistent`. If you plan to allow federation across accounts, use `persistent` and populate `externalId` via SCIM.
+
+- Service account token exchange (short summary):
+  1) IdP issues short-lived client assertion for a registered OIDC client (control-plane-agent).
+  2) Agent exchanges assertion for a Redwood session token via our token-exchange endpoint (exp 5m).
+  3) Token used for agent registration over mTLS channel.
+
+I've attached a small runbook: scim-schema-final.patch (notes + example payloads) and a reference to the token-exchange API in the Drive link.
+
+If Thursday 10am PT works, I'll be on the call to go through the PATCH flows.
+
+—Dev
+Dev Patel
+Senior Infra Engineer, Redwood Inference
+
+Attachments:
+- scim-schema-final.patch (attachment stub)
+
+From: Sara Holden <sara.holden@acmecorp.com>
+To: Olga Petrov <olga.petrov@redwood.com>, Dev Patel <dev.patel@redwood.com>
+Cc: Javier Ortega <javier@identityworks.io>, procurement@acmecorp.com
+Date: 2027-06-12T14:05:00-07:00
+Subject: Re: Access provisioning gap review for private control plane
+
+All —
+
+Thanks for the quick turnaround. Javier confirmed Acme will emit a `roles` claim (we can also provide `groups` for completeness) and we can set `externalId` to our internal employee UUIDs. We reviewed the SCIM PATCH example and it's acceptable.
+
+I've attached our IdP metadata and a redlines doc for the group-to-role mapping. Procurement opened ticket ACME-7321 for the enterprise retention add-on; they asked me to confirm the 13-month export SLA and whether we can get a SOC2 report as part of the contract. Can someone from legal/ops point us to the SOC2 evidence link?
+
+We'll take the Thursday 10am PT slot. Please send a calendar invite.
+
+Best,
+Sara Holden
+Head of IT Security | AcmeCorp
+
+Attachments:
+- idp-metadata-acmecorp.xml (attachment stub)
+- acme-redlines-group-mapping.docx (attachment stub)

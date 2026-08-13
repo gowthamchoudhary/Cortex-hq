@@ -1,0 +1,115 @@
+Private deployment headroom and surge tuning — StratusHealth kickoff
+
+From: Erin Cole <erin@stratushealth.com>
+To: dylan.brooks@redwood.ai
+Date: 2026-09-19T09:21:00-07:00
+Subject: Private deployment headroom and surge tuning — StratusHealth kickoff
+
+Hi Dylan,
+
+Thanks for the quick intro last week. We're moving the pilot into a private/VPC deployment and need Redwood's guidance on sizing for the private GPU pool. High-level goals:
+- Peak: ~2,000 inference requests/min (spiky; short sustained bursts up to 5 minutes)
+- Baseline: ~350 req/min (steady)
+- Latency target: p95 <= 150ms on our 512-token average prompt (mix of chat + single-turn completion)
+- Availability target: 99.9% over business hours (US heavy)
+
+Traffic profile: most requests are short (<2k tokens end-to-end), we have a 60% KV cache hit expectation once warmed. We will run a weekend soak test before cutover.
+
+Can you propose a short mutual action plan (MAP) with recommended initial reserve, autoscale steps, warmup guidance, and a baseline runbook for fallbacks if we hit an overload? Also: do you need any sample logs/traffic from us?
+
+Thanks — happy to jump on a 30min sync today or tomorrow.
+
+Erin
+Erin Cole
+Head of Platform Engineering, StratusHealth
+[Attachment: stratus_sample_traffic_202609.csv (csv)]
+From: dylan.brooks <dylan.brooks@redwood.ai>
+To: Erin Cole <erin@stratushealth.com>
+Cc: marissa_cole@redwood.ai, vivek_kulkarni@redwood.ai
+Date: 2026-09-19T10:04:00-07:00
+Subject: Re: Private deployment headroom and surge tuning — StratusHealth kickoff
+
+Erin — thanks, this is perfect context.
+
+High-level response / plan:
+1) Initial reserve: provision an initial dedicated pool sized for ~1,500 concurrent requests equivalent (see assumptions below).
+2) Autoscale policy: warm baseline of 4 GPUs (A100-equivalent), scale +2 GPUs per additional ~400 rps sustained over 60s, with a hard cap +8 GPUs for burst absorption.
+3) Warmup & cache: we recommend a 15–30 minute rolling warmup using prefix cache seeding and a prioritized warm pool for expected heavy routes.
+4) Fallbacks: automatic routing to a cheaper quantized model variant + degraded latency SLA if the pool is exhausted; return 503 with retry-after only as last resort.
+
+Assumptions (brief): avg tokens/request ~512; KV cache hit 60% once warmed; batching efficiency ~1.6x for this mix. With those numbers, the 4-GPU baseline is expected to hit ~65% CPU/GPU utilization during baseline. Reserve gives room for caching and short surges.
+
+Next steps: I attached our initial-sizing-template.xlsx to capture your expected concurrency and sample traces; can you drop the sample traffic file into the shared Drive link (or attach) and we will run a small sim to refine the numbers?
+
+I'm free at 11:30 PT for a 30-minute kickoff — proposed agenda: quick traffic review, confirm runbook owners, assign action items.
+
+Thanks,
+Dylan
+Dylan Brooks
+Solutions Architect — Redwood Inference
+[Attachment: initial-sizing-template.xlsx (xlsx)]
+From: dylan.brooks@redwood.ai
+To: marissa_cole@redwood.ai, vivek_kulkarni@redwood.ai
+Date: 2026-09-19T10:25:00-07:00
+Subject: Fwd: Private deployment headroom and surge tuning — StratusHealth kickoff
+
+Folks — forwarding Erin's note and my reply. TL;DR: Stratus wants private pool sizing for a pilot: peak ~2k r/min, target p95 150ms, 60% kv-hit.
+
+Quick capacity math / operational notes (for our sizing exercise):
+- Traffic units: 2,000 req/min = ~33 rps peak; but bursts are very spiky (they said short 5-min surges).
+- Convert to GPU throughput: with avg 512 tokens and our A100 perf vector (approx 90 tokens/sec per GPU for mixed batch patterns), one GPU can handle roughly ~1.5–2.0 rps at target latency without batching. With batching (1.6x), effective rps/GPU ~= 2.7–3.2.
+- Warm cache effect: 60% kv-hit reduces decode time ~35%; factor that into per-GPU capacity to bump throughput ~20–25%.
+- Safety margin: aim for 30% headroom at p95 to absorb jitter and network egress.
+
+Preliminary recommendation: baseline 6 A100-equivalent GPUs for pilot reserve, with immediate autoscale triggers to add 2 GPUs at 400 rps sustained windows and +4 GPUs for bursts > 600 rps. Rationale: we biased up from the 4-GPU conservative note because of the burst behavior and our desire to avoid fallback.
+
+Operational runbook items to include in MAP:
+- Warmup job: seed most common prefixes and priming queries 30m before peak windows.
+- Cache metrics: track kv-hit, cold-start rate; trigger warm pool if cold-start rate > 7% over 10m.
+- Circuit breakers: maintain a short-term request queue and fail fast after 3s queue time; prefer degraded model routing over dropping.
+- Network checklist: ensure private egress through their NAT with 10 Gbps headroom per sub-pool; verify MTU and peer routing for sustained bursts to avoid fragmentation.
+
+Questions for infra: what are our quantized-model fallbacks latency-penalties? Also confirm warm pool spin-up time on their on-prem infra (target < 120s).
+
+Will refine after we ingest their sample traffic.
+
+— D
+From: Erin Cole <erin@stratushealth.com>
+To: dylan.brooks@redwood.ai
+Cc: StratusHealth SRE <sre@stratushealth.com>
+Date: 2026-09-19T11:12:00-07:00
+Subject: Re: Private deployment headroom and surge tuning — StratusHealth kickoff
+
+Thanks Dylan — that alignment is helpful. I'm good to meet at 11:30 PT. I've attached a small sample trace (stratus_sample_traffic_202609.csv) that represents a recent Monday afternoon spike pattern and dropped a copy into the Drive folder you listed. A few notes:
+- We can give you a NAT egress range and MTU details in the kickoff.
+- We're okay with a temporary degraded model (if latency penalty < 2x) rather than full failover for user-facing routes.
+- We also want a short checklist for SOC/ audit items — can you include the on-prem logging and retention defaults you'd recommend in the MAP?
+
+See you shortly.
+
+Erin
+Erin Cole
+Head of Platform Engineering, StratusHealth
+
+On Sat, Sep 19, 2026 at 10:25 AM dylan.brooks@redwood.ai wrote:
+> Folks — forwarding Erin's note and my reply. TL;DR: Stratus wants private pool sizing for a pilot: peak ~2k r/min, target p95 150ms, 60% kv-hit.
+>
+> Quick capacity math / operational notes (for our sizing exercise):
+> - Traffic units: 2,000 req/min = ~33 rps peak; but bursts are very spiky (they said short 5-min surges).
+> - Convert to GPU throughput: with avg 512 tokens and our A100 perf vector (approx 90 tokens/sec per GPU for mixed batch patterns), one GPU can handle roughly ~1.5–2.0 rps at target latency without batching. With batching (1.6x), effective rps/GPU ~= 2.7–3.2.
+> - Warm cache effect: 60% kv-hit reduces decode time ~35%; factor that into per-GPU capacity to bump throughput ~20–25%.
+> - Safety margin: aim for 30% headroom at p95 to absorb jitter and network egress.
+>
+> Preliminary recommendation: baseline 6 A100-equivalent GPUs for pilot reserve, with immediate autoscale triggers to add 2 GPUs at 400 rps sustained windows and +4 GPUs for bursts > 600 rps. Rationale: we biased up from the 4-GPU conservative note because of the burst behavior and our desire to avoid fallback.
+>
+> Operational runbook items to include in MAP:
+> - Warmup job: seed most common prefixes and priming queries 30m before peak windows.
+> - Cache metrics: track kv-hit, cold-start rate; trigger warm pool if cold-start rate > 7% over 10m.
+> - Circuit breakers: maintain a short-term request queue and fail fast after 3s queue time; prefer degraded model routing over dropping.
+> - Network checklist: ensure private egress through their NAT with 10 Gbps headroom per sub-pool; verify MTU and peer routing for sustained bursts to avoid fragmentation.
+>
+> Questions for infra: what are our quantized-model fallbacks latency-penalties? Also confirm warm pool spin-up time on their on-prem infra (target < 120s).
+>
+> Will refine after we ingest their sample traffic.
+>
+> — D

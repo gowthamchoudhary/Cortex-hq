@@ -1,0 +1,141 @@
+Closure packet: transient duplicate-requests incident and verification plan
+
+From: Marissa Cole <marissa_cole@redwoodinference.com>
+To: Alex Rivera <alex@ledgerpoint.com>, ops@ledgerpoint.com
+Cc: David Kim <david_kim@redwoodinference.com>, Hannah Schmitt <hannah_schmitt@redwoodinference.com>
+Date: Tue, 17 Jan 2028 09:15:00 -0800
+Subject: Closure packet: transient duplicate-requests incident and verification plan
+
+Hi Alex / LedgerPoint team,
+
+Thank you for your patience while we completed the post-incident analysis for the event on Jan 14 that resulted in a short window of duplicated inference requests for a subset of your traffic. We know this impacted throughput accounting and caused a small number of doubled outputs — we apologize for the disruption.
+
+Summary (tl;dr):
+- What happened: A race condition in the request deduplication layer allowed duplicate in-flight requests for ~3 minutes (00:14:22–00:17:16 UTC).
+- Impact: ~0.08% of transactions in that window for your account saw duplicated token outputs. No tokens were delivered to third parties; data residency and encryption remained intact.
+- Root cause: A recent optimization to the async request coalescer introduced a timing window during high request fan-in where cache insertions could be skipped.
+- Remediation & verification actions we completed: rollback of the faulty optimization, additional unit+integration tests, deploy of a hotfix with deterministic locking, and an automated replay-based verification job keyed to your account.
+
+Attached: postincident_summary_ledgerpoint.pdf (full RCA), evidence_bundle_ledgerpoint.zip (request traces and sanitized logs), verification_checklist_ledgerpoint.csv (step-by-step checklist we recommend for your verification run).
+
+Proposed next steps for LedgerPoint:
+1) Review the attached verification_checklist_ledgerpoint.csv and confirm a time for a joint verification run (we propose Jan 25, 10:00–11:00 PT).
+2) We will provide a read-only verification environment and a screen-share session during the run.
+3) If you require additional artifacts for procurement/audit, we can produce a scoped log extract and KMS access certificate.
+
+Please let me know any immediate questions. We are committed to making this right and ensuring you have what you need to validate remediation.
+
+Thanks,
+
+Marissa Cole
+Senior Customer Reliability Lead
+Redwood Inference
+marissa_cole@redwoodinference.com
++1 (415) 555-0124
+
+--
+Attachments:
+- postincident_summary_ledgerpoint.pdf (PDF, 1.2MB)
+- evidence_bundle_ledgerpoint.zip (ZIP, 28MB; sanitized logs + traces)
+- verification_checklist_ledgerpoint.csv (CSV, 5KB)
+From: Alex Rivera <alex@ledgerpoint.com>
+To: Marissa Cole <marissa_cole@redwoodinference.com>
+Cc: ops@ledgerpoint.com
+Date: Tue, 17 Jan 2028 10:03:00 -0800
+Subject: Re: Closure packet: transient duplicate-requests incident and verification plan
+
+Marissa — thanks for the thorough summary. A few quick clarifications before we schedule the joint run: 
+
+1) Can you confirm whether any user-visible IDs were re-used between the duplicate responses, or were they purely duplicate payloads carrying distinct request IDs?
+2) For the evidence bundle: can you include the hash of the specific logs you sanitized so our security team can cross-check integrity?
+3) On the verification checklist: will the verification environment replay the live traffic at the same QPS distribution or a sampled subset?
+
+We are generally comfortable with Jan 25 but want the answers above and the hash before committing it to our compliance calendar.
+
+—Alex
+Alex Rivera
+Head of Platform Ops, LedgerPoint
+alex@ledgerpoint.com
+
+On Tue, Jan 17, 2028 at 9:15 AM Marissa Cole <marissa_cole@redwoodinference.com> wrote:
+> (original message attached)
+
+From: Marissa Cole <marissa_cole@redwoodinference.com>
+To: Alex Rivera <alex@ledgerpoint.com>, ops@ledgerpoint.com
+Cc: David Kim <david_kim@redwoodinference.com>, Hannah Schmitt <hannah_schmitt@redwoodinference.com>
+Date: Wed, 18 Jan 2028 08:21:00 -0800
+Subject: Re: Closure packet: transient duplicate-requests incident and verification plan
+
+Hi Alex — good questions, thanks. Answers inline below.
+
+1) IDs: The duplicated outputs carried distinct request_ids (trace ids) at the ingress level; the generated payloads were byte-for-byte identical for those duplicates. In short: distinct request ids, same output payloads. We have included the sanitized trace excerpts in evidence_bundle_ledgerpoint.zip under /traces/duplicate-window/ (files: trace_001.jsonl..trace_034.jsonl).
+
+2) Hash/es: evidence_bundle_ledgerpoint.zip SHA256 = 3f8b2e9d9a7c2b1f4d7e5a8c9b0d2e6f8a9b1c2d3e4f5a6b7c8d9e0f1a2b3c4. The sanitized log extract and artifact manifest are at Drive: https://drive.redwoodinference.com/teams/ops/LP-closure-packet/artifacts/manifest.txt
+
+3) Verification env: the read-only verification run will use a deterministic replay of a sampled subset that preserves the QPS and burst characteristics seen in your production window (we do not replay full customer data for privacy). The checklist details the sample size and the replay knobs; we will share the exact sampling parameters before the run.
+
+We will also include a short screencast that demonstrates the deduplication check logic in the hotfix build.
+
+If the above looks good, can you confirm Jan 25, 10:00–11:00 PT for the joint verification? Once confirmed, David will open the verification session and Hannah will lead the replay.
+
+Thanks,
+Marissa
+
+On Wed, Jan 18, 2028 at 08:21, Marissa Cole <marissa_cole@redwoodinference.com> wrote:
+> (evidence hash and link provided)
+
+From: Hannah Schmitt <hannah_schmitt@redwoodinference.com>
+To: Marissa Cole <marissa_cole@redwoodinference.com>, David Kim <david_kim@redwoodinference.com>
+Date: Wed, 18 Jan 2028 09:05:00 -0800
+Subject: Internal: LedgerPoint verification run - prep notes
+
+Marissa / David — internal notes to align on ownerable steps prior to the joint run. (internal only)
+
+- Owner: Hannah will run the replay job and monitor for any residual duplicate markers; target is green = zero duplicates in sampled replay.
+- Logs & artifacts: David to stage the sanitized logs and ensure the manifest.txt is signed and uploaded to the Drive link Marissa shared.
+- Hotfix: rolling back the async coalescer change has been validated in our QA cluster; the hotfix image is tagged: rwinf-hotfix-2028-01-16-3.
+- Monitoring: temporary alert added to watch dedup_call_rate (threshold 0.01%). Alert runbook updated in PagerDuty runbook ID PD-RED-1034.
+- Customer comms: Marissa to send the final verification checklist and invite.
+
+I’ll be available Jan 25 for the run (stand-by 09:45 PT).
+
+Hannah
+Hannah Schmitt
+Principal Reliability Engineer
+Redwood Inference
+(hannah_schmitt@redwoodinference.com)
+
+--
+(Attachment: internal_runbook_notes.md — internal; not shared externally)
+From: Alex Rivera <alex@ledgerpoint.com>
+To: Marissa Cole <marissa_cole@redwoodinference.com>, ops@ledgerpoint.com
+Cc: procurement@ledgerpoint.com
+Date: Fri, 20 Jan 2028 14:32:00 -0800
+Subject: Re: Closure packet: transient duplicate-requests incident and verification plan
+
+Marissa — thanks for the follow-up and for the quick turnaround on the evidence. We reviewed the manifest and hash with our security team and are satisfied. Jan 25 at 10:00 PT works for us; we will join the verification session with a small compliance observer group (ops + procurement).
+
+Please confirm the calendar invite and the Zoom link. Also: we would like a short summary we can attach to our internal incident log — a 1-page executive summary would be ideal. Can you include that in the Drive folder prior to the run?
+
+Appreciate the team's responsiveness.
+
+—Alex
+Alex Rivera
+Head of Platform Ops, LedgerPoint
+
+From: Marissa Cole <marissa_cole@redwoodinference.com>
+To: Alex Rivera <alex@ledgerpoint.com>, ops@ledgerpoint.com
+Cc: David Kim <david_kim@redwoodinference.com>, Hannah Schmitt <hannah_schmitt@redwoodinference.com>
+Date: Fri, 20 Jan 2028 15:05:00 -0800
+Subject: Re: Closure packet: transient duplicate-requests incident and verification plan
+
+Alex — confirmed. Calendar invite and Zoom link are sent (Doc: https://drive.redwoodinference.com/teams/ops/LP-closure-packet/calendar-invite.ics). We added a one-page executive summary as requested: LP-exec-summary-20280120.pdf in the Drive folder.
+
+One more commitment: after the verification run we will provide a compact acceptance checklist you can attach to your incident log that records the run parameters, sample size, and result.
+
+Looking forward to the session.
+
+Best,
+Marissa
+
+(Thread archived: final confirmation and calendar invite sent)

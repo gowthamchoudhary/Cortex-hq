@@ -1,0 +1,132 @@
+POC capacity & success criteria — Avery Solutions trial plan
+
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Liam O'Connor <liam.oconnor@averysolutions.com>, Priya Raman <priya.raman@averysolutions.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.ai>, Monica Patel <monica.patel@redwood.ai>
+Date: Mon, 15 Mar 2026 09:12:00 -0700
+Subject: POC capacity & success criteria — initial plan
+
+Hi Liam / Priya,
+
+Thanks again for a productive demo this morning. Per our conversation, I captured a concrete POC plan focused on validating performance, cost, and integration friction for your interactive assistant use case. High level below — please confirm this aligns with your expectations and add any missing success criteria.
+
+Goal: Prove that Redwood can meet Avery's latency, throughput, and cost targets in a 3-week trial using your sample prompts and a sanitized subset of product content.
+
+Proposed scope & success criteria:
+- Functional: Assistant returns correct, context-aware responses for the 50 canonical prompts in your test set (target F1/concordance to your eval > 0.85).
+- Latency: P50 < 120ms, P95 < 250ms for 512-token requests under expected concurrency.
+- Throughput: sustain 40 concurrent requests with <250ms P95; burst handling to 150 concurrent (see autoscale).
+- Cost signal: token cost and total cost estimate for projected monthly volume (we'll provide sample run numbers).
+- Integration: API integration completed and smoke tests passing in your dev environment.
+
+Capacity ask for POC:
+- Reserved/Dedicated capacity: 2x A100-equivalent GPUs for baseline (dedicated to you during business hours), with autoscale policy to burst up to 4x GPUs for short periods.
+- Autoscale policy suggestion: scale-out threshold at queue depth > 20 requests or sustained CPU/GPU utilization > 75% for 60s; scale-in after 5 minutes idle.
+- KV cache: we'll enable prefix/KV caching for session-heavy flows to reduce effective compute.
+
+Timeline (target):
+- Week 0 (kickoff): sign MAP, share sample data & prompts, provision reserved nodes.
+- Week 1: ingest data, baseline runs, initial latency/throughput tests.
+- Week 2: iterate prompts, tuning (quantization/config), run full eval set.
+- Week 3: finalize metrics, handoff/next-step decision.
+
+Owners:
+- Redwood SRE/Provisioning: Rishi to provision capacity and set autoscaling policy.
+- Redwood Solutions: Monica to own test harness, run evals, and share results.
+- Redwood AE: Neha to manage timeline and act as single-threaded contact.
+- Avery: Liam/Priya to share data, set success criteria sign-off, and coordinate procurement if needed.
+
+I attached a brief POC playbook and a spreadsheet template for the prompts/sample data. If this looks good, can we lock a kickoff on Wednesday 18 Mar at 10am PT?
+
+Thanks — Neha
+
+Neha Kapoor
+Enterprise AE | Redwood Inference
+neha.kapoor@redwood.ai | +1 (415) 555-0128
+
+From: Liam O'Connor <liam.oconnor@averysolutions.com>
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: Priya Raman <priya.raman@averysolutions.com>, procurement@averysolutions.com
+Date: Mon, 15 Mar 2026 11:04:00 -0500
+Subject: Re: POC capacity & success criteria — initial plan
+
+Thanks Neha, this is helpful. A couple of clarifying questions from our side:
+
+1) Autoscaling & burst: if we hit a 3x spike during business hours (unexpected demand), is the burst capacity guaranteed during the POC or is it best-effort? We need to know whether we should expect soft throttling.
+2) Cost model: can you confirm whether reserved capacity for the POC is billed pro-rata or included in a trial credit? Procurement will want a simple cost estimate for the baseline reservation + estimated burst consumption.
+3) Data handling: we'll send a sanitized CSV and a few sample documents. Does Redwood need anything else for indexing/context windows?
+
+We can tentatively do Wed 18 Mar 10am PT for kickoff. Priya — do you want procurement looped on a separate contract thread, or can we handle MAP acceptance during the kickoff?
+
+—Liam
+
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>, Monica Patel <monica.patel@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+Date: Tue, 16 Mar 2026 08:23:00 -0700
+Subject: Fwd: POC capacity & success criteria — internal ask
+
+Folks — forwarding Avery's follow-up. They want clarity on burst guarantees and billing for reserved capacity during the POC. Can you confirm the recommended capacity (GPU type/count), autoscale knobs, and whether we can offer a short-term credit to cover reserved cost? Also need a one-paragraph plain-English answer for Liam to share with procurement.
+
+Please reply-all with technical numbers and ownerships so I can close the loop before the kickoff.
+
+Thanks,
+Neha
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Neha Kapoor <neha.kapoor@redwood.ai>, Rishi Malhotra <rishi.malhotra@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>, Liam O'Connor <liam.oconnor@averysolutions.com>, Priya Raman <priya.raman@averysolutions.com>
+Cc: 
+Date: Tue, 16 Mar 2026 10:11:00 -0700
+Subject: Re: POC capacity & success criteria — baseline & burst plan
+
+Hi all,
+
+Quick technical confirmation and proposal:
+
+Recommended baseline: 2x A100-equivalent GPUs (or 2x H100 if you want headroom for larger context lengths). Baseline will be pinned to your trial to ensure consistent latency during business hours (9am–6pm local).
+
+Burst/autoscale behavior:
+- Autoscale target: allow bursts up to 4x GPUs (2 baseline + 2 burst) to handle demand spikes up to ~150 concurrent short requests. Bursts are provisioned from a shared pool and are best-effort but very reliable for short windows (sub-10 minute bursts are routinely honored).
+- If the shared pool is exhausted, Redwood will fallback to a compatible lower-cost model variant (slightly higher latency) rather than fail requests. We'll include a per-request header indicating fallback occurred for observability.
+
+Performance estimates (empirical):
+- With 2x A100-equivalents and the model variant we discussed, expect ~40 concurrent sessions with P95 around 200–240ms for 512 tokens.
+- Scale to 4x GPUs for bursts; that should push effective concurrency to ~140–180 depending on prompt length and KV cache hit rate.
+
+Cost and billing for POC:
+- Reserved capacity during the POC will be billed pro-rata at our standard reserved-hour rate unless we agree to credit it as part of the trial. For sales expediency we can offer up to $4,000 in trial credits to offset reserved hourly charges for a three-week POC (subject to approvals). Any burst consumption beyond reserved hours is billed at standard on-demand burst rates.
+
+Operational ownership: Rishi to provision capacity and confirm network/VPC settings. Monica will run the initial baseline tests and share a one-page test report. Stephanie will instrument the monitoring dashboard and set the evaluation thresholds so we can hit the success criteria. Neha to coordinate dates and MAP sign-off.
+
+Next steps before kickoff on Wed 18 Mar 10am PT:
+1) Liam/Priya to confirm MAP acceptance (or send edits) and share the sanitized sample data.
+2) Rishi to confirm node types and send a provisioning ETA (we aim for same-day provisioning on Wed morning).
+3) Monica to prepare the runbook and test harness (shared link attached).
+
+I'll attach a short runbook and the quick perf checklist to this thread.
+
+—Monica
+Monica Patel
+Solutions Engineer | Redwood Inference
+monica.patel@redwood.ai
+
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Liam O'Connor <liam.oconnor@averysolutions.com>, Priya Raman <priya.raman@averysolutions.com>, procurement@averysolutions.com
+Cc: Rishi Malhotra <rishi.malhotra@redwood.ai>, Monica Patel <monica.patel@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+Date: Wed, 18 Mar 2026 11:02:00 -0700
+Subject: Re: POC capacity & success criteria — final plan & kickoff
+
+Thanks everyone — confirming the kickoff on Wed 18 Mar 10am PT. Summary for procurement (one-paragraph):
+
+Redwood will provision 2x A100-equivalent GPUs reserved to Avery during standard business hours for the three-week POC, with autoscale allowed to burst up to 4x GPUs from our shared pool. Reserved capacity is normally billed pro-rata; Redwood is offering $4,000 in trial credits to offset reserved capacity charges for this POC. Any burst usage beyond reserved hours will be billed at on-demand burst rates. Full MAP link: https://drive.redwood.example/avery/poc/mutual-action-plan
+
+Action items for kickoff:
+- Avery: upload sanitized sample data to the Drive link and confirm MAP acceptance.
+- Redwood (Rishi): confirm provisioning ETA and network access by 9am PT Wed.
+- Redwood (Monica): share initial perf/runbook and test harness link at kickoff.
+
+Looking forward to kicking off. If procurement needs a short SOW or formal quote, I can loop in finance after the kickoff.
+
+Best,
+Neha
+
+(attachments referenced above are stubs: avery_poc_requirements.xlsx (spreadsheet), redwood_poc-playbook.pdf (2pg), mmp-avery-poc.docx (mutual action plan))

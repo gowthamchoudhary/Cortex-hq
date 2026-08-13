@@ -1,0 +1,120 @@
+Private VPC performance discovery — pathing checklist & next tech sync
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Lina Torres <lina.torres@acme-corp.com>, Victor Huang <victor.huang@acme-corp.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Fri, 22 Jun 2028 15:08:00 -0700
+Subject: Private VPC performance discovery — pathing checklist & next tech sync
+
+Hi Lina/Victor —
+
+Thanks again for the time earlier. Quick recap + concrete asks so everyone's aligned before we loop in your network team for measurements. Overall Acme goal: private deployment with predictable streaming SLOs for interactive agent product. High-level targets you mentioned on the call:
+
+- P90 token latency target (streaming): <= 75ms for typical messages (~64 tokens).
+- P99 tail target (worst-case short bursts): <= 220ms for 512-token streams.
+- Sustained concurrent streams: 250 active sessions during peak, with bursts to 500 for < 15m.
+- Throughput: baseline 400 rps steady with spikes to 1k rps during campaign windows.
+
+Key network/perf constraints we discussed that will affect runtime choices:
+- Traffic must egress from your VPC via a fixed set of public egress IPs (for allowlisting).
+- Preference for VPC Peering over VPN if we can meet latency/jitter targets.
+- TLS termination will remain at Redwood side; keep NAT rules minimal.
+
+Immediate asks / next steps (owners & dates):
+1) Lina/Victor: Share your network diagram + expected egress path (links to firewall/NAT) and a contact for infra to run iperf/traceroute with us — due: Tue 2028-06-26. (attachment: acme-slo-matrix.xlsx)
+2) Karthik / Ben (Redwood): Prepare a short pathing checklist (MTU, PMTU, keepalive, TCP window sizing, recommended peering config) and a proposed test plan for streaming smoke tests — due: Mon 2028-06-24.
+3) Joint tech call to run traceroute + sample streaming run (we'll bring a small test harness to simulate 40 concurrent streams) — propose Wed 2028-06-28 09:00 PT.
+
+Notes for the tech call: please ensure VPN or peering endpoints are reachable from the test IPs we give you; if peering is an option, we expect <10ms additional hop latency to our serving subnet to make certain quantized kernels practical without extra ee-ops. If peering is not possible, we'll validate VPN throughput and packet reordering risk.
+
+I've attached a draft SLO matrix and our lightweight network checklist to speed the handoff.
+
+Thanks —
+Evelyn
+Evelyn Hart
+Senior Solutions Engineer, Redwood Inference
+evelyn.hart@redwood.com
++1 (415) 555-0134
+
+Attachments: acme-slo-matrix.xlsx (spreadsheet), redwood-network-checklist.pdf (two-page checklist)
+
+From: Victor Huang <victor.huang@acme-corp.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Lina Torres <lina.torres@acme-corp.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Fri, 22 Jun 2028 17:46:00 -0700
+Subject: Re: Private VPC performance discovery — pathing checklist & next tech sync
+
+Evelyn — thanks for the clear summary. Quick clarifications from the Acme infra side:
+
+- We'll share the network diagram (VPC subnets, NAT gateways, peering attachments) by Monday.
+- Peering is preferred but depends on procurement of a cross-account peering arrangement; timeline uncertain (1-2 weeks).
+- VPN is immediately available (we have site-to-site IPSec appliances). Expect an additional 5–18ms and modest jitter; we'll capture baseline measurements during the call.
+
+A few data points you might need:
+- We have two NAT gateways in us-west-2 with auto-scaling; egress IPs will be ephemeral unless we move to an EIP-mapped NAT (we can pin EIPs if required).
+- Internal inter-subnet latency currently averages 0.8–2.1ms.
+- We can allocate a 10 Gbps transit link to Redwood if peering is agreed.
+
+I'll attach our initial ip space and reachability list in the Drive link and introduce our network engineer (lina.torres@acme-corp.com) to your team.
+
+—Victor
+Victor Huang
+Principal Product Ops, Acme Corporation
+victor.huang@acme-corp.com
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Victor Huang <victor.huang@acme-corp.com>, Lina Torres <lina.torres@acme-corp.com>
+Cc: Ben Carter <ben.carter@redwood.com>
+Date: Sat, 23 Jun 2028 09:12:00 -0700
+Subject: Re: Private VPC performance discovery — pathing checklist & next tech sync
+
+Thanks all — high level technical plan from Redwood ahead of the joint run: 
+
+1) Measurement phase (traceroute/iperf/tcpdump): confirm path MTU, per-hop latency, and baseline jitter. We prefer a direct peering path for steady-state streaming; if peering isn't available we'll validate IPSec throughput at target concurrency.
+
+2) Streaming smoke test (controlled): we will run 40 concurrent streaming sessions from our test harness (configurable token rate) for 10 minutes, capturing client- and server-side per-token latency and KV cache hit rates. Aim: verify P90 <= 75ms and P99 <= 220ms under realistic token sizes.
+
+3) Mitigation checklist we recommend before ramp:
+   - Pin EIPs for allowlist OR provide the NAT gateway IP range that will carry persistent egress for the Redwood test IPs.
+   - Ensure TCP offload or any packet coalescing at the VPN appliance is disabled for test VLANs (timers can add ~10–40ms).
+   - MTU>=1500; if jumbo frames are used ensure both sides match.
+   - Consider a dedicated peering attachment with 10Gbps for production (reduces jitter and egress queueing).
+
+I've attached a compact text file with example tcpdump filters and our recommended iperf flags (kvcache-ops-notes.txt) and the SLO matrix Evelyn shared. For the joint run we'll need: one run window where you can pin egress to our test IPs and at least one engineer on the call to adjust firewall/NAT rules.
+
+Proposed owners: Victor (Acme network lead) to provide reachability + egress plan; Lina to schedule test window; Evelyn to coordinate Redwood participants; Ben to run the streaming harness.
+
+I can be available Wed 06/28 09:00 PT as proposed. If peering procurement finishes earlier we can swap to a peering test.
+
+Thanks —
+Karthik
+Karthik Iyer
+Staff SRE, Redwood Inference
+karthik.iyer@redwood.com
+
+From: Lina Torres <lina.torres@acme-corp.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Victor Huang <victor.huang@acme-corp.com>, Ben Carter <ben.carter@redwood.com>
+Date: Sun, 24 Jun 2028 11:02:00 -0700
+Subject: Re: Private VPC performance discovery — pathing checklist & next tech sync
+
+Evelyn/Karthik — thanks, this looks good. I've uploaded our network diagram to the Drive folder (link below) and confirmed we can pin two EIPs for the test window. We're good for the Wed 06/28 09:00 PT slot; I've put Victor and our network engineer (victor.huang@acme-corp.com) on the calendar invite.
+
+Drive: https://drive.google.com/drive/folders/1aBcD_network_diagrams
+
+One production caveat: we can't commit to a permanent peering attachment before procurement — that will be a follow-up conversation with our cloud ops. For the proof-of-concept we will:
+- Pin EIPs during the test window.
+- Ensure the IPSec appliance disables TCP coalescing for the VLAN used in the test.
+
+I'll share the iperf/traceroute outputs after the run and we can decide next steps (peering procurement or VPN tuning).
+
+Thanks —
+Lina
+Lina Torres
+Director, Cloud Infrastructure, Acme Corporation
+lina.torres@acme-corp.com
+
+On Fri, Jun 22, 2028 at 03:08 PM Evelyn Hart <evelyn.hart@redwood.com> wrote:
+> Hi Lina/Victor —
+> 
+> Thanks again for the time earlier. Quick recap + concrete asks so everyone's aligned before we loop in your network team for measurements...

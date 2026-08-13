@@ -1,0 +1,97 @@
+Proposal: convert burst usage into committed GPU reserve (pilot + smoothing)
+
+From: Claudia Rivera <claudia@vectorica.com>
+To: Evelyn Hart <evelyn.hart@redwoodinference.com>
+Cc: ops+billing@vectorica.com
+Date: Wed, 12 Aug 2026 09:14:00 -0700
+Subject: Re: capacity overview + surge notes
+
+Thanks for the usage snapshot last week, Evelyn — we ran the figures against our internal forecast and wanted to start the conversation about converting some of our burst spend into a reserved commit.
+
+Recap of what we saw: in June/July we had 4 obvious weekly peaks where sustained GPU consumption was ~3.2x our typical baseline for 6-12 hours. Net effect was variable latency and a bunch of burst credits.
+
+We are open to a conversion if it avoids repeated supply-side throttles and gets us a cleaner unit cost. Primary asks: 1) what size commit do you recommend to smooth those peaks, 2) what conversion credit do we get for past burst spend, and 3) can we carve a small canary window (first 6 weeks) to validate no regression in latency?
+
+I attached the Jun-Jul usage export. Happy to hop on a quick call this week.
+
+— Claudia
+Head of Platform Ops
+Vectorica Labs
+
+From: Evelyn Hart <evelyn.hart@redwoodinference.com>
+To: Claudia Rivera <claudia@vectorica.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Karthik Iyer <karthik_iyer@redwoodinference.com>
+Date: Thu, 13 Aug 2026 10:02:00 -07:00
+Subject: Re: capacity overview + surge notes
+
+Claudia — really helpful data, thanks. I reviewed the attached csv and ran it by our capacity team. High level answer: we can translate your observed peaks into a staged committed pool plus an autoscale buffer to preserve latency during unexpected surges.
+
+Quick proposal in this reply (high-level):
+- Pilot commit: reserve 8 A100-equivalent GPU slots (6-month term) to cover predictable weekly peaks.
+- Autoscale buffer: keep 20% burst capacity available for short spikes (metered).
+- Conversion credit: apply 40% of the last 90 days of burst spend toward the pilot fee (one-time credit).
+- Observability: we’ll open a dedicated route/dashboard and share token-level cost/latency breakdowns for the pilot period.
+
+Ben and Karthik — can you confirm the sizing math and a quick MoP (milestone of success) we can share with Vectorica (latency p95 <= 220ms, steady-state GPU utilization ~60% across the reserved pool)?
+
+If that looks good to you, Claudia, I’ll send a formal addendum with numbers and a short canary SLO (first 6 weeks).
+
+Thanks,
+Evelyn
+Senior Account Executive, Redwood Inference
+
+From: Ben Carter <ben.carter@redwoodinference.com>
+To: Evelyn Hart <evelyn.hart@redwoodinference.com>, Karthik Iyer <karthik_iyer@redwoodinference.com>
+Date: Fri, 14 Aug 2026 08:33:00 -07:00
+Subject: Re: capacity overview + surge notes
+
+Eve — did a quick back-of-envelope on Vectorica's CSV. Assumptions: A100-equivalent throughput per GPU, average sequence length 128 tokens, median concurrency during peaks ~18 streams.
+
+Sizing rationale:
+- Observed peak sustained load maps to ~7.2 GPUs at 85% utilization. Round up to 8 for headroom and affinity packing.
+- 8 committed GPUs covers typical weekly peaks; the 20% autoscale buffer handles the top 5% of bursts without forcing model fallbacks.
+
+MoP (pilot success):
+1) p95 tail latency <= 220ms for 95% of requests over 6-week window
+2) no more than 2 forced fallbacks to lower-capacity model variants per week during pilot
+3) realized commit utilization >= 45% (we expect 55–65% after smoothing)
+
+I'll draft the amendment numbers (monthly commit fee, applied credit from burst spend) and send to you both by Monday.
+
+— Ben
+Sales Engineer, Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwoodinference.com>
+To: Ben Carter <ben.carter@redwoodinference.com>, Evelyn Hart <evelyn.hart@redwoodinference.com>
+Date: Mon, 17 Aug 2026 11:45:00 -07:00
+Subject: internal: pricing tweaks + tranche smoothing idea
+
+Internal notes (do not forward yet):
+- Pricing: if we offer a 4-month ramp on the commit price (75% month 1, 88% month 2, 93% month 3, 100% month 4) we reduce sticker shock and increase conversion probability. We can model this as an amortized discount against a 6-mo commit.
+- Tranche smoothing: suggest splitting the 8 GPUs into 2 tranches (5 + 3). Tranche 1 active immediately; tranche 2 activates automatically if 7-day rolling utilization > 70% for tranche 1. This reduces the risk of over-committing for Vectorica's seasonal pattern.
+- Docs to attach: MoP, SLOs, signed MOP template, and the usage report.
+
+Ben — please finalize the amendment PDF with the ramp and tranche language. Evelyn — if you get a green light from Claudia I’ll loop Legal for a short addendum.
+
+— Karthik
+Senior Product Manager, Redwood Inference
+
+From: Evelyn Hart <evelyn.hart@redwoodinference.com>
+To: Claudia Rivera <claudia@vectorica.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Karthik Iyer <karthik_iyer@redwoodinference.com>, ops+billing@vectorica.com
+Date: Tue, 18 Aug 2026 16:22:00 -07:00
+Subject: Re: capacity overview + surge notes
+
+Claudia — thanks for the quick review call today. Attached is the formal pilot addendum (commit_pricing_options_v2.pdf) and a short MoP and SLO appendix. TL;DR of the offer we discussed:
+- Pilot: 8 A100-equivalent GPUs (split into 5 + 3 tranches), 6-month term, tranche-activation logic based on 7-day rolling utilization.
+- Autoscale buffer: 20% metered burst capacity retained for short spikes.
+- Conversion credit: 40% credit applied to the pilot invoice, based on the last 90 days of burst spend (one-time).
+- Ramp pricing: 75% month 1, 88% month 2, 93% month 3, then full price month 4–6.
+- MoP: p95 <= 220ms, <=2 forced fallbacks/week, commit utilization target >=45% during pilot.
+
+If this matches what we discussed, please reply "I agree" and ops+billing (cc'd) can accept the addendum and we’ll spin up the dedicated pool. If you prefer a 3-month pilot instead of 6, mention that and we’ll run the numbers.
+
+Attachments: vectorica_usage_Jun-Jul.csv, commit_pricing_options_v2.pdf, mop_template_v1.docx
+
+— Evelyn
+Senior Account Executive, Redwood Inference

@@ -1,0 +1,208 @@
+Cost Model: overhead allocation policy + how it appears in v1 breakdown outputs
+
+From: Laura Bennett <laura.bennett@redwoodinference.com>
+To: Marissa Cole <marissa.cole@redwoodinference.com>
+Cc: Aditya Rao <aditya.rao@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 9:12 AM PST
+Subject: Cost Model: overhead allocation policy + how it appears in v1 breakdown outputs
+
+Marissa (cc Aditya) —
+
+We need to lock an explicit overhead allocation policy for the Standard Cost Model outputs before Console/Optimize ship the new breakdowns. The recurring customer/support issue is “Console doesn’t match invoice” and internally we’re also seeing inconsistent “what counts” across dashboards vs FP&A.
+
+Proposal (for v1 / Q1 reporting):
+
+1) The Cost Model API must return BOTH:
+- request-attributable cost (marginal): compute + request-specific runtime overhead (e.g., per-request scheduler time if you include it), excluding pooled/idle capacity and platform overhead
+- fully-loaded cost: request-attributable + allocated overhead
+
+2) Overhead definition (what’s included):
+- capacity overhead: idle/buffer capacity for SLOs, failed/aborted jobs, warm pools
+- platform overhead: control plane, observability, oncall/SRE allocation, networking egress where not directly attributable, shared storage where not directly attributable
+- excludes: R&D / model onboarding / GTM, and anything we don’t treat as COGS
+
+3) Allocation method:
+- basis: GPU-hour equivalent (by hardware SKU) derived from runtime-reported “gpu_time_ms” (or equivalent) + approved adjustment for batch efficiency; allocate overhead as an uplift factor by deployment mode
+- show explicit policy metadata in the API response so we can audit and so Console can explain it
+
+4) How it should show up in Console:
+- breakdown table must show separate line: “Overhead (allocated)” with tooltip text (policy + basis)
+- default “Total” should be fully-loaded (so it’s reconcilable to finance rollups), but we should allow a toggle/secondary view for marginal cost for engineering users
+
+I attached a 1-pager with the suggested language and the initial rate assumptions. These rates are adjustable, but we need the shape/versioning right.
+
+Attachment: OverheadAllocationPolicy_2026Q1_v1.pdf
+
+Can you confirm we can implement the above in the v1 schema outputs without blocking rollout? If there are engineering constraints (latency/boundedness), we can simplify, but we can’t ship a cost breakdown with an unlabeled “misc” line.
+
+Thanks,
+Laura
+
+—
+Laura Bennett
+FP&A / Unit Economics
+Redwood Inference
+
+
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: Laura Bennett <laura.bennett@redwoodinference.com>
+Cc: Aditya Rao <aditya.rao@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 10:01 AM PST
+Subject: Re: Cost Model: overhead allocation policy + how it appears in v1 breakdown outputs
+
+Thanks Laura — agree with the direction.
+
+A couple of practical questions from the product side:
+
+1) Console default = fully-loaded makes sense for reconcilability, but our “per-request” view is used heavily by engineers debugging perf regressions. If overhead shows up as a big number, it’s going to look like the request got “more expensive” when traffic is low (idle pools).
+
+Would you be comfortable with:
+- per-request detail views default to marginal (request-attributable)
+- aggregate dashboards default to fully-loaded
+- both views available everywhere, but defaults differ
+
+2) On “basis: GPU-hour equivalent”: we need the cost model to be deterministic and explainable from telemetry inputs. Can you confirm that for v1 we can treat the overhead uplift as a fixed percentage by (deployment_mode, hardware_sku, region) and not a function of real-time utilization? That would reduce surprises and make the cached results stable.
+
+3) Can you specify what you want the API to return as the policy identifiers? e.g.,
+- overhead_policy_id
+- overhead_policy_version
+- effective_start / effective_end
+
+If you’re good with that, I can align with the Cost Model API team on the exact field names.
+
+Marissa
+
+
+From: Laura Bennett <laura.bennett@redwoodinference.com>
+To: Marissa Cole <marissa.cole@redwoodinference.com>
+Cc: Aditya Rao <aditya.rao@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 10:34 AM PST
+Subject: Re: Cost Model: overhead allocation policy + how it appears in v1 breakdown outputs
+
+All fair.
+
+1) Defaults:
+Yes — per-request detail defaulting to marginal is acceptable as long as:
+- “Total (marginal)” is labeled explicitly
+- there is an obvious toggle to “Total (fully-loaded)”
+- the aggregate views (day/week/month) have fully-loaded as the default
+
+We should avoid another round of SUP-31844 where customers screenshot the wrong view and escalate.
+
+2) Fixed uplift vs utilization:
+For v1, agree: do NOT make overhead a function of real-time utilization. Use a fixed uplift table keyed by:
+- deployment_mode: hosted | dedicated | private
+- hardware_sku
+- region (only if materially different, otherwise keep it global)
+
+We can revisit more dynamic allocations later (v2) but not in the initial release.
+
+3) Policy metadata:
+Please include these fields (names can vary but semantics should match):
+- overhead_policy_id: e.g., "overhead-policy-2026Q1"
+- overhead_policy_version: e.g., "v1"
+- overhead_policy_effective_start: ISO timestamp
+- overhead_policy_effective_end: ISO timestamp or empty if open-ended
+- overhead_allocation_basis: "gpu_time_equivalent"
+- overhead_allocation_method: "uplift_percent"
+
+Also: in the breakdown, we need separate numbers:
+- cost_request_attributable_usd
+- cost_overhead_allocated_usd
+- cost_total_fully_loaded_usd
+
+And one important nuance: drift SLI / correctness checks should compare predicted vs observed spend on the fully-loaded rollup, but request-level “attributable” should be used for model-to-model comparisons and optimization ROI.
+
+I’ll send a short text excerpt you can lift into the tooltip/help copy.
+
+Laura
+
+
+From: Aditya Rao <aditya.rao@redwoodinference.com>
+To: Laura Bennett <laura.bennett@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 11:08 AM PST
+Subject: Re: Cost Model: overhead allocation policy + how it appears in v1 breakdown outputs
+
+Jumping in with an Optimize-specific concern.
+
+Our ROI estimates for batching/caching/quantization are sensitive to whether overhead is “fixed” vs “variable.”
+
+If we bake the fully-loaded cost into the default what-if savings, we’ll overstate savings in some cases (because overhead doesn’t move 1:1 with marginal GPU time, at least not immediately).
+
+Can we align on:
+- Optimize what-if endpoints return marginal savings by default
+- optionally also return a fully-loaded projection with a clear disclaimer (i.e., “assumes overhead scales proportionally with marginal GPU time”)
+
+Also: do you want the overhead uplift to apply to both prefill + decode equally, or just to the total request-attributable bucket? For customers, we’d rather not show “overhead per token stage” unless required.
+
+Aditya
+
+
+From: Laura Bennett <laura.bennett@redwoodinference.com>
+To: Aditya Rao <aditya.rao@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 12:02 PM PST
+Subject: Re: Cost Model: overhead allocation policy + how it appears in v1 breakdown outputs
+
+Agree with all of that.
+
+Optimize defaults:
+- Default what-if savings = marginal (request-attributable) deltas
+- Provide fully-loaded deltas as an additional field or “view” with explicit assumption text
+
+This keeps us honest and avoids support tickets like “what-if seems too optimistic.”
+
+Overhead application:
+- Apply overhead uplift ONLY at the total request-attributable level, not per-stage (prefill/decode). Finance doesn’t need overhead split by token stage, and it will create confusion.
+- Console may still break down request-attributable into prefill/decode, cache hits/misses, etc., but overhead remains a single line item.
+
+Copy excerpt for the disclaimer (feel free to rephrase):
+“Overhead is allocated based on a fixed policy for the reporting period. Marginal savings estimates exclude overhead. Fully-loaded projections assume overhead scales proportionally with marginal compute usage; actual realized savings may differ based on capacity planning and utilization.”
+
+Attachment: CostModel_BreakdownTaxonomy_Notes_20260206.txt
+
+Laura
+
+
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: Laura Bennett <laura.bennett@redwoodinference.com>
+Cc: Aditya Rao <aditya.rao@redwoodinference.com>
+Date: Fri, Feb 6, 2026 at 3:38 PM PST
+Subject: Re: Cost Model: overhead allocation policy + how it appears in v1 breakdown outputs
+
+Confirmed — we’ll implement this as the product policy for v1.
+
+Summary of the agreement (for our release notes / internal doc):
+
+A) Cost Model API outputs will include three top-level cost primitives:
+- Request-attributable (marginal)
+- Overhead (allocated)
+- Total (fully-loaded)
+
+B) Overhead is defined as capacity + platform COGS overhead (excluding R&D/GTM) and is allocated via a fixed uplift policy table keyed by deployment mode + hardware SKU (+ region only if needed). No real-time utilization dependency in v1.
+
+C) UI/UX defaults:
+- Console per-request detail: default marginal, with toggle to fully-loaded
+- Console aggregate dashboards: default fully-loaded, with toggle to marginal
+- Overhead shows as a single line item (not split across prefill/decode)
+
+D) Optimize what-if defaults:
+- Savings and ROI default to marginal deltas
+- Fully-loaded projections may be returned with disclaimer language about scaling assumptions
+
+E) Auditability:
+- API will return policy metadata (policy id/version and effective dates + basis/method).
+
+Next steps (we’ll own):
+1) I’ll align with the Cost Model API implementers on field names + tooltip copy and make sure the schema contains the policy metadata you listed.
+2) Aditya: we’ll sync on the Optimize endpoint response shape so you can surface both marginal + fully-loaded (with guardrails) without confusing users.
+
+Thanks — this unblocks us to finalize the Console breakdown design and avoids the recurring reconciliation issues.
+
+Marissa
+
+—
+Marissa Cole
+Console Product Owner
+Redwood Inference

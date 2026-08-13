@@ -1,0 +1,122 @@
+Intermittent generation truncation & elevated p95 latency — status update for Lakeshore AI
+
+From: Olga Petrov <olga.petrov@redwood.inference>
+To: Alex Rivera <alex.rivera@lakeshore.ai>, SRE Team <sre@lakeshore.ai>
+Cc: Monica Patel <monica.patel@redwood.inference>, Sean Gallagher <sean.gallagher@redwood.inference>
+Date: Tue, 6 Apr 2027 09:12:00 -0700
+Subject: Incident notification — temporary generation truncation & throughput degradation
+
+Hi Alex / Lakeshore SRE team,
+
+We wanted to let you know we are investigating an issue affecting hosted inference for a subset of Lakeshore API keys that may result in truncated generation outputs (responses cut short) and higher p95 latency on the /v1/generate and chat endpoints.
+
+Impact:
+- ~3% of requests for your production key are returning partial responses (newline/truncation mid-sentence).
+- p95 generation latency has increased from ~420ms to ~1.9s for some regions.
+- No data exfiltration observed; requests are processed and responses returned, but sometimes cut short.
+
+What we're doing:
+- Engineering has opened an active incident (RED-7891) and is running an ops bridge.
+- We have enabled a temporary routing bypass to reduce queuing on the affected pools and are adjusting KV cache thresholds.
+- We will provide an ETA for full mitigation within 2 hours.
+
+Workaround you can use now:
+- Retry on 5xx/early-close with exponential backoff (we recommend up to 2 retries).
+- If you rely on stream completeness, we suggest enabling our prefix-cache pinning per the attached runbook_extract.txt for sensitive prompts.
+
+Attachments: runbook_extract.txt (short guidance), incident_snapshot-0406.json (ops snapshot).
+
+I will keep this thread updated. Apologies for the disruption — we know this affects your user flows and we are prioritizing a fix.
+
+Regards,
+Olga Petrov
+Senior SRE, Redwood Inference
+olga.petrov@redwood.inference
+Redwood Inference
+
+
+From: Alex Rivera <alex.rivera@lakeshore.ai>
+To: Olga Petrov <olga.petrov@redwood.inference>
+Date: Tue, 6 Apr 2027 09:20:14 -0700
+Subject: Re: Incident notification — temporary generation truncation & throughput degradation
+
+Thanks for the heads-up, Olga.
+
+Quick questions: do you have an initial ETA? Our app surfaces summaries for end users and truncation causes misinterpretation; we may need to toggle fallbacks on our side. Can you confirm whether this is limited to the us-west region or global?
+
+Also, please advise if Redwood credits / SLA remediation will be discussed — this outage is affecting a small but revenue-impacting set of clients.
+
+Alex Rivera
+Head of Platform, Lakeshore AI
+alex.rivera@lakeshore.ai
+
+On Tue, 6 Apr 2027 at 09:12, Olga Petrov <olga.petrov@redwood.inference> wrote:
+> We wanted to let you know we are investigating an issue affecting hosted inference for a subset of Lakeshore API keys...
+
+
+From: Olga Petrov <olga.petrov@redwood.inference>
+To: Alex Rivera <alex.rivera@lakeshore.ai>
+Cc: Monica Patel <monica.patel@redwood.inference>, Sean Gallagher <sean.gallagher@redwood.inference>, Markus Klein <markus.klein@redwood.inference>
+Date: Tue, 6 Apr 2027 11:03:29 -07:00
+Subject: RE: Incident notification — temporary generation truncation & throughput degradation
+
+Alex — quick update from the ops bridge and engineering:
+
+Summary of root cause (interim):
+- We identified a KV-cache eviction path that triggers under particular request patterns that include long prompt prefixes + simultaneous small-batch high-concurrency traffic. On affected nodes this causes backend kernels to evict prefix cache entries mid-request which manifests as truncated output and spiking p95 while the runtime rehydrates state.
+- Scope: affected pools in us-west-1 and us-east-1 used for hosted inference for some shared-capacity customers (Lakeshore keys fall into the affected pool list). Not observed in Dedicated instances.
+
+Mitigation applied @ 10:40 PDT:
+- Disabled aggressive eviction heuristics on affected pools and increased per-session cache pin window.
+- Activated an emergency routing policy to shift new requests away from saturated nodes (this will remain for ~4 hours while we validate).
+
+Current status:
+- Error rate for truncation has dropped from ~3% to ~0.3% for your key; p95 latency has fallen to ~650ms on routed traffic.
+- We are monitoring; full normalization expected within 2–3 hours while we complete a safe kernel patch and targeted canary.
+
+Next steps and asks:
+- We will run a controlled canary of the runtime patch at ~13:00 PDT; we'll notify you before widening.
+- Please avoid bulk batch replays from your side during the next 2 hours — this helps reduce noise during canary.
+- We'll share postmortem and offer a credit as appropriate once the incident is closed.
+
+Attachments: incident_snapshot-0406.json (ops traces), runbook_extract.txt (recommended temporary flags).
+
+Apologies again for the impact — I will message you as soon as the canary completes.
+
+Thanks,
+Olga
+Senior SRE, Redwood Inference
+
+
+From: Olga Petrov <olga.petrov@redwood.inference>
+To: Alex Rivera <alex.rivera@lakeshore.ai>, SRE Team <sre@lakeshore.ai>
+Cc: Monica Patel <monica.patel@redwood.inference>, Sean Gallagher <sean.gallagher@redwood.inference>, Markus Klein <markus.klein@redwood.inference>
+Date: Tue, 6 Apr 2027 14:38:05 -07:00
+Subject: RESOLVED: Incident closed — generation truncation & throughput normalized
+
+Alex / Lakeshore SRE,
+
+Status: RESOLVED (2027-04-06 14:25 PDT).
+
+What we changed:
+- Deployed a safe runtime kernel patch that fixes the KV-cache edge eviction and added backpressure limits to prevent mid-request cache rehydration.
+- Re-enabled normal routing after validation canaries showed stable behavior across test traffic and production samples.
+
+Impact:
+- Truncation rate for your key is back at baseline (<0.01%).
+- p95 latency returned to expected levels (~420–480ms).
+
+Post-incident actions we will share in a formal postmortem by EOD tomorrow:
+- Detailed timeline, root cause analysis, remediation steps, and planned long-term mitigations (improved cache instrumentation, apportioning hot-prefix protection, and a change to our autoscaler backoff behavior).
+- Proposed customer remediation: a service credit covering the window of elevated error rate and latency; Monica (cc'd) from Customer Success will follow up with specifics.
+
+If you want a call to walk through the timeline and technical details, we can set that up this week — Monica will coordinate.
+
+Thanks for your patience and for flagging the user-facing impact. We’ll share the postmortem and the incident artifact links here once published.
+
+Olga Petrov
+Senior SRE, Redwood Inference
+olga.petrov@redwood.inference
+
+Attachments included: runbook_extract.txt, incident_snapshot-0406.json
+Related links: https://status.redwood.inference/incidents/2027-04-06-lakeshore, JIRA RED-7891, Zendesk 45219

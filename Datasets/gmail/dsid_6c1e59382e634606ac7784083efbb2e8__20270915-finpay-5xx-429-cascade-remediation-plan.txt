@@ -1,0 +1,140 @@
+Customer incident: FinPay 5xx/429 cascade — remediation & postmortem
+
+From: Emily Tucker <emily.tucker@finpay.com>
+To: olga_petrov <olga_petrov@redwood.ai>
+Cc: support@finpay.com
+Date: 2027-09-15T09:12:00Z
+Subject: High error rates — our customers seeing 5xx/429
+
+Hi Olga —
+
+We started seeing a sharp increase in 5xx/429 responses on calls to the text-generation endpoint around 08:45 UTC. Between 08:45 and 09:00 we saw roughly 55–65% error rate on /v1/generate for live checkout flows (multiple merchant tokens failing). Timeouts on the client combined with our in‑app retry policy are amplifying the impact — merchants are reporting failed purchases.
+
+Attached: finpay_latency_graphs.png (sample traces + percentiles).
+
+Can you confirm whether this is a platform-side degradation or whether we should change anything on our side? We need an ETA for a mitigation and an external-facing status update.
+
+Thanks,
+Emily Tucker
+CTO, FinPay
+
+From: olga_petrov <olga_petrov@redwood.ai>
+To: marcus_lin@redwood.ai, dylan_brooks@redwood.ai, lauren_bishop@redwood.ai, sean_gallagher@redwood.ai
+Date: 2027-09-15T09:25:00Z
+Subject: Fwd: High error rates — FinPay (urgent triage)
+
+Team — FYI, FinPay has a high impact customer incident (see below). Paging SRE/Infra and CS for immediate triage and customer comms. Initial asks:
+
+- Triage primary signal: are we seeing router queue saturation, model timeouts, or rate-limiter 429s?
+- Apply temporary mitigations (tenant throttle, circuit-breaker, fallback model) if safe.
+- Prepare a customer note (one-line cause, mitigation, ETA).
+
+Immediate channel: #inc-finpay and PagerDuty PDR-4521. I will loop in Marcus for root-cause and Lauren for exec comms. Dylan — please coordinate rapid mitigations.
+
+Thanks,
+Olga Petrov
+Director, Customer Reliability
+Redwood Inference
+
+> From: Emily Tucker <emily.tucker@finpay.com>
+> Sent: 15 September 2027 09:12
+> Subject: High error rates — our customers seeing 5xx/429
+>
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: olga_petrov@redwood.ai, dylan_brooks@redwood.ai, lauren_bishop@redwood.ai, sean_gallagher@redwood.ai
+Date: 2027-09-15T09:43:00Z
+Subject: Re: Fwd: High error rates — FinPay (urgent triage)
+
+Olga — quick update from sleuthing (initial notes attached: initial-sleuth-notes.txt):
+
+Findings (preliminary):
+- Edge routers reported long request queues and elevated 5xx (backend timeouts) starting ~08:42 UTC.
+- Many 429s are originating from the per-tenant rate-limiter at the router layer when bursts exceed token-bucket capacity.
+- FinPay client logs show aggressive retry policy (0s -> immediate retry then exponential) that produced a retry storm once transient latency hit 100–200ms.
+- Autoscaler lag: our scale-up path for the model pool takes ~4–6 minutes to reach steady-state under bursty traffic; during the ramp we hit timeouts and additional retries.
+- KV cache churn observed for large sequence lengths which increased tail latency.
+
+Immediate mitigation I recommend (doing now):
+1) Apply a short-duration tenant-level throttle (soft cap) to finite window for FinPay to bound requests.
+2) Enable per-tenant circuit-breaker to eject traffic to a lightweight fallback model for non-critical paths.
+3) Increase router rate-limiter burst allowance slightly for authenticated tenants while keeping a hard cap.
+4) Kick off a warm-pool spin (add warm reserve instances) to reduce scale latency.
+
+I'll start 1–3 now and monitor. We need a postmortem for detection/runbook gaps: specifically there was no alert that would have indicated client-driven retry amplification vs steady increased latency.
+
+—Marcus
+Principal SRE, Redwood Inference
+
+> On 2027-09-15 09:25 Olga Petrov wrote:
+> > Team — FYI, FinPay has a high impact customer incident...
+From: Dylan Brooks <dylan_brooks@redwood.ai>
+To: olga_petrov@redwood.ai, marcus_lin@redwood.ai, lauren_bishop@redwood.ai, sean_gallagher@redwood.ai
+Date: 2027-09-15T11:10:00Z
+Subject: Re: Fwd: High error rates — FinPay (urgent triage)
+
+Status update — actions applied at 10:05 UTC:
+- Tenant-level token bucket enforced for FinPay (soft throttle 120 rps, hard cap 200 rps).
+- Circuit-breaker enabled; low-latency fallback model returned for non-payments flows (reduced per-request compute).
+- Warm pool requested: +6 warm workers (expected available ~10:35 UTC).
+
+Result: error rate dropped from ~60% -> 10% over the next 20 minutes; 95th latency for FinPay decreased from ~1.2s -> 320ms on average. We briefly saw an uptick of 429s during enforcement but overall user-visible errors fell.
+
+Next steps:
+- Schedule 16:00 UTC postmortem call (30m) to capture timeline, RCA, and action owners.
+- Runbook items: add tenant-throttle playbook, define per-tenant warm pools threshold, and an alert for "sharp error-rate delta over 5 minutes".
+
+Dylan
+Sr. Engineer, Serving Runtime
+
+> On 2027-09-15 09:43 Marcus Lin wrote:
+> > Findings (preliminary):...
+From: Olga Petrov <olga_petrov@redwood.ai>
+To: marcus_lin@redwood.ai, dylan_brooks@redwood.ai, lauren_bishop@redwood.ai, sean_gallagher@redwood.ai, emily.tucker@finpay.com
+Date: 2027-09-15T17:46:00Z
+Subject: FinPay incident — postmortem summary & action items
+
+Team / Emily — thank you for the rapid response. Below is a concise postmortem and the committed follow-up actions. Please review and flag anything missing.
+
+Summary of impact:
+- Window: 08:42–10:20 UTC on 2027-09-15.
+- Symptom: Elevated 5xx and 429 responses on /v1/generate; client-side timeouts and amplified retries caused increased user failures for FinPay merchant flows.
+- Customer impact: FinPay reported merchant checkout failures and increased support tickets; revenue-impacting for two major merchants.
+
+Root cause (primary):
+- Client retry policy on FinPay (immediate retries) + a transient backend latency spike caused a retry amplification effect that saturated router queues.
+- Router-level token-bucket rate-limiter returned 429s when token buckets burst-depleted.
+- Autoscaler scale-up latency and lack of warm capacity increased backend timeouts.
+- Detection gap: alerting does not differentiate between gradual latency increase and short, sharp retry-amplified error spikes. No per-tenant throttling playbook existed.
+
+Immediate remediation performed:
+- Tenant-level soft throttle and hard cap applied to FinPay (Dylan) — reduced user-visible errors.
+- Circuit-breaker/fallback model enabled for non-critical flows (Dylan).
+- Warm pool invoked (+6 workers) to reduce further scale-up lag (Marcus).
+- Customer comms: FinPay notified at 10:45 UTC and updated at 12:00 UTC (Lauren handled customer email cadence).
+
+Committed follow-up actions (owners & target dates):
+1) Alerting enhancements — add "sharp error-rate delta (5m)" and "per-tenant 5xx spike" alerts; include automated severity tiers. Owner: Marcus Lin. Due: 2027-09-22.
+2) Runbook additions — tenant-throttle playbook, step-by-step mitigation (soft throttle, circuit-breaker, warm-pool invocation, customer comms template). Owner: Dylan Brooks. Due: 2027-09-20.
+3) Autoscale tuning & warm pools — create policy for reserved warm capacity for high-volume tenants and faster scale-up targets. Owner: Lauren Bishop. Due: 2027-09-29.
+4) Client guidance — collaborate with FinPay to adjust their retry/backoff recommendations and publish an SDK note. Owner: Lauren Bishop (partner with FinPay). Due: 2027-10-06.
+5) SLO review — evaluate SLOs tied to tail latency and per-tenant SLA protections; update SLA exception handling. Owner: Sean Gallagher. Due: 2027-09-26.
+6) Postmortem doc & exec note — finalize comprehensive PM doc and short exec summary for CS/Accounts. Owner: Olga Petrov. Due: 2027-09-17.
+
+Links & artifacts: incident channel: https://redwood.pagerduty.com/incidents/PDR-4521; detailed notes: https://redwood.atlassian.net/l/cp/FinPay-incident-20270915; artifacts attached: postmortem-action-items.md
+
+Customer-facing note draft (for Lauren):
+"On 15 Sep 2027 between ~08:42–10:20 UTC FinPay saw elevated error rates from platform timeouts and rate-limiting. We applied tenant throttles and fallback routing which restored service. We are implementing alerting and runbook changes and will share a timeline for preventative changes."
+
+Risks / open items:
+- Need to validate warm-pool sizing under other heavy-traffic tenants to avoid cross-tenant impact.
+- Confirm FinPay will adopt recommended backoff settings in their SDKs (Lauren leading).
+
+Thanks again — please add any missing items on the Confluence PM doc and mark ownership. Emily, we'll share the customer-facing postmortem and the SDK guidance draft by 2027-09-20.
+
+Olga Petrov
+Director, Customer Reliability
+Redwood Inference
+
+Attachments: postmortem-action-items.md
+> On 2027-09-15 11:10 Dylan Brooks wrote:
+> > Status update — actions applied at 10:05 UTC...

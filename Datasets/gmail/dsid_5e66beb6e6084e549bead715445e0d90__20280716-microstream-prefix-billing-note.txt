@@ -1,0 +1,114 @@
+Billing note: microstream prefix reuse and rounding behavior for short bursts
+
+From: Margaret Cole <margaret@acmehealth.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Cc: Procurement Team <procurement@acmehealth.com>
+Date: Mon, 16 Jul 2028 09:12:00 -0700
+Subject: Unexpected line items on June invoice — microbursts
+
+Hi Vanessa,
+
+We noticed an odd set of charges on our June invoice that look like repeated small "microburst" charges tied to short-lived streaming calls. The invoice excerpt is attached (invoice-snippet-0708.png). Our engineers believe most of these calls are reusing prefixes/inputs cached in our runtime, so they expected lower token accounting. Can you explain why these sub-second calls are showing full unit charges and whether any rounding or minimums are being applied?
+
+Specifics:
+- Many calls are ~150 tokens total but repeat with same customer prefix.
+- We see a 1.0 unit minimum on each call line item, which balloons cost for high-frequency, short-session workflows.
+- Looking for an explanation and whether there is a recommended packaging/discount (or a credit) for this pattern during our pilot.
+
+Thanks — happy to hop on a call if easier.
+
+Margaret
+Margaret Cole
+Head of ML Integrations, Acme Health
+Margaret.Cole@acmehealth.com
++1 415-555-0123
+
+Attachment: invoice-snippet-0708.png (png, 88KB)
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Margaret Cole <margaret@acmehealth.com>
+Cc: Priyom Das <priyom_das@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Mon, 16 Jul 2028 11:05:00 -0700
+Subject: Re: Unexpected line items on June invoice — microbursts
+
+Hi Margaret — thanks for flagging this and sharing the snippet. Appreciate the detail.
+
+Quick summary for you up front: the charges you're seeing are caused by our per-call minimum for short-lived streaming sessions combined with the current prefix amortization window. In your pattern (many ~150-token calls that start a fresh streaming session), the runtime is estimating minimal KV reuse across disconnected sessions and applies the per-call minimum (1 billing unit) to each call.
+
+We're investigating whether your prefix reuse is actually being detected by the server-side prefix cache (it should be) or whether the calls are being routed to different GPU hosts where the KV cache is cold. I've looped in Priyom for the exact billing math and Karthik for routing/cache behavior. Marissa I'm cc'ing so we have sales context for a pilot concession if needed.
+
+Action items:
+1) Internal: Priyom/Karthik, can you confirm how prefix amortization is computed today for streaming sessions and the exact rounding applied when calls are under the per-call minimum? I attached the customer's example invoice — happy to share logs if helpful.
+2) External: Margaret, we can offer a one-off credit while we assess (if the amortization is not being applied). If prefix reuse is working and routing is the culprit, we can propose a small configuration change (sticky host routing within your Dedicated pool) to reduce microburst cost dynamics.
+
+I'll get back to you with a firm math example by EOD.
+
+Best,
+Vanessa Ortiz
+Enterprise Sales Lead, Redwood Inference
+vanessa_ortiz@redwood.ai
++1 650-555-0188
+
+Attachment: (none)
+From: Priyom Das <priyom_das@redwood.ai>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Mon, 16 Jul 2028 13:20:00 -0700
+Subject: Re: Unexpected line items on June invoice — microbursts
+
+Vanessa,
+
+Notes from quick triage (math-first):
+- Current billing unit: we charge per-call with a minimum quantum of 1 unit for short calls under streaming. Each unit maps to our configured "microcall quantum" (in ACME's profile it's 1 unit = 250 token-equivalent).
+- Rounding: for streaming, we round up to the nearest microcall quantum per call (no cross-call aggregation unless the KV cache registers a reuse event within an amortization window).
+- Prefix amortization: we maintain a prefix KV amortization window of 90s by default for hosted customers; Dedicated customers can set sticky routing to keep KV warm longer. Amortization only applies when the runtime can match the prefix hash to an existing warm KV cache on the serving host. If requests hit different hosts (round-robin or scale-out), amortization won't occur.
+
+Applying to Margaret's numbers:
+- Example call: 150 tokens -> 0.6 of a 250-token unit -> rounded up to 1 unit -> billed as 1.
+- If same prefix is reused on the same host within 90s and the KV cache matches, we only bill incremental tokens beyond cached prefix; typical amortized charge could be ~0.1 unit (rounded to billing rules) depending on their configuration.
+
+As quick fixes:
+- We can enable stronger host affinity for ACME's Dedicated pool (reduces cross-host cold starts).
+- For the pilot, recommend a temporary waiver/credit for June to offset the unexpected rounding while we apply the sticky routing.
+
+I'm attaching a small CSV that shows modeled invoice lines with and without amortization — this should help procurement. If sticky routing is acceptable we'll also provide a short runbook for implementation and expected savings.
+
+Priyom
+Priyom Das
+Product Manager, Pricing & Metering, Redwood Inference
+priyom_das@redwood.ai
+
+Attachment: microburst-billing-math.csv (csv, 6KB)
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Margaret Cole <margaret@acmehealth.com>
+Cc: Procurement Team <procurement@acmehealth.com>, Priyom Das <priyom_das@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Mon, 16 Jul 2028 15:00:00 -0700
+Subject: Re: Unexpected line items on June invoice — microbursts
+
+Hi Margaret — quick update and proposed resolution: we did a short engineering check and found that ~82% of ACME's microbursts were handled by different hosts (scale-out behavior) and therefore did not hit a warm KV cache. That explains the per-call minimum rounding pattern you saw.
+
+Proposed immediate plan:
+- Credit: Redwood will issue a one-time credit equal to 50% of the June microburst overage lines while we change routing (applies to the specific line items you flagged). We'll show the credit on next invoice.
+- Config change: we will enable stronger host affinity in your Dedicated pool to keep prefix KV warm for 120s (default was 90s) and set a soft sticky policy for small microstream sessions. Expectation: modeled savings in Priyom's CSV show ~65-75% reduction in per-call unit counts for your pattern.
+- Follow-up: Karthik's team will schedule a 30-min window (low-traffic) to toggle the sticky routing and monitor for any latency regressions. We'll collect a two-week sample and reconcile usage after.
+
+If that sounds good I can have the credit applied and schedule the routing change. If procurement needs a short amendment to the SOW for sticky routing we'll loop in legal but it should be a configuration-only change.
+
+Thanks for flagging this — we'll sort it out quickly.
+
+Best,
+Vanessa
+Vanessa Ortiz
+Enterprise Sales Lead, Redwood Inference
+vanessa_ortiz@redwood.ai
++1 650-555-0188
+
+On Mon, Jul 16, 2028 at 11:05 AM Vanessa Ortiz <vanessa_ortiz@redwood.ai> wrote:
+> Hi Margaret — thanks for flagging this and sharing the snippet. Appreciate the detail.
+> 
+> Quick summary for you up front: the charges you're seeing are caused by our per-call minimum for short-lived streaming sessions combined with the current prefix amortization window. In your pattern (many ~150-token calls that start a fresh streaming session), the runtime is estimating minimal KV reuse across disconnected sessions and applies the per-call minimum (1 billing unit) to each call.
+> 
+> Action items:
+> 1) Internal: Priyom/Karthik, can you confirm how prefix amortization is computed today for streaming sessions and the exact rounding applied when calls are under the per-call minimum? I attached the customer's example invoice — happy to share logs if helpful.
+> 2) External: Margaret, we can offer a one-off credit while we assess (if the amortization is not being applied). If prefix reuse is working and routing is the culprit, we can propose a small configuration change (sticky host routing within your Dedicated pool) to reduce microburst cost dynamics.
+
+Attachment: (none)

@@ -1,0 +1,98 @@
+Pinecrest Biotech - p95 streaming & concurrency discovery
+
+Initial discovery focused on Pinecrest's target p95 latency for streaming inference, concurrency needs for clinical real-time assistants, and options across Redwood Hosted/Dedicated/Private. Customer has strict data residency and SOC2 requirements; they are evaluating a pilot against a 500ms p95 target for 2k-token streaming responses at 75 concurrent streams with burst to 200 concurrent. Action: send benchmark template, share SOC2/KMS docs, schedule pilot kickoff.
+Lena Ortiz: send performance benchmarking spreadsheet and example prompt set by 2028-03-01
+Amir Shah: draft streaming token/sec test plan and cluster config suggestions by 2028-03-03
+Anika Bose (Pinecrest): share representative prompt set (25 prompts) and current perf logs by 2028-03-02
+Schedule Dedicated pilot kickoff (requested date window 2028-03-07 to 2028-03-09)
+Provide SOC2 and KMS/HSM integration docs
+Provision test API key and 100k test tokens for benchmarking
+Share sample performance dashboard and tracing snippet
+[00:00] Lena (Redwood): Hi everyone — thanks for joining, I'm Lena, AE on this account. Happy to kick off. Am I okay to introduce Amir who's going to take the technical deep dive?
+[00:12] Amir (Redwood-SE): Hey, hi — Amir here. We'll talk through latency and throughput tradeoffs, streaming behavior, and deployment options (hosted/dedicated/private).
+[00:18] Dr. Maya (Pinecrest): Thanks. Quick context: Pinecrest builds an on-call clinical assistant that summarizes patient notes and streams step-by-step guidance to clinicians — low-latency is critical. We target p95 under 500 milliseconds for the typical 1.5–2k token output, and often have 75 sustained concurrent clinicians, with expected bursts up to ~200.
+[00:40] Carlos (Pinecrest): We run a mix of cloud infra and our own GPU rack for other workloads, currently using Triton for some models. We don't want to manage kernel-level infra for this if we can avoid it. Also, data residency — all patient data must stay in our VPC or on-prem.
+[01:05] Lena: Great, so main constraints are 500ms p95 for ~2k tokens, 75 steady concurrency, burst to 200, and VPC/on-prem requirement. Is that right?
+[01:12] Dr. Maya: Yes that's right. Also SOC2 Type II required, SSO via SAML, and KMS integration for keys.
+[01:22] Amir: Cool. Quick question on model: are you looking at smaller encoder-decoder models or large decoder-only? Which model family are you evaluating?
+[01:30] Anika (Pinecrest): We're experimenting with a 30B LLM tuned for clinical summarization, quantized to 4-bit for cost. In experiments we see decent quality but latency increases with bigger contexts. We also have a shorter prompt path for high-priority alerts.
+[01:46] Amir: OK — 30B quantized is a reasonable sweet spot. For streaming 2k tokens — two knobs matter: per-token generation latency (kernel perf and kv-cache) and application-level batching/concurrency.
+[01:58] Speaker 4: [murmur]
+[02:02] Amir: To hit 500ms p95 for 2k tokens you basically need sustained token throughput ~4k–6k tokens/sec end-to-end when you account for network/overhead, depending on decoding method. Does that align with your internal numbers?
+[02:16] Anika: Our rough internal is more like 2–3k tokens/sec for single-stream on our quantized stack, p95 around 700–900ms at 2k tokens. So we'd need about 2x improvement.
+[02:30] Lena: Important note: hosted vs dedicated changes the math. Redwood Hosted can give you fastest time-to-value and we tune kernels per model, but Dedicated (reserved GPU pools) gives you more predictable tail at scale and you can isolate KV/cache warming. Private (VPC/on-prem) gives full data residency but may require additional tuning for kernel choices.
+[02:58] Dr. Maya: Curious on the warm vs cold cache behavior — our clinicians will open a patient record and then stream — some prompts share prefixes, others are unique. How much does KV cache reduce p95 in your experience?
+[03:15] Amir: KV cache can dramatically reduce repeated prefix costs. For streaming where outputs are generated token-by-token, if you can reuse the KV for the shared prompt prefix, you save the encode cost; we've seen 20–40% p95 improvement in many workloads. But cache hit rate depends on prompt similarity and session design.
+[03:34] Carlos: What about batching? I assume batching helps throughput but hurts single-stream p95?
+[03:41] Amir: Exactly. Continuous batching increases aggregate tokens/sec (good for cost), but batching delay must be bounded for low p95. Our runtime supports adaptive batching: it will only batch up to a per-request max latency budget, so you get some throughput benefit without blowing p95.
+[03:56] Dr. Maya: We prefer consistent p95 over cost savings — clinicians can't wait. So we'd likely pick policies that prioritize latency.
+[04:05] Anika: Also interested in fallback behaviors — if Dedicated capacity is saturated, what's the fallback?
+[04:11] Lena: You can configure automatic fallback to a cheaper model variant or a different region. For mission-critical clinical flows you can configure prioritized capacity and autoscale thresholds; we also support canary rollouts and graceful degradation (e.g., shorten response length or switch to a compact model).
+[04:28] Amir: One note — switching to a smaller model reduces quality; for clinical summarization that can change safety. So we recommend canary A/B tests and quality monitors tied to prompt sets.
+[04:40] Carlos: Security check — if we pick Redwood Private VPC, is audit loging and KMS integration available? We need HSM-backed keys in our KMS.
+[04:50] Lena: Yes, Private includes customer-managed KMS/HSM integration and retention of audit logs in your environment. We also provide SOC2 artifacts for hosted and support dedicated compliance packages for Private. We'll share the docs.
+[05:01] Dr. Maya: Thanks. On specifics — could you walk through a sizing example? Say 75 concurrent steady streams, each producing 15 tokens/sec on average, bursts to 200 where tokens/sec doubles. How do we map that to GPU counts and latency?
+[05:15] Amir: Sure — simplistic mapping: tokens/sec per GPU depends on model and quantization. For a 30B 4-bit quantized model we might see 30k–60k tokens/sec on an A100-like instance with optimized kernels for streaming; that translates to roughly 400–800 sustained single-streams at 15 tokens/sec for throughput alone, but tail behavior and context length reduce effective capacity. For p95 < 500ms you need headroom — so for 75 steady streams you'd be safe on Dedicated with 1–2 GPUs depending on real decoding speed and KV cache hit. For bursts to 200, we'd recommend autoscale + burst buffer capacity or an extra GPU standby to absorb the burst.
+[06:05] Anika: That seems optimistic vs our numbers. We only saw 10k tokens/sec on our quantized Triton racks. Are your kernels that much faster?
+[06:14] Amir: Two factors: kernel-level optimizations (attention kernels, fused ops), and runtime KV cache and continuous decoding pipelines. Also, metric differences: we report raw decode token/sec excluding some wrapper overhead; your Triton pipeline might include copying, grpc overhead, and data pre/post-processing. We'll run a benchmark to align numbers.
+[06:33] Speaker 4: [crosstalk]
+[06:38] Lena: We'll provide a benchmark template so we can replicate your current test and then run Redwood-hosted comparatives. That will help identify where the 2x gap is.
+[06:47] Dr. Maya: On data residency, if we do Hosted for the benchmark, can we mask or synthetic-ize data? Also, how do you handle PHI during tests?
+[06:56] Lena: Synthetic prompts are fine and preferred for hosted initial tests. For real PHI we recommend Private or Dedicated with VPC peering. For hosted we can also sign a BAA as part of an enterprise agreement but Private affords the strongest controls.
+[07:13] Amir: Also note, network latency from clinician device to region matters for p95. If clinicians are in eastern US, pick the same region; regional routing reduces network tail.
+[07:24] Carlos: We have clinicians across US timezones; can we route by region automatically?
+[07:28] Amir: Yes — smart routing policies can send requests to nearest region and fall back to nearest available capacity. That reduces p99 network spikes.
+[07:36] Dr. Maya: Can you explain streaming framing and server-sent events? We need token-by-token echoes to the UI fast.
+[07:42] Amir: Redwood supports chunked HTTP streaming and gRPC streaming. For SSE/HTTP chunking we push tokens as they're produced. The per-token latency includes model decode time and network flush frequency; flushing too often increases overhead. We recommend batching small groups of tokens per network flush (e.g., every 20–50ms) to balance latency and throughput.
+[08:05] Anika: What's the overhead of continuous batching on single-stream p95?
+[08:09] Amir: If you set batching window to 20ms, you might incur ~20ms of added latency worst-case plus decode time. But that helps throughput by allowing other requests to piggyback. Again, adaptive batching attempts to keep within your SLO.
+[08:20] Lena: Quick poll — are you leaning Hosted for faster trial or Dedicated/Private because of data controls?
+[08:26] Dr. Maya: For a proof-of-concept we might start with Hosted with synthetic prompts to validate latency. For production we'd likely need Private or Dedicated in our VPC.
+[08:37] Carlos: Agreed — but we'd want to validate the kernel perf first.
+[08:41] Amir: Good. For the benchmark we'll need: your prompt set, typical context lengths, target p95, concurrency profile (ramp up pattern), and output length distribution.
+[08:52] Anika: We can share a redacted prompt set and a small sample of logs. We'll aim to get that by next Thursday.
+[08:59] Lena: Perfect. We will also share a sample dashboard with token-level latency and p95 plots to match your telemetry.
+[09:07] Dr. Maya: A question on model variants — can Redwood run quantized 4-bit models with KV cache intact?
+[09:13] Amir: Yes, our runtime supports 4-bit quantized weights and the KV caching remains the same; some quantization schemes trade a bit of per-token time for reduced memory. We will include a quantization profile recommendation in the test plan.
+[09:27] Carlos: Regarding SLOs — do you offer an SLA for p95 or uptime for Dedicated?
+[09:31] Lena: Dedicated has SLA options for uptime and latency targets depending on contract tier. For p95 latency contractual SLOs we typically define measurement windows and allowed degradation; this is something we can scope in an enterprise agreement.
+[09:44] Speaker 4: [laughter]
+[09:47] Anika: Another operational question: do you provide token-level tracing to correlate spikes to prompt or model behavior?
+[09:53] Amir: Yes — Redwood Console provides per-request traces, tokenization breakdown, model step timing, and per-route metrics. We can instrument your test prompts to tag where spikes occur.
+[10:06] Dr. Maya: How do you handle throttles? We can't have requests dropped mid-stream.
+[10:11] Amir: Throttling policy is configurable. For mission-critical streams we can enable prioritized lanes, queueing with guaranteed retries, or graceful truncation fallback that returns partial summary instead of dropping. We avoid mid-stream drops by design.
+[10:25] Carlos: For sizing again — is there a recommended margin of safety for the fleet? 30%?
+[10:30] Amir: We typically recommend 30–50% headroom for streaming workloads because tails can be spiky and decoding cost can vary with token content. For your clinical case I'd push toward 50% to start, then optimize once we have benchmark data.
+[10:44] Lena: Quick note on billing: Hosted is usage-based per token, Dedicated is committed reserved capacity with overage billing options, Private has platform fees plus infra costs. We'll send a pricing matrix.
+[10:56] Dr. Maya: Could Redwood provide a short-run dedicated pilot (1–2 GPUs) for us to test in our VPC?
+[11:03] Lena: Yes — we can provision a Dedicated sandbox in your VPC or a Private deployment for a pilot. We'll propose a Dedicated pilot to start because it's faster operationally and still gives isolation.
+[11:14] Anika: If we do Dedicated, how quickly can autoscale respond to bursts? Seconds? Minutes?
+[11:20] Amir: Autoscale depends on provisioning model and cloud capacity. We have rapid scaling for short bursts via warm pools (seconds to low minutes) and longer provisioning for adding new GPU nodes (minutes). For predictable bursts we'd recommend warm standby capacity or burst credits.
+[11:36] Dr. Maya: Any hidden gotchas with tokenization differences across models which might affect token counts and cost?
+[11:42] Amir: Yes — tokenization differences can change token counts by up to 10–20% depending on model tokenizer. We'll standardize on the tokenizer used in the model during the benchmark.
+[11:51] Carlos: Ok, can we see a sample benchmark plan now?
+[11:54] Amir: I'll describe at a high level: 1) replicate your current test in Hosted Redwood with synthetic prompts, 2) run single-stream latency tests across prompt lengths, 3) ramp concurrency tests to 75 then burst to 200 while measuring p50/p95/p99 and token/sec, 4) test KV cache hit/miss by grouping similar prefixes, 5) try quantization variant and record quality delta. We'll provide exact scripts.
+[12:25] Anika: How do we measure p95 for streaming? Do you measure until stream end or rolling p95 per N tokens?
+[12:32] Amir: We measure end-to-end p95 for the full response completion. For longer outputs we also provide per-token latency distributions so you can see if later tokens have different tails.
+[12:45] Dr. Maya: Good. One more question — do you support client-side aggregation to reduce network chattiness? Like chunking tokens into 50-token batches?
+[12:53] Amir: Yes, client-side can aggregate but that increases perceived latency. We generally recommend server-side controlled flush intervals to manage network overhead while maintaining low apparent latency.
+[13:05] Lena: We're about halfway through — any outstanding security questions?
+[13:09] Carlos: Need the SOC2 artifact and our legal will want deployment architecture for Private.
+[13:13] Lena: We'll attach SOC2 report and sample architecture.
+[13:17] Dr. Maya: Timeline: if benchmarks look good we'd like a pilot in March and production by June. Can Redwood support that?
+[13:24] Lena: Yes — typical pilot-to-prod timeline for Dedicated/Private is 6–12 weeks depending on integrations; March pilot and June prod is achievable.
+[13:33] Speaker 4: [mutter]
+[13:36] Amir: A practical suggestion — start the benchmark on Hosted with synthetic prompts this week, then move to Dedicated sandbox in your VPC for PHI-sensitive tests. That reduces risk and speeds feedback.
+[13:49] Anika: Sounds good. On quality monitoring — can Redwood tie regressions to prompt sets so we can roll back models?
+[13:55] Amir: Yes, Redwood Optimize can create prompt-based evals and alert on regressions per rollout. We'll include an eval harness in the plan.
+[14:06] Dr. Maya: Anything else on concurrency shaping?
+[14:09] Amir: Just that request prioritization and graceful degradation are key: for example, mark clinical-critical flows as high-priority and enable fallback rules for lower-priority batch jobs.
+[14:21] Carlos: Ok let's capture next steps.
+[14:24] Lena: Action items recap — I'll send the perf spreadsheet and SOC2/KMS docs; Amir will send the benchmark plan; Anika will share prompts and sample logs. We'll try to kick off the Hosted benchmark the week of 2028-03-01 and schedule a Dedicated pilot for the week of 2028-03-07.
+[14:40] Dr. Maya: That aligns. Thank you.
+[14:43] Lena: Thanks everyone, we'll follow up with calendar invites and the artifacts.
+[14:48] [END OF TRANSCRIPT]
+
+Notes on transcript quality: Autogenerated transcript had a few mis-hearings on kernel names (Triton vs Tri-ton) and product names (Redwood Dedicated sometimes heard as Redwood Dedicate). There is occasional speaker label drift.
+
+References mentioned during call: "performance benchmarking spreadsheet (link)"; "SOC2 report (link)"; "KMS/HSM integration doc (link)"; "sample Redwood Console dashboard (link)"

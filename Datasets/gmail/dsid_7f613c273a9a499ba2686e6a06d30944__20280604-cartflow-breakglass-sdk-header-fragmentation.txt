@@ -1,0 +1,121 @@
+URGENT: CartFlow checkout failures — client SDK header fragmentation (exec attention)
+
+From: Alex Turner <alex@cartflow.com>
+To: Marissa Cole <marissa.cole@redwood.com>
+Cc: CartFlow SRE <sre@cartflow.com>
+Date: Mon, 04 Jun 2028 09:12:00 -0700
+Subject: Checkout failures across EU/US — started after SDK update
+
+Marissa —
+
+We’ve been seeing an uptick in checkout failures since our customers upgraded to the CartFlow web plugin (which bundles Redwood client SDK v1.7.0). Symptoms started ~08:50 PT: sharp p99 latency spikes (~6–9s), and intermittent 502/503 errors coming from your streaming endpoint. Failures are consistent when load goes above ~800 RPS.
+
+Attached is a small sample of request traces and the server-side error lines (cartflow_error_sample.log). A couple of observations from our SRE team:
+- Errors surface when requests go through our HTTP/2 proxy (nginx, proxy protocol).
+- Logs show broken/fragmented header frames and downstream parser errors with lines like: "header-frame: continuation-length=0" followed by a separate header frame chunk.
+
+This is impacting live checkouts for ~1.6% of sessions (measured over the last 30m). We’ve paused the staged rollout to 10% but need Redwood intervention — a hotfix or mitigation ASAP. We’re happy to join a call.
+
+Alex Turner
+Head of Integrations, CartFlow
+alex@cartflow.com
+Attachments: cartflow_error_sample.log
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: rishi.malhotra@redwood.com, jonas.weber@redwood.com, sean.gallagher@redwood.com
+Cc: laura.bennett@redwood.com, vanessa.ortiz@redwood.com
+Date: Mon, 04 Jun 2028 09:25:00 -07:00
+Subject: Fwd: Checkout failures across EU/US — started after SDK update
+
+Folks — urgent escalation from CartFlow (see below). They’re seeing client activity that can reproduce 502s and p99 spikes tied to header fragmentation through their HTTP/2 proxy. Customer is on our hosted API. Execs want visibility; customer is requesting a hotfix.
+
+Immediate asks:
+- Can eng confirm if our streaming parser tolerates split/continuation header frames from HTTP/2 proxies (jonas)?
+- Can oncall confirm if we can route CartFlow to a dedicated pool as temporary mitigation (sean)?
+- Rishi/Laura — please coordinate exec comms and credits if this looks like an SLA-level incident.
+
+I’ll schedule an emergency sync at 10:30 PT (30m). Please join if you can.
+
+Marissa
+Senior AM, Redwood Inference
+Attachments: sdk_trace_headers.txt (from CartFlow)
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: marissa.cole@redwood.com, rishi.malhotra@redwood.com, sean.gallagher@redwood.com
+Cc: laura.bennett@redwood.com
+Date: Mon, 04 Jun 2028 10:05:00 -07:00
+Subject: Re: Fwd: Checkout failures across EU/US — started after SDK update
+
+Quick triage notes (pre-call):
+- Reproduced similar failure locally using an nginx HTTP/2 proxy that deliberately splits header frames (test harness linked in INF-8421). The issue is in our streaming parser’s header coalescing logic: it assumes header frames arrive atomically and fails when continuation frames are delivered separately.
+- Error surfaced as a parser panic that returns a 502 to the client and prevents the KV cache lookup path — which explains the latency spike as requests are retried.
+
+Proposed immediate actions:
+1) Patch the streaming parser to accept header continuation frames (two-line change to the coalescer) -> run CI -> can ship as server hotfix in ~90 minutes if we prioritize.
+2) Publish a client SDK micro-patch (v1.7.1) that includes more robust header emission when behind HTTP/2 proxies; this reduces the probability of split frames on the client side (ETA ~2 hours for release/propagation).
+3) Short-term mitigation: route CartFlow traffic to a dedicated read-only pool that does relaxed header parsing and bypasses the KV cache path to avoid the retry storm. This is ~10–15m ops work.
+
+I’ll prep a PR and can be standby for the 10:30 sync.
+
+— Jonas (eng)
+Attachments: patch_diff_preview.txt
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: marissa.cole@redwood.com, laura.bennett@redwood.com, vanessa.ortiz@redwood.com
+Cc: jonas.weber@redwood.com, sean.gallagher@redwood.com
+Date: Mon, 04 Jun 2028 10:18:00 -07:00
+Subject: Re: Fwd: Checkout failures across EU/US — started after SDK update
+
+Thanks for the triage, Jonas.
+
+Two priorities from leadership:
+- Customer impact looks material (live revenue paths). If a rollback of client rollout is possible on CartFlow’s side, request they do that immediately. Marissa — confirm if they can rollback to plugin build that bundles SDK v1.6.x.
+- Engineering: expedite the parser hotfix and the SDK micro-patch. If ship window slips beyond 3 hours we should prepare SLA/credit options and an exec note. Laura, Vanessa — please prepare the comms and coordinate the exec briefing.
+
+Also ensure we capture a postmortem timeline and action items in INF-8421. This needs to be a P1 incident until resolved.
+
+Rishi
+CTO, Redwood Inference
+
+From: Sean Gallagher <sean.gallagher@redwood.com>
+To: marissa.cole@redwood.com, jonas.weber@redwood.com, rishi.malhotra@redwood.com
+Cc: laura.bennett@redwood.com, vanessa.ortiz@redwood.com
+Date: Mon, 04 Jun 2028 11:40:00 -07:00
+Subject: Incident sync notes — CartFlow SDK/streaming parser (11:30 call)
+
+Notes from 11:30 call (short):
+- Attendees: Marissa, Rishi, Jonas, Sean, Laura, Vanessa, CartFlow (Alex, Nate).
+- Agreed mitigations:
+  * Ops: move CartFlow to dedicated relaxed-parsing pool (owner: sean) — ETA 15m.
+  * Eng: ship server-side parser hotfix and SDK v1.7.1 micro-patch (owner: jonas) — ETA 2h.
+  * CS/Sales: customer comms and potential rollback instructions (owner: marissa) — send update within 1h.
+  * Legal/Finance: prepare potential SLA credit language if the hotfix misses the 3h window (owner: laura/vanessa).
+- Risk: If rollback is not possible and SDK propagation is slow, will need to throttle rollout or apply server-side rate limiting to preserve platform stability.
+- Jira: INF-8421 created, priority P0. I attached the temporary ops checklist.
+
+I’m initiating the routing change now and will send an update once traffic is moved.
+
+Sean
+On-call, Redwood Inference
+Attachments: ops_pool_move_checklist.txt
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Alex Turner <alex@cartflow.com>, CartFlow SRE <sre@cartflow.com>
+Cc: rishi.malhotra@redwood.com, jonas.weber@redwood.com, sean.gallagher@redwood.com, laura.bennett@redwood.com
+Date: Mon, 04 Jun 2028 13:45:00 -07:00
+Subject: Status update: mitigation underway (CartFlow)
+
+Alex / CartFlow team — thank you for the quick signal and for joining the call. Short update and next steps: 
+
+1) We moved your traffic to a dedicated relaxed-parsing pool (Sean) at 11:50 PT — this immediately dropped error rate from ~1.6% to ~0.2% and reduced tail latency.
+2) Jonas has a server-side parser patch in review; target deploy to canary at 12:40 PT and full rollout if canary looks good (ETA ~2h from now).
+3) We are publishing an SDK micro-patch (v1.7.1) with improved header emission behind HTTP/2 proxies; recommend you roll back plugin rollout to v<=1.6 if feasible while we finish.
+4) INF-8421 contains the timeline, logs, and PR links: https://redwood.atlassian.net/browse/INF-8421.
+
+We will follow up with a postmortem and a timeline for a permanent fix. Can you please attach any additional proxy configs or traces (nginx config lines) if you have them? That’ll help us validate the permanent fix.
+
+Marissa Cole
+Senior AM, Redwood Inference
+marissa.cole@redwood.com
+Phone: +1 (415) 555-0198
+Attachments: screenshot_checkout_502.png

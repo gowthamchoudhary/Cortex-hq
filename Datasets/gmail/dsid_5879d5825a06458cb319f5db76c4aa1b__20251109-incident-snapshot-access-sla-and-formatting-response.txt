@@ -1,0 +1,120 @@
+Incident snapshot export, SLA and formatting clarifications (RFP)
+
+From: Emma Jenkins <emma.jenkins@astrahealth.com>
+To: Tessa Morgan <tessa_morgan@redwood.com>
+Date: Sun, 9 Nov 2025 09:12:00 -0800
+Subject: Incident snapshot export Qs for RFP - Redwood
+
+Hi Tessa,
+
+Thanks for the quick intro call last week. We're working through the RFP and have a couple of fairly specific questions about how Redwood provides incident / forensic exports so we can include accurate requirements in our procurement template. Can you confirm the following?
+
+- Retention windows for audit logs (per-event and aggregated): what are default and maximum retention durations for hosted accounts?
+- On-demand snapshot exports for a scoped incident: can you produce a tamper-evident bundle that covers a time range + subject identifiers?
+- Export formats supported (JSONL, CSV, Parquet, compressed tar) and whether payloads include original request/response pairs or just structured metadata.
+- Delivery mechanisms: S3 presigned uploads, direct SFTP, or signed manifest delivery to our cloud?
+- SLA for export delivery (standard vs expedited) and whether exports can be incremental (only new records since last snapshot).
+- Hashing / signing / chain-of-custody: do exports come with SHA256 manifests and do you support signed manifests using KMS/HSM-backed keys?
+- Redaction options: can you omit or pseudonymize PII at export time and provide a redaction map?
+- Cost model for exports (volume / per-GB / per-request surcharge).
+
+I've attached our RFP appendix that lists the fields we commonly ask vendors to confirm. Appreciate concise, technical responses — the procurement and security teams will use this to score the response.
+
+Best,
+Emma
+Emma Jenkins
+Senior Procurement Manager, AstraHealth
+procurement@astrahealth.com
+
+Attachment: RFP_Attachments.pdf
+From: Tessa Morgan <tessa_morgan@redwood.com>
+To: Emma Jenkins <emma.jenkins@astrahealth.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: Mon, 10 Nov 2025 08:45:00 -0800
+Subject: Re: Incident snapshot export Qs for RFP - Redwood
+
+Emma — thanks for the clear list. I'll summarize our standard capabilities below and attach our retention matrix and export SOP for reference (retention_matrix.xlsx, s3-export-sop.pdf). Happy to turn any of these into a one‑page compliance response for your scoring rubric.
+
+High-level answers (short):
+- Retention: hosted accounts default to 90 days for full per-event audit logs; configurable up to 7 years via Dedicated/Private plans or enterprise retention contracts.
+- Snapshot exports: yes — we can produce scoped incident bundles (time range + identifiers). Bundles are produced as compressed archives that include event files plus a signed manifest.
+- Formats: JSONL (primary), CSV export for structured events, Parquet on request. We include raw request/response payloads for customers that have opted into storage of request payloads; otherwise exports contain structured metadata and references.
+- Delivery: S3 presigned PUT (preferred), SFTP, or encrypted HTTPS POST to your collector. We also support direct transfer to customer-owned S3 buckets via cross-account role (AWS).
+- SLA: standard delivery target is 72 hours for up to 200GB. Expedited 48-hour turnaround is available for an upcharge. For very large datasets (>1TB) we provide chunked exports and an agreed timeline.
+- Hashing/signing: bundles include SHA256 hashes per-file and a signed manifest. We sign manifests using customer-managed KMS where available; otherwise Redwood KMS-backed signing is used.
+- Redaction: we offer on-export redaction and pseudonymization. The export includes a redaction map (rows removed or fields pseudonymized) and an assertion that redaction was applied.
+- Costs: export pricing is volume-based (per-GB) plus a flat request fee; expedited processing has an additional fee. I'll have Ben follow up with a template cost table.
+
+I'll loop in Ben (security) to confirm the manifest signing details and Marissa to confirm SLAs for enterprise customers.
+
+— Tessa
+Tessa Morgan
+Enterprise Sales, Redwood Inference
+attachment: retention_matrix.xlsx; s3-export-sop.pdf
+From: Ben Carter <ben_carter@redwood.com>
+To: Tessa Morgan <tessa_morgan@redwood.com>
+Cc: Emma Jenkins <emma.jenkins@astrahealth.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Mon, 10 Nov 2025 10:03:00 -0800
+Subject: Re: Incident snapshot export Qs for RFP - Redwood
+
+On Mon, Nov 10, 2025 at 8:45 AM Tessa Morgan <tessa_morgan@redwood.com> wrote:
+> Emma — thanks for the clear list. I'll summarize our standard capabilities below...
+
+Emma — quick technical addendum from security/ops:
+
+- Manifest signing: We generate a per-bundle manifest.json that lists all files and per-file SHA256 checksums. For Dedicated/Private customers we can configure manifest signing with your KMS (asymmetric ECDSA signing) or an HSM-backed customer key. For Hosted accounts we offer Redwood-managed KMS signing; the signature includes a timestamp (RFC3339) and the signing key id.
+- Time provenance: manifest includes monotonic event timestamps (UTC) and the server ingestion timestamp. We can include an attestation file that contains a Redwood-signed statement of the export parameters (time range, filter set, user ids) suitable for legal review.
+- Tamper evidence: apart from per-file checksums and signed manifest, we can provide a chained hash (Merkle-style summary) on request for high-assurance cases.
+- Export filters: supported filters include time range, user_id list, session ids, route ids, and log level. Incremental exports supported (delta since last manifest) via continuation tokens.
+- Redaction map: delivered as a CSV with original field path, redaction type (remove/pseudonymize), and redaction salt id (for pseudonymization reproducibility).
+- Schema: attached audit_log_schema.csv — it documents event fields we include by default; additional application fields can be mapped during onboarding.
+
+If AstraHealth would like a sample 2GB export bundle and manifest so you can test ingestion and verification, we can produce one within 48 hours.
+
+— Ben Carter
+Principal Security Engineer, Redwood Inference
+attachment: audit_log_schema.csv
+From: Emma Jenkins <emma.jenkins@astrahealth.com>
+To: Tessa Morgan <tessa_morgan@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Tue, 11 Nov 2025 09:07:00 -0800
+Subject: Re: Incident snapshot export Qs for RFP - Redwood
+
+Thanks Tessa/Ben — this is exactly the level of detail we need. Two quick follow-ups:
+
+1) For the signed manifest: can you include the public key or cert chain so we can independently verify the signature?
+2) For expedited requests, what are the typical cost brackets (ballpark $/GB or flat fees) so procurement can score pricing?
+
+If you can also push the sample bundle Ben mentioned to the SharePoint link in your attachment, we will run our ingestion test and provide feedback.
+
+Best,
+Emma
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Emma Jenkins <emma.jenkins@astrahealth.com>
+Cc: Tessa Morgan <tessa_morgan@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Tue, 11 Nov 2025 14:28:00 -0800
+Subject: Re: Incident snapshot export Qs for RFP - Redwood
+
+Emma — following up on cost/SLA specifics so your procurement scoring is actionable. Apologies for the longer note.
+
+SLA & delivery (enterprise baseline):
+- Standard export: target 72 hours for bundles <= 200GB; delivered as single compressed archive plus manifest.
+- Expedited export: 48 hours for bundles <= 200GB (25% surcharge on base export fee).
+- Large-scale exports: for >200GB we schedule a delivery plan; typical timelines 3–5 business days depending on size and retention extraction complexity.
+
+Pricing (ballpark for RFP scoring):
+- Base request: $150 per request (covers orchestration & packaging).
+- Data transfer: $0.10 per GB exported (first 200GB).
+- Expedited processing: +25% on total export fee.
+- Redaction/pseudonymization: flat $250 per export run if applied at export time (on-top of per-GB).
+
+Technical/verification notes:
+- We can provide the public certificate (PEM) for Redwood signing keys; for customer-managed KMS we provide the public key/cert you upload during onboarding.
+- We'll push a 2GB sample bundle to the SharePoint link this afternoon: https://redwood-prod.sharepoint.com/sites/incident-exports/sample-bundle-2025-10
+- For formal RFP attachments we can also produce a 1-page export assurance statement that lists the signing algorithm, manifest fields, and hash algorithm.
+
+Next steps: Tessa — shall I draft the 1-page assurance statement and a concise pricing table for Emma's RFP appendix?
+
+— Marissa Cole
+Product Operations, Redwood Inference
+
+Attachment: (none)

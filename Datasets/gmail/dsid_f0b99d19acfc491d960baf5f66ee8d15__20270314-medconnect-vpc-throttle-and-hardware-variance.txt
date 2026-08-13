@@ -1,0 +1,130 @@
+Recurring tokenization stalls and 5xx spike: MedConnect private cluster
+
+From: Hannah Lee <hannah.lee@medconnect.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: MedConnect SRE <sre@medconnect.com>
+Date: Sat, 13 Mar 2027 22:07:00 -0700
+Subject: High p95/5xx on private cluster since 19:00 UTC
+
+Rishi,
+
+We're seeing a sustained p95 jump and a rise in 5xx responses on our private VPC cluster starting around 19:00 UTC today. Key symptoms:
+- p95 for /v1/infer/tokenize increased from ~350ms to ~1.8s for our busiest shard
+- 5xx rate across the cluster rose to ~1.8% for ~3 hours, briefly spiking to 4%
+- Total throughput (requests/sec) dropped ~22% even though incoming traffic stayed constant
+
+We've attached a basic CSV dump of the routing KPIs and the request timeline. We restarted a few worker nodes which temporarily reduced 5xx but the spike returned.
+
+This is affecting our clinical triage queues — our team is pausing non-essential processing. Can you and the Redwood infra team take a look? We need an ETA for mitigation and whether this looks like a regression on your side or a hardware/OS issue.
+
+Attachments: medconnect_kpi_dump_20270313.csv (csv)
+
+Thanks,
+Hannah
+Hannah Lee
+Head of SRE | MedConnect Health
+
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Hannah Lee <hannah.lee@medconnect.com>
+Cc: Aditya Rao <aditya.rao@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Sat, 13 Mar 2027 22:28:00 -07:00
+Subject: Re: High p95/5xx on private cluster since 19:00 UTC
+
+Hannah — thanks for the heads up and the CSV, I've opened INF-4821 to track this.
+
+Immediate plan:
+1) I've looped in Aditya (solutions) and Laura (infra) to run the initial diagnostics.
+2) Please preserve the node-level logs and any nvme/dmesg output — if you can tar and drop to the shared Drive link in the ticket that helps.
+3) We'll try short-term mitigations (batch cap, KV cache policy adjust) and report back within 3 hours with an initial assessment.
+
+Can you confirm if you saw any OOMs or kernel-level evictions on the worker nodes? If you have orchestration logs (kubelet, systemd) that would be useful.
+
+I've cc'd internal infra so they can propose a safe rollback path if this is a regression.
+
+—Rishi
+Rishi Malhotra
+Senior Solutions Engineer | Redwood Inference
+
+From: Aditya Rao <aditya.rao@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Sat, 13 Mar 2027 23:10:00 -07:00
+Subject: Re: High p95/5xx on private cluster since 19:00 UTC
+
+Quick findings from the first pass against the logs Hannah dropped into the ticket:
+- Node-3 shows intermittent NVMe SMART warnings (reallocated sectors) during the 18:50-19:30 UTC window — correlated with IO wait spikes.
+- KV cache miss rate for the hot prefix increased 4x after 19:00 UTC; TTL evictions concurrently rose (suggests cache thrash after a small set of requests became heavier).
+- Batching patterns: several clients' average batch sizes jumped to 32 for a ~20-minute window, which created longer decode stalls and amplified device IO pressure.
+- No OOMs detected in kubelet logs, but there are a handful of long GC pauses from the runtime on Node-3 (120–300ms).
+
+Suggested immediate mitigations (low-risk):
+- Set max_batch=8 for the affected model variant and enable per-route batch timeout (200ms) — this should reduce tail latency while we investigate.
+- Temporarily move Node-3 out of the hot-shard rotation and drain it for deeper forensic (smartctl + vendor diagnostics).
+- Flip on short-circuit CPU fallback for tokenization for requests that exceed 1s in queue.
+
+I attached a quick timeline visualization showing IO spikes and p95 correlation. If hardware diagnostics confirm NVMe degradation, we should treat this as a hardware incident and consider a node replacement cadence.
+
+Attachments: support_mcap_timeline.png (png)
+
+- Aditya
+Aditya Rao
+Solutions Architect | Redwood Inference
+
+From: Laura Bennett <laura.bennett@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Aditya Rao <aditya.rao@redwood.com>
+Date: Sun, 14 Mar 2027 02:14:00 -07:00
+Subject: Re: High p95/5xx on private cluster since 19:00 UTC
+
+Team — thanks for the triage. Two operational asks:
+1) We need an exec-facing one-pager for the MedConnect CTO/ops leadership. Include: brief timeline, customer impact (triage queue delay), what we changed (batch cap/node drain/CPU fallback), short-term metrics (p95, 5xx before/after), and next steps (hardware replacement window, postmortem owner).
+2) Prepare an estimate for potential SLA credits if the incident qualifies as a performance SLA breach — I'll sync with legal/support once we have objective numbers.
+
+I'll stand up a short incident bridge if MedConnect requests an immediate exec sync; otherwise let's be ready for a 09:00 PT briefing tomorrow.
+
+For the runbook: Aditya, draft the steps for the node drain and rollback of the batch cap (we want a safe revert if we see negative throughput impact).
+
+- Laura
+Laura Bennett
+Director, Infrastructure | Redwood Inference
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Hannah Lee <hannah.lee@medconnect.com>
+Cc: Aditya Rao <aditya.rao@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Sun, 14 Mar 2027 09:22:00 -07:00
+Subject: Update: mitigations applied and initial improvement metrics
+
+Hannah — quick update following the mitigations we applied at 04:00 UTC: 
+- We capped max_batch to 8 for the affected model variant and set per-route batch timeout=200ms.
+- Node-3 was drained from the hot rotation at 04:10 UTC; NVMe diagnostics are scheduled with the hardware vendor.
+- CPU short-circuit for tokenization was enabled for requests whose queueing time exceeded 1s.
+
+Initial impact (measured on the same hot shard):
+- p95 for /v1/infer/tokenize: 1.82s -> 0.32s
+- 5xx rate: 1.8% -> 0.12%
+- Throughput restored to ~97% of baseline within 30 minutes of mitigation (some transient drop during the drain).
+
+I've attached the remediation patch (small orchestration parameter changes) and a CSV with post-mitigation p95 samples. We'll continue monitoring for 24 hours and recommend a hardware replacement if the vendor confirms NVMe repro.
+
+Would you like an exec briefing tomorrow at 09:00 PT? We can include Laura for infra details and I can present the mitigation timeline and proposed next steps.
+
+Attachments: remediation_patch.diff (diff), post_mitigation_p95_20270314.csv (csv)
+
+—Rishi
+Rishi Malhotra
+Senior Solutions Engineer | Redwood Inference
+
+From: Hannah Lee <hannah.lee@medconnect.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: MedConnect SRE <sre@medconnect.com>, Tom Reynolds <tom.reynolds@medconnect.com>
+Date: Sun, 14 Mar 2027 16:35:00 -07:00
+Subject: Re: Update: mitigations applied and initial improvement metrics
+
+Thanks Rishi — the numbers look great and the triage backlog is clearing. We'll validate for a full business cycle but this seems like the right short-term fix.
+
+We would like the exec briefing tomorrow at 09:00 PT; our CTO and CFO will join. Could you share the one-pager and the runbook ahead of the call (or link to a Drive doc)? Also include the vendor NVMe report once available.
+
+We'll keep the SRE channel open if any regression appears. Appreciate the quick turnaround.
+
+Hannah
+Hannah Lee
+Head of SRE | MedConnect Health

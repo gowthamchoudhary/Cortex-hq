@@ -1,0 +1,120 @@
+Initial-output guarantee and streaming vs sync delivery (CloudBank pilot)
+
+From: Alex Mercer <alex@cloudbank.com>
+To: Soojin Lee <soojin_lee@redwood.com>
+Date: Mon, 12 Jan 2026 09:14:00 -0800
+Subject: Streaming TTFT / sustained token/sec expectations for pilot
+
+Soojin,
+
+Thanks again for the demo earlier — CloudBank's engineering and payments teams are excited about the latency profile. Before we lock timelines for the pilot, procurement wants explicit commitments for streaming endpoints. Two things we need clarified:
+
+1) Time-to-first-token (TTFT) expectations for streaming responses at our target payload sizes (typical outputs are 30–120 tokens). We need to understand the 95th and 99th percentile numbers you can commit to.
+
+2) Sustained token/sec for a single endpoint under steady-state vs burst windows. Our workload is spiky: baseline 7 qps, bursts to 60 qps for short periods (1–3 minutes), average output ~50 tokens.
+
+Ideally we'd get an amendment stating: TTFT <= X ms (95p) and token/sec >= Y under these scenarios, or an explicit carveout that describes fallback behavior if streaming can't keep up. Can you sketch what exceptions look like operationally and commercially?
+
+Procurement is fine with an initial pilot SLA but wants a clear measurement & credit model if the streaming path misses the first-token target.
+
+-Alex
+Alex Mercer
+Head of Platform Integrations, CloudBank
+alex@cloudbank.com
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Alex Mercer <alex@cloudbank.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>
+Date: Mon, 12 Jan 2026 11:02:00 -0800
+Subject: Re: Streaming TTFT / sustained token/sec expectations for pilot
+
+Alex — thanks, great questions. High level first, then a proposed operational carveout.
+
+High-level commitments (hosted offering, default model family):
+- TTFT (streaming): 95th percentile <= 220 ms for outputs <= 256 tokens; 99th percentile <= 420 ms.
+- Sustained token throughput: we provision per-model variants; for the model we demoed we expect sustained ~9k tokens/sec per GPU when batched.
+- Burst handling: autoscaling and preemptible bursts apply; short spikes (<=90s) are absorbed by burst capacity, beyond that we recommend Dedicated capacity for hard SLAs.
+
+Operational carveout proposal (pilot-stage exception):
+- If streaming first-token target is at risk during rollout we will: 1) automatically fallback the request to the synchronous (non-streaming) endpoint with equivalent latency expectations for completion; 2) emit a trace tag and increment a pilot-exception counter.
+- Measurement window: 30-day rolling window, compute 95p TTFT per route; credit tier: 10% service credit when monthly TTFT misses exceed 2% of requests, 25% credit when >10%.
+
+Notes / constraints:
+- Streaming is sensitive to prefix caching and client-side windowing; very short prompts with many concurrent warmups can increase observed TTFT for initial tokens.
+- We can instrument a canary that sends representative payloads from CloudBank's staging region to get baseline numbers before signing.
+
+I'll attach a draft SLA amendment (PDF) and ask Karthik to add a short technical note on batching and token emission behavior. If these commercial terms look sane to you, we can open a DocuSign and schedule a call to agree measurement details.
+
+Best,
+
+Soojin Lee
+Director, Solutions — Redwood Inference
+soojin_lee@redwood.com
++1 (415) 555-0191
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Soojin Lee <soojin_lee@redwood.com>, Alex Mercer <alex@cloudbank.com>
+Cc: Grace O'Connor <grace_oconnor@redwood.com>
+Date: Tue, 13 Jan 2026 09:18:00 -0800
+Subject: Re: Streaming TTFT / sustained token/sec expectations for pilot
+
+Alex / Soojin — quick technical addendum to set expectations:
+
+1) Batching and TTFT: the runtime uses continuous batching. For isolated low-qps requests we see near-single-request latency; however, when requests align for batching to be efficient, TTFT can be slightly higher (batching delay) but aggregate throughput improves. We tune the batching window aggressively for streaming routes to prioritize first-token emission.
+
+2) KV cache warmup: cold-model or cold KV cache can add ~40–120 ms to the first-token emission until the KV cache populates. For CloudBank's pattern (bursts following idle periods) this is the primary cause of TTFT tail.
+
+3) Quantized variants: some quantized model builds have different per-token emission rates; we should define per-variant baselines.
+
+Proposed technical exception for the pilot:
+- Accept an operational SLA that guarantees 95p TTFT <= 300 ms during a 14-day rollout window. After validated telemetry and a canary pass we will reduce the contracted 95p target to 220 ms.
+- If streaming falls back to sync automatically more than 1.5% of requests in a measurement week, we trigger an incident review and temporary scaling of Dedicated-like burst capacity.
+
+Attaching a small CSV with empirical quantiles from a comparable pilot (perf-profile-quantiles.csv).
+
+-Karthik
+Lead, Inference Performance — Redwood Inference
+
+From: Alex Mercer <alex@cloudbank.com>
+To: Soojin Lee <soojin_lee@redwood.com>
+Cc: procurement@cloudbank.com
+Date: Wed, 14 Jan 2026 08:46:00 -0800
+Subject: Re: Streaming TTFT / sustained token/sec expectations for pilot
+
+Thanks, that helps a lot. A couple of follow-ups from procurement and eng:
+
+- Commercial ask: CloudBank will accept the staged TTFT (300 ms 95p during a 14-day rollout) but requests a clear credit formula for missed first-token commitments during the first 90 days. We proposed a 30% credit for any week where the 95p TTFT exceeds the staged target by >15%.
+- Operational ask: we need a simple failover behavior documented (what client sees when streaming falls back to sync) and an integration checklist for instrumentation events so our observability can tie to your traces.
+
+If Redwood is comfortable with the 30% week-over-week credit provision during the 90-day ramp and can provide an integration doc and canary plan by EOD Friday we'll move forward with signatures.
+
+-Alex
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Alex Mercer <alex@cloudbank.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Thu, 14 Jan 2026 17:03:00 -0800
+Subject: Re: Streaming TTFT / sustained token/sec expectations for pilot
+
+Alex — we can accept the 30% weekly credit during the 90-day ramp with the following clarifications:
+
+1) Credit trigger and measurement: week is UTC Monday–Sunday, compute 95p TTFT across the streaming route for CloudBank's primary endpoint. Credits apply only to the portion of usage attributed to that route.
+2) Exceptions: credits are not applied if the miss is caused by customer-induced traffic shaping (client-side retry storms) or if CloudBank requests a non-default model variant without a pre-agreed perf profile.
+3) Failover behavior: when fallback occurs the client will receive a single non-streaming completion response; metadata header X-Redwood-Fallback: sync and trace id will be present. We will publish a short integration checklist (trace tags, example requests, sampling guidance) and a canary runbook.
+
+Next steps:
+- I'll upload the SLA amendment (attached) with the staged targets and credit language and open a DocuSign envelope.
+- Grace will coordinate a 60-minute canary call with CloudBank eng for next Tuesday to run representative workloads from your staging region.
+
+I'll mark this as tentatively approved on our side pending a successful canary.
+
+Thanks all — looking forward to getting this into the pilot.
+
+Soojin Lee
+Director, Solutions — Redwood Inference
+
+--
+Attachment stubs:
+- redwood-streaming-sla-amendment-draft.pdf (PDF, 142 KB)
+- perf-profile-quantiles.csv (CSV, 6 KB)
+

@@ -1,0 +1,111 @@
+Security questionnaire: Hosted API — data stewardship & deletion clarifications
+
+From: security@acmesoft.com
+To: vanessa_ortiz@redwood.ai
+Cc: samantha.lin@acmesoft.com
+Date: Sun, 29 Nov 2026 15:12:00 -0800
+Subject: Security questionnaire: data residency & retention (hosted API)
+
+Hi Vanessa,
+
+Thanks for agreeing to take a look — attached is AcmeSoft's standard security questionnaire focused on data residency, retention and deletion for hosted APIs. We have a few specific asks:
+
+1) Can you confirm where request/response data and derived artifacts (embeddings, logs, cached prefixes) are stored geographically for Redwood's hosted API?
+2) What are default retention windows for request/response content, logs, metrics, and backups?
+3) What is your deletion workflow and SLAs for customer-initiated deletion requests?
+4) Are there circumstances where data lives longer (e.g., backups, legal holds)? If so, how long?
+5) Is there a way to choose EU-only or US-only residence on the hosted tier, and how is that enforced?
+
+Attached: acme_security_questionnaire_v3.xlsx (questionnaire).
+
+Appreciate a short matrix we can attach to our internal RFP — happy to schedule a quick call if helpful.
+
+— Sam Lin
+Head of IT Security, AcmeSoft
+security@acmesoft.com
+
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: security@acmesoft.com
+Cc: marissa_cole@redwood.ai, diego_fernandez@redwood.ai
+Date: Sun, 29 Nov 2026 17:05:00 -08:00
+Subject: Re: Security questionnaire: data residency & retention (hosted API)
+
+Hi Sam — thanks for sending this over and for the clear list of asks. Below is a concise Q&A / matrix that addresses each bullet; I attached a one-page PDF summary (redwood_data_stewardship_matrix.pdf) for your procurement/RFP packet. If you want formal language for contract amendments we can produce a covered-data addendum.
+
+Q1 — Geographic storage for request/response and derived artifacts- Hosted API model execution and transient artifacts are executed in the region you specify at request time (choices: us, eu). By default tenant data for free/self-serve signups is served from US regions (us-west). For enterprise customers (including AcmeSoft) we can pin hosted workloads to EU-only or US-only zones via account-level configuration; enforcement is by routing and storage policies that restrict data plane resources and audit logs to the selected region.
+
+Q2 — Default retention windows (hosted API):
+- Request/Response payloads: retained up to 30 days by default to power debugging, abuse detection, and short-term tooling.
+- Embeddings and vector indexes created by the hosted API: retained up to 30 days unless the customer elects persistent storage for search workflows.
+- Inference logs (model latency, token-level costs): aggregated metrics retained 13 months; raw logs used for billing/diagnostics retained 90 days by default.
+- KV/prefix caches: ephemeral; kept in-memory or local to the serving node for the duration of the session and not written to long-term storage (deleted immediately after the request lifecycle completes).
+- Backups & snapshots: encrypted backups of service metadata exist for recovery; retention window for backups is up to 90 days.
+
+Q3 — Deletion workflow & SLAs:
+- Customer-initiated deletion (primary stores): requests submitted via support + data-deletion API are acknowledged immediately; primary data purge completed within 48 hours in normal operations.
+- Backups & cold archives: may require up to 90 days for complete removal due to snapshot lifecycle; customers are informed of this window during the deletion confirmation.
+- Verification: we provide a deletion confirmation report (signed/hashed) and a machine-readable audit entry in the account's audit log once deletion completes.
+
+Q4 — Exceptions / legal holds:
+- Data required for active legal holds, litigation, or regulatory retention will be preserved as required; Redwood will notify customers of any compulsory holds and the legal basis.
+
+Q5 — Region selection & enforcement: same as Q1 — account-level pinning or per-request region selector. For EU-only enforcement on hosted tier we restrict model-serving endpoints and persistent stores to EU regions and do not mirror data to other regions.
+
+Encryption & access control notes:
+- All stored data is encrypted at rest using keys managed by Redwood KMS; for enterprise customers we offer customer-managed keys (CMK) integrated with common KMS providers.
+- Data in transit is TLS 1.2+ with mutual TLS available for private links.
+- Access to customer data is role-based and audited; support/engineers require Just-in-Time access and approvals for any manual data access.
+
+If you want, I can: 1) produce a one-page contract clause for retention/deletion windows, and 2) kick this to our CISO for an attestation letter.
+
+Attachments: redwood_data_stewardship_matrix.pdf
+
+Best,
+Vanessa Ortiz
+Director, Solutions — Redwood Inference
+vanessa_ortiz@redwood.ai
++1 (415) 555-0147
+
+
+From: security@acmesoft.com
+To: vanessa_ortiz@redwood.ai
+Cc: samantha.lin@acmesoft.com
+Date: Mon, 30 Nov 2026 10:02:00 -05:00
+Subject: Re: Security questionnaire: Hosted API — data stewardship & deletion clarifications
+
+Vanessa — this is helpful, thank you. A couple follow-ups so we can finalize the RFP appendix: 
+
+1) You say embeddings are retained up to 30 days unless persisted; does Redwood persist embeddings by default for features like semantic search, or only when customers explicitly request storage?
+2) For the KV/prefix cache, is there any scenario where in-memory cache entries are written to disk (e.g., crash dump, swap)?
+3) If we request deletion, will there be a short window where new traffic might recreate the same derived artifacts (embeddings) and therefore re-materialize similar content?
+
+If easier, we can take the CISO attestation and include it in our security binder.
+
+— Sam
+security@acmesoft.com
+
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: security@acmesoft.com
+Cc: marissa_cole@redwood.ai, diego_fernandez@redwood.ai
+Date: Mon, 30 Nov 2026 11:20:00 -05:00
+Subject: Re: Security questionnaire: Hosted API — data stewardship & deletion clarifications
+
+Hi Sam — quick clarifications:
+
+1) Embeddings persistence: Redwood does not persist embeddings for customer accounts by default outside the short default retention window (30 days). For customers who enable Redwood-managed semantic search or vector stores we persist embeddings in the chosen region; persistence is an explicit account-level feature and is reflected in the UI/API and billing. If you want zero-persistence on hosted API we can set the account flag to disable Redwood-managed vector stores; you can still compute embeddings client-side and store them in your own systems.
+
+2) KV/prefix cache durability: caches live in-memory on serving nodes. We do not write prefix caches to long-term disks. In the rare event of host-level crash diagnostics, memory captures are only generated with engineering approval and are treated as high-sensitivity artifacts (subject to the same deletion flows and access approvals). We also ensure swap space is encrypted at the host level; by default we avoid swapping persistent inference caches.
+
+3) Recreation risk after deletion: deleting historical artifacts removes the stored vectors and request logs; however, identical new requests will produce new derived artifacts (new embeddings) because embeddings are deterministic only to the model + tokenization and often differ with model versions. If your concern is re-materialization, recommend pairing deletion with: (a) account-level rate limits during the purge window, and (b) a short-term policy to route suspect traffic to a deleted-data-safe pathway during confirmation. We can operationalize both for the enterprise onboarding.
+
+Next steps: I can route an attestation from our CISO (Marissa) and include the deletion-playbook.pdf that outlines the exact audit steps we run. Attached here: redwood_deletion_playbook.pdf.
+
+Thanks — I will drop the attestation in a follow-up and can schedule 30 minutes with Marissa if you want legal/attest questions answered live.
+
+Vanessa
+
+On Mon, Nov 29, 2026 at 05:05 PM PST, Vanessa Ortiz <vanessa_ortiz@redwood.ai> wrote:
+> [previous reply and attachments]
+

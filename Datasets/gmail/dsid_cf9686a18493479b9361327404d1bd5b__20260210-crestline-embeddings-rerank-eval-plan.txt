@@ -1,0 +1,114 @@
+Rerank & embeddings evaluation — next steps (Crestline Analytics)
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Emma Lee <emma@crestline.ai>
+Cc: Rafael Mendes <rafael.mendes@redwood.com>, Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Date: Tue, 10 Feb 2026 15:12:00 -0800
+Subject: Rerank & embeddings evaluation — next steps (Crestline Analytics)
+
+Hi Emma — great call earlier. Quick recap and proposed next steps so we stay aligned:
+
+Recap:
+- Crestline uses a hybrid retrieval stack (Elasticsearch + ANN) for product search; current reranker is TensorFlow-based on top-20 candidates.
+- Key success metrics you care about: recall@10, recall@1 for conversions, retrieval latency (95th percentile), and per-query cost.
+- Typical request distribution: ~70% short queries (2-4 tokens), 30% long queries (6-20 tokens).
+
+What we propose for the competitive evaluation:
+1) A/B rerank test: Redwood inference (quantized 8-bit embeddings + fine-tuned reranker) vs HyperscalerX text-embedding-ada-like baseline vs your current on-prem stack.
+2) Dataset: 50k documents, 5k held-out queries (you mentioned you can provide a sample subset).
+3) Metrics: recall@1, recall@5, recall@10, MRR, retrieval latency (p50/p95), token cost and per-query cost normalized to 1M queries.
+4) Embedding dim variants to test: 1024 and 1536 (we'll include both to see tradeoffs).
+5) Similarity functions: cosine vs dot-product.
+
+Technical artifacts attached: test-config.yaml (defines batching, quantization profile, candidate pool sizes) — see attachment.
+
+Requests for you:
+- Please share a small sample S3 link with 50k docs (or a representative 5k if you want to start smaller) and the 5k query set.
+- Confirm any PII requirements/redaction we should apply before ingestion.
+
+Proposed timeline:
+- Prep + ingest: 3 business days after we receive sample data
+- Run: 2 business days per round (we plan 2 rounds: initial + tuned)
+- Results + deep-dive: within 2 business days after run
+
+If that looks good I can get the infra and a 45-min deep-dive on the calendar with Rafael and Vivek to align on configuration and success criteria.
+
+Thanks — excited to dig in.
+
+—
+Marissa Cole
+Account Executive, Redwood Inference
+marissa.cole@redwood.com | +1 (415) 555-0124
+
+Attachment: test-config.yaml (defines batch_size, candidate_pool=20/100/1000, quantization=8bit, embeddings=[1024,1536])
+From: Emma Lee <emma@crestline.ai>
+To: Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 10 Feb 2026 16:05:00 -0800
+Subject: Re: Rerank & embeddings evaluation — next steps (Crestline Analytics)
+
+Thanks Marissa — that recap is perfect and matches what we discussed. A few clarifications:
+
+- We can share an S3 prefix with 60k product documents (jsonl) and a 5k query set. I'll send credentials via SecureShare (I can't paste creds in email).
+- PII: product descriptions occasionally contain vendor contact emails; we require that vendor emails be redacted during ingestion. That is non-negotiable for our security team.
+- On hypotheses: we expect higher-dim embeddings to improve recall@10 but worried about latency/cost tradeoffs; happy to see both numbers.
+- Can Redwood provide an estimated cost delta for 1536 vs 1024 dims (tokens / inference cost per 1M queries)?
+
+I'd like to schedule the deep-dive next Wednesday or Thursday afternoon PT. Also looping in my platform engineer (CloudOps team) for any infra/credentials coordination — fyi.
+
+Best,
+Emma
+Emma Lee
+Head of Search & Recommendations, Crestline Analytics
+emma@crestline.ai
+
+On Tue, Feb 10, 2026 at 3:12 PM Marissa Cole <marissa.cole@redwood.com> wrote:
+> Hi Emma — great call earlier. Quick recap and proposed next steps so we stay aligned:...
+From: Rafael Mendes <rafael.mendes@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Date: Wed, 11 Feb 2026 09:22:00 -0800
+Subject: Re: Rerank & embeddings evaluation — next steps (Crestline Analytics)
+
+Marissa / Vivek — small suggestions from the solutions side before we lock config:
+
+- Add recall@1 and recall@5 as explicitly required metrics (these are decisive for conversion).
+- Candidate pool sizes: run with top-20 (to match current) and top-100 to simulate broader retrieval.
+- Embedding dims: test 1024 and 1536; quantify index size per million vectors and estimate memory footprint (we should record approx GB per 1M).
+- Similarity: run cosine and dot-product — some ANNs are faster with dot-product depending on quantization.
+- Latency: capture both P50 and P95 for retrieval and rerank separately (we've seen rerank stage dominate).
+- Cost tracking: report CPU/GPU-hours and estimate $/1M queries for each configuration; include storage cost for indices.
+
+I attached a CSV template (crestline_eval_results_template.csv) to capture all metrics consistently. I'll own the run orchestration with Vivek if Emma provides the S3 link and credentials.
+
+—Raf
+Rafael Mendes
+Solutions Architect, Redwood Inference
+rafael.mendes@redwood.com
+
+On Tue, Feb 10, 2026 at 3:12 PM Marissa Cole <marissa.cole@redwood.com> wrote:
+> Hi Emma — great call earlier. Quick recap and proposed next steps so we stay aligned:...
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Emma Lee <emma@crestline.ai>
+Cc: Rafael Mendes <rafael.mendes@redwood.com>, Vivek Kulkarni <vivek.kulkarni@redwood.com>
+Date: Thu, 12 Feb 2026 08:03:00 -0800
+Subject: Re: Rerank & embeddings evaluation — next steps (Crestline Analytics)
+
+Emma — thanks for the quick reply and for confirming the dataset availability. We can absolutely redact vendor emails during ingestion (we have a pipelined transform for that).
+
+Plan & asks (finalized):
+- You will share S3 prefix + SecureShare instructions by EOD Thu (we'll wait for credentials).
+- Redwood will run two rounds: baseline vs tuned (each with dims 1024 and 1536, candidate pools 20 & 100).
+- Metrics tracked: recall@1/5/10, MRR, P50/P95 retrieval latency, P50/P95 rerank latency, index size per 1M vectors, CPU/GPU-hours, and cost per 1M queries.
+- Deliverables: full results CSV, a short slide deck with callouts on tradeoffs, and recommended config for production.
+
+I've scheduled the 45-min deep-dive for Wednesday, Feb 18 at 11:30 AM PT and shared the calendar invite (link: https://calendar.google.com/event?eid=redwood-crestline-eval). Rafael and Vivek will run the tests once we receive credentials.
+
+HubSpot: I linked this thread to company record (https://app.hubspot.com/contacts/1234567/company/98765) and created DEAL-2026-0071.
+
+If anything changes on your side (PII redaction requirements, timeline), please ping me. Looking forward to the results.
+
+Cheers,
+Marissa
+Account Executive, Redwood Inference
+marissa.cole@redwood.com | +1 (415) 555-0124
+
+Attachment: redwood-rerank-proposal.pdf (summary of test plan and pricing estimates).

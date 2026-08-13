@@ -1,0 +1,140 @@
+Post-demo: Evaluation success checkpoints & KPI ownership
+
+From: Soojin Lee <soojin.lee@redwood.ai>
+To: Alex Johnson <alex.johnson@clymber.ai>
+Cc: Priya Raman <priya.r@clymber.ai>, Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Thu, 30 Sep 2026 15:12:00 -0700
+Subject: Post-demo: Evaluation success checkpoints & KPI ownership
+
+Hi Alex / Priya — thanks again for taking the demo today. High level recap and proposed next steps below so we have alignment heading into the trial planning session next week.
+
+Quick recap:
+- Goal: validate retrieval + summarization flow for customer support use case (60k tickets / month).
+- Must-haves for success: p95 latency under 250ms for single-turn requests, sustained throughput for peak periods, and model-level quality on intent classification > 90% on your seed test set.
+
+What I attached: evaluation-plan-v1 (spreadsheet) with proposed datasets, telemetry to capture, and initial gating thresholds. Also included a draft SLA sketch.
+
+Proposed next steps (please confirm owners & dates):
+1) Internal kickoff: agree on datasets and synthetic transforms — target by Tue 2026-10-05 — owner: Clymber (Priya) with Redwood support (Ben).
+2) Baseline benchmark: Redwood runs a smoke run on a 1k-sample subset to validate tokenization and latency expectations (p95 target provisional: 250ms) — target by Fri 2026-10-08 — owner: Redwood (Ben / Karthik).
+3) Full trial window: 3 weeks of seeded traffic + 1 week of customer-run validation — target window 2026-10-18 -> 2026-11-07 — owner: Clymber ops + Redwood dedicated support.
+4) Acceptance gates: latency (p95), throughput (concurrent requests / TPS), cost/token estimate, and quality (intent accuracy + hallucination rate) — see attached sheet for initial thresholds.
+
+Questions for you: any constraints on sample export cadence (S3 vs secure FTP), and are there any redlines on data residency we should track?
+
+If that looks right, I can schedule a 30-min planning slot and Ben will scope the smoke-run checklist.
+
+Thanks,
+Soojin
+Soojin Lee | Senior Solutions Engineer
+Redwood Inference
+soojin.lee@redwood.ai | +1 415-555-0198
+
+Attachments: clymber-eval-plan-v1.xlsx (xlsx), redwood-sla-proposal-clymber.pdf (pdf)
+From: Alex Johnson <alex.johnson@clymber.ai>
+To: Soojin Lee <soojin.lee@redwood.ai>
+Cc: Priya Raman <priya.r@clymber.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: Thu, 30 Sep 2026 17:05:00 -04:00
+Subject: Re: Post-demo: Evaluation success checkpoints & KPI ownership
+
+Thanks Soojin — that recap is helpful and matches our internal notes. A few clarifications from our side: 
+
+- We can deliver export samples to an S3 bucket (us-east-1). We'll confirm RBAC details by Monday.
+- Data residency: all test data can remain in us-east-1 for the trial; for production we will need EU residency but not required for this POC.
+- Our preferred trial window is 3 weeks but we can start the baseline smoke-run earlier if Redwood needs it to size burst capacity.
+
+We reviewed the gating thresholds in the spreadsheet and suggested a slightly tighter p95 latency goal (200ms) for single-turn inference — is that achievable on your Hosted tier or should we consider a Dedicated pool for the trial?
+
+I'll loop Priya to confirm sample readiness. If you can schedule the planning slot, we'll accept.
+
+—Alex
+Alex Johnson | Head of Platform
+Clymber AI
+alex.johnson@clymber.ai
+
+On Thu, Sep 30, 2026 at 15:12 Soojin Lee <soojin.lee@redwood.ai> wrote:
+> Hi Alex / Priya — thanks again for taking the demo today...
+
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Soojin Lee <soojin.lee@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Cc: Alex Johnson <alex.johnson@clymber.ai>, Priya Raman <priya.r@clymber.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Fri, 01 Oct 2026 09:40:00 -07:00
+Subject: RE: Post-demo: Evaluation success checkpoints & KPI ownership
+
+Nice recap — I ran a quick sizing on our side. Notes below and a proposed minimal smoke-run checklist.
+
+Sizing + tier suggestion:
+- Hosted (burst) can plausibly hit p95=200ms for single-turn 1-2K token requests in us-east on our optimized Llama-derivative if traffic is <20 TPS.
+- For sustained 50+ TPS or lower p95 target with peak bursts, recommend Dedicated trial instance (we can provision a 2-GPU pool for the 3-week window).
+
+Smoke-run checklist (owner in parentheses):
+1) Confirm S3 location + IAM read-only role (Clymber / Priya).
+2) Provide 1k labeled sample set + 2k unlabeled for throughput tests (Clymber).
+3) Redwood to run tokenization sanity & warmup (Ben) — collect p50/p95/p99 latency, token/sec, GPU utilization.
+4) Redwood to run quality eval (Karthik) — intent accuracy + top-1 hallucination estimate on provided set.
+5) Share cost-per-token estimate based on observed effective throughput (Ben).
+
+I'll block 60 minutes on Mon 2026-10-04 to run through the smoke-run plan and provisioning checklist. Soojin — can you send a calendar invite?
+
+Ben
+Ben Carter | Solutions Lead, Trials
+Redwood Inference
+ben.carter@redwood.ai
+
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Soojin Lee <soojin.lee@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Alex Johnson <alex.johnson@clymber.ai>
+Date: Mon, 04 Oct 2026 08:12:00 -07:00
+Subject: Re: Post-demo: Evaluation success checkpoints & KPI ownership
+
+Looping in the acceptance gate specifics so we have crisp pass/fail criteria. These are deliberately conservative for the trial so we can tighten in production: 
+
+Acceptance gates (provisional):
+- Latency: p95 <= 220ms for single-turn requests (measured over 1k sample smoke-run, 99th excluded ops outliers).
+- Throughput: system sustains 50 TPS for 5 minute window without error rate > 1%.
+- Cost: estimated cost/token for production projection < $0.0025 (based on trial utilization).
+- Quality: Intent classification accuracy >= 90% on labeled seed set; hallucination rate (false facts called out) <= 4% on targeted QA questions.
+
+Telemetry to capture (must be in eval-plan spreadsheet): request_id, timestamp, token_count, model_variant, p50/p95/p99 latency, response_length, confidence scores, match_to_ground_truth(boolean), error_code.
+
+Owners:
+- Data delivery & labeling: Clymber (Priya)
+- Smoke-run orchestration & latency/throughput: Redwood (Ben)
+- Quality evaluation & regression checks: Redwood (Karthik)
+- Cost projection & SLA draft: Redwood (Marissa)
+
+I'll prepare a short runbook with the exact CLI commands and perf script tonight and drop to the Drive link.
+
+—Karthik
+Karthik Iyer | Performance & Trials Engineer
+Redwood Inference
+karthik.iyer@redwood.ai
+
+
+From: Soojin Lee <soojin.lee@redwood.ai>
+To: Alex Johnson <alex.johnson@clymber.ai>, Priya Raman <priya.r@clymber.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Mon, 05 Oct 2026 10:03:00 -07:00
+Subject: Re: Post-demo: Evaluation success checkpoints & KPI ownership
+
+Thanks everyone — aligned. Final quick readout and immediate actions: 
+
+Immediate actions (owners + due dates):
+- Priya: share S3 path and IAM role by Tue 2026-10-06 EOD. (Clymber)
+- Ben: run tokenization sanity & baseline smoke-run on Wed 2026-10-06; report p50/p95 by Thu 2026-10-07. (Redwood)
+- Karthik: publish the perf runbook and upload to Drive (link below) by Tue 2026-10-06. (Redwood)
+- Marissa: finalize cost projection and SLA bullet points by Fri 2026-10-08. (Redwood)
+
+Planning slot: I scheduled a 30-min kickoff for Wed 2026-10-06 09:00 PT — invite sent to Alex / Priya / Ben / Karthik.
+
+Drive (runbook + plan): https://docs.google.com/document/d/1a2b3c-clymber-eval-plan
+
+Thanks — I will track owners and close the loop after the smoke-run.
+
+Soojin
+Soojin Lee | Senior Solutions Engineer
+Redwood Inference
+soojin.lee@redwood.ai
+

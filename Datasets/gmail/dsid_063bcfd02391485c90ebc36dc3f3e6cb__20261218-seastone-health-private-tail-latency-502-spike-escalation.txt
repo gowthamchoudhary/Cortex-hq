@@ -1,0 +1,103 @@
+Seastone Health private deployment: tail latency & 502 spike
+
+From: Alex Moreno <alex.moreno@seastonehealth.com>
+To: marissa_cole@redwood.com
+Cc: priya.saldana@seastonehealth.com
+Date: Fri, 18 Dec 2026 08:12:00 -0800
+Subject: Urgent: spike in 502s + p95 tail latency on our private VPC
+
+Team,
+
+We're seeing a sudden onset of 502s from our private Redwood deployment starting ~02:05 UTC this morning. Our p95 latency jumped from ~220ms to ~820ms and error rate climbed to ~3.8% over the last 45 minutes. Throughput for inference calls dropped ~40% as a consequence.
+
+Attached: seastone-logs-20261218.tar.gz (500MB, server logs + runtime traces) and a Grafana snapshot (grafana-p95-snapshot-20261218.png).
+
+We have an active teleconference with our on-call SREs but wanted to loop you in since this is production-impacting for two major clients. Any immediate mitigation steps you can take from the Redwood runtime side? Can you confirm whether any recent kernel or quantization changes were rolled to our private cluster last night?
+
+Priya (CTO) is on the thread — we need a short plan and ETA.
+
+Thanks,
+Alex Moreno
+Head of Infrastructure, Seastone Health
+---
+Attachments: seastone-logs-20261218.tar.gz (type: archive), grafana-p95-snapshot-20261218.png (type: image)
+From: marissa_cole@redwood.com
+To: karthik_iyer@redwood.com, evelyn_hart@redwood.com, laura_bennett@redwood.com
+Cc: alex.moreno@seastonehealth.com, priya.saldana@seastonehealth.com
+Date: Fri, 18 Dec 2026 08:25:00 -0800
+Subject: Re: Urgent: spike in 502s + p95 tail latency on our private VPC
+
+Thanks Alex — pulling this into our triage. Evelyn/Karthik/Laura: can you prioritize?
+
+Immediate asks:
+- Karthik/Evelyn: can you confirm whether any runtime rollouts (kernels, quantization profiles) touched Seastone's private cluster in the last 12–24 hrs?
+- If this is a KV-cache growth / GPU memory pressure symptom, we should temporarily lower concurrency and reduce batch token window for the affected model(s).
+- Customer asked about a maintenance window; propose a 20–30 minute controlled window where we apply a config tweak and roll one host at a time.
+
+I will coordinate communications with Alex & Priya. If this is going to require >1h remediation or tenant fallback, we need to escalate to CS leadership for an SLA credit discussion.
+
+Marissa Cole
+Account Executive, Redwood Inference
+marissa_cole@redwood.com | +1 415 555 0199
+Redwood Inference
+
+From: karthik_iyer@redwood.com
+To: marissa_cole@redwood.com, evelyn_hart@redwood.com, laura_bennett@redwood.com
+Date: Fri, 18 Dec 2026 09:00:00 -0800
+Subject: Re: Urgent: spike in 502s + p95 tail latency on our private VPC
+
+Quick triage notes (runtime inspection + logs Alex sent):
+- Observed rapid growth of KV cache entries for model 'redwood-open-lite-v2' leading to OOM pressure on 2 of 6 GPUs in the cluster.
+- Decoder queue backlog correlates with an increased number of long sequences from a new nightly batch job (looks like an indexing job from Seastone).
+- Several 502s come from our decoder worker process hitting a soft failure when memory allocation fails during attention kernel selection.
+
+Temporary mitigations I recommend (low-risk, reversible):
+1) Set concurrency_per_gpu=2 for the affected node pool (current is 6) — immediate effect on mem pressure.
+2) Reduce max_batch_tokens for that model to 256 (current 1024) and disable continuous batching for that tenant for 30 minutes.
+3) Enable model-variant fallback to a smaller quantized variant (redwood-open-lite-v2-q4_0) for new requests only.
+4) Apply a runtime patch to reduce prefetch window from 4->1 (JIRA-OPS-9876 created).
+
+I'll prepare a small rollout that updates node config and switches fallback for new traffic. This should reduce 502s quickly; plan to monitor p95 and error-rate for 15m windows after each change.
+
+Estimated time to implement: 20–35 minutes once we have customer approval for a brief maintenance window.
+
+Karthik Iyer
+Solutions Engineer, Redwood Inference
+
+From: evelyn_hart@redwood.com
+To: marissa_cole@redwood.com, karthik_iyer@redwood.com, laura_bennett@redwood.com
+Cc: alex.moreno@seastonehealth.com
+Date: Fri, 18 Dec 2026 09:22:00 -08:00
+Subject: Re: Urgent: spike in 502s + p95 tail latency on our private VPC
+
+We will execute Karthik's mitigations on a rolling basis. Operational plan (high level):
+- 09:30 PST: throttle concurrency on node-2 and node-5 to concurrency_per_gpu=2; monitor.
+- 09:40 PST: reduce max_batch_tokens for 'redwood-open-lite-v2' tenant override to 256; observe 5m windows.
+- 09:55 PST: enable model-variant fallback for new sessions only.
+- 10:10 PST: evaluate; if tail latency remains >500ms we will consider temporarily diverting a fraction of traffic to hosted fallback.
+
+Need explicit approval from customer for the maintenance window and for enabling fallback (this changes quantization for some queries). Also looping in Laura for any customer escalation / SLA notes.
+
+Evelyn Hart
+SRE, Redwood Inference
+---
+Attachments: maintenance-plan-draft.md (small checklist + rollback steps)
+From: Priya Saldana <priya.saldana@seastonehealth.com>
+To: marissa_cole@redwood.com, evelyn_hart@redwood.com, karthik_iyer@redwood.com
+Cc: Alex Moreno <alex.moreno@seastonehealth.com>, laura_bennett@redwood.com
+Date: Fri, 18 Dec 2026 09:48:00 -08:00
+Subject: Re: Urgent: spike in 502s + p95 tail latency on our private VPC
+
+Marissa / team — we authorize the 09:30 maintenance window and the mitigations listed. Please be conservative: start with one host and confirm no clientimpact before proceeding.
+
+Two asks from Seastone leadership:
+1) We need an executive summary for our out-of-hours ops after this is closed (what triggered this, what changed).
+2) Please clarify the SLA credit policy and who at Redwood we should be talking to if this impacts contractual uptime.
+
+Marissa — can you escalate to Laura for an exec-to-exec brief if this becomes protracted? We will keep communications through this thread.
+
+Thanks,
+Priya Saldana
+CTO, Seastone Health
+
+Seastone Health reported a sudden increase in p95 tail latency and 502 errors on their private VPC. Internal triage identified KV cache growth and GPU memory pressure tied to a new long-sequence batch job. Proposed mitigations: reduce concurrency, lower max_batch_tokens, enable model-variant fallback, and apply a small runtime prefetch patch (JIRA-OPS-9876). Customer authorized a 09:30 maintenance window; SRE will roll changes host-by-host and monitor. Customer requested an exec summary and clarification on SLA crediting if incident persists.

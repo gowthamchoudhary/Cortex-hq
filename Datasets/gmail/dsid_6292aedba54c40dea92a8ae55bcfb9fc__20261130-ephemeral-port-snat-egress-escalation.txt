@@ -1,0 +1,145 @@
+Escalation: FinTract production 5xx/429 surge — suspected SNAT/egress exhaustion
+
+From: ops+infra@fintract.com
+To: rachel_kim@redwood.com
+Date: 2026-11-29T09:12:00-08:00
+Subject: urgent: 5xx/429 spike in production hitting Redwood endpoints
+
+Rachel —
+
+We're seeing a sudden spike in 5xx and 429 responses from your hosted endpoints (us-west-2) beginning ~08:50 PST this morning. Impact: Checkout and background jobs are failing with connection resets and 504s; our customer-facing latency has doubled and we see heavy retry behavior from app tier.
+
+What we have observed so far:
+- Error surface: ~18% 5xx rate for generation endpoints and ~12% 429s for the embedding/bulk endpoints during the surge window.
+- TCP traces: increased retransmits and connection resets; SYN retry counts rising.
+- Topology note: our traffic to Redwood is via a transit VPC -> NAT gateway -> peered VPC to Redwood Dedicated (private).
+
+Attached: FinTract_sre_logs_20261129.tar.gz (SRE logs + tcpdump snippets).
+
+We need immediate help diagnosing whether the problem is on our side (SNAT port exhaustion / transit gateway) or something on Redwood's egress/ingress path. Can we put together a bridge?
+
+— Alex Park
+ops+infra@fintract.com
+SRE Lead, FinTract
+
+From: rachel_kim@redwood.com
+To: ops+infra@fintract.com
+Cc: marissa_cole@redwood.com, jonas_weber@redwood.com, vivek_kulkarni@redwood.com, monica_patel@redwood.com
+Date: 2026-11-29T09:28:00-08:00
+Subject: Re: urgent: 5xx/429 spike in production hitting Redwood endpoints
+
+Alex —
+
+Thanks for the heads up and the logs. Looping in engineering and our SREs to diagnose ASAP. Proposed immediate next steps:
+
+1) Stand up a short bridge (we have availability starting at 12:00 PST).
+2) Engineering will look for correlated 5xx traces and connection-level drops from our side; please keep tcpdumps coming and share any NAT/gateway metrics.
+3) As a temporary mitigation, we can route a subset of FinTract traffic to an alternate pool in us-east while we investigate — this will cost a short failover window but can reduce the retry storm.
+
+Can the FinTract network team check SNAT ephemeral port utilization and your NAT idle timeouts? Common failure mode: SNAT pool exhaustion + short TCP timeouts causing many ephemeral ports to be reused and create connection resets. If that's high, increasing SNAT ports or reducing connection churn will help immediately.
+
+I'll coordinate the bridge and executive update if needed.
+
+Best,
+Rachel Kim
+Account Exec, Redwood Inference
+rachel_kim@redwood.com
++1 415-555-0192
+
+From: jonas_weber@redwood.com
+To: rachel_kim@redwood.com, marissa_cole@redwood.com
+Cc: vivek_kulkarni@redwood.com, monica_patel@redwood.com
+Date: 2026-11-29T09:45:00-08:00
+Subject: Re: urgent: 5xx/429 spike in production hitting Redwood endpoints
+
+Quick status from runtime:
+
+- We see matching 5xx/429 spikes in our ingress logs, concentrated on a handful of dedicated workers serving FinTract's tenant (tenant id masked). The error profile is TIMEOUT/CONN_RESET while tokenizing/first-chunk generation.
+- Trace samples attached: redwood-connection-traces-20261129.json (traces include conn-id and timestamp).
+
+Preliminary hypothesis:
+- Probable SNAT / egress port exhaustion on FinTract's transit path causing TCP resets on initial handshake or during keepalive. That triggers client retries which amplify traffic, exhausting worker queue capacity and producing 429s on our side.
+- We also see a small subset of asymmetric TCP sessions where return path appears via a different node (packet-level TTL differences). That can increase perceived connection failure.
+
+Immediate mitigations we can apply from our side (low-friction, quick):
+- Short-term rate-limiter rules for FinTract to cap concurrent active requests (can be enabled in ~5 minutes for a soft window).
+- Failover routing: divert 15% of traffic to an alternate region/pool with warmed workers to absorb retry load.
+- Increase per-connection timeouts on workers temporarily to tolerate transient resets.
+
+Suggested asks of FinTract network team:
+- Increase SNAT port pool or add additional NAT IPs.
+- Check transit GW connection tracking table and NAT idle timeouts (reduce short idle timeouts that cause port churn).
+- Confirm no firewall ephemeral-port deep inspection that might reset TCP midstream.
+
+I'll prepare the quick mitigations and be on the 12:00 bridge.
+
+— Jonas Weber
+Principal SRE, Redwood Inference
+
+From: sre_lead@fintract.com
+To: rachel_kim@redwood.com, marissa_cole@redwood.com, jonas_weber@redwood.com
+Date: 2026-11-29T10:10:00-08:00
+Subject: Re: urgent: 5xx/429 spike in production hitting Redwood endpoints
+
+Rachel / team —
+
+Thanks for the quick response. We've validated SNAT ephemeral port utilization climbed above 90% during the incident window; NAT idle timeout is set to 60s and our transit GW had connection-tracking high-water marks during the same time. We're already provisioning additional Elastic IPs and asked infra to enlarge the NAT pool.
+
+We can be on the bridge at 12:00 PST. Attached are the tcpdump snippets and NAT metrics (in the tar). We will also check firewall rules for any stateful resets.
+
+— Alex Park
+SRE Lead, FinTract
+ops+infra@fintract.com
+
+From: rachel_kim@redwood.com
+To: marissa_cole@redwood.com, marcus_lin@redwood.com, jonas_weber@redwood.com, vivek_kulkarni@redwood.com, monica_patel@redwood.com
+Date: 2026-11-29T11:05:00-08:00
+Subject: Fwd: urgent: 5xx/429 spike in production hitting Redwood endpoints — bridge scheduled
+
+Team —
+
+Scheduling a 12:00 PST bridge with FinTract SRE + their network ops. Please join: Zoom link in calendar invite (attached exec-bridge-agenda.pdf). High-level asks for the bridge:
+- Confirm FinTract is provisioning additional NAT IPs (short term).
+- We will enable traffic diversion to alternate pool (jonas) and a soft rate-limit (vivek).
+- Decide whether we need an executive-level update (Marcus, please advise if we should elevate to VP level).
+
+I will lead the customer update and will share a short exec note after the bridge.
+
+Thanks,
+Rachel
+
+From: vivek_kulkarni@redwood.com
+To: rachel_kim@redwood.com, marissa_cole@redwood.com, jonas_weber@redwood.com, marcus_lin@redwood.com, monica_patel@redwood.com
+Date: 2026-11-30T16:05:00-08:00
+Subject: Post-bridge notes & follow-ups — FinTract incident (INF-2142)
+
+Follow-up after bridge and mitigation window (summary):
+
+What happened (high level):
+- Root cause: FinTract SNAT ephemeral port exhaustion + aggressive NAT idle timeout led to midhandshake resets and asymmetric returns. That caused a retry amplification pattern from their app tier which overloaded a portion of our warmed worker pool and produced elevated 5xx/429.
+
+Actions taken (what we executed):
+- Enabled a 15% diversion of FinTract traffic to an alternate warmed pool (reduced hot-path load by ~40%).
+- Enabled a conservative per-tenant concurrency cap and a short-term rate limiter (5 minutes warm window).
+- Increased worker-side initial handshake timeout from 3s -> 6s to reduce false-positive timeouts.
+- Created Jira: INF-2142 to track end-to-end fixes and postmortem. Link: https://redwood.atlassian.net/browse/INF-2142
+
+Actions for FinTract (requested):
+- Add additional NAT IPs / enlarge SNAT port capacity (they confirmed in- flight).
+- Increase NAT connection-tracking table size and raise idle timeout to avoid unnecessary churn.
+- Audit firewall/IPS for any midstream TCP resets.
+
+Next steps (owners):
+- FinTract infra: confirm NAT capacity changes and share metrics (alex@fintract).
+- Redwood eng: follow-up on permanent route fallback automation and improved tenant-level backpressure controls (jonas).
+- Customer success: prepare an exec note summarizing impact and restitution for contract review (marissa).
+
+Attachments: bridge recording + logs posted to Drive (https://drive.google.com/drive/folders/1FinTractIncidentLogs).
+
+I'll own INF-2142 and will post a full postmortem once all metrics are in.
+
+— Vivek Kulkarni
+SRE Lead, Redwood Inference
+vivek_kulkarni@redwood.com
+
+

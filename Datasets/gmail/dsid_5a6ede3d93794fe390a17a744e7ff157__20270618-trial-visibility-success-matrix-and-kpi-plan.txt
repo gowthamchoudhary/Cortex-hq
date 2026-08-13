@@ -1,0 +1,134 @@
+POC visibility: success metrics, telemetry owners & timeline
+
+From: Sergio Alvarez <sergio.alvarez@redwood.ai>
+To: Ella Thompson <ella@quantahealth.com>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Jordan Blake <jordan.blake@redwood.ai>
+Date: Fri, 18 Jun 2027 09:12:00 -0700
+Subject: POC visibility: success metrics, telemetry owners & timeline
+
+Hi Ella / Marcus —
+
+Great to meet yesterday. Thanks for the time and for walking us through the Quanta Health pilot goals. Below is a concise recap from our discovery and a proposed observability-forward plan for the two-week trial so we can avoid any visibility gaps.
+
+High-level POC goals (from your side)
+- Validate inference latency and tail behavior for patient-summary generation in production-like traffic
+- Confirm error rates and taxonomy for malformed inputs / rate-limits
+- Ensure audit-grade traceability for requests tied to request_id + patient correlation id
+
+Proposed success criteria (what we'd measure during the trial)
+1) Latency: p95 end-to-end < 200ms for 1–2k concurrent token requests; p99 < 400ms (measured at request boundary)
+2) Erroring requests: < 0.2% of total requests (classification of error types exported)
+3) Throughput: sustained 3k tokens/sec across the trial window without throttling for 95% of minutes
+4) Observability: dashboards populated with request/latency/errrate, traces for request_id, and log export to your GCS bucket with 90-day retention
+5) Security/lineage: mapping of which model variant served each request (model_version tag in logs) and KV-cache hit rate exported to metrics
+
+Telemetry deliverables (first pass)
+- Dashboard: per-route latency heatmap, p50/p95/p99, error-rate trend, requests/sec. Owner: Laura (attaching template)
+- Tracing: 1 span at ingress, 1 span at model invocation, request_id propagated; sampling set to 100% for trial. Owner: Marissa
+- Logs: structured JSON logs (request_id, model_version, tokens_in/out, user_id_hash) forwarded to Quanta GCS bucket. Owner: Jordan
+- Alerts / Acceptance gates: simple alert if p95 > 350ms for > 5 consecutive minutes or error-rate spike > 0.5%. Owner: Laura / Marissa
+
+Timeline & next steps
+- Week of Jul 5: trial start (2 weeks). We can compress if you want an accelerated 7–10 day run.
+- Wed Jun 23: internal kickoff at Redwood to pre-wire dashboards and tracing (Laura/Marissa/Jordan)
+- Fri Jun 25: alignment call with Quanta to confirm S3/GCS path, service account for log sink, and IP allowlist
+
+Attached: redwood-poc-observability-template.xlsx (dashboard + metric names) and QH-mutual-action-plan.docx (M.A.P. draft).
+
+Can you confirm the trial start window (Jul 5 works for us) and that 90-day log retention is acceptable? Also let us know who on your side will own verification of success criteria so we can sync dashboards/permissions.
+
+Thanks,
+Sergio Alvarez
+Enterprise Sales
+Redwood Inference
+
+
+
+From: Ella Thompson <ella@quantahealth.com>
+To: Sergio Alvarez <sergio.alvarez@redwood.ai>
+Cc: Marcus Leone <m.leone@quantahealth.com>
+Date: Sat, 19 Jun 2027 10:05:00 -04:00
+Subject: Re: POC visibility: success metrics, telemetry owners & timeline
+
+Sergio —
+
+Thanks for the clear recap and the attachments. Jul 5 for a two-week run looks good from our PLM side. A few clarifications from us: 
+
+- Log retention: our security team requires 90 days for trial telemetry (that's fine). Can you confirm logs will be written to our GCS bucket under a /redwood-poc/ prefix and that exported logs will be newline-delimited JSON?
+- Dashboards: we need view-only access for two folks (me and Marcus) and a write user for our SRE (Samir Patel). Can you provide a link to a preview dashboard by Jun 25?
+- Acceptance owner: Marcus will be the verification lead on our side, but he wants a simple acceptance matrix (pass/fail per metric) to sign off at trial end.
+- Data flow diagram / PII: our compliance team wanted a diagram showing what metadata Redwood stores during the POC — if you can provide a short one-page sketch that would speed the legal review.
+
+If you can confirm the above and share the meeting invite for Jun 25, we’ll lock in Jul 5 start.
+
+Best,
+Ella Thompson
+Head of Product
+Quanta Health
+
+> On Jun 18, 2027, at 09:12, Sergio Alvarez <sergio.alvarez@redwood.ai> wrote:
+> > Great to meet yesterday. Thanks for the time and for walking us through the Quanta Health pilot goals...
+
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Sergio Alvarez <sergio.alvarez@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Jordan Blake <jordan.blake@redwood.ai>
+Cc: Ella Thompson <ella@quantahealth.com>, Marcus Leone <m.leone@quantahealth.com>
+Date: Mon, 21 Jun 2027 11:30:00 -07:00
+Subject: Re: POC visibility: success metrics, telemetry owners & timeline (owners + acceptance matrix)
+
+Folks —
+
+Thanks, Sergio and Ella. Below I mapped owners to discrete deliverables and sketched an acceptance matrix that Marcus can use to verify results at trial end. I’ll take point on the dashboard preview and will share a dashboard link (read-only) by Jun 25 EOD.
+
+Owners (Redwood)
+- Dashboards & alerts: Laura Bennett (dashboard provisioning, Grafana/Looker layer + read-only link for Quanta)
+- Distributed tracing & sampling: Marissa Cole (ensure request_id propagation and 100% spans for trial)
+- Log export & retention: Jordan Blake (configure sink to Quanta GCS bucket; use /redwood-poc/qh-0421/ prefix; verify newline JSON)
+- Trial coordination & MAP signoff: Sergio Alvarez
+
+Acceptance matrix (pass/fail rows) — short form
+- Latency: p95 < 200ms (pass) | p95 200–350ms (warning) | p95 > 350ms (fail)
+- Error rate: < 0.2% (pass) | 0.2–0.5% (warning) | > 0.5% (fail)
+- Request tracing: 100% sample for trial and trace contains request_id + model_version (pass if >98% of sampled traces have both)
+- Log export: sink active and files present in GCS under agreed prefix within 1 hour of generation
+- Throughput: system sustains 3k tokens/sec 95% of minutes during load window
+
+Tech notes for the Jun 23 internal kickoff
+- We’ll pre-create dashboard panels from template. I’ll populate expected metric names so Marcus can see identical panels during preview.
+- Marissa will deploy a lightweight middleware to propagate request_id and attach model_version tag to the invocation span.
+- Jordan: please confirm service account email we should request for the GCS write ACLs; Ella, we’ll need the service account + destination bucket path.
+
+I’ve attached the dashboard template (redwood-poc-observability-template.xlsx) and will follow with the read-only dashboard URL.
+
+Laura Bennett
+Product Ops — Observability
+Redwood Inference
+
+
+From: Sergio Alvarez <sergio.alvarez@redwood.ai>
+To: Ella Thompson <ella@quantahealth.com>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Jordan Blake <jordan.blake@redwood.ai>
+Date: Fri, 25 Jun 2027 14:05:00 -07:00
+Subject: Re: POC visibility: success metrics, telemetry owners & timeline
+
+Ella / Marcus —
+
+Quick update: Jun 25 alignment call scheduled for 11:00am PT (invite sent). Laura will share the dashboard preview link just before the call; Jordan, please confirm the service account and bucket path in the meeting so we can add ACLs.
+
+Ella, thanks for confirming Marcus as the acceptance owner — we’ll include the pass/fail matrix in the mutual action plan and add a final sign-off step on Jul 19 (two days after trial end).
+
+If anything else comes up beforehand, ping me. Looking forward to a smooth run.
+
+Cheers,
+Sergio
+Enterprise Sales
+Redwood Inference
+
+> -----Original Message-----
+> From: Ella Thompson <ella@quantahealth.com>
+> Sent: Sat, Jun 19, 2027 10:05:00 -04:00
+> To: Sergio Alvarez <sergio.alvarez@redwood.ai>
+> Subject: Re: POC visibility: success metrics, telemetry owners & timeline
+>
+> Sergio — thanks, confirming Jul 5 start and we’ll be on the call Jun 25.
+

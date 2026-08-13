@@ -1,0 +1,119 @@
+Latency & error spike after v2.3 quant profile deploy
+
+From: Alicia Park <apark@cygnus.ai>
+To: Michael Grant <michael_grant@redwood.com>
+Cc: Rajesh Patel <rpatel@cygnus.ai>
+Date: Tue, 17 Jan 2028 09:12:34 -0800
+Subject: Production impact after v2.3 / Q2 quant profile deploy
+
+Hi Michael,
+
+We started seeing significant degradation immediately after the v2.3 model + Q2 quant profile rolled into our production slice at ~08:50 PST. Summary: p99 latency has roughly doubled (from ~210ms -> ~430ms), overall error rate (model decode failures + early terminations) is ~8% across the hot path, and throughput is falling under normal load — downstream queues are backing up.
+
+This is impacting our checkout flow and a subset of high-concurrency endpoints. We can revert, but need confirmation and a rollback window that minimizes customer disruption. Can your team triage ASAP and propose a mitigation? We've attached a trimmed set of traces and the production logs (p99-traces.zip, cygnus-prod-logs-01017.tar.gz).
+
+Appreciate quick alignment — happy to jump on a call.
+
+Thanks,
+Alicia Park
+Director of Applied AI
+Cygnus.ai
+
+[attachment: p99-traces.zip, cygnus-prod-logs-01017.tar.gz]
+From: Michael Grant <michael_grant@redwood.com>
+To: Alicia Park <apark@cygnus.ai>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 17 Jan 2028 09:28:01 -08:00
+Subject: Re: Production impact after v2.3 / Q2 quant profile deploy
+
+Thanks Alicia — I'm looking into this and have looped in engineering and CS. Preliminary ask for your team: can you confirm whether the affected traffic is pinned to the new quant variant only, or if there's mixed traffic? Also please forward a short sample of the request payloads hitting the hot path (redact PII).
+
+Immediate actions we are proposing:
+- Rishi: quick triage on kernel path + decode stalls (risk: Q2 enabling an optimized kernel that regresses under long prompts).
+- If we can't mitigate within 60 minutes, we recommend an emergency rollback to the previous quant profile (v2.2/Q1) during a low-traffic window we can coordinate.
+- CS (Laura & Marissa) to queue a customer-facing status and prepare credits if SLA impacted.
+
+I will host a short technical huddle in 20 minutes. If anyone from Cygnus is on the call, please dial in.
+
+—Michael
+Michael Grant
+Head of Customer Success (Escalations)
+Redwood Inference
+
+[attachment referenced: p99-traces.zip]
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+To: Michael Grant <michael_grant@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Cc: Alicia Park <apark@cygnus.ai>
+Date: Tue, 17 Jan 2028 10:45:12 -08:00
+Subject: Re: Production impact after v2.3 / Q2 quant profile deploy
+
+Quick technical readout from initial trace pass:
+- The Q2 quant profile flips a kernel selection for long-context decoding to a new integer-matmul path. On our infra it shows periodic stalls when the KV cache crosses a 48k token threshold on this model variant.
+- Those stalls explain both the p99 jump and the decode failures (the runtime aborts long-running decode attempts when latency headroom is exceeded).
+- We see error signatures consistent with a miscompiled kernel on a subset of GPU micro-architectures (likely older A-series).
+
+Immediate mitigations that are low-risk:
+1) Serve a mixed routing for affected customers: route 100% of Cygnus hot-path traffic to the legacy quant profile until we patch.
+2) If mixed routing isn't fast enough, perform an emergency rollback of the quant profile on the affected pool (rollback plan attached).
+3) Hotfix: deploy a runtime guard that disables the new kernel selection for models with >32k token sequences while we produce a deterministic kernel fallback (estimated 6–12 hours).
+
+I've attached a short analysis (p99-traces-analysis.txt) and marked the suspected kernel callsites. If Cygnus can confirm the GPU SKU(s) in the affected fleet, that would speed root cause.
+
+—Rishi
+Rishi Malhotra
+Principal Software Engineer, Inference Runtime
+Redwood Inference
+
+[attachment: p99-traces-analysis.txt]
+From: Alicia Park <apark@cygnus.ai>
+To: Michael Grant <michael_grant@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Rajesh Patel <rpatel@cygnus.ai>, Claire Gomez <claire.gomez@cygnus.ai>
+Date: Tue, 17 Jan 2028 11:10:26 -08:00
+Subject: Re: Production impact after v2.3 / Q2 quant profile deploy
+
+Thanks — confirmed this traffic was 100% hitting the Q2 quant variant (we had toggled the rollout flag for the hot-path group). Our fleet runs a mix of A2 and A1 family GPUs (A1 are more common in the affected pools). Attached are sanitized request samples and the thin logs. Impact: checkout latencies doubled for peak customers and we saw several timeouts cascade to backend order processing.
+
+We need two things:
+1) An immediate rollback and a firm timeline for when the prior profile will be restored.
+2) An executive update we can share with our ops & procurement (Claire is on copy).
+
+If you can schedule the rollback in the next 90 minutes that would be ideal.
+
+Alicia
+
+[attachment: cygnus-prod-logs-01017.tar.gz]
+From: Michael Grant <michael_grant@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 17 Jan 2028 12:05:00 -08:00
+Subject: Exec summary & ask: Cygnus production disruption (immediate rollback request)
+
+Internal — short summary for decision:
+- Customer: Cygnus.ai (deal CYG-4781).
+- Impact: p99 latency doubled, ~8% model-level decode errors, throughput collapse on hot endpoints.
+- Root cause (working theory): Q2 quant profile selects an optimized kernel that regresses on A1 GPUs for long prompts, causing stalls and early decode aborts.
+- Proposed action: Emergency rollback to v2.2/Q1 on affected pools, schedule runtime guard patch post-rollback.
+- Customer asks for timeline and an executive update to share with their ops/procurement.
+
+Decision requested: Approve emergency rollback for the affected pool now (rollback window ~5–10 mins to flip models back; we will use traffic-split if safer). Approve offering a one-week service credit if SLAs breached.
+
+—Michael
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Alicia Park <apark@cygnus.ai>, Rajesh Patel <rpatel@cygnus.ai>, Claire Gomez <claire.gomez@cygnus.ai>
+Cc: Michael Grant <michael_grant@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 17 Jan 2028 13:30:14 -08:00
+Subject: Action plan: rollback scheduled + customer communications
+
+Alicia — thanks for the quick confirmations. We will proceed with the following plan:
+
+1) Rollback window: 02:00 UTC (2028-01-18 18:00 PST) — we picked a reduced-traffic slot and it will take ~5–10 minutes to flip the quant profile for the affected pool. If Cygnus prefers an earlier immediate rollback, we can perform a controlled routing-based rollback in the next 30 minutes; confirm and we will run that.
+2) Mitigation: Rishi will push a runtime guard post-rollback; engineering ETA 6–12 hours.
+3) Customer comms: we will send an exec-ready incident note for you to share (DocuSign/status link attached).
+4) Commercial: pending SLA check, we will extend a one-week credit to offset customer impact.
+
+Attached: rollback-plan.docx (technical steps + rollback checklist). Please reply with a single-line ack or call the on-call chain if you want the immediate routing rollback instead.
+
+- Marissa Cole
+Account Executive, Strategic Accounts
+Redwood Inference
+
+[attachment: rollback-plan.docx]

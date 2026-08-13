@@ -1,0 +1,121 @@
+Private deployment safety rails, version triage and customer comms
+
+From: Sara Lowe <sara.lowe@acmehealth.com>
+To: Rishi Malhotra <rishi@redwood.com>, Monica Patel <monica_patel@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: 
+Date: Fri, 14 Jun 2028 09:23:00 -0700
+Subject: Re: Upcoming maintenance window & pinning question
+
+Hi Rishi / team,
+
+We're planning a maintenance window for our Private deployment of the Redwood runtime the week of July 9. Before we lock dates, two asks from our side:
+
+1) We need a clear version-gating plan so we know which nodes will be allowed to pick up a new bundle vs which remain pinned. Our compliance team requires an explicit canary and rollback plan.
+2) We operate in a regulated environment — any recommended communication templates and SLA impacts would be helpful.
+
+Can you propose a short triage/playbook that covers pinning strategy, quick rollback criteria, and comm cadence? We prefer a low-risk approach: small canary (1-2 hosts), 24h observability window, then progressive roll.
+
+Thanks,
+Sara
+Sara Lowe
+Operations Lead, Acme Health
+
+--
+Attachments: none
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Sara Lowe <sara.lowe@acmehealth.com>, Monica Patel <monica_patel@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Naomi Feldman <naomi_feldman@redwood.com>
+Date: Fri, 14 Jun 2028 11:05:12 -0700
+Subject: Re: Upcoming maintenance window & pinning question
+
+Sara — thanks for the heads up. I've sketched a conservative triage + comms plan below and attached a version-gating matrix for the Acme fleet. High-level:
+
+- Pinning model: all customer production clusters start pinned to the current GA bundle. We create a canary variant (canary bundle) and only target it to 1-2 non-critical hosts per cluster in a single AZ.
+- Canary observation: 24h metrics + automated health checks (latency/tail-latency, error-rate, kv-cache hit rate).
+- Rollback criteria: if 3+ SLO breaches within the window OR any data-path errors (KV corruption, persistent OOM), trigger an immediate rollback to the pinned bundle.
+- Progressive rollout: after 24h stable canary, expand to 20% of capacity, watch 48h, then full at 48–72h with a staggered 10% step schedule.
+- Emergency escape: immediate pin-shelve (freeze new scheduling) + manual drain of canary hosts if rollback triggers.
+
+Attachments: version-gating-matrix.xlsx (matrix mapping components to pin/fallback behavior)
+Links: runbook draft at https://drive.google.com/drive/folders/0A1B2C3D/Private-Upgrade-Runbook
+
+Communications suggestion: short pre-window notice (48h) with explicit impact, then a mid-window status at 50% canary completion, and a post-window summary. Draft comms attached (comm-draft.md).
+
+I propose we run a tabletop with Acme and Redwood SRE next Tue to walk the matrix. Requested owners: Monica (rollback ops), Jonas (network gating & BGP/route failover preflight), Naomi (security sign-off for keys/rotation).
+
+Notes: I added Naomi on cc for KMS/HSM gating questions — Naomi, can you validate the key rotation sequence for the canary?
+
+--
+Rishi Malhotra
+Head of Field Reliability, Redwood Inference
+Attachments: version-gating-matrix.xlsx
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Rishi Malhotra <rishi@redwood.com>, Sara Lowe <sara.lowe@acmehealth.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Naomi Feldman <naomi_feldman@redwood.com>
+Date: Fri, 14 Jun 2028 13:47:38 -0700
+Subject: Re: Upcoming maintenance window & pinning question
+
+Thanks Rishi — this is a great start. A few operational additions from my side:
+
+- Escalation ladder: if rollback criteria met, first response is automated rollback by the scheduler, then page the on-call SRE (pager: PIN-ops) and the Acme oncall. If the automated rollback fails after 30m, open an incident and escalate to engineering lead.
+- Network gating: during canary we should ensure control-plane traffic uses a pinned set of routers. Jonas, please confirm BGP route advertisements will not be changed during canary to avoid asymmetric routing.
+- Grace period for DB migrations: any schema bump must be gated behind a feature-flagged migration and cannot be part of canary.
+
+I've filed a tracking ticket: https://redwood.atlassian.net/browse/PIN-4521 (private-upgrade-triage).
+
+Additional suggested rollback checklist (attached as PDF) — includes immediate steps, communication templates, and a post-mortem stub.
+
+Monica
+Senior Reliability Engineer, Redwood Inference
+
+Attachments: rollback-checklist.pdf
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Rishi Malhotra <rishi@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Cc: Sara Lowe <sara.lowe@acmehealth.com>, Naomi Feldman <naomi_feldman@redwood.com>
+Date: Fri, 14 Jun 2028 15:10:05 -0700
+Subject: Re: Upcoming maintenance window & pinning question
+
++1 on everything — couple small asks from networking:
+
+- We'll prepare a preflight checklist to validate route tables, firewall rules, and DNS TTL lowering. I recommend lowering DNS TTLs to 60s one business day before canary to reduce cutover latency risk.
+- Can we get a list of the IP blocks Acme wants to keep pinned for control traffic? We'll shard BGP announcements to avoid a single point of failure.
+
+Naomi - can you confirm if the KMS access pattern during canary needs scoped temporary credentials for auditors? If yes, we'll coordinate with procurement for exception paperwork.
+
+Jonas
+Network Lead, Redwood Inference
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Sara Lowe <sara.lowe@acmehealth.com>, Monica Patel <monica_patel@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Naomi Feldman <naomi_feldman@redwood.com>, ops@acmehealth.com
+Date: Sat, 15 Jun 2028 08:30:00 -0700
+Subject: Re: Upcoming maintenance window & pinning question -- final plan and next steps
+
+Team — small update after reading Monica and Jonas:
+
+1) I've merged Monica's rollback ladder into the matrix and attached the comm draft (comm-draft.md).
+2) Proposed schedule for Acme:
+   - July 9, 02:00–06:00 UTC: canary rollout to 1–2 hosts per cluster (non-prod hosts first).
+   - July 9–10: 24h canary observation period.
+   - July 10, 02:00–08:00 UTC: progressive 20% -> 50% expansion (48h monitoring windows).
+   - July 12: full fleet, staggered 10% step until 100% (abort on criteria).
+
+3) Action items:
+   - Monica: lead rollback ops and confirm automated rollback playbooks (PIN-4521).
+   - Jonas: prepare network preflight + list of pinned IP blocks by 2028-06-18.
+   - Naomi: confirm KMS access pattern and whether temporary scoped creds are needed by 2028-06-17.
+   - Acme (Sara): confirm acceptance of the schedule and any blackout windows where you require zero changes.
+
+4) I'll schedule the tabletop for Tue 2028-06-18 16:00 UTC and share a dial-in. Please review the attached files before then.
+
+If there are no objections, I'll publish the comms template to Acme and start the ticket flows.
+
+Thanks — Rishi
+
+Rishi Malhotra
+Head of Field Reliability, Redwood Inference
+---
+Attachments: comm-draft.md

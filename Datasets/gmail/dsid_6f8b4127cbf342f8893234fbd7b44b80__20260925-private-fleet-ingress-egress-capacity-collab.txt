@@ -1,0 +1,118 @@
+Private fleet ingress/egress budgeting and throughput parallelism
+
+From: Ellen Park <ellen@acme.com>
+To: david_kim <david.kim@redwood.com>
+Cc: SRE Team <sre@acme.com>
+Date: Fri, 25 Sep 2026 09:12:00 -0700
+Subject: Private fleet throughput profile + egress constraints
+
+Hi David —
+
+Thanks for taking the time. As we discussed in the call, Acme is evaluating a private VPC deployment for two mission-critical services (inference for perception and a reranker). We attached a small traffic sample (CSV) with token distribution and peak qps windows. Quick asks: 
+
+- Can Redwood provide a first-pass capacity estimate (GPU count by class and provisioning pattern) to meet a sustained 1.2k qps peak with 95th p50 latency <= 180ms?
+- What is a safe egress budget (GB/day) we should procure given the sample?
+- What minimum warm-pool size and cold-start tolerance do you recommend for our SLA?
+
+We're on a tight procurement timeline — CFO needs a cost+network ask by EOD next week. Appreciate a short write-up and any assumptions you need.
+
+Attachments: acme-traffic-sample-2026.csv (CSV, 45KB)
+
+Thanks,
+Ellen Park
+Head of Infrastructure, Acme Robotics
+ellen@acme.com
+
+
+From: david_kim <david.kim@redwood.com>
+To: Ellen Park <ellen@acme.com>
+Cc: karthik_iyer <karthik.iyer@redwood.com>, irene_choi <irene.choi@redwood.com>
+Date: Fri, 25 Sep 2026 11:08:00 -07:00
+Subject: Re: Private fleet throughput profile + egress constraints
+
+Ellen —
+
+Appreciate the sample. I pulled together a short first-pass estimate below (high-level assumptions first):
+
+Assumptions
+- Model mix: 70% perception (context 1k tokens, base open model), 30% reranker (short context, heavy cross-attention).
+- Effective tokens/response: perception avg 900 tokens, reranker avg 120 tokens.
+- Batch/latency trade: target 95th p50 <= 180ms, allow batching up to 8 for perception at peak.
+- Network: 1.2k qps sustained peak, 3x short burst headroom. Egress cost counted as outbound payload only.
+
+First-pass capacity (sustained target 1.2k qps)
+- GPU class assumed: A100-series (quantized FP16 path).
+- Estimated concurrent generation tokens/s: ~1.1M tokens/s across fleet (from sample) => ~12 A100s for inference if using aggressive batching and KV cache sharing.
+- Warm-pool recommendation: 20% of fleet (~3 GPUs) kept hot to absorb burst headroom.
+- Admission control: add a 30% safety margin for headroom and degradation handling => suggest provisioning 16 GPUs as committed capacity, with autoscale for bursts up to 20.
+
+Egress budgeting
+- Based on sample, average response payload ~2.2KB (after compression). At 1.2k qps sustained: ~2.3GB/hour => ~55GB/day. Add 50% buffer for logs, retries, and auxiliary metadata => budget ~85GB/day.
+
+Open questions I need to finalize numbers:
+1) Can you confirm the model variants (any quantized-only constraints)?
+2) Is cross-account egress (to downstream analytics) counted inside your datacenter bandwidth or is it charged separately?
+
+I attached a provisioning estimate workbook (redwood-provisioning-estimate.xlsx) with the math. Karthik/Irene — can you review the GPU rightsizing and the network assumptions and flag anything I'm oversimplifying?
+
+Next step: If these align, we can translate into a firm procurement ask and a staging run to validate queueing latency. Happy to set a 30-minute slot next week for a sizing walkthrough.
+
+Best,
+David Kim
+Solutions Architect, Redwood Inference
+david.kim@redwood.com
+
+Attachments: redwood-provisioning-estimate.xlsx (XLSX, 120KB)
+From: karthik_iyer <karthik.iyer@redwood.com>
+To: david_kim <david.kim@redwood.com>, Ellen Park <ellen@acme.com>
+Cc: irene_choi <irene.choi@redwood.com>
+Date: Fri, 25 Sep 2026 13:37:00 -07:00
+Subject: Re: Private fleet throughput profile + egress constraints
+
+David / Ellen —
+
+Quick technical sanity check on the numbers and a few caveats from infra side: 
+
+Sizing caveats
+- The 12 GPU estimate lines up if we assume per-GPU token throughput of ~90k tokens/s for the chosen model and our batching heuristics; that number drops if sequence length variance spikes — recommend we run a synthetic on your real sample to measure tail behavior.
+- I recommend allocating at least 2 dedicated NICs per GPU host for isolation (one for control plane, one for inference traffic). If Acme requires encryption-in-flight with per-request TLS termination inside the fleet, budget CPU headroom + ~5-7% network overhead.
+
+Autoscale & warm-pool
+- Warm-pool at 20% is sensible. For on-prem, we suggest a multi-stage warmup: keep a keeper-queue of prepared KV caches for top-3 model variants to avoid token-level cold starts. This reduces cold-start latency from hundreds of ms to tens.
+
+Network egress math (sanity)
+- Confirmed David's payload estimate. If you plan to stream partial responses, multiply the egress by ~1.6x. Also consider chunked-encoding overhead for long responses.
+
+Operational runbook note
+- During the staging test, capture token-level tracing and kernel-utilization samples. We should instrument per-GPU GPU_util, NIC_tx, and scheduler_queue_depth. Set thresholds so the autoscaler triggers before queue depth causes latency degradation.
+
+Irene — please add any runtime/quantization implications (I flagged FP16 path above).
+
+-Karthik
+Principal Infra Engineer, Redwood
+
+
+From: Ellen Park <ellen@acme.com>
+To: david_kim <david.kim@redwood.com>
+Cc: karthik_iyer <karthik.iyer@redwood.com>, irene_choi <irene.choi@redwood.com>, SRE Team <sre@acme.com>
+Date: Fri, 25 Sep 2026 16:04:00 -07:00
+Subject: Re: Private fleet throughput profile + egress constraints
+
+Thanks — that helps a lot. Couple of quick confirmations so procurement can proceed: 
+
+- Model variants: Perception will run the quantized FP16 variant, reranker is FP32 for now.
+- Egress accounting: Everything leaving our VPC to third-party analytics is billed separately; outbound responses to our app are what we want to size for (so David's 85GB/day with buffer looks good).
+- Staging test: Yes — please schedule the 30-minute sizing walkthrough plus a 2-hour staged soak with SRE next Tue 10/5. SRE will share a runbook and will need the network egress estimates in-network and cross-account.
+
+Action items (summary)
+- David: finalize provisioning workbook and add a column for FP32 vs FP16 throughput and per-GPU NIC sizing. (Due: Mon 9/28 EOD)
+- Karthik: prepare a run-template for the synthetic tail tests and NIC isolation diagram. (Due: Mon 9/28 EOD)
+- Acme SRE: share egress billing cut-offs and confirm if downstream analytics egress is separate.
+
+We attached a short network note from our infra team (network-egress-budget.txt) for reference. Looking forward to the walkthrough.
+
+Best,
+Ellen
+Head of Infrastructure, Acme Robotics
+
+Attachments: network-egress-budget.txt (TXT, 8KB)

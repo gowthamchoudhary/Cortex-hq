@@ -1,0 +1,152 @@
+Model footprint runway — dedicated capacity recommendations and quantization tradeoffs
+
+From: Samuel Reed <samuel.reed@aurelianbio.com>
+To: Kimberly Park <kimberly@redwood.ai>
+Date: Tue, 25 Aug 2026 09:12:00 -0700
+Subject: Quick sizing question for Dedicated capacity (model variants + long context)
+
+Hi Kimberly,
+
+Thanks for the demo last week — the team was impressed. We're starting to scope committed capacity for a production pilot (Q4). High level:
+- Primary model: ‘Aurelian-70B’ (open foundation fork, roughly same architecture/size class as other 70B-family models).
+- Two variants: low-latency q8-ish distillation for short answers, and a high-context variant (32k) for long retrieval-augmented generation (RAG).
+- Expected steady-state traffic: 1.5 qps average, peak 6 qps sustained during business hours. Concurrency target: 20 concurrent active sessions for the long-context RAG flows.
+
+We need a recommended committed configuration (GPU types and count) plus a pricing ballpark to include in our procurement packet. Also — any notes on quality tradeoffs if we push aggressive quantization (q4) vs q8 for their high-context variant?
+
+Can you folks help turn this into a recommended runway (committed pool + burst) so procurement can evaluate?
+
+Thanks,
+Sam
+Samuel Reed
+Head of ML Engineering, Aurelian Bio
+samuel.reed@aurelianbio.com
++1 (415) 555-0123
+
+P.S. we can share model artifacts if needed; attaching a simple traffic snapshot in the follow-up if that helps.
+From: Kimberly Park <kimberly@redwood.ai>
+To: Samuel Reed <samuel.reed@aurelianbio.com>
+Date: Tue, 25 Aug 2026 11:05:00 -07:00
+Subject: Re: Quick sizing question for Dedicated capacity (model variants + long context)
+
+Sam — thanks, this is great context.
+
+We can definitely put together a committed pool recommendation and two sizing options (conservative and cost-optimized). Two quick asks to make estimates tight:
+1) Can you confirm expected p50/p95 request lengths for the RAG calls (prompt + response)? That changes KV cache sizing.
+2) Are you planning to use full KV caching per request (sticky sessions) or a prefix-caching strategy (shared retrievals)?
+
+I've attached a small template to capture the traffic/latency targets — if you fill that out I can run exact numbers with Marcus.
+
+Next step: I'll loop in Marcus Lin (serving/footprint) and Jordan Blake (capacity planning) to produce the runway and options.
+
+Best,
+Kimberly Park
+Director, Solutions Engineering — Redwood Inference
+kimberly@redwood.ai
+
+Attachments: aurelian_memory_estimates_template.xlsx (xlsx)
+From: Kimberly Park <kimberly@redwood.ai>
+To: Marcus Lin <marcus@redwood.ai>, Jordan Blake <jordan@redwood.ai>
+Cc: Mina Haddad <mina@redwood.ai>
+Date: Wed, 26 Aug 2026 08:32:00 -07:00
+Subject: Fwd: Quick sizing question for Dedicated capacity (model variants + long context)
+
+Marcus / Jordan — forwarding Sam's ask. Short summary for the playbook:
+- Customer 'Aurelian Bio' intends to commit to Dedicated reserved capacity for a mix of 70B-class model variants.
+- Two workload patterns: (A) low-latency short context (q8-optimized) and (B) long-context RAG at 32k with sticky KV for sessions.
+- Traffic: avg 1.5 qps, peak 6 qps, concurrency target 20 for long flows.
+
+Please produce:
+1) A recommended committed pool (GPU type & count) with headroom for QPS peaks + 20% runway.
+2) A cost-optimized alternative that relies on more aggressive quantization + burst to hosted for non-critical tail.
+3) Callouts for quality and latency tradeoffs (q4 vs q8, KV offload implications).
+
+I attached their filled template and a one-pager draft — please reply with numbers and a short narrative I can share with procurement.
+
+Thanks,
+Kim
+
+--- Forwarded message attached above ---
+
+Attachments: rdw_dedicated_option_summary.pdf (pdf), aurelian_memory_estimates_template.xlsx (xlsx)
+From: Marcus Lin <marcus@redwood.ai>
+To: Kimberly Park <kimberly@redwood.ai>, Jordan Blake <jordan@redwood.ai>
+Cc: Mina Haddad <mina@redwood.ai>
+Date: Thu, 27 Aug 2026 14:10:00 -07:00
+Subject: Re: Fwd: Quick sizing question for Dedicated capacity (model variants + long context)
+
+Team — did a quick first-pass footprint and options. I kept the math conservative and included assumptions so we can adjust. High level takeaways first, then numbers.
+
+Assumptions (rounded):
+- Model class: 70B parameters. FP16 full weights ≈ 140 GB. Quantized q4_0 weights ≈ 38–45 GB depending on format/packing; q8-ish variant ≈ 70–80 GB.
+- KV cache: long-context (32k tokens) per concurrent session ≈ 20–28 GB of KV memory (depends on layer count and per-token KV footprint). I used 24 GB/session for estimates.
+- Serving config: we aim for p50 latency targets under 400 ms for short flows and under 700 ms for long RAG (with retrieval).
+- GPU options considered: H100 80GB, A100 80GB, and 48GB-class (for burst/offload). H100 and A100 behave similarly for memory accounting; H100 gives better multistream performance.
+
+Option A — Performance-first (recommended for pilot with predictable latency):
+- Use H100 80GB reserved pool. Each GPU can host one 70B q4_0 model + 1 long-context concurrent session (32k) without KV offload.
+- Per-instance memory budget: q4 weights 40 GB + KV 24 GB + runtime/overhead ~8 GB => ~72 GB total.
+- To meet concurrency 20 long-context sessions concurrently => 20 GPUs. Add 20% headroom => 24 H100 GPUs reserved.
+- Short-context q8 variants: colocate as separate containers (weights ~75 GB) — can squeeze one q8 short-worker per H100 if not contending with long flows, otherwise prefer mixing via routing policies.
+
+Option B — Cost-optimized committed + burst to hosted:
+- Reserve A100 80GB equivalent, size for baseline concurrency 12 long-context sessions (12 GPUs) + 25% headroom => 15 GPUs reserved. Peak handled by bursting to Redwood hosted tier or by autoscaling non-committed GPU pool.
+- Aggressive quantization: if the customer is willing to accept q4 for the short-variant as well, we can pack 1.5–2x short-serving containers per GPU for baseline traffic.
+- Tradeoff: q4 reduces model size ~3x vs FP16 but can introduce subtle generation quality differences for the most sensitive prompts — plan for an evaluation harness and a small A/B test before full switch.
+
+Option C — Mixed offload strategy (lower capex footprint):
+- Use 48GB-class GPUs in the reserved pool and rely on KV offload (NVMe/host memory) for long-context requests. That reduces reserved GPU count but increases p95 latency ~200–400ms and operational complexity. Estimated reserved count: 28 x 48GB GPUs to cover 20 concurrent long-context sessions with KV offload and higher CPU/IO provisioning.
+
+Numbers summary table (rounded):
+- Performance-first (H100): reserved = 24 H100 80GB (commit) — supports 20 concurrent 32k long sessions with 20% runway.
+- Cost-optimized (A100 + burst): reserved = 15 A100 80GB (commit) + hosted burst.
+- Offload (48GB): reserved = 28 x 48GB + NVMe offload.
+
+Quality/quantization notes:
+- q4_0 gives the largest memory win (weights drop ~3x) making single-GPU serving for 70B + 32k context feasible. However, q4 artifacts can appear on edge cases (hallucination patterns, tokenization differences). Recommend a 2-week eval on a representative prompt set.
+- q8-ish formats have smaller memory savings but preserve fidelity better — a good middle ground for customer-facing flows that are quality-sensitive.
+- KV offload is viable but increases tail latency and operational surface (monitoring of NVMe throughput and failure modes).
+
+Recommended ask for procurement packet:
+1) Option A pricing (24 H100 reserved) — call this baseline for SLA-backed latency.
+2) Option B pricing (15 A100 reserved + hosted burst) — call this cost-optimized.
+3) A short technical annex describing quantization risks, the evaluation plan (A/B tests), and an operations runbook for KV offload.
+
+I attached a spreadsheet with the per-GPU math and a short one-pager. If they share the model artifact we can run an exact micro-benchmark on our staging H100s and tighten numbers.
+
+Action items:
+- Kimberly: share both options with Sam/procurement and request permission to run a micro-benchmark on their model artifact.
+- Jordan: please validate the reserved GPU counts against our capacity pool and give a runbook for burst fallbacks (hosted endpoints).
+
+Marcus
+Senior Systems Engineer — Serving Runtime, Redwood Inference
+marcus@redwood.ai
+
+Attachments: rdw_memory_calculations_v1.xlsx (xlsx)
+From: Kimberly Park <kimberly@redwood.ai>
+To: Samuel Reed <samuel.reed@aurelianbio.com>
+Cc: Marcus Lin <marcus@redwood.ai>, Jordan Blake <jordan@redwood.ai>, Mina Haddad <mina@redwood.ai>
+Date: Sun, 29 Aug 2026 16:43:00 -07:00
+Subject: Re: Quick sizing question for Dedicated capacity (model variants + long context)
+
+Sam — following up with our recommended options and next steps. Short summary below; full attachments and the spreadsheet are in the Drive link.
+
+Summary of recommended runway:
+- Performance-first (recommended for SLA): 24 H100 (80GB) reserved — predictable p50/p95 latency and supports 20 concurrent 32k sessions.
+- Cost-optimized (recommended if procurement prefers lower up-front commitment): 15 A100 (80GB) reserved + hosted burst autoscale — lower commit but requires reliance on hosted fallback during sustained peaks.
+- If you need the lowest committed dollar: we can size on 48GB GPUs with KV offload (28 GPUs) but expect higher p95s and more ops work.
+
+Next steps:
+1) Please confirm which option procurement prefers to price.
+2) Grant us access to a representative model artifact or a 1–2 hour inference container so we can run microbenchmarks (this will let us convert the H100/A100 numbers into tighter cost estimates).
+3) We'll include a short evaluation plan (A/B test for q4 vs q8) and a one-page appendix on operational impacts for KV offload.
+
+I can present the two options to procurement as early as Wednesday if we get model access.
+
+Thanks — Kim
+Kimberly Park
+Director, Solutions Engineering — Redwood Inference
+kimberly@redwood.ai
++1 (650) 555-0189
+
+Attachments/Links: https://drive.redwood.ai/drive/folders/committed-capacity/RDW-2026-1247, rdw_dedicated_option_summary.pdf (pdf)

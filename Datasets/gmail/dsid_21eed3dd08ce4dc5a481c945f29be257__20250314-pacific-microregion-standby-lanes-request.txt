@@ -1,0 +1,108 @@
+APAC/EU standby lanes for Skybound — microregion pool sizing & triggers
+
+From: Maria Chen <maria@skybound.ai>
+To: Evelyn Hart <evelyn_hart@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: Tue, 11 Mar 2025 09:12:00 -0700
+Subject: Sizing ask: APAC + EU low-latency coverage for Skybound predictive inference
+
+Evelyn / Ben —
+
+Thanks again for the demo last week. We ran a quick internal estimate and want to understand what a committed, tri-geography standby configuration would look like for Skybound. The ask is: cover our predictive-inference peak windows in APAC (SG/HK), provide a Frankfurt fallback for GDPR workloads, and maintain a US east standby for burst.
+
+High-level targets (starting point from our side):
+- Sustained inference for 3 models: 4k token avg, 200 qps aggregate at peak
+- Latency target: 150–250ms p50 for APAC users
+- Night/day offsets: APAC peak overlaps EU off-peak; we expect 40% cross-region spill
+
+Can you share: a) recommended dedicated pool sizing per region, b) safety buffer and warm-standby strategy, c) rollout cadence and expected procurement lead times?
+
+Attaching our forecast and a quick traffic sketch. Happy to hop on a call if helpful.
+
+—Maria
+Maria Chen
+VP Engineering, Skybound Analytics
+attachments: skybound_demand_forecast_q2-q4.xlsx
+
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Maria Chen <maria@skybound.ai>
+Cc: Ben Carter <ben_carter@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Irene Choi <irene_choi@redwood.com>
+Date: Wed, 12 Mar 2025 10:22:00 -0700
+Subject: Re: Sizing ask: APAC + EU low-latency coverage for Skybound predictive inference
+
+Maria — thanks for the clear ask and the forecast. Quick summary of what we recommend based on your forecast and the 40% spill assumption:
+
+Proposed dedicated pools (initial commit, month 1):
+- APAC (Singapore primary, 1 warm HK edge): 16x H100-equivalent GPUs (8 nodes of 2x H100 or 16x A100 80GB equivalent with quantization)
+- EU (Frankfurt fallback): 6x A100 80GB (3 nodes) configured for GDPR workloads and isolated logging
+- US (Ashburn standby): 4x A100 (2 nodes) for burst and cross-region failover
+
+Operational safety buffers and policies:
+- Buffer: 20% capacity headroom (hot spare on APAC) to absorb demand spikes; additional 10% cold reserve that can be warmed within 30–60 min
+- Routing: primary by region, automatic failover to nearest fallback region based on latency + compliance tags
+- Prefix caching: enable KV/prefix cache on APAC primary to reduce token compute by ~12–18% for repeated session patterns
+
+Triggers & rollout cadence (deal-linked):
+- T0 (SOW signed + 25% prepay): provision APAC primary pool (16 GPUs) + baseline EU/US reserved nodes (total 26 GPUs)
+- T1 (30 days usage > 60% sustained for 3 days): spin up cold reserve to cover +10% within 48 hours
+- T2 (60 days or MRR milestone $X reached): convert cold reserve to hot capacity and add additional 8 GPUs in APAC
+
+Procurement / lead times:
+- Cloud-native reserved pools (preferred): 7–14 days to provision and validate; H100-backed shapes may add 3–5 days if we need capacity sourcing
+- On-prem or contracted dedicated hardware: 6–10 weeks (we generally avoid this for initial pilots)
+
+I attached a short proposal PDF with the math and a spreadsheet that maps your forecast to weekly capacity needs. If that aligns I can loop in operations to validate procurement timelines and costs.
+
+Next steps:
+- Maria: confirm which compliance lane (GDPR strict vs standard EU) for datasets processed in Frankfurt
+- Ben / Karthik / Irene: ops feasibility and cost delta (see attachments)
+
+Thanks,
+Evelyn Hart
+Director, Strategic Accounts — Redwood Inference
+attachments: redwood_pool_proposal_skybound_v1.pdf
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Evelyn Hart <evelyn_hart@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Irene Choi <irene_choi@redwood.com>
+Date: Thu, 13 Mar 2025 08:41:00 -0700
+Subject: Re: Sizing ask: APAC + EU low-latency coverage for Skybound predictive inference
+
+Quick add — the math in the proposal looks right to me. Two operational asks:
+
+1) Can Ops confirm a realistic SLA/validate latency numbers when APAC primary + Frankfurt fallback are both under 60% load? We want to avoid surprises when failover happens.
+2) We should include a short contract clause for rapid scale triggers (T1/T2 above) and pre-commit credits for converting cold reserve to hot. Ops: please give us an estimate of the monthly incremental cost to flip +8 GPUs in APAC (hot) vs keeping them cold.
+
+If Ops can give numbers by EOD Friday we can propose the initial SOW terms next week.
+
+—Ben
+Ben Carter
+Senior Account Executive — Redwood Inference
+
+From: Irene Choi <irene_choi@redwood.com>
+To: Ben Carter <ben_carter@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Fri, 14 Mar 2025 16:45:00 -0700
+Subject: Re: Sizing ask: APAC + EU low-latency coverage for Skybound predictive inference
+
+Ben / team — ops confirmation below (short):
+
+Feasibility & timelines:
+- Singapore (cloud reserved H100): 10–12 days to provision and run validation; we can allocate hot capacity from our dedicated pool if approved in week 1
+- Hong Kong edge (warm standby): 48 hr warm-up window using warm images and cached KV to meet your 150–250ms p50 target once warmed
+- Frankfurt (EU): 5–7 days to provision A100 reserved nodes with GDPR isolation profiles
+- Ashburn (US): 3–5 days to provision standby nodes
+
+Cost delta (approx, monthly incremental) for converting +8 GPUs in APAC from cold -> hot:
+- Cold reserve (warmed within 48–72h): ~$6000/mo for software and reserved metadata + minimal compute carry cost
+- Hot capacity (instances fully provisioned/available): ~$38,000/mo for 8x H100-equivalent (includes higher I/O and tracing retention)
+
+Operational notes:
+- We recommend a canary window for failover testing (scheduled low-traffic hour) before moving to full auto-failover.
+- We can support a contract addendum: 48 hr scale-to-hot SLA with a pre-signed addendum and 25% capacity prepay to guarantee procurement priority. Doc links below.
+
+Next steps:
+- Evelyn: confirm compliance lane for EU processing and signoff to start APAC provisioning at T0 once SOW is accepted.
+- Ben: include the 48 hr scale SLA language and the cold->hot pricing table in the SOW draft.
+
+Irene Choi
+Head of Capacity Planning — Redwood Inference
+related_links: https://app.hubspot.com/deals/12345/SB-2025-379

@@ -1,0 +1,117 @@
+Service redirect advisory — EU & APAC impact and customer action plan
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Paul Simmons <ops@acmemedia.com>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Markus Klein <markus_klein@redwood.ai>
+Date: Tue, 14 May 2029 09:12:00 -0700
+Subject: Service redirect advisory — EU & APAC impact and customer action plan
+
+Paul —
+
+We detected a provider-level networking degradation impacting a subset of endpoints in EU-central and APAC-west regions. The incident is affecting session creation and occasional 5xxs for inference requests routed to those regions. Our on-call team has confirmed the root provider issue and we are executing a short-lived service redirect to healthy endpoints to preserve availability.
+
+What this means for Acme Media:
+- Short term: Requests that would normally land in EU/APAC will be redirected to nearby healthy zones (EU -> EU-nearest-zone or US-west as fallback; APAC -> APAC-nearest-zone or US-west as fallback) via our smart routing layer.
+- Expected impact: Latency increase for some endpoints (typical added tail latency 40–120ms) and potential token throughput reduction if your traffic exceeds current capacity in fallback zones.
+- What we need from you: Please confirm if you allow cross-region fallback for your production traffic. If you require strict region-only routing, we will open a high-touch escalation to the provider and keep your traffic pinned (but availability may be reduced).
+
+Immediate actions we are taking:
+1) Smart routing policy activation at 09:20 PDT to shift new sessions off affected provider POPs.
+2) Autoscale headroom enabled for your Dedicated pools for the next 72 hours.
+3) Prefix cache warm-up for in-flight sessions to reduce token re-computation.
+4) A customer-facing redirect diagram and step-by-step checklist (attached).
+
+Attachments: eu-apac-redirect-diagram.pdf, customer-step-by-step-checklist.txt
+
+If you confirm cross-region fallback, we will proceed at 09:20 PDT. If you prefer to remain pinned, reply with PIN-ONLY and we will preserve locality but expect degraded availability until the provider resolves their network issue.
+
+I will be on the call with our infra team at 09:25 to coordinate.
+
+— Rishi
+Sr. Solutions Engineer
+Redwood Inference
+
+From: Paul Simmons <ops@acmemedia.com>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Tue, 14 May 2029 09:37:00 -0700
+Subject: Re: Service redirect advisory — EU & APAC impact and customer action plan
+
+Thanks Rishi —
+
+We give you permission to fallback across regions for production traffic while the provider works this out. Latency is preferable to partial outages for our real-time personalization flows. Please call out any endpoints we should whitelist or IPs to expect. Also keep us posted about billing impact if cross-region routing incurs additional costs.
+
+—Paul
+Head of Platform, Acme Media
+Ops: +1 415 555 0189
+
+On Tue, May 14, 2029 at 9:12 AM Rishi Malhotra <rishi_malhotra@redwood.ai> wrote:
+> Paul —
+> 
+> We detected a provider-level networking degradation impacting a subset of endpoints in EU-central and APAC-west regions...
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>, Markus Klein <markus_klein@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 14 May 2029 10:05:00 -0700
+Subject: Re: Service redirect advisory — EU & APAC impact and customer action plan
+
+Rishi — quick ops notes from infra on the call:
+- We will flip the routing policy at 09:20 PDT using the emergency routing flag; this creates a short period of re-home for active sessions (~15s) but is safe.
+- Autoscale: we've pre-warmed 2x capacity for Acme's dedicated pools in fallback zones; additional bursts will require manual approval.
+- DNS TTLs: advise customers to keep traffic to the API hostnames — we will handle the redirect transparently; no DNS changes required.
+
+Markus — please prepare a quick note for accounting on potential cross-region egress billing so we can proactively share numbers with Acme (estimate attached).
+
+—Laura
+Director, Site Reliability
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Paul Simmons <ops@acmemedia.com>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Markus Klein <markus_klein@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, CloudPartner Integrations <partners@cloudpartner.com>
+Date: Tue, 14 May 2029 12:20:00 -0700
+Subject: Re: Service redirect advisory — EU & APAC impact and customer action plan
+
+Paul — thanks for the quick confirmation. We are proceeding with the cross-region fallback now. Summary of customer-facing steps we executed and what to expect: 
+
+1) Activation summary (executed 09:20 PDT): smart-routing flag set to: allow_cross_region_fallback=true for Acme account.
+2) Session handling: new sessions will land in fallback zones; existing sessions will continue until reconnect. If you see errors, a reconnect should land in healthy zone.
+3) Endpoint notes: No additional firewall rules required. If you have IP allowlists, expect the following prefixes from our fallback zones: 34.198.120.0/24 (US-west), 18.194.45.0/24 (EU-nearest), 3.210.88.0/24 (APAC-nearest).
+4) Cost & telemetry: Markus attached a conservative cost delta estimate — we will bill observed egress/compute; see attached estimate. We will absorb emergency ingress routing for the first 24 hours (no charge) as a courtesy.
+5) Monitoring & SLOs: We have added a temporary uptime budget and raised alert thresholds to avoid noisy paging. Your integration contact at CloudPartner is on standby for any partner-layer adjustments.
+
+Attachments included: eu-apac-redirect-diagram.pdf; customer-step-by-step-checklist.txt
+
+Next steps for Acme: 
+- Confirm you see steady traffic and report any anomalous error spikes to support@redwood.com with ticket INC-20290514-ACME.
+- If you want us to pin traffic back to EU-only when provider indicates resolved, reply with PIN-BACK:EU.
+
+I will follow up with a postmortem and a timeline once the provider confirms resolution.
+
+— Rishi
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Paul Simmons <ops@acmemedia.com>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Markus Klein <markus_klein@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Thu, 16 May 2029 15:04:00 -0700
+Subject: Follow-up: resolution summary and next steps (post-incident)
+
+Paul —
+
+Provider update: the underlying networking issue in the EU and APAC POPs was resolved at 2029-05-16T07:40:00Z. We began draining the fallback routing and restored normal region-preferred routing at 08:10 UTC.
+
+Post-incident summary for Acme Media (short):
+- Timeline: detection 2029-05-14T08:50 UTC; redirect activated 2029-05-14T16:20 UTC PDT; provider fix announced 2029-05-16T07:40 UTC; rollback to normal routing 2029-05-16T08:10 UTC.
+- Impact observed: ~0.4% request error rate spike during window; median latency increase for redirected sessions +78ms; no data exposure.
+- Actions completed: temporary cross-region fallback, autoscale headroom, prefix IP communication, and cost estimate delivered.
+
+Action items (owned):
+- Laura / Infra: produce a short runbook entry to automate emergency routing flagging (ETA 2029-05-30).
+- Markus / Finance: finalize actual cross-region cost delta and confirm whether bill credit is required (ETA 2029-05-20).
+- Rishi: schedule a 30-minute customer postmortem with Acme to review telemetry and confirm either PIN-BACK:EU or continued fallback allowance (options: 2029-05-21 or 2029-05-23).
+
+We will share the full engineering postmortem once internal sign-off is complete. Please let me know which date works for your team for the postmortem call.
+
+Thanks again for the quick decision to allow fallback — that choice kept your production flows healthy.
+
+— Rishi
+Sr. Solutions Engineer, Redwood Inference

@@ -1,0 +1,133 @@
+Urgent: customer streaming hang during high-throughput test — exec attention requested
+
+From: Elena Morales <elena@somalabs.com>
+To: soojin.lee@redwood.ai
+Cc: infra@somalabs.com, procurement@somalabs.com
+Date: Tue, 11 Aug 2026 22:17:00 -0700
+Subject: Demo run: repeated WS timeouts and long tail latency
+
+Hi Soojin,
+
+We ran the 1k-concurrent session demo against the committed Dedicated instance this afternoon and saw repeated WebSocket timeouts during chunked transfer. Symptoms: long gaps (2–8s) between token frames, occasional complete stalls for ~30s requiring client reconnect. Error rate spiked from 0.2% to ~6% during the run; p50 latency stayed OK but p95/p99 blew past SLA.
+
+We captured a client-side trace and attached a zip. This is impacting our go/no-go tomorrow; procurement is asking whether we can guarantee throughput for the pilot. Can you triage?
+
+Logs attached: client-trace-20260811.zip (18 MB, log archive)
+
+Thanks,
+Elena
+Elena Morales
+Senior Eng, Platform
+Soma Labs
+
+-----Original attachment: client-trace-20260811.zip-----
+From: soojin.lee@redwood.ai
+To: Elena Morales <elena@somalabs.com>
+Cc: david.kim@redwood.ai, karthik.iyer@redwood.ai
+Date: Wed, 12 Aug 2026 00:04:12 -0700
+Subject: Re: Demo run: repeated WS timeouts and long tail latency
+
+Elena —
+
+Received, and thanks for the trace. I'm escalating immediately — looping in David and Karthik from SRE/Serving. Initial ask: can you confirm whether the client was sending keep-alives and whether requests were skewed to a single model variant? Any rate limiting on your proxy?
+
+We're going to collect server-side metrics (token publish times, connection lifecycle events) and a heap of traces from the Dedicated pool. Will send interim findings within 2 hours.
+
+Sooj
+SoojIn Lee
+Technical Account Lead, Redwood Inference
+soojin.lee@redwood.ai
+
+On Tue, Aug 11, 2026 at 10:17 PM Elena Morales <elena@somalabs.com> wrote:
+> We ran the 1k-concurrent session demo...
+
+From: david.kim@redwood.ai
+To: soojin.lee@redwood.ai, karthik.iyer@redwood.ai
+Cc: Elena Morales <elena@somalabs.com>
+Date: Wed, 12 Aug 2026 01:35:48 -07:00
+Subject: Re: Demo run: repeated WS timeouts and long tail latency
+
+Team —
+
+Quick findings from the Dedicated pool logs (prelim):
+- Around 21:45 PDT we see a sudden backpressure event on shard-gamma-02; token dispatch intervals increase from ~40ms to spikes of 3–7s.
+- Error stream shows a tight cluster of HTTP/2 stream resets (RST_STREAM) with cause PROTOCOL_ERROR coming from the proxy tier; that aligns with client trace gaps.
+- CPU and GPU utilization are not saturated; queues are piling up in the proxy connection handler.
+
+Hypothesis: proxy connection-handling bottleneck under certain connection churn patterns (keep-alive mis-handled + larger-than-expected multipart frames). Karthik, can you look at the connection dispatcher and keepalive handling?
+
+I've pulled a couple of token-level latency graphs and uploaded the p95/p99 to the Drive link so Elena/procurement can view.
+
+I'll prep a mitigation we can try for the demo: a temporary routing rule to move Soma traffic to an alternate pool with a different proxy configuration and to enable aggressive chunk coalescing on the runtime (reduces per-frame overhead).
+
+-David
+
+David Kim
+SRE Lead, Serving Runtime
+david.kim@redwood.ai
+
+[attachment: soma-demo-token-latency.png]
+From: karthik.iyer@redwood.ai
+To: soojin.lee@redwood.ai, david.kim@redwood.ai
+Cc: Elena Morales <elena@somalabs.com>, rachel.kim@redwood.ai
+Date: Wed, 12 Aug 2026 09:02:07 -07:00
+Subject: Re: Demo run: repeated WS timeouts and long tail latency
+
+Sooj / David / Elena —
+
+I dug into the connection dispatcher: we have a rare race in our HTTP/2 stream-creation path when clients open many concurrent multiplexed streams while sending sporadic PINGs/keep-alives. Under load, the dispatcher marked some streams as errored and dropped them back to the connection pool; the runtime then attempted to reschedule token emission which caused frame gaps.
+
+Short-term mitigation (I can apply now):
+- Disable aggressive HTTP/2 flow priorities for Soma's routing key (reduces dispatcher churn).
+- Enable chunk coalescing at runtime (merge small token frames into fewer frames).
+
+Impact: should reduce observed p99 gaps to <500ms in our staging replay. Downside: slightly increased latency on tiny responses (p50 up ~10–15ms). For the go/no-go, that's acceptable and keeps throughput.
+
+Request: Soojin, recommend we implement the routing change and ask Elena to re-run the 1k session test at 12:30 PDT. I'll be on standby.
+
+Karthik
+Karthik Iyer
+Principal Engineer, Runtime
+karthik.iyer@redwood.ai
+
+From: soojin.lee@redwood.ai
+To: Elena Morales <elena@somalabs.com>, procurement@somalabs.com
+Cc: david.kim@redwood.ai, karthik.iyer@redwood.ai, rachel.kim@redwood.ai
+Date: Wed, 12 Aug 2026 11:14:33 -07:00
+Subject: ACTION: temporary routing + coalescing applied — please re-run at 12:30 PDT
+
+Elena —
+
+We applied the temporary routing rule to push your demo traffic to an alternate pool and enabled chunk coalescing for your routing key at 11:08 PDT. This is a mitigation-only change (non-rollback-affecting config) so we can revert quickly.
+
+Next steps for Soma: please re-run the 1k-concurrent demo at 12:30 PDT and share a fresh client trace if you see any issues. Procurement — we understand the urgency and are offering an SLA credit discussion if this results in missed commitments; will coordinate once we have a clean post-mitigation result.
+
+I'll escalate to leadership if the re-run still fails, but optimistic this will be resolved.
+
+Regards,
+Sooj
+
+On Wed, Aug 12, 2026 at 01:35 AM David Kim <david.kim@redwood.ai> wrote:
+> Quick findings from the Dedicated pool logs...
+
+From: Elena Morales <elena@somalabs.com>
+To: soojin.lee@redwood.ai, procurement@somalabs.com
+Cc: infra@somalabs.com, david.kim@redwood.ai, karthik.iyer@redwood.ai
+Date: Wed, 12 Aug 2026 16:02:00 -07:00
+Subject: Re: ACTION: temporary routing + coalescing applied — please re-run at 12:30 PDT
+
+Sooj, David, Karthik —
+
+Re-run complete. Improvements are immediate: p99 gaps collapsed to <450ms, WebSocket stalls gone in three runs. We still see a small uptick in transient RST_STREAMs (~0.6%) but nothing that blocks the pilot.
+
+Thanks for the quick action and for the temporary routing change. Procurement has asked for a written summary of the root cause and a proposed permanent fix before final sign-off. Can you provide a short post-mortem and a timeline for the permanent mitigation (kernel-level dispatcher fix + validation)?
+
+Elena
+Elena Morales
+Senior Eng, Platform
+Soma Labs
+
+--
+References:
+- Drive: https://drive.google.com/s/0Aexample/soma-demo-logs
+- Jira: SRV-2147

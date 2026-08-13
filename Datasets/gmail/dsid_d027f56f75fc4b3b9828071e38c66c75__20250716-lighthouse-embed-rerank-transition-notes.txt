@@ -1,0 +1,164 @@
+Transition plan: embeddings -> rerank migration & index hydration (Lighthouse)
+
+From: Marissa Cole <marissa@redwood.com>
+To: Erin Blake <erin.blake@acme.com>, TechOps <techops@acme.co>
+Cc: Monica Patel <monica@redwood.com>, Rishi Malhotra <rishi@redwood.com>, Jordan Blake <jordan@redwood.com>, Neha Kapoor <neha@redwood.com>
+Date: Wed, 16 Jul 2025 09:12:00 -0700
+Subject: Transition plan: embeddings -> rerank migration & index hydration (Lighthouse)
+
+Hi Erin / Acme TechOps team —
+
+Thanks again for the call this morning. This thread will track the handoff and the concrete steps we need from both sides to migrate your search pipeline to the new embeddings + reranker flow. High-level goals: keep search latency within SLA (req < 150ms P95 on queries), complete a non-blocking index backfill, and validate rerank quality with your production prompts.
+
+Quick ask from us to you this week:
+- Confirm a 3-hour maintenance window (preferred weekend) for the final cutover (read-only for writes to search index).
+- Share any strict blackout dates for July/August.
+- Provide access (read) to a representative sample of production queries (we requested S3 bucket last week) or confirm we can use the HubSpot link below.
+
+Attachments: index-backfill-checklist.xlsx (backfill phases + resource estimates), rerank-eval-samples.csv (30 sample queries we discussed), cutover-runbook.md (high-level runbook).
+
+Next steps from Redwood (owner in parentheses):
+- Draft phased backfill schedule (Rishi)
+- Provide cutover runbook and rollback criteria (Jordan)
+- Coordinate CSM communications and executive sign-off (Marissa)
+
+Erin — can you confirm the availability window and whether TechOps prefers us to run the backfill from Redwood-hosted workers or give us a compute window inside your VPC?
+
+Thanks,
+Marissa Cole
+Customer Success Manager
+Redwood Inference
+
+--
+Attachment: index-backfill-checklist.xlsx (spreadsheet stub)
+Attachment: rerank-eval-samples.csv (csv stub)
+
+From: Erin Blake <erin.blake@acme.com>
+To: Marissa Cole <marissa@redwood.com>, Monica Patel <monica@redwood.com>
+Cc: TechOps <techops@acme.co>
+Date: Thu, 17 Jul 2025 11:04:00 -0700
+Subject: Re: Transition plan: embeddings -> rerank migration & index hydration (Lighthouse)
+
+Marissa — thanks for the summary. Quick answers:
+- We can do a 3-hour window on Sunday 2025-08-03 01:00–04:00 PT. That weekend is currently open.
+- No blackout dates for Aug.
+- We'll share the query sample in the S3 bucket by Friday (techops@acme.co will upload a 2GB gzipped sample).
+
+Question for your team: what are the compatibility expectations for our vector store? We're currently on a managed Milvus deployment (v2.2) via CloudVendor; we also replicate an on-prem FAISS store for backups. Is there a preferred pattern for the backfill and reranker priming?
+
+Also, is there any anticipated downtime for read queries during hydrating the new index? We want to understand if search will keep serving via the old index until final cutover.
+
+—Erin
+Director, Search Engineering
+Acme Commerce
+
+--
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Erin Blake <erin.blake@acme.com>, Marissa Cole <marissa@redwood.com>
+Cc: Jordan Blake <jordan@redwood.com>, Monica Patel <monica@redwood.com>
+Date: Thu, 17 Jul 2025 13:20:00 -0700
+Subject: Re: Transition plan: embeddings -> rerank migration & index hydration (Lighthouse)
+
+Erin — great questions. Short answers up front:
+- Milvus v2.2 is supported as a target vector store for our backfill; we commonly use an export/import pattern (bulk insert) to avoid per-document RPC costs.
+- No reads required to be offline while we hydrate a parallel index. We suggest dual-read routing during validation and then a DNS/traffic switch for final cutover.
+
+More details / recommended approach:
+1) Backfill strategy (phase A/B/C)
+   - Phase A (seed): backfill documents with highest traffic & recent recency first (parallel worker pool, low priority IO).
+   - Phase B (bulk): parallel bulk imports into Milvus with sharded batches, track insert latency and failed ids in a monitoring table.
+   - Phase C (catch-up): tailing ingestion for any writes that occurred during bulk import and final consistency check.
+2) Dual-read validation
+   - We will route a percentage of production traffic to the new index (starting 1%, then 5%, 20%) and compare top-K results plus rerank score deltas.
+   - Acceptance criteria: <3% drop in CTR-equivalent metric on sample queries or manual QA signoff.
+3) Rerank evaluation
+   - Use the rerank-eval-samples.csv you have; we will return normalized NDCG and pairwise preference results and attach example failure cases.
+4) Operational notes
+   - Memory-optimized nodes recommended for Milvus import to avoid OOM during large batches. If you prefer, we can perform the backfill from a Redwood-hosted worker pool with secure S3 access.
+
+Open items for TechOps:
+- Confirm whether we can create temporary ingest credentials that expire after the backfill.
+- Confirm if any export rate-limits exist on the CloudVendor-managed Milvus API (we saw 200 RPS limit in other customers).
+
+I'll prepare an annotated backfill schedule and a template for smoke-test assertions by Friday.
+
+Rishi
+Principal Applied ML Engineer
+Redwood Inference
+
+--
+
+From: Jordan Blake <jordan@redwood.com>
+To: Erin Blake <erin.blake@acme.com>, Rishi Malhotra <rishi@redwood.com>, Marissa Cole <marissa@redwood.com>
+Cc: Monica Patel <monica@redwood.com>, Neha Kapoor <neha@redwood.com>
+Date: Fri, 18 Jul 2025 08:37:00 -0700
+Subject: Re: Transition plan: embeddings -> rerank migration & index hydration (Lighthouse)
+
+Thanks — adding operational acceptance criteria and rollback triggers inline.
+
+Cutover runbook highlights (attached runbook has step-by-step):
+- Pre-cutover: run dual-read validation for 72 hours with <1% traffic to new index, confirm top-5 overlap >= 85% on sampled queries.
+- Cutover steps:
+   1) Pause writes to search index (enter maintenance mode).
+   2) Final tailing ingest and consistency check (verify missing ids < 0.01% of total).
+   3) Promote new index and switch routing.
+   4) Monitor traffic and rollback to old index if search error rate increases > 1% or P95 latency worsens > 40%.
+- Rollback: immediate DNS rollback and resume writes to previous index; we keep previous index intact for 24 hours as a hot fallback.
+
+Smoke test checklist (we'll run these during the maintenance window):
+- Run 500 representative queries and compare top-5 overlap and rerank score diffs.
+- Validate embeddings dimensionality and checksum on a 1k-doc random sample.
+- Confirm KV cache priming completed (if used) before traffic switch.
+
+I'll attach the cutover-runbook.md and a one-page ops checklist to the thread.
+
+Jordan
+Solutions Engineer, Redwood Inference
+
+--
+Attachment: cutover-runbook.md (markdown stub)
+
+From: Marissa Cole <marissa@redwood.com>
+To: Erin Blake <erin.blake@acme.com>, TechOps <techops@acme.co>
+Cc: Monica Patel <monica@redwood.com>, Rishi Malhotra <rishi@redwood.com>, Jordan Blake <jordan@redwood.com>, Neha Kapoor <neha@redwood.com>
+Date: Mon, 20 Jul 2025 09:02:00 -0700
+Subject: Re: Transition plan: embeddings -> rerank migration & index hydration (Lighthouse)
+
+Erin — thanks for confirming the maintenance window. Proposed timeline (all times PT):
+- Fri 2025-08-01: Redwood runs a first 1% dual-read validation (1 week) — owners: Rishi / Jordan.
+- Sun 2025-08-03 01:00–04:00: Final maintenance window for cutover (TechOps to set maintenance mode).
+- Mon 2025-08-04: Monitoring and rollback watch window (24h) — owner: TechOps + Redwood SRE.
+
+Action items for Acme TechOps by 2025-07-24:
+- Upload query sample to S3 and share read credentials (techops@acme.co).
+- Confirm temporary ingest credentials or grant Redwood a VPC compute window (which do you prefer?).
+- Share any rate-limiting constraints on Milvus import API.
+
+We (Redwood) will:
+- Deliver a seeded backfill plan and a detailed smoke-test report by 2025-07-25.
+- Provide a post-cutover evaluation report (rerank NDCG / sample failure cases) within 72 hours of cutover.
+
+Please reply with a single-line signoff and indicate preference for backfill location (Redwood-hosted worker vs VPC compute).
+
+Thanks — looping in Neha to prepare customer comms and Monica for onboarding docs.
+
+Marissa
+Customer Success Manager
+Redwood Inference
+
+--
+
+From: TechOps <techops@acme.co>
+To: Marissa Cole <marissa@redwood.com>, Erin Blake <erin.blake@acme.com>
+Cc: Monica Patel <monica@redwood.com>, Rishi Malhotra <rishi@redwood.com>, Jordan Blake <jordan@redwood.com>
+Date: Mon, 20 Jul 2025 14:05:00 -0700
+Subject: Re: Transition plan: embeddings -> rerank migration & index hydration (Lighthouse)
+
+Marissa / team — thanks. Single-line signoff: Acme OK for 2025-08-03 01:00–04:00 PT.
+Preferred backfill: Redwood-hosted workers with temporary S3 ingest credentials (please issue expiring creds tied to this job).
+We will upload the query sample by EOD Thursday (2025-07-24).
+
+- TechOps (on behalf of Acme Commerce)
+
+--

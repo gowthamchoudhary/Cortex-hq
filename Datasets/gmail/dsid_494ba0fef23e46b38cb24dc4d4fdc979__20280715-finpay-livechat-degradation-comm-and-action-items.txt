@@ -1,0 +1,117 @@
+Intermittent high latency on live chat / next steps
+
+From: Elaine Park <elaine@finpay.com>
+To: rafael.mendes@redwood.com
+Date: 2028-07-15T09:12:00-07:00
+Subject: Live chat streaming getting very slow right now
+
+Hi Rafael,
+
+We started seeing a sharp increase in response latency on our live chat flows around 08:55 PDT. Tokens are arriving in big gaps — the frontend shows clients waiting 6–12s for the next token chunk. This is only happening on the streaming endpoints; normal non-streamed completions look OK.
+
+Impacts: a 10% drop in agent throughput, multiple customer complaints. We don’t see obvious errors in our client logs besides long gaps between token frames. Can you confirm this isn’t on our side? If this is on Redwood, we need mitigation steps and an estimated ETA for a fix.
+
+Attaching a short capture from one session.
+
+Thanks,
+Elaine
+Head of Integrations, FinPay
+
+Attachment: finpay_session_08_58_trace.txt (log excerpt)
+
+From: rafael.mendes@redwood.com
+To: Elaine Park <elaine@finpay.com>
+Cc: laura.bennett@redwood.com, ben.carter@redwood.com, monica.patel@redwood.com
+Date: 2028-07-15T09:40:00-07:00
+Subject: Re: Live chat streaming getting very slow right now
+
+Hi Elaine —
+
+Thanks for the quick heads-up and for the trace. We’re seeing matching telemetry on our edge tier for the region you’re in (us-west2) that aligns with the gaps you described. Short summary and near-term mitigations:
+
+- What we see: intermittent node-level backpressure where the streaming muxer pauses for 3–10s while a small subset of model instances rebuild internal KV caches after a burst of long-context requests. This impacts only streaming frames; standard non-streamed completions continue to return the final payload.
+- Immediate mitigations we’re pushing now:
+  1) Route your traffic to a warm pool of instances pinned to shorter context windows (temporary routing rule) — reduces rebuilds.
+  2) Enable aggressive prefix caching on your tenant for 2 hours (we’ll do this server-side; no client change required).
+  3) Temporarily throttle the concurrent-streams-per-session setting from 8 -> 4 (we’ll coordinate with your engineering team if you want to control this from your side).
+
+I’ve asked Ben (SRE) to run a targeted sweep of impacted nodes and Laura (CS) will coordinate any client-visible changes. Expect an update within 45 minutes; we’ll also provide a short runbook with recommended client fallbacks (smaller chunk sizes + client-side reassembly timeout).
+
+I’m sorry for the disruption — we’ll get this stabilized and then follow up with a full incident summary.
+
+— Rafael
+Senior Enterprise Lead, Redwood Inference
+
+Attachments: streaming_latency_log_excerpt.txt (our sampled edge traces), temporary-config-snippets.txt (routing + prefix-caching commands)
+
+From: ben.carter@redwood.com
+To: rafael.mendes@redwood.com, laura.bennett@redwood.com, monica.patel@redwood.com
+Date: 2028-07-15T10:05:00-07:00
+Subject: Fwd: Live chat streaming getting very slow right now — ops notes
+
+FYI — quick ops notes from the initial sweep (pasting the important bits):
+
+On Tue, Jul 15, 2028 at 09:40 Rafael Mendes <rafael.mendes@redwood.com> wrote:
+> I’ve asked Ben (SRE) to run a targeted sweep of impacted nodes and Laura (CS) will coordinate any client-visible changes. Expect an update within 45 minutes; we’ll also provide a short runbook ...
+
+Observations (from edge telemetry):
+- Spike in long-context generation requests from a small shard of customers beginning 08:50–09:05 PDT that caused repeated KV cache churn on NVIDA-A10G instances.
+- The runtime’s cache-rebuild path currently serializes a few maintenance steps which can stall streaming frame emission for that instance while it rebuilds; we saw 3–12s stalls.
+
+Immediate actions taken (completed by 09:30 PDT):
+1) Hot-route FinPay to warm pool (routing change applied) — measurable drop in stall frequency on their request stream.
+2) Increased background pre-warm concurrency for affected shard nodes to reduce subsequent cache rebuilds.
+3) Pushed a temporary config snippet to FinPay to lower concurrent-streams-per-session to 4.
+
+Next steps (owned):
+- Ben: continue node sweep, collect heap/KV metrics and correlate to request-size histograms.
+- Rafael / Monica / Laura: monitor customer-side metrics and confirm improvements.
+- Schedule engineering follow-up to harden cache-rebuild path (target: medium-term).
+
+I’ll keep the thread updated with logs and a short mitigation checklist we can hand to customers.
+
+— Ben
+SRE | Redwood Inference
+
+From: rafael.mendes@redwood.com
+To: Elaine Park <elaine@finpay.com>, Tom Keller <tom.keller@finpay.com>
+Cc: laura.bennett@redwood.com, ben.carter@redwood.com, monica.patel@redwood.com
+Date: 2028-07-18T16:00:00-07:00
+Subject: Incident review: July 15 streaming latency impact and actions for FinPay
+
+Hi Elaine / Tom —
+
+Apologies again for the disruption last Friday. Below is a concise incident review and the actions we’ve completed or scheduled. Please let me know if you’d like this turned into a formal RCA doc with exec summary.
+
+Summary
+- Impact window: 2028-07-15 08:50–09:40 PDT. Customers in a small shard (including FinPay) experienced intermittent streaming frame stalls of 3–12s. Estimated customer-level impact: increased wait times for end-users and a temporary drop in agent throughput.
+- Root cause: cache-rebuild behavior in the serving runtime. A burst of long-context requests triggered repeated KV cache rebuilds on a subset of model instances; the rebuild path serialized maintenance work that delayed streaming frame emission until the instance completed rebuild.
+
+What we did (completed)
+- Re-routed FinPay traffic to a warm instance pool (temporary) during the incident — reduced stall frequency by ~80% for your traffic.
+- Applied server-side prefix caching for your tenant for 24 hours.
+- Provided temporary client config to lower concurrent streams per session.
+- Collected and attached relevant edge traces and a short checklist your engineers can apply if you see recurrence.
+
+Planned engineering changes (timeline)
+- Short-term (2 weeks): make the cache-rebuild path non-blocking for streaming emission (work started; Ben leading).
+- Mid-term (1–2 months): add smarter pre-warm heuristics and routing safeguards to avoid placing long-context-heavy sessions on small-instance pools.
+
+Customer guidance (recommended immediate client fallbacks)
+- If you see gaps: temporarily reduce client chunk size (256 -> 128 tokens) and increase client reassembly timeout to 15s.
+- Use our streaming retry glue: suppress duplicate final tokens and resume streaming from the last confirmed token id.
+
+Attachments and links
+- Included: customer-incident-summary-20280718.pdf (short incident review), streaming_latency_log_excerpt.txt, temporary-config-snippets.txt
+- Incident ticket: https://redwood-support.atlassian.net/browse/RW-INC-1428
+- Shared folder with traces and runbook: https://drive.redwood.com/Shared/FinPay-Incident-20280715
+
+If you want a 30-minute sync to walk through the traces and the client changes, I can set something up with Ben and Laura.
+
+Thanks for your patience — we’ll keep you posted as the engineering fixes land.
+
+Regards,
+Rafael Mendes
+Senior Enterprise Lead, Redwood Inference
+
+Attachment: customer-incident-summary-20280718.pdf

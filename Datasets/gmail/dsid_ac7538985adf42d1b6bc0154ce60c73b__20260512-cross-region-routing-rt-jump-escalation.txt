@@ -1,0 +1,140 @@
+Hosted API: FastCommerce latency spike - cross-region routing suspected
+
+From: ops@fastcommerce.com
+To: Sean Gallagher <sean_gallagher@redwood.ai>
+Date: 2026-05-10T14:03:00-07:00
+Subject: Sharp p95/p99 jump affecting checkout - urgent
+
+Hi Sean,
+
+We started seeing severe latency regressions on your hosted API around 13:45 PT today. Our checkout calls to the text-generation endpoint have p95 jump from ~120ms to ~612ms and p99 from ~450ms to ~1800ms. Error rate up from 0.2% to 2.7% concentrated between 13:45-14:15. Throughput hasn't changed significantly.
+
+Attached is a short trace sample and a Grafana screenshot. Traces suggest several requests are routing to eu-west-1 pods (RTT ~220ms) even though our traffic is pinned to us-west-2. Can you confirm? This is impacting live checkout; we are seeing customer drop-off.
+
+Elena Ruiz
+Head of Platform Ops
+FastCommerce Inc
+
+Attachments: fastcommerce_grafana.png (image/png), trace_sample.har (http archive)
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Laura Bennett <laura_bennett@redwood.ai>, Markus Klein <markus_klein@redwood.ai>
+Cc: rishi_malhotra@redwood.ai
+Date: 2026-05-10T14:15:00-07:00
+Subject: Fwd: Sharp p95/p99 jump affecting checkout - urgent
+
+Laura / Markus,
+
+Forwarding FastCommerce alert. Customer traces point to cross-region routing to eu-west-1 which would explain the sudden RTT increase and p95 spikes. They are live in production and this is high severity. Asking for quick triage and a rollback plan for any recent routing/policy changes.
+
+Immediate asks:
+- Can infra confirm whether a routing policy rollout happened in the last 24h?
+- If it is a config drift, can we rollback traffic preference to us-west-2 (temporary) and verify p95?
+- Laura: can CS open an incident bridge and provide an exec-level update for Elena + CTO?
+
+Customer impact: checkout latency, revenue-facing. We should prepare an offer of credits if the incident exceeds SLA thresholds.
+
+Sean Gallagher
+Enterprise AE, Redwood Inference
+Mobile: +1 415 555 0123
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Sean Gallagher <sean_gallagher@redwood.ai>, Markus Klein <markus_klein@redwood.ai>
+Cc: rishi_malhotra@redwood.ai
+Date: 2026-05-10T14:28:00-07:00
+Subject: Re: Fwd: Sharp p95/p99 jump affecting checkout - urgent
+
+Sean / team,
+
+I opened an incident channel and looped customer execs (Elena + CTO). Triage notes so far:
+- Confirmed alert in our metrics (Grafana): p95 increased by ~5x for FastCommerce route.
+- Error spike corresponds to a small subset of origin IPs being routed to eu-west-1.
+
+Mitigation plan (short term):
+1) Apply emergency routing override to set region preference to us-west-2 for FastCommerce routing key.
+2) If override does not stabilize within 10 minutes, shift 100% of their traffic to the dedicated fallback pool (same model variant) in us-west-2.
+3) Prepare credit offer and post-mortem comms.
+
+I have the runbook open: https://internal.playbook/runbooks/routing-incidents
+Markus, please confirm whether you see a config rollout ID tied to this window. If you approve, I'll run the override immediately and keep the customer updated.
+
+Laura Bennett
+Manager, Customer Success
+Redwood Inference
+
+On Tue, May 10, 2026 at 2:15 PM Sean Gallagher <sean_gallagher@redwood.ai> wrote:
+> Forwarding FastCommerce alert...
+
+From: Markus Klein <markus_klein@redwood.ai>
+To: Laura Bennett <laura_bennett@redwood.ai>, Sean Gallagher <sean_gallagher@redwood.ai>
+Cc: rishi_malhotra@redwood.ai
+Date: 2026-05-10T14:38:00-07:00
+Subject: Re: Fwd: Sharp p95/p99 jump affecting checkout - urgent
+
+Quick update from infra:
+- We ran a routing-policy rollout 2026-05-10T12:50:00Z to promote a new region selection heuristic that contained a regression in location scoring. The rollout targeted a small percentage of routes for validation and should not have impacted FastCommerce, but a selector mismatch caused their routing key to match the canary set.
+- Effect: some percentage of their requests were sent to eu-west-1, adding ~200ms RTT and bumping p95/p99.
+
+Proposed hotfix (I can implement now):
+A) Abort the heuristic rollout and rollback to previous policy (estimated time to stabilize: ~15-30 minutes).
+B) Immediately apply an emergency override forcing us-west-2 preference for FastCommerce routing key (takes effect in <60s).
+C) After stabilization, run a narrow canary with corrected selector and additional telemetry.
+
+I recommend doing B immediately while we prepare A. If we get customer sign-off, I'll run B now and monitor.
+
+Markus Klein
+Senior Infra Engineer, Serving Runtime
+Redwood Inference
+
+On Tue, May 10, 2026 at 2:28 PM Laura Bennett <laura_bennett@redwood.ai> wrote:
+> I opened an incident channel...
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Elena Ruiz <elena@fastcommerce.com>, ops@fastcommerce.com
+Cc: laura_bennett@redwood.ai, markus_klein@redwood.ai, rishi_malhotra@redwood.ai
+Date: 2026-05-10T14:41:00-07:00
+Subject: RE: Sharp p95/p99 jump affecting checkout - urgent
+
+Elena,
+
+Thanks for the quick reporting and for the traces. Laura and Markus are on the incident. Markus has identified a routing-policy canary that matched your routing key; we plan to apply an emergency override to force traffic to us-west-2 and then fully abort the rollout.
+
+We will:
+- Apply override now and confirm p95/p99 return to baseline within 15 minutes.
+- If the override does not fully resolve, we will move 100% traffic to your dedicated fallback pool in us-west-2.
+- Prepare an executive update and a goodwill credit if SLA thresholds were breached.
+
+Would you like an incident bridge now? I propose a short bridge at 14:50 PT to confirm restoration and next steps.
+
+Sean Gallagher
+Enterprise AE, Redwood Inference
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Sean Gallagher <sean_gallagher@redwood.ai>, Elena Ruiz <elena@fastcommerce.com>
+Cc: markus_klein@redwood.ai, rishi_malhotra@redwood.ai
+Date: 2026-05-12T09:22:00-07:00
+Subject: Re: Sharp p95/p99 jump affecting checkout - urgent
+
+Hi all,
+
+Post-incident summary:
+- Timeline: 2026-05-10T14:15 PT alert -> emergency override applied 14:18 PT -> routing rollback completed 14:36 PT.
+- Impact: p95 returned to baseline (~130ms) within 10 minutes of override; p99 improved to ~420ms. Error rate back to baseline.
+- Root cause: routing-policy canary selector mismatch during a scheduled rollout.
+
+Actions taken:
+1) Rolled back heuristic rollout and applied corrected selector in a narrow canary.
+2) Added an automatic guard that prevents routing-key collisions with active canaries.
+3) Created Jira SUP-1279 for post-mortem and long-term fixes.
+4) CS offered a one-time credit; finance will calculate based on impacted tokens and SLA.
+
+Markus and infra will publish a short post-mortem doc: https://confluence.redwood.example/display/SUP/SUP-1279
+We recommend keeping the emergency override in place for 24h while we monitor.
+
+Elena, thank you for working with us on the traces and for patience. Sean, I'll schedule the bridge notes and exec summary to be sent to FastCommerce leadership.
+
+Laura Bennett
+Manager, Customer Success
+Redwood Inference
+
+Attachments: fastcommerce_grafana.png, trace_sample.har

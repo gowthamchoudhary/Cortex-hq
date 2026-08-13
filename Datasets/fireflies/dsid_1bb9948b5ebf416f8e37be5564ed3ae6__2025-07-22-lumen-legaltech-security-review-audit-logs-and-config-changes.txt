@@ -1,0 +1,339 @@
+Lumen Legaltech - Security review: audit logs + config change controls (Dedicated autoscaling)
+
+Lumen Legaltech reviewed Redwood’s approach to auditability for Dedicated autoscaling configuration and scaling decisions, with emphasis on compliance needs (change traceability, retention, export). Redwood confirmed that scaling policy updates are captured as audit events with actor identity (user/service), before/after diffs, request IDs, and enforcement outcomes. Redwood also described decision/audit events emitted by the autoscaler (requested desired vs bounded desired, clamp reason, predictive vs reactive signal source, staleness/fallback). Lumen asked about RBAC granularity, separation of duties, and whether Redwood support staff can modify customer bounds. Redwood outlined role-based controls in Console/API, optional approval workflows via customer process, and that Redwood internal access is controlled and logged. Next steps: share draft audit event schema and retention options, confirm Lumen’s required retention period (12 vs 24 months), and schedule a follow-up focused on SIEM export + evidence collection for audits.
+Redwood (Kevin Osei) to share audit log export options (HTTP webhook vs S3-style delivery) and current retention defaults by tier.
+Redwood (Benji Okafor) to send draft event shape for scaling policy change + autoscaler decision events (fields + example payloads).
+Lumen (Ava Chen) to confirm required retention period (12/24 months) and whether immutable/WORM storage is required for their audits.
+Lumen (Priya Desai) to list required RBAC roles (who can edit bounds, who can view audit logs, who can enable predictive mode).
+Redwood (Marcus Lin) to provide Trust Center links / SOC 2 report access instructions and confirm audit log access controls for support personnel.
+Schedule 30-min follow-up next week to walk through event samples and how they map to Lumen evidence checklist.
+Do audit logs include before/after for min/max bounds and predictive mode toggles?
+Can Redwood employees change customer scaling bounds, and is that logged distinctly from customer-initiated changes?
+What is the default retention and can we extend to 24 months for regulated workloads?
+Can audit logs be exported to our SIEM (Splunk) with guaranteed delivery semantics?
+Do you log autoscaler decisions (i.e., why you scaled) or only config changes?
+Fireflies.ai Transcript
+
+Meeting: Lumen Legaltech - Security review: audit logs + config change controls (Dedicated autoscaling)
+Date: 2025-07-22
+Time: 4:00 PM PT
+Duration: 47 minutes
+Recorder: Fireflies.ai
+
+Attendees
+- Liam O'Rourke (Redwood Inference, TAM)
+- Marcus Lin (Redwood Inference, Security)
+- Kevin Osei (Redwood Inference, Audit Log Export/SIEM)
+- Benji Okafor (Redwood Inference, Platform/Control Plane)
+- Ava Chen (Lumen Legaltech, Security & GRC)
+- Mark Feld (Lumen Legaltech, Compliance)
+- Priya Desai (Lumen Legaltech, Platform Engineering)
+- Jonah Brooks (Lumen Legaltech, Procurement Ops)
+
+---
+
+[00:00] Liam O'Rourke: Alright, cool. Folks can hear me okay?
+
+[00:03] Ava Chen: Yep, loud and clear.
+
+[00:05] Liam O'Rourke: Great. Thanks everyone. Today we wanted to focus on audit logs and config changes around Dedicated autoscaling, right. Specifically, the min/max bounds feature you all asked about, and predictive scaling toggle. Marcus and Kevin are here for security and export/retention, Benji for the actual API side.
+
+[00:23] Mark Feld: Perfect.
+
+[00:25] Priya Desai: Yeah, we have an internal checklist. We can just run down it.
+
+[00:28] Liam O'Rourke: Sounds good. Ava do you want to kick us off with the top questions?
+
+[00:33] Ava Chen: Sure. So, for us the big thing is change traceability. If someone changes autoscaling policy—min bound, max bound, cool-down, turning on predictive—do we have an audit record with who did it, when, and what exactly changed, like before and after.
+
+[00:50] Benji Okafor: Yep. So there are two buckets: configuration changes and scaling decisions. For configuration, updates to the scaling policy are done via Console or API endpoint. Those are persisted, and we emit an audit event on write.
+
+[01:05] Ava Chen: When you say audit event, what’s in it?
+
+[01:07] Benji Okafor: Actor identity, so user ID if it’s a human via Console, or service account if via API token; the org/account ID, deployment ID, region; timestamp; request ID; and we capture a diff-like structure. In practice it’s “before” and “after” snapshots of the policy object.
+
+[01:29] Mark Feld: Snapshot of the whole object or just the changed fields?
+
+[01:32] Benji Okafor: Whole object, but we also include changed field paths for easy indexing. Like scaling_policy.min_replicas changed from 4 to 8.
+
+[01:43] Priya Desai: Does that include predictive mode? Like “predictive.enabled = true” type of thing.
+
+[01:49] Benji Okafor: Exactly.
+
+[01:51] Ava Chen: Okay. Next: retention. We typically require 1 year minimum, sometimes 2 years depending on the client matter. What’s default retention and can it be extended.
+
+[02:02] Kevin Osei: Today for Dedicated enterprise tiers we default to 400 days in-platform for audit events. For some customers we do 730 days with an add-on, but we generally recommend export to your own storage for long-term retention and immutability.
+
+[02:20] Jonah Brooks: 400 days is… oddly specific.
+
+[02:23] Kevin Osei: Yeah. It’s basically 13 months. Covers “one year plus some audit lag.”
+
+[02:29] Ava Chen: If we export, what are the options? We use Splunk. We can do webhooks, or S3 with a forwarder.
+
+[02:37] Kevin Osei: Both patterns are supported depending on deployment mode. For Hosted and Dedicated, we support near-real-time delivery via HTTPS endpoint, signed payloads. And we have a bucket delivery option that’s like “we drop JSON lines files” on a cadence. Some customers then ingest to Splunk via a collector.
+
+[02:58] Ava Chen: And delivery guarantees? Like, at least once, exactly once?
+
+[03:02] Kevin Osei: It’s at-least-once. Events have idempotency keys (event_id) so you can de-dupe. We retry on non-2xx with exponential backoff.
+
+[03:13] Mark Feld: Are these “audit logs” different from app logs?
+
+[03:16] Marcus Lin: Yes, separated streams. Audit is change events, access events, and some control-plane decisions. It’s not request payloads or prompt data.
+
+[03:25] Priya Desai: That’s good. We don’t want prompts in audit logs.
+
+[03:28] Liam O'Rourke: Yep, that’s been a consistent ask.
+
+[03:33] Ava Chen: Okay, now RBAC. Who in our org can see audit logs, who can edit scaling policy. We need separation: operators can view, only platform admins can change.
+
+[03:45] Benji Okafor: In Console we have roles at the project/account scope. Roughly: Viewer, Operator, Admin. Viewer can read configs and view audit logs. Operator can do operational actions like view metrics, but cannot change scaling policy by default. Admin can update scaling policy.
+
+[04:05] Ava Chen: “By default” meaning configurable?
+
+[04:08] Benji Okafor: Yeah, you can also use custom roles via RBAC policy if you’re on the enterprise plan. Under the hood it’s permission-based: “dedicated.scalingPolicy.write” etc.
+
+[04:22] Priya Desai: Is API token scopeable to just one deployment? We try to avoid broad tokens.
+
+[04:28] Benji Okafor: Yes. Tokens can be constrained to deployment IDs and environments. And service accounts have their own audit identity.
+
+[04:38] Mark Feld: We also need to know if Redwood staff can change these settings. Like, can Support log in and edit our bounds.
+
+[04:46] Marcus Lin: Good question. So, Redwood internal access is tightly controlled. For Dedicated, support cannot casually edit customer scaling policies. If there is a break-glass scenario, there is a privileged workflow requiring approval, and actions are logged. Those logs are in our internal audit system, and customer-visible audit events would show “actor_type=redwood_operator” and the reason code.
+
+[05:09] Ava Chen: So we would see that in our audit export.
+
+[05:12] Marcus Lin: Yes, the same audit stream. The event includes “actor,” “channel,” and a justification field. We don’t put sensitive internal ticket content, but we tag the internal case ID.
+
+[05:23] Jonah Brooks: That’s important for us. A lot of vendors say “we can but we won’t.”
+
+[05:27] Marcus Lin: Understood. We try to make it explicit and inspectable.
+
+[05:33] Priya Desai: Switching to the autoscaler decision logging—do you log when the system scales? We’ve been burned where scaling happens and we can’t explain why.
+
+[05:42] Benji Okafor: Yes, we log the scaling decisions as a separate event type. It includes “requested_desired_replicas” from the policy evaluator, then “bounded_desired_replicas” after applying min/max. And the clamp reason: e.g. “clamped_to_max” or “clamped_to_min.”
+
+[06:02] Ava Chen: Wait, what generates requested desired? Is that prediction or reactive signals.
+
+[06:07] Benji Okafor: Both. The autoscaler loop computes a desired value based on reactive signals—queue depth, saturation, latency—and optionally includes a forecast input if predictive mode is enabled. The audit event records which signals were used and their “staleness.” If the forecast is stale or missing, it falls back to reactive.
+
+[06:29] Priya Desai: That’s the thing we want documented. Like, if the predictor was down, we don’t want it scaling to zero.
+
+[06:35] Benji Okafor: Right, and we had a pilot bug in a different account where null forecast caused an unsafe downscale. That’s fixed: null forecast is treated as “no forecast,” and min bound is always applied. Also, scale-to-zero is not allowed for Dedicated unless explicitly configured, and for your tier it would be disabled.
+
+[06:58] Mark Feld: Do you include the reason in human terms? Or it’s just numbers.
+
+[07:02] Benji Okafor: Both. There’s a “reason_code” field and a “reason_detail” string. Example: “reactive_queue_depth_high; bounded at max=24”
+
+[07:13] Ava Chen: Okay. Another compliance item: we need “who viewed audit logs” sometimes. Do you log access to audit logs?
+
+[07:21] Marcus Lin: We do, yes. Access events include read actions in Console for sensitive pages (audit log viewer, token management, scaling policy). For API access, we log token usage metadata. Again, no prompt contents, just the fact of access and which resource.
+
+[07:41] Priya Desai: Is that also exportable?
+
+[07:44] Kevin Osei: Yes, same export pipeline. Event type differs: “audit_log.read” versus “scaling_policy.update” etc.
+
+[07:52] Ava Chen: Good.
+
+[08:00] Liam O'Rourke: Maybe we should anchor back on Dedicated specifics. You all asked about min/max bounds because of budget controls, but here we’re focusing on the security posture: you want assurance that those are hard enforced and any change is traceable.
+
+[08:14] Mark Feld: Exactly. And we also need to know retention and if we can do WORM.
+
+[08:19] Kevin Osei: If you export to your storage, you can configure WORM/immutability on your side. On our bucket delivery, we don’t currently offer customer-managed WORM in Redwood-managed storage. But we can deliver to your bucket in your cloud account for Private; for Dedicated, it’s typically our managed pipeline to your endpoint.
+
+[08:40] Ava Chen: Okay, so for Dedicated we should do webhook -> Splunk, then store raw events in an immutable index.
+
+[08:46] Kevin Osei: That’s the usual pattern.
+
+[08:49] Priya Desai: Are events signed? We need integrity.
+
+[08:53] Kevin Osei: Yes, we sign payloads, and include a signature header. We can also do mTLS for the webhook.
+
+[09:03] Ava Chen: Nice.
+
+[09:05] Marcus Lin: Also, all audit events are generated server-side; clients can’t spoof them.
+
+[09:10] Ava Chen: Right.
+
+[09:12] Priya Desai: On RBAC, what about SSO? We require SAML.
+
+[09:16] Marcus Lin: We support SAML SSO with SCIM for provisioning. RBAC ties to groups. Many enterprise customers map “Platform-Admins” group to Admin role, etc.
+
+[09:31] Mark Feld: And do you support MFA.
+
+[09:33] Marcus Lin: Yes. If SSO enforced, you inherit your IdP MFA policy.
+
+[09:39] Ava Chen: Cool. Let’s talk about config change controls. We have an internal change management process that requires approvals. Do you have any in-product approval workflow?
+
+[09:51] Liam O'Rourke: Today we don’t have a two-person approval flow in Console. Most customers handle that by restricting write permissions and requiring changes go through Terraform or API with your CI approvals.
+
+[10:04] Benji Okafor: And just to add: we have Terraform support for scaling policy fields—min, max, predictive toggle—so you can put it into GitOps. That gives you an audit trail in your repo plus our audit event.
+
+[10:20] Priya Desai: That’s actually ideal for us.
+
+[10:22] Jonah Brooks: Procurement note: we will likely ask that to be in scope for the enterprise agreement.
+
+[10:28] Liam O'Rourke: We can loop legal in later, sure.
+
+[10:33] Ava Chen: Another question: if someone changes max bound, do you rate limit changes? We’ve seen systems where people spam config and it causes instability.
+
+[10:43] Benji Okafor: Yes, we enforce throttling on policy updates. If someone tries to update repeatedly, we reject with a 429-ish error and also emit an audit warning event “scaling_policy.update_throttled.”
+
+[10:59] Ava Chen: Nice. That helps.
+
+[11:03] Priya Desai: On decision events, can we correlate to deployment metrics? Like we want to see “scale event at 10:05, queue depth rising.”
+
+[11:12] Benji Okafor: Yes, events include a trace/correlation ID, and the autoscaler also emits metrics for “desired vs bounded replicas.” In Grafana you can line up the timeline. I can share example dashboards.
+
+[11:28] Liam O'Rourke: We’ll send the dashboard spec link too.
+
+[11:33] Mark Feld: Do you keep these decision logs for same retention as audit logs?
+
+[11:38] Kevin Osei: Yes, same pipeline and retention settings.
+
+[11:44] Ava Chen: Okay. Let’s get into data residency. If our Dedicated deployment is in us-west, where do audit logs live.
+
+[11:53] Marcus Lin: The control plane logs are stored in region-aligned infrastructure. For export, we deliver from that region to your endpoint. If you need strict residency guarantees, we can document the specific region mapping.
+
+[12:09] Priya Desai: We’ll need that documented.
+
+[12:11] Liam O'Rourke: Got it.
+
+[12:14] Ava Chen: We also have to answer: do you log any customer data in these events. Like deployment names could contain client names.
+
+[12:22] Benji Okafor: We include deployment_id, not freeform deployment display names, in the audit event. In Console you may label deployments, but the event payload uses IDs. If you want, we can add a field to include display name, but by default it’s not included.
+
+[12:39] Mark Feld: Prefer not.
+
+[12:40] Benji Okafor: Same.
+
+[12:43] Ava Chen: Good. Another item: do you log changes coming from Redwood automation? Like if the platform changes defaults.
+
+[12:51] Benji Okafor: Platform defaults changing generally does not mutate your policy object. But if we change something that affects behavior, we publish release notes and it’s versioned. Your explicit bounds always win. If there is a migration that writes fields, we emit an audit event with actor_type=system and includes the migration version.
+
+[13:12] Ava Chen: That’s what I want to hear.
+
+[13:14] Priya Desai: Can you give an example of the audit event types? Just list them.
+
+[13:20] Benji Okafor: Sure. “scaling_policy.create”, “scaling_policy.update”, “scaling_policy.delete” (rare), “scaling_decision.emitted”, “scaling_bound_hit” as a counter event, “forecast.input_stale” when predictive enabled but stale, and “audit_log.read”. Plus the general “token.create/rotate” events.
+
+[13:45] Kevin Osei: And “export.delivery_failed” is another one if your endpoint starts returning errors.
+
+[13:52] Ava Chen: Great. I’ll map those.
+
+[13:56] Mark Feld: On the predictive mode: if we don’t enable it, do we still see forecast-related events.
+
+[14:02] Benji Okafor: No, you won’t. Predictive signal ingestion is gated and the events only appear if enabled.
+
+[14:08] Ava Chen: And enabling predictive mode itself is audited.
+
+[14:11] Benji Okafor: Yep.
+
+[14:14] Liam O'Rourke: Maybe we should also cover who can enable predictive mode. Some customers treat it as a higher-risk setting.
+
+[14:20] Priya Desai: Yes, we’d want only Admin to do that.
+
+[14:23] Benji Okafor: That’s the default. And we can also add an org-level policy: predictive mode can’t be enabled unless account flag is on. So you’d have to request it.
+
+[14:35] Ava Chen: That’s good. So you basically have a feature flag gate.
+
+[14:38] Benji Okafor: Exactly.
+
+[14:41] Mark Feld: Another compliance question: can we export audit logs to our eDiscovery system? Meaning do you have an API to query historical events.
+
+[14:50] Kevin Osei: Yes, there’s an API for querying audit events by time range, type, deployment_id, actor. It’s paginated. For bulk eDiscovery we recommend export rather than API.
+
+[15:08] Ava Chen: Okay.
+
+[15:10] Priya Desai: Switching a bit—one of our concerns is config drift. If Terraform is source of truth, will Console edits create drift.
+
+[15:19] Liam O'Rourke: It can, like any system. Most customers lock down Console writes and treat Terraform as the only writer.
+
+[15:26] Benji Okafor: Also, the audit event includes “channel=console|api|terraform” depending on how it was made. Terraform uses API under the hood but tags a user-agent and we set channel.
+
+[15:39] Priya Desai: Perfect.
+
+[15:41] Ava Chen: Can you talk about how you store the audit logs? Encryption, keys.
+
+[15:47] Marcus Lin: Audit logs are encrypted at rest. For Dedicated, we use cloud KMS. For Private deployments, we can integrate with customer-managed KMS depending on the packaging. Access is restricted and logged.
+
+[16:03] Mark Feld: Any chance of customer-managed keys for Dedicated.
+
+[16:07] Marcus Lin: Not today as a standard feature, but we can discuss as part of enterprise requirements. Many customers are satisfied with export to their own storage as the compliance control.
+
+[16:19] Ava Chen: Okay, so for our audit scope we can treat “authoritative” retention as in our own environment.
+
+[16:25] Marcus Lin: Exactly.
+
+[16:28] Jonah Brooks: I have a question on contractual language. If we set max bounds, are those hard enforced? Because that’s part of our budget control.
+
+[16:37] Benji Okafor: Yes. Hard invariant: never exceed max, never go below min. There are special cases like region capacity shortage where we might not be able to meet min, but we never exceed max. If min can’t be met, we surface a degraded state and alert.
+
+[16:56] Priya Desai: And that degraded state is visible in logs/metrics?
+
+[17:00] Benji Okafor: Yes, metric and event: “min_unmet_due_to_capacity_shortage” with region.
+
+[17:08] Ava Chen: Is that an audit event or operational event.
+
+[17:10] Benji Okafor: It’s in the decision/audit stream because it’s important for postmortems.
+
+[17:17] Marcus Lin: And from compliance standpoint, it’s not a user-initiated change. It’s an operational state event.
+
+[17:24] Ava Chen: Got it.
+
+[17:26] Liam O'Rourke: We’re at about halfway. Any other checklist items, Ava?
+
+[17:31] Ava Chen: Yeah, last couple. One: do we get timestamps in UTC?
+
+[17:36] Kevin Osei: ISO-8601 with offset, but effectively UTC. You can choose to normalize.
+
+[17:41] Ava Chen: Two: can we include our own change ticket ID as metadata when updating scaling policy. For example, “CHG-1234”.
+
+[17:50] Benji Okafor: Not in the core schema today, but we have a “client_request_context” string field that can carry metadata. Some customers put their change ticket there. It is included in the audit event.
+
+[18:03] Priya Desai: That’s excellent.
+
+[18:05] Mark Feld: Great for evidence.
+
+[18:08] Ava Chen: Last: we want to ensure audit logs can’t be deleted by our own admins. Like, an admin could cover their tracks.
+
+[18:16] Kevin Osei: In Redwood, audit logs are append-only. You can’t delete or modify entries via API/Console. In your own Splunk, that depends on your controls.
+
+[18:28] Marcus Lin: And internal Redwood policies prevent tampering; we can share that as part of SOC 2 controls documentation.
+
+[18:36] Ava Chen: Okay.
+
+[18:38] Liam O'Rourke: Before we wrap, do you want to ask about competitor comparisons? Not required but sometimes helps.
+
+[18:44] Priya Desai: We’ve looked at Bedrock and Azure OpenAI. Mostly they don’t give us the autoscaling knobs we want. On audit logs, they do CloudTrail-ish logs, but it’s not tied to model serving decisions.
+
+[18:58] Benji Okafor: Yeah, we try to connect the “what changed” and “what the autoscaler did” so you can explain behavior.
+
+[19:05] Mark Feld: That’s key.
+
+[19:08] Ava Chen: Can you send a sample? Even redacted. Like one scaling policy update event, one decision event.
+
+[19:16] Benji Okafor: Yep, I’ll send a couple examples.
+
+[19:19] Kevin Osei: And I’ll send export docs plus how to verify signatures.
+
+[19:24] Marcus Lin: I’ll send Trust Center links and the section that mentions audit logging access controls.
+
+[19:31] Liam O'Rourke: Great. Anything else?
+
+[19:34] Ava Chen: That’s it. We’ll confirm 24 month retention requirement. Might be a must.
+
+[19:41] Jonah Brooks: And I’ll note it for contract.
+
+[19:44] Liam O'Rourke: Cool. We’ll schedule a 30-min follow up next week. Thanks all.
+
+[19:50] Priya Desai: Thanks.
+
+[19:51] Mark Feld: Thank you.
+
+[19:52] Ava Chen: Thanks.
+
+---
+
+Auto-generated notes (Fireflies)
+- Action items captured in meeting: send audit event schema + samples; send export/signing docs; confirm retention requirements; schedule follow-up.
+- Keywords detected: audit logs, RBAC, SAML, SCIM, Splunk, retention, autoscaling bounds, predictive scaling.

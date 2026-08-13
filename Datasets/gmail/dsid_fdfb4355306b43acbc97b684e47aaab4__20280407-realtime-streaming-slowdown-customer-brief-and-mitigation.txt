@@ -1,0 +1,120 @@
+Realtime streaming slowdown — observed spikes in chat latency
+
+From: Alyssa Chen <alyssa@fintechlabs.com>
+To: nikhil_sharma@redwood.com, support@redwood.com
+Cc: support@fintechlabs.com
+Date: 2028-04-07T09:13:00-07:00
+Subject: Realtime chat sessions experiencing large latency spikes
+
+Hi Nikhil / Redwood team,
+
+We started seeing significant latency spikes on the streaming/chat endpoint for our primary integration around 08:55 UTC (attached are a connection dump and a short packet trace). Symptoms: streaming tokens arrive in several-second bursts instead of steady streaming; some sessions hit 5–7s p99 token latency, which breaks our UX. This affects ~7% of requests for the last 20 minutes across multiple users.
+
+What we've tried: restarted our client polyfills, switched to polling (reduced but did not eliminate the burstiness), and confirmed the issue reproduces from two different regions (us-west and us-east).
+
+Attached: conn_dump_0407.txt (connection-level timings), short_request_ids.txt (IDs included), and a small pcap extract.
+
+We need an ETA on mitigation and any immediate workarounds we can apply on our side. Happy to jump on a call.
+
+Thanks,
+Alyssa Chen
+Sr. Product Manager, Fintech Labs
+alyssa@fintechlabs.com
+
+---
+Attachments: conn_dump_0407.txt (text), short_request_ids.txt (text)
+From: nikhil_sharma@redwood.com <nikhil_sharma@redwood.com>
+To: Alyssa Chen <alyssa@fintechlabs.com>
+Cc: marissa_cole@redwood.com, sergio_alvarez@redwood.com, support@redwood.com
+Date: 2028-04-07T09:28:00-07:00
+Subject: Re: Realtime chat sessions experiencing large latency spikes
+
+Hi Alyssa — thanks for the quick heads-up and the dumps, we can see the traces in the attachment. Really sorry for the interruption. We're treating this as high-priority.
+
+Immediate actions we've applied (short-term mitigation):
+- Rolled a safety routing policy: traffic from Fintech Labs is being routed to a lower-latency replica pool while we investigate (this should be transparent to your API key).
+- Applied an on-the-fly request-rate smoothing for active sessions (aim to reduce token-bursting behavior).
+- If you see continued issues, please try the non-streaming fallback (response mode) for critical paths — that currently avoids the streaming token cadence problem.
+
+What we need from you (quick favors):
+- Can you share 3 example request IDs from the latest 20 minutes (you included some; please highlight 3 primary ones)?
+- If possible, keep one session on streaming so we can correlate with our traces; we'll provide a timestamped link.
+
+Next steps from Redwood:
+- Engineering (cc'd) will triage kernel-level telemetry and kernel/queue backlog.
+- I will follow up with a 24–48h post-incident summary and remediation plan.
+
+Contact: If latency spikes again, reply-all and mark URGENT and our on-call will pick it up. We'll also schedule a 30-minute bridge if the problem persists.
+
+Best,
+Nikhil Sharma
+SRE Lead, Redwood Inference
+nikhil_sharma@redwood.com
+
+---
+Attachments: p99_traces_20280407.zip (trace summary)
+From: nikhil_sharma@redwood.com <nikhil_sharma@redwood.com>
+To: marissa_cole@redwood.com, sergio_alvarez@redwood.com
+Cc: 
+Date: 2028-04-07T10:05:00-07:00
+Subject: Internal: initial triage for Fintech Labs streaming latency
+
+Marissa / Sergio — quick notes from initial triage (internal only). Please do not forward raw traces to the customer yet; we'll sanitize.
+
+Observations:
+- Spike start correlates with a scheduled kernel selection patch that rolled at 08:50 UTC to the realtime-serving fleet (commit 8f7a2c). We see queue depth grow for certain shard classes and an increase in tail latency for KV-cache lookups (~2.6x p99).
+- A subset of sessions are suffering from intermittent slow memcpy on the new kernel path; appears to affect long-context sessions more.
+- Correlation: 88% of affected requests hit a particular model variant (variant-v3-q8) that switched runtime kernel selection at deploy.
+
+Proposed mitigations (immediate):
+1) Roll back kernel selection change for variant-v3-q8 (rollback patch queued).
+2) Temporarily pin Fintech Labs traffic to the older variant-v2-q4 which has consistent tail behavior.
+3) Add a short-lived queue priority for streaming ACKs so small token frames are not coalesced into large bursts.
+
+I'll coordinate rollback with infra and confirm once done. After that we should run a controlled canary of the fixed kernel against low-traffic shards.
+
+Thanks,
+Nikhil
+
+---
+Attachments: internal_trace_excerpt.txt (engineer view)
+From: nikhil_sharma@redwood.com <nikhil_sharma@redwood.com>
+To: Alyssa Chen <alyssa@fintechlabs.com>
+Cc: marissa_cole@redwood.com, sergio_alvarez@redwood.com, support@redwood.com
+Date: 2028-04-09T17:26:00-07:00
+Subject: Post-incident summary and follow-up: streaming latency spike on 2028-04-07
+
+Hi Alyssa — following up with a brief post-incident summary and recommended next steps. Thanks again for the signal and the traces; that was instrumental in narrowing the root cause.
+
+Summary (what happened):
+- Between ~08:50–09:25 UTC on 2028-04-07 we had an increase in p99 token latency on streaming endpoints for certain model runtime kernels. The root cause was a kernel selection regression for the variant-v3-q8 runtime that introduced occasional memcpy inefficiencies under specific long-context workloads.
+
+Impact on Fintech Labs:
+- Approximately 7% of your streaming requests experienced bursty token delivery (p99 token latency 4–7s) during the window. Non-streaming responses were less affected.
+
+What we did (mitigation):
+- Immediate routing of your traffic to a healthy replica pool (completed 09:00 UTC).
+- Rolled back the kernel-selection change for the affected variant (09:18 UTC).
+- Applied a short-term queue smoothing policy to reduce token coalescing while rollback validated.
+
+Permanent fixes and timeline:
+- Patch for kernel memcpy path validated in internal canary (deployed to canary 04-08, will ship to prod 04-10 after final perf regression tests).
+- We will add a runtime guard that prevents automatic kernel switching for long-context streaming sessions until the memcpy path is validated under burst workloads.
+
+Customer guidance (recommended workarounds while we rollout):
+- If you observe regressions again, switch a small percentage of traffic to response-mode (non-streaming) as a fallback — this reduces UX regressions during the transient.
+- Keep one or two sessions live for us to correlate if you file another incident; please include request IDs and timestamps.
+
+Compensation and next steps:
+- We're issuing a one-time service credit for the affected window; your account rep will follow up with details.
+- I'll share a sanitized postmortem draft attached (postmortem-draft.md) and a link to the incident ticket: https://redwood.atlassian.net/browse/INF-1742.
+
+Again, apologies for the disruption — we're treating the long-tail token latency as a high-priority reliability area. If you'd like a 30-minute walkthrough of the cause and mitigations, let me know times that work next week.
+
+Best regards,
+Nikhil Sharma
+SRE Lead, Redwood Inference
+nikhil_sharma@redwood.com
+
+---
+Attachments: postmortem-draft.md (internal sanitized PM), p99_traces_20280407.zip (sanitized)

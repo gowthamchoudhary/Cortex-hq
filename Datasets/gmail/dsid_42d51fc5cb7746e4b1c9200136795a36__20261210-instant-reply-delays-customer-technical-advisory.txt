@@ -1,0 +1,104 @@
+Intermittent instant-reply delays impacting streaming chat — immediate mitigations & postmortem timeline
+
+From: Sharon Li <sharon.li@fastcommerce.com>
+To: rachel_kim@redwood.ai
+Cc: ops-team@fastcommerce.com
+Date: Thu, 10 Dec 2026 09:05:12 -0800
+Subject: Re: [LIVE] Users seeing replies pause for 5-20s in streaming chat
+
+Hi Rachel —
+
+We started seeing a spike this morning around 08:58 PST where users in our customer support product experienced pauses mid-response (streaming token emissions stopped for ~5-20s and then resumed). This has affected multiple agents and a subset of long responses. Attaching a client-side trace and a short screen capture.
+
+Can your team confirm if there was a platform-side event? We have support conversations impacted and would like immediate guidance for a mitigation we can apply client-side.
+
+Attachments: client_trace_20261210.json (JSON), screen_capture_20261210.mp4 (video stub)
+
+Thanks,
+Sharon
+Sharon Li
+Head of Platform Ops, FastCommerce
+sharon.li@fastcommerce.com
+
+From: rachel_kim@redwood.ai
+To: Sharon Li <sharon.li@fastcommerce.com>
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai
+Date: Thu, 10 Dec 2026 09:18:44 -0800
+Subject: Re: [LIVE] Users seeing replies pause for 5-20s in streaming chat
+
+Hi Sharon — thanks for the quick report and the trace. We’re investigating now. Immediate notes and recommended client-side mitigations: 
+
+- We have observed a short-lived increase in token emission gaps that matches your timeline. Root confirmation pending from infra, but here are safe mitigations you can apply now: 
+  - Enable streaming_fallback: true in your SDK config so the client will switch to periodic chunking when the stream stalls.
+  - Reduce the model's max_tokens for interactive responses by 15-25% to reduce long-tail KV pressure.
+  - If you can, add a 2s client-level retry on stalled chunks (idempotent for your use case).
+
+- Please attach the full authenticated request ids where possible (request_id headers) — I see partial traces in the file you sent; those help correlate to our ingress logs.
+
+We’re escalating to our runtime team and will follow up with a timeline for a postmortem and a permanent fix. Short-term ETA: we’ll confirm root cause within 4 hours and send an interim update in 60–90 minutes.
+
+For visibility, I’ve looped in Marissa (incidents) and Ben (runtime).
+
+—Rachel
+Rachel Kim
+Customer Reliability Manager, Redwood Inference
+
+From: rachel_kim@redwood.ai
+To: marissa_cole@redwood.ai, ben_carter@redwood.ai
+Date: Thu, 10 Dec 2026 10:02:05 -0800
+Subject: Fwd: [LIVE] Users seeing replies pause for 5-20s in streaming chat
+
+Forwarding Sharon's trace. TL;DR of what I see in preliminary logs: ingress latency spikes coincident with a small window of KV cache misses on an edge shard that caused token generation to stall while a remote recompute occurred. Autoscaler warmed but did not attach new worker fast enough for certain long-sequence requests.
+
+Immediate actions I recommend we coordinate now (short timeframe):
+- Ben: can we provision a burst pool for the affected edge shard (edge-13) and enable the hot-kv-cache replicate for 30 minutes? This should reduce recompute stalls.
+- Marissa: I’ll prepare a customer-facing one-paragraph advisory and include three client mitigations (streaming_fallback, reduce max_tokens, retry-on-stall).
+- Ops: correlate request_ids from Sharon's trace to ingress logs (I've tagged the candidate request ids in the attachment).
+
+Longer-term followups to include in the postmortem:
+- Investigate autoscaler attach latency for long-lived streams.
+- Add health signals for KV miss storms and automated traffic shedding to compatible model variants.
+
+Quoting Sharon below for context:
+
+> From: Sharon Li <sharon.li@fastcommerce.com>
+> Date: Thu, 10 Dec 2026 09:05:12 -0800
+> Subject: Re: [LIVE] Users seeing replies pause for 5-20s in streaming chat
+>
+> Hi Rachel —
+>
+> We started seeing a spike this morning around 08:58 PST where users in our customer support product experienced pauses mid-response (streaming token emissions stopped for ~5-20s and then resumed).
+
+—Rachel
+
+From: rachel_kim@redwood.ai
+To: Sharon Li <sharon.li@fastcommerce.com>
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai
+Date: Thu, 10 Dec 2026 17:32:00 -0800
+Subject: [Update] Follow-up: streaming token pauses this morning — mitigations applied and next steps
+
+Hi Sharon —
+
+Thanks again for the trace and patience. Quick summary and next steps: 
+
+What we saw (summary):
+- Time window: 08:58–09:12 PST (we observed matched ingress delays).
+- Cause (preliminary): an edge shard (edge-13) experienced a transient KV cache miss storm while several long-sequence requests were in flight. The autoscaler added capacity but the attach-to-hot-path latency caused gaps in token emission for affected streams.
+
+What we applied for you (completed at ~12:10 PST):
+- Short-term: provisioned a burst pool on the affected shard and enabled hot-kv-cache replication; this eliminated further stalls in our monitoring for your tenant.
+- Recommended client mitigations (still in place): streaming_fallback: true; reduce max_tokens for interactive flows by 20%; client retry-on-stall of 2 seconds for idempotent requests (we can provide SDK snippet).
+
+Attachments: diagnostic_bundle_20261210.zip (server-side traces and ingress logs) — we included correlated request_ids; client_trace_20261210.json (you provided).
+
+Next steps and timeline: 
+- We will deliver a full postmortem by EOD Friday, 2026-12-11 that includes root cause, timeline, and permanent remediation plan (autoscaler improvements + KV replication tuning).
+- If you’d like an immediate technical sync, Ben can join a 30-minute call tomorrow morning to walk through logs and confirm SDK changes. Suggested times: 09:00–10:00 PST or 11:00–11:30 PST.
+
+We apologize for the disruption. Our priority is minimizing any recurrence and ensuring you have clear, short-term mitigations. Please let me know which call time works and whether you want the SDK snippet now.
+
+Thanks,
+Rachel Kim
+Customer Reliability Manager, Redwood Inference
+rachel.kim@redwood.ai
+Attachments: diagnostic_bundle_20261210.zip

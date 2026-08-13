@@ -1,0 +1,132 @@
+Pinnacle AI - sudden latency spike tied to KV prefetch reshuffle
+
+From: Alex Chen <alex.chen@pinnacle.ai>
+To: Naomi Feldman <naomi.feldman@redwood.ai>
+Cc: Pinnacle AI SRE <sre@pinnacle.ai>
+Date: Fri, 20 Jul 2028 08:55:00 -0700
+Subject: Production latency spike - urgent
+
+Hi Naomi,
+
+We just saw a large P95/P99 latency spike across inference endpoints starting ~08:30 PDT. Error rate doubled and overall throughput dropped as clients retried. Our dashboard shows long tail tokenizes and a queue backlog on the KV-prefetch lane.
+
+Can your team confirm whether any config changes or autoscaling events happened on your side? This is impacting a demo starting in 30 minutes.
+
+Attached: SLO snapshot and sampling of traces.
+
+—Alex
+Alex Chen
+Head of Platform 
+Pinnacle AI
+
+From: Naomi Feldman <naomi.feldman@redwood.ai>
+To: Alex Chen <alex.chen@pinnacle.ai>
+Cc: Jonas Weber <jonas.weber@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Pinnacle AI SRE <sre@pinnacle.ai>
+Date: Fri, 20 Jul 2028 09:12:00 -07:00
+Subject: Re: Production latency spike - urgent
+
+Thanks Alex — escalating internally now.
+
+Quick note: I see a correlated autoscaling activity around 08:28 that triggered a prefetch policy reshuffle for several tenant namespaces. Putting the SRE + runtime team on this thread (Jonas, Ben).
+
+Immediate asks from our side:
+- Can Pinnacle share any customer-side changes in traffic pattern in last 30m?
+- If you can keep debug logs for 08:25–08:40 available that would help trace request routing.
+
+We’ll follow with an initial impact summary and mitigation steps in ~15–20m.
+
+Naomi
+Naomi Feldman
+Customer Success Manager, Redwood Inference
+
+From: Jonas Weber <jonas.weber@redwood.ai>
+To: Naomi Feldman <naomi.feldman@redwood.ai>, Alex Chen <alex.chen@pinnacle.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Fri, 20 Jul 2028 09:28:00 -07:00
+Subject: RE: Production latency spike - urgent
+
+Summary of what we see (initial):
+- At 08:27:45 the autoscaler added 4 slots to the tenant pool. The prefetch coordinator then redistributed prefix ownership to rebalance memory pressure.
+- During the reshuffle there was a short window where KV-lookups for high-volume prefixes routed to cold nodes; that caused synchronous prefetches to pile up on the same hot-shard (observed HOL blocking).
+- Batching layer also rebounded: a subset of requests bypassed batching (small sequences) while others accumulated behind KV blocking — this created large variance in lane latencies and increased p99.
+
+Immediate hypothesis: the combination of (a) aggressive prefetch reshuffle during scaling, and (b) our current KV eviction threshold allowed hot prefixes to be temporarily evicted, produced a resonance that amplifies HOL blocking.
+
+Immediate mitigations we’re starting now:
+1) Pause automatic prefetch reshuffles for the affected tenant namespace.
+2) Increase KV pin threshold for high-frequency prefixes for the next 10 minutes.
+3) Temporarily relax batching packetization so small requests join existing batches instead of creating micro-batches.
+
+I’ve attached a metrics snapshot (kv-metrics-snapshot-20280720.json) and a short diagnostic trace. Will update once we validate effects.
+
+-Jonas
+Jonas Weber
+Principal SRE, Redwood Inference
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Naomi Feldman <naomi.feldman@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>, Alex Chen <alex.chen@pinnacle.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Fri, 20 Jul 2028 09:40:00 -07:00
+Subject: RE: Production latency spike - urgent
+
+Action log (executed):
+- Applied temporary routing-change patch to pin hot prefixes to current nodes (attachment: temp-routing-change.patch).
+- Updated prefetch coordinator config: disabled reshuffle-on-scale for 15m; increased pin time-to-live from 60s -> 300s.
+- Adjusted batching config to reduce max-batch-split threshold; this should prevent micro-batch proliferation.
+
+Early results: backend queue depth reduced within 45s; error rate down ~30% vs peak but p99 remains elevated (~2.1s vs baseline 750ms). We need to monitor for tenant-specific hot shards that may still be thrashing.
+
+Next steps:
+- If p99 doesn’t fall below 1s in the next hour, we’ll open an exec escalation and propose traffic shaping (rate-limit bursty client keys) or temporary model fallback for the hottest endpoints.
+- Schedule a postmortem with runtime + orchestration teams to adjust the prefetch coordination heuristics.
+
+Ben
+Ben Carter
+Staff Engineer, Inference Runtime
+
+From: Alex Chen <alex.chen@pinnacle.ai>
+To: Naomi Feldman <naomi.feldman@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>
+Cc: Pinnacle AI SRE <sre@pinnacle.ai>
+Date: Fri, 20 Jul 2028 10:05:00 -07:00
+Subject: Re: Production latency spike - urgent
+
+Thanks for the quick turnaround. We saw the error rate drop and the demo was salvaged, but p99 is still ~1.6s on some endpoints (down from 3.2s at peak). Our ops team pulled request-level traces and they match your notes about KV misses landing on newly added nodes.
+
+Two asks from our side:
+- We’d like a short executive summary for our CTO + procurement team describing what happened and what remediation you’ve applied. This incident affects our renewal conversation next month.
+- Please confirm whether Redwood will consider a goodwill credit for the user-facing SLA degradation.
+
+Alex
+
+From: Naomi Feldman <naomi.feldman@redwood.ai>
+To: CEO Leadership <leadership@redwood.ai>, VP Product <vp.product@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Alex Chen <alex.chen@pinnacle.ai>, Pinnacle AI SRE <sre@pinnacle.ai>
+Date: Sun, 22 Jul 2028 17:45:00 -07:00
+Subject: Executive briefing requested — Pinnacle AI latency incident (07/20)
+
+Leaders,
+
+Summary: On 07/20 at ~08:30 PDT Pinnacle AI experienced a production P95/P99 latency spike tied to a KV prefetch reshuffle triggered by autoscaling. The reshuffle briefly routed hot prefixes to cold nodes causing synchronous prefetches and HOL blocking. Our immediate mitigations (paused reshuffle, increased pin TTL, batching relax) reduced error rate and throughput impact; p99 remains above baseline for specific endpoints.
+
+Impact: Customer-facing demo degraded; visible customer SLA breach with elevated p99 for ~45m. Revenue impact: potential renewal risk (HB-9873).
+
+Root cause (summary): orchestration heuristic allowed a full reshuffle during a rapid scale-up leading to temporary loss of hottest prefix locality. The existing KV pin and eviction thresholds were insufficient to avoid eviction during that window. Batching behavior amplified tail latency by creating micro-batch variance.
+
+Immediate remediation underway:
+- Change prefetch reshuffle policy to be quiescent during scale events (implemented temporarily on 07/20).
+- Adjusted pin TTL and eviction thresholds; evaluating safest defaults for multi-tenant high-throughput customers.
+- Postmortem scheduled: runtime + orchestration + SRE + solutions engineering. Expected deliverables: design for safe reshuffle (circuit-breaker), a tenant risk classification to avoid reshuffle during known high-peek periods, and backfill/cold-warm handoff improvements.
+
+Customer asks: executive summary for their CTO and consideration of a goodwill credit for SLA hit.
+
+Recommended exec asks:
+- Approve a one-time customer credit (recommendation: 1 week of service credit pro-rated) to close the renewal risk.
+- Prioritize the reshuffle/circuit-breaker work in the next sprint and assign a single owner for production rollout.
+
+Attachments: pinnacle-slo-report-20280720.pdf, kv-metrics-snapshot-20280720.json, temp-routing-change.patch
+
+I’ll coordinate a short call with Pinnacle’s CTO if leadership wants to align on the credit and the remediation timeline.
+
+Thanks,
+Naomi Feldman
+Customer Success Manager, Redwood Inference

@@ -1,0 +1,102 @@
+Deployment mode fit assessment — Dedicated vs Private VPC (post-demo)
+
+From: Olga Petrov <olga@redwood.ai>
+To: Nora Singh <nora@brightline.ai>
+Cc: Ben Carter <ben@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: Tue, 15 Dec 2026 15:03:00 -0800
+Subject: Deployment mode fit assessment — Dedicated vs Private VPC (post-demo)
+
+Hi Nora — thanks again for your time earlier today. Quick recap from our call and the items I promised to follow up on: 
+
+Key constraints you mentioned
+- Regulated patient records (PHI) must remain under customer control; encryption with customer-managed keys (KMS/HSM) is a hard requirement.
+- Non-PHI analytics may be ok in hosted environments if logs and telemetry are retained per your retention policy.
+- Target 99th pctl latency goal: 250ms for short inference requests; bulk batch jobs can be higher.
+
+Two deployment paths that match what we discussed
+1) Dedicated capacity (Redwood Dedicated) — isolated GPU pools with tenant-level separation, Redwood controls the control plane; supports autoscaling and burst. Quicker to stand up, predictable throughput, and we can provide SOC2 evidence and network isolation controls.
+2) Private (VPC / on-prem) — customer-controlled VPC with private control plane or on-prem package; full control over key residency, audit logs routed to your SIEM, and can keep PHI entirely off shared infrastructure. Longer lead time, but aligns with your compliance ask.
+
+Clarifying questions (would you mind answering these so we can size the POC and proposal?):
+- Can you confirm the percent of requests that will carry PHI vs non-PHI (ballpark)?
+- Do you need the control plane to be customer-managed or is customer KMS + audit forwarding sufficient?
+- Are HA across AZs and cross-region failover required for the initial POC?
+- Who in procurement/legal should we include for contracting and an initial redline review?
+
+Attachments: feel free to send your data classification CSV and SLA doc you referenced on the call — that will help us map the right configuration. 
+
+Next steps I propose:
+- If you confirm PHI volume and control-plane preference, we’ll sketch a two-week POC plan (environment + test prompts + pass/fail criteria).
+- Technical sync with our infra engineer (Ben) to go through network/VPC peering and KMS options.
+- Procurement touchpoint to get a statement of work and timelines.
+
+I’ve looped Ben and Marissa here to help with the technical and commercial details. Thanks — looking forward to your notes.
+
+— Olga
+Olga Petrov
+Enterprise Account Executive | Redwood Inference
+olga@redwood.ai | +1 415-555-0194
+
+
+From: Nora Singh <nora@brightline.ai>
+To: Olga Petrov <olga@redwood.ai>
+Cc: procurement@brightline.ai
+Date: Wed, 16 Dec 2026 09:12:00 -0800
+Subject: Re: Deployment mode fit assessment — Dedicated vs Private VPC (post-demo)
+
+Hi Olga — thanks for the clear recap. A few answers below and I attached the classification/export we used on the call.
+
+Answers:
+- PHI vs non-PHI split: roughly 18% of inference requests will touch PHI records during peak. Bulk offline analytics (~10% of total token volume) are non-PHI.
+- Control plane: Preference is customer-managed KMS (BYOK) + audit forwarding first. If that proves insufficient for auditors we may need a private control plane later.
+- Availability: HA across two AZs is required for production; for the POC a single AZ is acceptable.
+- Procurement: please CC Rachel Lin (rachel.lin@brightline.ai) for contracts & redlines.
+
+We attached Brightline_PII-classification.csv and a draft of our SLA requirements (Brightline_SLA_requirements_v1.docx). 
+
+Also — can you confirm whether Dedicated gives us tenant-level network separation that prevents egress to other tenants (we need demonstrable network Fencing for our auditors)?
+
+Thanks,
+Nora
+Director, IT Security | Brightline AI
+Nora.Singh@brightline.ai
+
+
+From: Olga Petrov <olga@redwood.ai>
+To: Ben Carter <ben@redwood.ai>, Marissa Cole <marissa@redwood.ai>, Karthik Iyer <karthik@redwood.ai>
+Date: Thu, 17 Dec 2026 11:34:00 -0800
+Subject: FW: Deployment mode fit assessment — Dedicated vs Private VPC (post-demo)
+
+Team — forwarding Nora’s responses and the attachments. Highlights for sizing the POC and proposal:
+
+- PHI is material (18% of peak) — this pushes us toward Private VPC if auditors insist on a private control plane, but initial route is Dedicated + BYOK + audit forwarding.
+- Required: HA across two AZs for production; single AZ acceptable for POC.
+- Procurement contact: Rachel Lin (cc’d by Nora).
+
+Questions for you:
+- Ben — can Dedicated be profiled (docable) to show network fencing per tenant such that egress to other tenants is prevented and we can provide an implementation note for auditors? If not, what evidence can we provide?
+- Karthik — what’s the cost delta estimate for a 2-week POC on Private VPC vs Dedicated reserved capacity for the same throughput (approx 100 reqs/s peak)?
+- Marissa — commercial: recommend we present Dedicated POC first with an option to transition to Private control plane; what margin / discount should we apply for a two-week POC to keep it low friction?
+
+I’m proposing a short internal sync tomorrow to align on an ask list for our AM and infra teams and then send a POC proposal back to Brightline.
+
+— Olga
+
+From: Ben Carter <ben@redwood.ai>
+To: Olga Petrov <olga@redwood.ai>, Marissa Cole <marissa@redwood.ai>, Karthik Iyer <karthik@redwood.ai>
+Date: Fri, 18 Dec 2026 09:21:00 -0800
+Subject: Re: FW: Deployment mode fit assessment — Dedicated vs Private VPC (post-demo)
+
+Thanks for the flag, Olga. Quick answers / suggestions: 
+
+- Network fencing (Dedicated): we run tenant-dedicated GPU pools with virtual network isolation and per-tenant NAT. For auditors we can produce network diagrams, flow logs, and a tenant isolation design doc describing how egress is restricted and how packets are NATed through tenant-dedicated endpoints. We cannot (today) provide a fully customer-controlled control plane in the hosted Dedicated service; that’s only available in Private deployments.
+- BYOK / KMS: Dedicated supports customer-managed keys (BYOK) for model payload encryption at rest. We can also forward audit logs (CloudTrail-equivalent) to their SIEM via a secure log-forwarding connector.
+- Cost / timeline: for a 2-week POC at ~100 reqs/s peak — estimate: Dedicated POC = ~USD 32K (reserved short-term capacity + minimal engineering effort). Private VPC POC (customer VPC + private control plane) = ~USD 68K (higher infra and setup + infra eng time). Exact numbers need infra sizing validation from Karthik.
+
+My recommendation: propose a staged POC — start with Dedicated + BYOK + audit-forwarding and predefine the acceptance criteria (latency, isolation verification steps). If auditors still require a private control plane, include Private migration as a defined next phase with clear delta costs and timeline.
+
+I can draft the isolation evidence we can provide; Olga, if you want I’ll attach a tenant-isolation checklist and a short runbook for the POC.
+
+— Ben
+Senior Solutions Engineer | Redwood Inference
+ben@redwood.ai

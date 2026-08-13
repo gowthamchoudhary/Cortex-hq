@@ -1,0 +1,123 @@
+KiteHealth surge: executive triage summit + customer comms
+
+From: Sam Wu <sam.wu@kitehealth.com>
+To: grace_oconnor, marissa_cole, laura_bennett
+Cc: ops@kitehealth.com
+Date: Mon, 10 Jun 2028 08:15:00 -07:00 (PDT)
+Subject: urgent: kite-text-v1 latency + errors since 05:40 PT (diag attached)
+
+Team —
+
+We started seeing a sustained spike in tail latency and error rate on the kite-text-v1 endpoint after the model swap at ~05:40 PT this morning. Summary:
+- 95th pct latency increased from ~180ms -> ~1.2s for the last 2 hours
+- Error rate (5xx) jumped to ~6% during the peak window; customers reporting timeouts and partial responses
+- Throughput (req/s) dropped ~30% compared to baseline despite similar incoming traffic
+
+Attached is a short diagnostics dump (kite_diagnostics_0610.pdf) and a Grafana link with traces. Customer ops (Elena Torres) is already seeing failed flows and has asked for an ETA.
+
+Can you confirm whether a model variant rollback is possible quickly? We’ve also captured request IDs and traces in the attached CSV.
+
+Thanks,
+Sam
+KiteHealth — Platform / Customer Ops
+(attachment: kite_diagnostics_0610.pdf)
+
+From: grace_oconnor <grace_oconnor@redwood.ai>
+To: marissa_cole, vivek_kulkarni, karthik_iyer, laura_bennett
+Date: Mon, 10 Jun 2028 08:30:00 -07:00 (PDT)
+Subject: Re: urgent: kite-text-v1 latency + errors since 05:40 PT (diag attached)
+
+Acknowledged — thanks for the heads up, Sam.
+
+We’re standing up an executive triage summit at 09:30 PT (calendar invite to follow) to:
+- Align on immediate mitigation (rollback vs routing)
+- Finalize customer-facing comms and credits/offers
+- Identify short-term SLA/Billing impacts and legal/finance touches if needed
+
+Immediate asks before 09:00 PT:
+1) Vivek — short hypothesis and rollback path feasibility
+2) Karthik — telemetry snapshot + whether we can throttle new traffic into the affected pool
+3) Marissa + Laura — draft two customer comm templates (technical + executive) for KiteHealth ops
+
+I’ll chair the 09:30 summit and will aim to send a concise status note to Elena and Sam within 30 minutes after the meeting.
+
+Grace O'Connor
+VP, Customer Reliability | Redwood Inference
+(Internal)
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+To: grace_oconnor, karthik_iyer, laura_bennett, marissa_cole
+Date: Mon, 10 Jun 2028 08:45:00 -07:00 (PDT)
+Subject: Re: urgent: kite-text-v1 latency + errors since 05:40 PT (diag attached)
+
+Quick technical read from infra:
+- Correlation shows the latency/error spike coincides with a quantized variant swap for kite-text-v1 at 05:40 PT. The new variant (v3-q8) appears to trigger repeated KV cache invalidation on nodes with older NV cache warm states — this is producing memory pressure and intermittent OOMs, which manifest as 502/504 from the SGW.
+- Rollback path: we can revert traffic to v2 (legacy non-quantized) across the affected Dedicated pool. Expected rollback time: ~12 minutes to drain and switch traffic, plus ~10–15 minutes for KV warmup to recover tail latency metrics.
+- Mitigations in parallel: enable per-request retry with exponential backoff at the gateway (low-cost), and route latency-sensitive customers to the hot dedicated pool if capacity allows.
+
+I will start the rollback dry-run at 09:05 PT if we green-light. I’ve uploaded a snapshot (sla-metrics.csv) to the drive link for the 04:00–08:30 window.
+
+—Vivek
+Director, Serving Runtime
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: grace_oconnor, laura_bennett
+Cc: vivek_kulkarni, karthik_iyer
+Date: Mon, 10 Jun 2028 09:00:00 -07:00 (PDT)
+Subject: Draft customer comms for KiteHealth — two options
+
+Attached is a short executive + technical note draft to send to KiteHealth ops. Two options:
+
+1) Executive short (to send immediately after triage):
+Subject: Update on service disruption / immediate remediation steps
+Body: Hi Elena / Sam — we’ve identified a model rollout as the likely cause of the latency and error spikes affecting your service. Our engineering team is rolling back to the previous model variant and we expect service metrics to return to normal within ~20–25 minutes. We will follow up with a technical post-mortem and propose a credit for the incident. — Grace O'C.
+
+2) Technical note (attach diagnostic summary):
+Body: Short timeline + mitigation steps + request for any customer traces. Offer: 20% credit on June usage as goodwill and a dedicated post-incident call with our senior engineers.
+
+Please confirm which option to send. If approved, I’ll send and coordinate a CS follow-up at +30 and +90 minutes.
+
+(draft at: drive link)
+(attachment: kite_customer_brief_draft.docx)
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: grace_oconnor, vivek_kulkarni
+Cc: marissa_cole, laura_bennett
+Date: Mon, 10 Jun 2028 09:15:00 -07:00 (PDT)
+Subject: Re: Draft customer comms for KiteHealth — two options
+
+On Mon, Jun 10, 2028 at 09:00 AM Marissa Cole <marissa_cole@redwood.ai> wrote:
+> Attached is a short executive + technical note draft to send to KiteHealth ops. Two options:
+
+Rollback initiated at 09:10 PT (triggered via blue/green route). Early telemetry:
+- Error rate down from 6.1% -> 2.0% within the first 6 minutes after cutover
+- 95th pct latency improved from 1.2s -> ~420ms so far (still above baseline but trending down)
+- No sustained OOMs flagged on dedicated pool after rollback; KV warmup in progress
+
+Request from infra: hold off on broad customer reroutes until we see stable 95th pct < 300ms for 15 consecutive minutes. I’ll push a follow-up at +20.
+
+Karthik
+Principal SRE — Serving Runtime
+
+From: grace_oconnor <grace_oconnor@redwood.ai>
+To: Sam Wu <sam.wu@kitehealth.com>, Elena Torres <elena.torres@kitehealth.com>
+Cc: marissa_cole, vivek_kulkarni, karthik_iyer, laura_bennett
+Date: Mon, 10 Jun 2028 09:45:00 -07:00 (PDT)
+Subject: Update: rollback in progress + customer next steps
+
+Elena / Sam —
+
+Thanks for the quick report and patience. Short update from our executive triage summit:
+- Root cause: model variant swap (v3-q8) triggered KV cache invalidation and transient memory pressure, producing elevated 95th pct latency and 5xx errors.
+- Immediate action: we rolled traffic back to the previous model variant at 09:10 PT and enabled gateway-level retries for impacted routes. Early telemetry shows error rate falling and latency improving; Karthik will validate stability for the next 15–20 minutes.
+- Next steps:
+  * We will send a formal technical post-mortem within 48 hours with remediation and long-term guardrails.
+  * As a gesture of goodwill, Redwood will offer a 20% credit on June usage for KiteHealth. Marissa will coordinate the formal offer and billing note.
+  * We’ve attached a short diagnostics snapshot and the draft comms for your review (kite_customer_brief_draft.docx).
+
+If you need a joint bridge with our engineering leads while we validate, we can stand one up immediately.
+
+Apologies for the disruption — we’re treating this with top priority.
+
+Grace O'Connor
+VP, Customer Reliability | Redwood Inference
+(attachment: kite_customer_brief_draft.docx)

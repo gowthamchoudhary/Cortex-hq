@@ -1,0 +1,116 @@
+PrivGPU: graceful-degradation & admission policy proposal for regulated workloads
+
+From: Sarah Dunn <sarah.dunn@acme.ai>
+To: logan_wright
+Cc: marissa_cole
+Date: 2026-09-18T09:12:00-07:00
+Subject: Regulated workload sizing: throughput / graceful-degradation needs
+
+Hi Logan,
+
+Thanks again for the walkthrough yesterday. We're starting to draft our procurement and compliance checklist for the private VPC deployment and need a concrete sizing and operational profile to feed into our CISO and procurement. A few specific asks: 
+
+- Target sustained throughput you can guarantee per "slab" (we're looking at predictable token/sec for baseline pricing).
+- Expected p95/p99 latency under sustained and 2x burst traffic shapes (our SLOs are p95 < 250ms for single-turn inference).
+- How the system behaves when the pool is saturated — what graceful-degradation modes exist (queueing, shed, fallback to hosted tier, or degraded model)?
+- Networking constraints: egress caps, peering requirements, and expected TLS handshake overhead for high QPS.
+
+We also need any runbooks or checklist items you recommend we include for onboarding (eg. warm-pool window, cache-warmup steps). Can you send a proposal by EOD so we can align with our legal and infra teams?
+
+Appreciate it — happy to loop in our cloud partner if needed.
+
+Cheers,
+Sarah
+Head of Engineering, Acme.ai
+
+From: logan_wright
+To: Sarah Dunn <sarah.dunn@acme.ai>
+Cc: marissa_cole, karthik_iyer
+Date: 2026-09-18T10:04:00-07:00
+Subject: Re: Regulated workload sizing: throughput / graceful-degradation needs
+
+Sarah — thanks for the clear list. Draft answers below (high level) plus attached capacity workbook and a network topology sketch. Will follow with a concise mutual action plan after we sync internally.
+
+Summary (high level recommendations)
+- Slab sizing: recommend a 40-GPU slab (A100-equivalent) as the initial committed unit for regulated customers; this gives strong isolation and predictable amortization for pre-warm/caches.
+- Sustained throughput: ~110k–130k tokens/min per slab depending on model/quantization; for conservative planning use 110k tokens/min.
+- Latency: p95 ~120–220ms (single-turn) at sustained load; p99 can push up to ~400ms under tail events unless admission control is applied.
+- Burst handling: we operate a warm-buffer pool + short-duration burst lanes. For 2x bursts we recommend a 15–20% warm-buffer capacity and a 5–10s queueing window before shedding.
+- Graceful degradation modes (in order): 1) short queue with ETA, 2) model fallback to a smaller variant (quantized or distilled), 3) rate-limit with explicit 429 and retry-after, 4) cross-region fallback to hosted Redwood with reduced privacy guarantees (opt-in).
+
+Operational knobs we propose for your runbook
+- Admission gate thresholds: at 75% slab concurrency begin request queuing, at 90% trigger pre-warm and enable model-fallback policy.
+- Queue policy: FIFO with per-tenant priority tiers; max queue time 8s for latency-sensitive lanes, 20s for batch lanes.
+- Cache warmup: recommend a 10–15min warmup window after slab activation for common prefixes; we provide a warmup API and tooling.
+- Network: expect TLS overhead ~1–2ms per connection at scale; recommend keep-alive and connection pooling on clients.
+
+Attachments: capacity_calcs_v3.xlsx (token math + slab burn-rate scenarios), network_topology_v2.pdf (peering & egress notes).
+
+Next steps: propose a 30m ops+security call tomorrow to lock admission thresholds and SLA language. If that works, we can produce a short Mutual Action Plan and a draft DocuSign SOW for legal.
+
+– Logan Wright
+Senior Solutions Engineer, Redwood Inference
+
+From: karthik_iyer
+To: logan_wright, marissa_cole
+Cc: Sarah Dunn <sarah.dunn@acme.ai>, CloudPartner Solutions <eng@cloudpartner.com>
+Date: 2026-09-18T12:10:00-07:00
+Subject: Re: Regulated workload sizing: throughput / graceful-degradation needs
+
+Adding capacity math and a couple of concrete knobs we should commit to in the MAP: 
+
+Concrete capacity assumptions (conservative)
+- Per GPU sustained token rate (real-world mixed model): ~2.6k tokens/min. So 40 GPUs ≈ 104k tokens/min (matches Logan's conservative number).
+- Warm-buffer: keep 4 GPUs hot (10% of slab) to absorb short spikes without coldstart penalty.
+- Admission sizing: each tenant lane should map to a 10% share of slab by default; for single-tenant dedicated slabs, increase to 80% reserved tenant carveout with 20% shared buffer.
+
+Failure and fallback behavior (engineering particulars)
+- Soft-fail mode: when queue exceeds the 8s threshold, respond with structured partial results where applicable and a clear client-side retry recommendation.
+- Eviction and KV cache: keep per-tenant KV caches pinned for the top 5k prefixes; eviction is LRU with prefetch hints from client during warmup.
+
+Suggested SLA wording snippets (for legal)
+- Throughput commitment: Redwood will provision dedicated slabs to support sustained throughput of X tokens/min per slab, measured at the slab egress gateway.
+- Burst absorption: Redwood will maintain a warm buffer to absorb bursts up to 2x baseline for a 60s window.
+
+I'll upload a quick calculator tab in the attachment and mark the scenarios (steady, 2x burst, fat-tail).
+
+— Karthik
+Staff Engineer, Runtime & Capacity
+
+From: marissa_cole
+To: logan_wright, karthik_iyer
+Cc: Sarah Dunn <sarah.dunn@acme.ai>
+Date: 2026-09-18T14:05:00-07:00
+Subject: Re: Regulated workload sizing: throughput / graceful-degradation needs
+
+Operational checklist and procurement considerations from an ops lens:
+
+- Network & peering: for Acme's expected traffic profile we recommend direct cloud interconnect/peering with a minimum egress cap of 4Gbps per slab; we should pin expected egress in the SOW to avoid surprise charges.
+- Monitoring: add per-tenant dashboards (Console) with token rates, queue depths, p95/p99 latency, and evicted-cache rate. Create SLA alerting thresholds (75/90/95%).
+- Rollback runbook: pre-approve an automatic fallback policy to the hosted Redwood API for 5–10% of traffic during an emergency cutover; include a communication template for customer support.
+- Procurement timeline: procurement needs 2 weeks to approve a dedicated slab commitment after SOW sign; staging can be stood up in 3–5 business days with reduced commit.
+
+One more operational note: TLS session reuse and client-side connection pooling will materially reduce load on control-plane and help keep per-request overhead low — we'll include recommended SDK config in the onboarding doc.
+
+Marissa
+Principal Technical Program Manager, Customer Operations
+
+From: Sarah Dunn <sarah.dunn@acme.ai>
+To: logan_wright, marissa_cole, karthik_iyer
+Date: 2026-09-18T16:35:00-07:00
+Subject: Re: Regulated workload sizing: throughput / graceful-degradation needs
+
+Thanks everyone — this is very helpful and gives us what we need to push through our security and procurement gates.
+
+Action items we've captured:
+- Quick ops+security sync tomorrow at 10am PT to finalize admission thresholds and warm-buffer numbers.
+- Acme to review the capacity_calcs_v3.xlsx and confirm peak token profile by EOD Monday.
+- Redwood to draft Mutual Action Plan + SOW with attached egress caps and runbook excerpts; we'll target signature within two weeks.
+
+I've opened a placeholder DocuSign (link below) for the SOW template so legal can see the skeleton earlier: https://www.docusign.com/placeholder/acme-priv-deploy
+
+If it's useful, we'll also loop in our cloud partner next call to confirm peering details.
+
+Best,
+Sarah
+Head of Engineering, Acme.ai

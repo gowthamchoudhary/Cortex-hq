@@ -1,0 +1,123 @@
+Re: Evergreen RFP — preservation ledger, extraction and chain-of-custody details
+
+From: Sara Patel <sara.patel@evergreen.co>
+To: Priyom Das <priyom.das@redwood.inference>
+Cc: procurement@evergreen.co
+Date: Mon, 30 Nov 2026 09:12:00 -0500
+Subject: Evergreen RFP — data preservation & ledger extraction (Section 8)
+
+Priyom —
+
+Thanks for taking our call this morning. Section 8 of our RFP asks for details on long-term preservation of the event/audit ledger for hosted services and the mechanism to extract an immutable copy suitable for regulatory reviews. Specifically Evergreen needs:
+
+- Retention windows (default & configurable) for: audit trails (API requests, admin events), generation provenance (request inputs/outputs, model version, deterministic/non-deterministic flags), and system telemetry necessary for reconstruction.
+- Supported export formats and export APIs (bulk, incremental, snapshots).
+- Chain-of-custody guarantees: tamper-evidence, signed manifests, and verification checksums.
+- Time-to-deliver for a full-account export and any SLA penalties if the export is delayed.
+- Options for storing exports directly into customer-owned buckets (S3/GCS) and associated credentials/permissions model.
+
+We included a PDF in Section 8 (attached) with a sample evidence request. Can you respond with a short technical summary and any constraints for Redwood Hosted vs Dedicated vs Private deployments? Also flag any items that would require an exception/paid project.
+
+Thanks,
+Sara
+Sara Patel
+Procurement Lead, Evergreen Systems
+[sara.patel@evergreen.co]
+
+-----
+From: Priyom Das <priyom.das@redwood.inference>
+To: Sara Patel <sara.patel@evergreen.co>
+Date: Mon, 30 Nov 2026 11:04:00 -0500
+Subject: Re: Evergreen RFP — data preservation & ledger extraction (Section 8)
+
+Sara —
+
+Appreciate the clear ask and the PDF. Looping in Karthik (security) and Marissa (account lead) to draft a formal RFP response. High level now: we support account-level audit ledger exports in multiple formats, and Dedicated/Private support configurable retention policies and direct S3/GCS export to customer buckets. For Hosted we have default short-term retention for generated content but a separate long-term audit ledger that is retained for 365 days by default and can be extended with paid retention add-ons.
+
+I'll follow up with a technical export spec and chain-of-custody details tomorrow.
+
+— Priyom
+Priyom Das
+Senior Solutions — Redwood Inference
+
+-----
+From: Karthik Iyer <karthik.iyer@redwood.inference>
+To: Priyom Das <priyom.das@redwood.inference>, Marissa Cole <marissa.cole@redwood.inference>
+Cc: Sara Patel <sara.patel@evergreen.co>
+Date: Tue, 01 Dec 2026 09:18:00 -0500
+Subject: RE: Evergreen RFP — data preservation & ledger extraction (Section 8)
+
+Sara / Priyom / Marissa —
+
+Below is a concise technical summary you can use in the RFP response (I will paste into the RFP draft):
+
+1) Retention windows (defaults and configurable)
+- Hosted API:
+  - Generation artifacts (request inputs/outputs) — default: 30 days; can be extended to 90/365 days with an add-on.
+  - Audit ledger (API-level audit entries, admin actions, model versioning events) — default: 365 days.
+  - System telemetry for reconstruction (traces, sampling logs) — default: 90 days.
+- Dedicated (reserved capacity):
+  - Customer-configurable retention per-tenant. Standard plans support 365/730/1095 days (1/2/3 years). Longer-term archival available via snapshot exports to customer bucket.
+- Private (VPC / on-prem):
+  - Fully customer-controlled retention; no default enforced by Redwood.
+
+Notes: Hosted retention above is for the canonical ledger entries required for compliance. For high-volume generation payloads (raw prompt + full token stream) we recommend customers use Dedicated or Private if long-term retention is required due to cost considerations.
+
+2) Export formats & delivery mechanisms
+- Full-account snapshot exports: JSON Lines (newline-delimited JSON) and Parquet (columnar) are supported; schema in attached redwood-audit-export-schema-v1.json.
+- Incremental exports: incremental cursor-based pulls via the Audit Export API (/v1/audit/exports?cursor=...) producing ndjson deltas.
+- Direct-to-customer-bucket: supported for Dedicated and Private (Hosted only for enterprise customers under contract). We sign temporary STS credentials to write to customer S3/GCS, or customers can provide a write-only bucket policy.
+- For very large exports we provide multipart upload tooling and a resume-capable redwoodctl client.
+
+3) Chain of custody & tamper-evidence
+- Every export includes a manifest.txt that contains export metadata, start/end timestamps, object list, and per-object SHA256 hashes.
+- Manifests are signed by Redwood's export signing key (RSA 4096) and we provide public-key fingerprint so customers can verify signatures. Sample manifest in attached chain-of-custody-sample-manifest.txt.
+- For Hosted exports we additionally provide a signed S3 object lock option (governance mode) when exporting to a customer-controlled bucket — requires contractual setup.
+
+4) Delivery SLA & timing
+- Standard full-account export for medium-sized accounts (<5TB raw ledger) — typical delivery time: 24–48 hours after request acceptance.
+- Large exports (>5TB) — time depends on size; we provide a delivery estimate within 48 hours and expected completion within 72–168 hours.
+- SLA credits: available for enterprise contracts (tiered by plan). Out-of-scope for self-serve hosted customers unless included in enterprise addendum.
+
+5) Verification & audit support
+- We provide MD5/SHA256 checksums and signed manifests; we can also compute deterministic Merkle roots on request for additional tamper-evidence (paid engagement).
+- For regulatory audits we can provide a redacted export that omits customer-sensitive PII if required; export tooling supports field-level redaction rules configured by the customer.
+
+6) Deletion & DSR handling
+- Data subject request (erase) flows: For Hosted, we remove generation artifacts within the configured retention policy and mark ledger entries with a deletion flag; full removal from backups/archives is subject to retention windows and will follow contractual timelines (we provide timelines in the RFP response).
+- For Dedicated/Private customers, DSR handling can be delegated to customer admin with Redwood providing API hooks (DELETE /v1/admin/audit-objects/:id).
+
+Constraints / Items that require exceptions or paid work
+- Immediate export to customer bucket for Hosted customers: enterprise contract and configuration of outbound STS permissions required.
+- Merkle root tamper-evidence and on-demand notarization: professional services engagement.
+- On-site forensic assistance and chain-of-custody witness: professional services and travel/coordination fees.
+
+Attachments: redwood-audit-export-schema-v1.json (export schema), chain-of-custody-sample-manifest.txt.
+
+—Karthik
+Karthik Iyer
+Security & Compliance — Redwood Inference
+
+-----
+From: Marissa Cole <marissa.cole@redwood.inference>
+To: Sara Patel <sara.patel@evergreen.co>, Priyom Das <priyom.das@redwood.inference>, Karthik Iyer <karthik.iyer@redwood.inference>
+Date: Thu, 02 Dec 2026 11:03:00 -0500
+Subject: Re: Evergreen RFP — data preservation & ledger extraction (Section 8)
+
+Sara —
+
+Thanks for the ask; Karthik's summary is attached and I'm adding a short commercial note to the RFP response:
+
+- Hosted: default audit ledger retention = 365 days; extended retention packages available starting at +6 months for $X/month (details in the SOW). Direct-to-customer-bucket exports for Hosted are part of the Enterprise addendum.
+- Dedicated: configurable retention up to multi-year; long-term archival to customer bucket included on annual reserved plans.
+- Private: retention and export fully controlled by customer; Redwood provides the export tooling and optional managed services.
+
+We have attached the redwood-audit-export-schema-v1.json and a sample manifest. Please confirm whether Evergreen prefers ndjson or Parquet for the archive format and whether the export should be pushed to an Evergreen-owned S3 bucket (we will need a write-only policy or STS step-up flow). If helpful, we can set up a 30-minute tech-run with Karthik and our infra team to walk through a sample export next week.
+
+Best,
+Marissa
+Marissa Cole
+Enterprise Account Executive — Redwood Inference
+[attachment: Evergreen_RFP_Section8_Attach.pdf]
+[attachment: redwood-audit-export-schema-v1.json]
+[attachment: chain-of-custody-sample-manifest.txt]

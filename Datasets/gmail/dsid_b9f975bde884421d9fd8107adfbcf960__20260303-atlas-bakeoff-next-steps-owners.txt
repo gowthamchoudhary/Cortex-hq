@@ -1,0 +1,137 @@
+Atlas bake-off: post-demo recap, proposed tests & owners
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Sara Mills <sara@atlas-analytics.com>, David Hart <david.hart@atlas-analytics.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Mon, 2 Mar 2026 16:12:00 -0700
+Subject: Atlas bake-off: post-demo recap & next steps
+
+Thanks again for the demo time today — great discussion and helpful context on the production SLAs you need. Quick recap and proposed next steps so we all have the same plan.
+
+Call highlights:
+- Atlas priorities: consistent p99 latency under 200ms for the short-query path, predictable throughput for peak batches (500 concurrent streams), and a 20–30% unit-cost improvement vs current managed endpoints.
+- Success signals you mentioned: parity on quality for the customer-facing prompts (sampling attached seed set), no incident-level OOMs during 48h soak, reproducible fallbacks when capacity is constrained.
+- Competitive frame: you’re running parallel tests vs (1) hyperscaler managed endpoints, (2) another inference API vendor. You asked for a clear, comparable test matrix.
+
+Proposed bake-off test matrix (high level):
+1) Latency profile (T1) — p50/p95/p99 on the seed prompt set, steady-state and burst. Success: p99 <= 200ms for the short path; p95 within 1.5x of p50 for typical prompts.
+2) Throughput stability (T2) — sustained throughput run at 500 concurrent streams for 2 hours. Success: <=5% error rate (timeouts/502/OOM) and token cost measured.
+3) Streaming degradation and cold-start (T3) — 100 cold-starts over a 24h window; monitor first-token latency. Success: 95th percentile first-token latency under 300ms for warm paths; graceful degradation for cold starts.
+4) Quality parity (T4) — automated metrics + small blind human eval on 250 prompts. Success: no statistically significant quality drop vs your baseline (you’ll provide baseline outputs).
+5) Failure/fallback behavior (T5) — induce capacity failures and confirm fallback policy/failover within SLA. Success: automatic fallback triggers and no data leaks.
+
+Owners & timing (first cut):
+- Marissa Cole (marissa.cole@redwood.com) — test orchestration & runner (owner).
+- Ben Carter (ben.carter@redwood.com) — provisioning and billing/credits (owner).
+- Jordan Blake — project sponsor and tie-break on scope/rollout.
+- Atlas contacts: Sara Mills (test dataset + baseline outputs), David Hart (technical lead).
+
+Timeline (tentative):
+- Sara provides seed prompt set + baseline outputs: by 2026-03-04 EOD
+- Redwood posts finalized test matrix & config: 2026-03-06
+- Kickoff run & live tests: week of 2026-03-09 (kickoff meeting proposed 2026-03-09 10:00 PT)
+- Initial results & readout: 2026-03-16
+
+I attached a first-pass test matrix (bakeoff-test-matrix-v1.xlsx) and an example runtime config (redwood-test-config.json). If this aligns, Marissa will produce the runnable playbook and invite Atlas to the kickoff.
+
+Open items for Atlas to confirm:
+- Which hyperscaler endpoints and competitor API versions should we run side-by-side?
+- Are you able to share representative baseline outputs (or do you want Redwood to produce them against your dataset)?
+- Any compliance constraints for running tests in us-west-2 vs europe?
+
+Thanks — I’ll leave internal scheduling/owners to Marissa and Ben.
+
+—
+Jordan Blake
+Head of Solutions — Redwood Inference
+jordan.blake@redwood.com | +1 415-555-0192
+
+
+From: Sara Mills <sara@atlas-analytics.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: David Hart <david.hart@atlas-analytics.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 3 Mar 2026 09:05:00 -0700
+Subject: Re: Atlas bake-off: post-demo recap & next steps
+
+Jordan — thanks for the clear recap and proposed matrix, this is exactly what we needed. Quick answers and a couple of asks: 
+
+- We’ll share the seed prompts + the customer-facing prompts (250 items) and our baseline outputs by EOD 2026-03-04. Link: https://s3.aws.atlas-analytics.com/sample-prompts/seed-set-1.json (read-only).
+- Hyperscaler endpoints for comparison: AWS Bedrock (gpt-like-v2), GCP managed-LM (prod), and we’ll include one run against our incumbent inference API (vendor@competitor.ai).
+- Baseline outputs: we’ll attach the CSV in the S3 folder — if you can also run Redwood’s variants and drop outputs back to that folder, that would be great.
+- One ask on metrics: please include tokenized-cost normalized to 1M input+output tokens and a short note on how quantization impacted quality (if you test quantized variants).
+
+Also, we’d like to join the kickoff — propose 2026-03-09 10:00 PT. Please send an invite and the runbook ahead of the meeting.
+
+Regards,
+Sara
+Sr. ML Ops Manager — Atlas Analytics
+sara@atlas-analytics.com
+
+On Mon, Mar 2, 2026 at 4:12 PM Jordan Blake <jordan.blake@redwood.com> wrote:
+> [quoted earlier message]
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Ben Carter <ben.carter@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Cc: Sara Mills <sara@atlas-analytics.com>
+Date: Tue, 3 Mar 2026 11:30:00 -0700
+Subject: Re: Atlas bake-off: post-demo recap & next steps
+
+Thanks — I’ll take point on orchestration. Drafting the runnable plan below (owners + exact success criteria) so we can be deterministic during the run and reduce ambiguity in readouts.
+
+Runnable test plan (detailed):
+- T1 Latency profile (owner: Marissa)
+  * Inputs: seed-set-1.json (250 prompts, short/medium/long distribution)
+  * Runs: 3 x 30-minute steady-state runs at target concurrency (100, 250, 500)
+  * Metrics: p50/p95/p99 for total latency and first-token latency; CPU/GPU util; tail latencies per shard
+  * Success: p99 <= 200ms on short-path prompts at 500 concurrency; error rate < 1%
+- T2 Throughput stability (owner: Ben)
+  * Inputs: burst script (attached in redwood-test-config.json)
+  * Runs: 2-hour sustained at 500 concurrent streams, with synthetic and real prompt mixes
+  * Metrics: sustained throughput, qps, error types, retries, memory OOMs
+  * Success: sustained throughput within 90% of target and <5% combined error/timeouts
+- T3 Streaming & cold-start (owner: Marissa)
+  * Runs: 100 cold-starts over 24h, and 2-hour continuous streaming sessions
+  * Success: first-token p95 < 300ms for warm; observed graceful degraded frames for cold starts
+- T4 Quality parity (owner: Evelyn)
+  * Method: automated BLEU/ROUGE and blind human evaluation on 250 prompts (50 prompts per evaluator)
+  * Success: no statistically significant drop vs Atlas baseline at alpha=0.05; any differences >5% flagged for review
+- T5 Failure/fallback (owner: Marissa + Ben)
+  * Method: intentionally reduce capacity and confirm fallback policy triggers (model variant, region fallback)
+  * Success: automatic fallback within configured policy; no exposure of PII; failover within 2x latency of warm baseline
+
+Operational owners & deliverables:
+- Marissa: executable playbook, invocation scripts, final test matrix (deliverable by 2026-03-06).
+- Ben: provision dedicated capacity / temporary reserved cluster in us-west-2 and apply any required credits (by 2026-03-05).
+- Evelyn: coordinate human-eval panel and scoring rubric (by 2026-03-10).
+- Jordan: executive readout & final approval of matrix.
+
+Runbook notes:
+- We will publish raw logs and aggregated dashboards to a shared read-only folder; Atlas will get access.
+- For fairness, Redwood will run the hyperscaler and competitor APIs under the same synthetic load scripts (we will log provider side differences).
+
+Risks & mitigations:
+- Risk: quantized models may introduce subtle quality regressions on specific prompts. Mitigation: include an unquantized control run and annotate any delta.
+- Risk: bandwidth/region constraints for Atlas’ baseline. Mitigation: run both us-west-2 and eu-west-1 variants if required.
+
+I’ll draft the kickoff agenda and send calendar invites once Ben confirms provisioning.
+
+—
+Marissa Cole
+Principal Solutions Engineer — Redwood Inference
+marissa.cole@redwood.com
+
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Jordan Blake <jordan.blake@redwood.com>
+Cc: Sara Mills <sara@atlas-analytics.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Wed, 4 Mar 2026 10:23:00 -0700
+Subject: Re: Atlas bake-off: post-demo recap & next steps
+
+Quick update from infra/billing side: I provisioned a temporary reserved cluster in us-west-2 (4x A10G equivalents, autoscaling config disabled for repeatability) and added a billing credit line tied to DEAL-2026-ATL-17. Details and SSH/run access credentials will be in the secure run folder; Marissa, I gave you owner-level access.
+
+I also created the kickoff invite for 2026-03-09 10:00 PT and attached the first-draft runbook link: https://cal.redwood.com/kickoff/atlas-bakeoff-20260309. Please confirm attendance and any additional pre-kickoff items.
+
+Ben
+Director, Product Solutions — Redwood Inference
+ben.carter@redwood.com | +1 650-555-0124
+

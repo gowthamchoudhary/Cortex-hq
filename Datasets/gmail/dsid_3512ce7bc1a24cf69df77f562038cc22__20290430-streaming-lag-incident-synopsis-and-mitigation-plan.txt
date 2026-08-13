@@ -1,0 +1,105 @@
+Streaming/chat latency spike — summary and immediate mitigations
+
+From: Liam Hart <liam.hart@fastbank.com>
+To: Sean Gallagher <sean_gallagher@redwood.com>
+Cc: FastBank Platform Ops <platform-ops@fastbank.com>
+Date: Tue, 30 Apr 2029 09:12:00 -0700
+Subject: Significant latency on streaming chat since 8:45am PT
+
+Hi Sean —
+
+We started seeing a sharp increase in tail latency for our live chat sessions around 08:45 PT this morning. Median token times were OK, but p95/p99 jumped to 2–3s per token and several sessions dropped entirely (clients reported long pauses of 8–12s). This is affecting our agent handoffs.
+
+I've attached the traces from a few sessions and our metrics dashboard link. Can you confirm if there were any infra changes or model rollouts on your side? We have a peak today at 11:00 PT and need a mitigation plan.
+
+Attachments: fastbank-latency-trace-0430.json (json)
+
+Thanks,
+Liam
+Liam Hart
+Sr. Platform Engineer — FastBank
+liam.hart@fastbank.com
++1 415-555-0132
+
+
+From: Sean Gallagher <sean_gallagher@redwood.com>
+To: Liam Hart <liam.hart@fastbank.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Tue, 30 Apr 2029 09:28:00 -07:00
+Subject: Re: Significant latency on streaming chat since 8:45am PT
+
+Thanks for the traces, Liam — we see the same elevated p95/p99 in our ingest telemetry. Short answers up front: no scheduled model rollouts or config pushes at 08:45; we are investigating a routing congestion pattern in the us-west edge pool.
+
+Immediate actions we are doing now:
+- Flushing a hot-connection cache on the affected edge nodes (in progress).
+- Temporarily increasing concurrency on the us-west serving ring to offload backpressure.
+- Enabling per-request lower-precision quantized variant for your route (nonbreaking, should reduce latency).
+
+Temporary mitigations you can apply (one-line snippets attached):
+- Add exponential backoff on client-side streaming retries (start 150ms, max 1s).
+- Decrease max tokens per chunk from 512 to 256 for live sessions during the peak.
+
+I'll loop Marissa and Ben for widescale impact and credits discussion. We'll update in 30 minutes with observed changes.
+
+Sean Gallagher
+Technical Account Lead, Redwood Inference
+sean_gallagher@redwood.com
+(650) 555-0199
+[attachment: temporary-config-snippets.txt (txt)]
+
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Sean Gallagher <sean_gallagher@redwood.com>, Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Tue, 30 Apr 2029 10:01:00 -07:00
+Subject: Re: Significant latency on streaming chat since 8:45am PT
+
+On Tue, Apr 30, 2029 at 9:28 AM Sean Gallagher <sean_gallagher@redwood.com> wrote:
+> Thanks for the traces, Liam — we see the same elevated p95/p99 in our ingest telemetry. Short answers up front: no scheduled model rollouts or config pushes at 08:45; we are investigating a routing congestion pattern in the us-west edge pool.
+
+Update from infra/serving: we correlated the spike with an autoscaler mis-evaluation that caused a burst of connection churn on three us-west instances; churn increased KV-cache misses for longer sessions and made per-token kernel selection spike. Root cause: noisy latency signals from a networking BLIP node that temporarily reduced our batching headroom.
+
+Short-term fixes already applied by infra (10:00 PT):
+- Isolated the noisy BLIP node and drained it from the routing pool.
+- Turned on a conservative autoscale threshold for the affected ring.
+- Deployed a targeted kernel fallback that prioritizes low-latency execution for streaming (this will be live for FastBank in ~5 minutes).
+
+Customer-facing mitigations we recommend now (we included config snippets):
+1) Client: enable smaller chunking and 150ms initial retry backoff (see attached).
+2) Route: pin FastBank to the low-latency kernel variant for the next 6 hours (we can do this for you).
+3) If you can, set a 30s idle-keepalive for agent sessions to reduce reconnections during this window.
+
+I'll monitor the metrics dashboard and send a follow-up with p95/p99 graphs once we have stable data. Ben, can you prepare a proposed credit for the degraded window? Monica — please draft a brief post-incident note to share with the account team.
+
+--
+Marissa Cole
+Director, Customer Reliability — Redwood Inference
+marissa_cole@redwood.com
+
+
+From: Sean Gallagher <sean_gallagher@redwood.com>
+To: Liam Hart <liam.hart@fastbank.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Tue, 30 Apr 2029 15:47:00 -07:00
+Subject: Re: Significant latency on streaming chat since 8:45am PT
+
+Hi Liam —
+
+Quick status: after the fixes (node drain + conservative autoscale + kernel fallback) we observed p95 drop from ~2.8s to ~450ms and p99 from ~3.5s to ~800ms for your traffic in us-west. We also pinned FastBank to the low-latency kernel variant for a 6-hour window as a precaution.
+
+Action items and next steps:
+- Redwood: deliver a short postmortem (root cause, timelines, and permanent remediation plan) by EOD tomorrow. Monica will own this draft.
+- Redwood: Ben will propose a goodwill credit for the impacted 2.5-hour window and share by EOD today.
+- FastBank: If you can temporarily reduce streaming chunk size to 256 and enable the backoff snippet, we expect fewer client-side reconnections; we will keep the kernel pin until 5:00 PT.
+- Joint: schedule a 30-minute post-incident review on Wednesday to walk the runbook changes and validation tests (proposed: Wed 10:00 PT).
+
+We apologize for the disruption — we know this overlaps with your peak. If anything degrades again ping my cell and we'll elevate immediately.
+
+Best,
+Sean
+Technical Account Lead, Redwood Inference
+sean_gallagher@redwood.com
+(650) 555-0199
+
+---
+Attachments referenced above: fastbank-latency-trace-0430.json, temporary-config-snippets.txt
+

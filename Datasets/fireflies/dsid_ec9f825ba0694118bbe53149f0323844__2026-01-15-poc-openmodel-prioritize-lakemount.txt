@@ -1,0 +1,77 @@
+POC: open-model prioritization and workload sizing - Lakemount Health
+
+Discovery + POC scoping for Lakemount Health focused on open-model shortlist, workload sizing, benchmarks and timeline. Agreement to run 2-week bench on dedicated pool, share security docs and sample traffic.
+Meeting header:
+Date: 2026-01-15 16:00 UTC
+Duration: 54m
+Attendees: Alex Martinez (Redwood AE), Priya Shah (Redwood SE), Mark Reyes (CTO - Lakemount), Nina Park (Product), Jorge Alvarez (SRE)
+
+Auto-summary (auto): quick notes captured: prioritize quality for triage UX, latency SLOs for live chat, Spanish/Portuguese support is required, HIPAA + SOC2 compliance non-negotiable.
+
+[00:00] Alex: Hey everyone, thanks for taking the time. Quick intros — I'm Alex, AE on the Redwood side, and with me is Priya, our systems engineer.
+[00:18] Mark (Lakemount): Hey thanks, Mark here, CTO. Nina and Jorge are with me. We're trying to scope a proof-of-concept for triage/chat automation across English and Spanish, possibly Portuguese in phase two.
+[00:35] Priya: Great — can you outline success criteria briefly? What does a win look like for Lakemount?
+[00:48] Nina: Uh, yeah; three things. First, answer accuracy on triage intents above 88% on our eval set. Second, average latency under 350ms p50 for short sessions, p95 under 700ms. Third, cost target — must be less than 0.02 USD per convo on average. And, of course, data residency and HIPAA controls.
+[01:05] Alex: Solid. Those are helpful. For models we're proposing an open-model shortlist to keep licensing flexible — thinking of Llama-derived variants and a couple of Mistral-ish models — low-level note: we will provide concrete perf profiles.
+[01:20] Jorge: Quick Q — when you say Llama variants, are we talking quantized 4-bit runs on dedicated GPUs or hosted? Our infra team prefers VPC/private but we want Redwood to host initial runs.
+[01:37] Priya: We recommend a staged approach: hosted for early iteration, then a small Redwood Dedicated pool inside your VPC for latency and data isolation. For quantization we can test 4-bit and nf4 profiles — there will be a quality vs cost tradeoff.
+[01:55] Mark: Yeah cost-quality tradeoffs are key. We're willing to sacrifice some small bit of quality if latency and cost are right, but not for core clinical triage flows.
+[02:10] Nina: Also multilingual quality — Spanish evaluations historically drop ~5-7% relative to English. We'll need to see model-specific multilingual benchmarks.
+[02:22] Alex: Absolutely. Priya, I'll ask you to walk through the benchmark plan in a bit.
+
+[05:00] Priya: Ok so proposed bench: 2-week run, three model variants: (A) LlamaX-13B (fp16), (B) MistralLike-7B (nf4), (C) Open-Instruct-30B (quantized). We'll perf and quality test on your sample prompts, measure QPS, latency, memory footprint and token cost. We'll run both English and Spanish eval suites.
+[05:25] Mark: That sounds about right but can you add a cold-start and KV-cache-heavy scenario? Our bots have long context threads, KV cash — sorry, KV cache — is important.
+[05:40] Priya: Yes we'll include long-context tests (up to 8k tokens) and KV/cache warm vs cold. We'll capture tokenization differences too.
+
+[08:10] Speaker 1 (auto): small transcription garble here, but they're confirming timeline
+[08:25] Alex: Timeline we propose: baseline bench plan and security docs this week, Lakemount shares traffic sample by Monday next week, Redwood provisions dedicated pool by 01/22, bench runs 01/24-02/06, follow-up results review week of 02/09. Is that viable?
+[08:47] Mark: Yes that timeline looks okay if we can get the security/compliance paper trail early.
+
+[11:00] Nina: On the security side, we need to see SOC2 Type II report and HIPAA BAAs. Also can Redwood support HSM-based KMS integration for key management inside our VPC?
+[11:20] Alex: We can — Redwood Private supports KMS/HSM integrations for enterprise customers. For the POC we'll provide a scoped HIPAA addendum and SOC2 artifacts. We'll also provide our runbook for VPC peering and logs export.
+[11:40] Jorge: Logs export is important. We need audit trails with token-level cost and redaction controls. Can you redact PHI automatically before any logs leave our env?
+[12:02] Priya: We have configurable redaction hooks and can run a pre-ingest filter. For the initial bench, best if you anonymize samples; we'll also show redaction in the pipeline.
+
+[15:30] Mark: Another constraint — throughput profile during business hours spikes to 120 RPS sustained for short bursts. Our current peak sessions have long tails with heavy prompt reuse. We need batching to be smart; synchronous latencies still matter.
+[15:52] Priya: We'll capture throughput shape and set batching policies that respect latency SLOs; Redwood Optimize will suggest batch sizes and caching TTLs. Expect a 20-35% token cost reduction for workload-aware batching in many cases.
+
+[18:00] Alex: On model selection tradeoffs — smaller models (7B) are cheaper and fast but may lose ~4-9% on the triage eval. Larger models cost more but give higher accuracy and better multilingual coverage. We'll present per-model quality vs token-cost curves.
+[18:25] Nina: For safety/regulatory reasons, we may want to route high-risk intents to human-in-the-loop or a larger model even if it's costlier. Can Redwood support hybrid routing?
+[18:40] Priya: Yes, policy routing by intent is supported. You can pin certain intents to a higher-capacity model or to a fallback route that goes to a rep.
+
+[22:10] Speaker 2 (auto): brief cross-talk on API keys
+[22:30] Alex: For the POC we'll provide a temporary API key scoped to the test pool with RBAC so only your SRE and product folks have access.
+
+[25:00] Mark: Benchmark metrics — please include p50/p95 latency, tokens per request, GPU utilization, cost per 1k tokens, and quality metrics (F1/accuracy) per intent and per language.
+[25:20] Priya: Noted. We'll submit a bench spreadsheet with columns for each metric and a column for recommended production config.
+
+[28:40] Nina: On multilingual — our Spanish prompts include regional terms (Mexico, Argentina) which confuse models. Do you have experience fine-tuning or prompt engineering for regional variants?
+[29:00] Priya: For the POC we'll do prompt engineering and eval slices by locale. If fine-tuning is needed later, Redwood can host model variants and manage versions but fine-tune Ops aren't part of this initial bench unless you want to add it.
+
+[32:15] Jorge: Question about private deployment — if we go Redwood Private later, what are the differences for latency and observability?
+[32:30] Alex: Private/on-prem reduces network hops and can cut latency by ~50ms in many setups. Observability pipelines are the same; you'll retain full audit logs and it's easier to meet data residency. Pricing is different — enterprise license + infra.
+
+[36:00] Mark: Are there any known gotchas with long-context keys and memory when using 4-bit quantization?
+[36:15] Priya: Yes, KV cache memory patterns change; some kernels are less optimized for certain quant formats which can increase latency at high token lengths. We'll include memory vs latency charts in the bench report.
+
+[40:10] Alex: Competitors — quick note: some teams use hosted OpenAI for simplicity, but for our use case (HIPAA, VPC, model control) Redwood gives more deployment options. We also compete with Anthropic-ish models for safety-focused workflows and Vertex for cloud-native shops.
+
+[43:00] Nina: Pricing model question — how granular is token billing for a dedicated pool? We need predictable monthly costs.
+[43:15] Alex: Dedicated is reserved capacity with commit tiers. We'll show estimated monthly cost based on your projected QPS and the bench numbers; bench will help you pick the right commit.
+
+[46:50] Mark: Ok let's talk acceptance criteria for the POC — minimum accuracy 88% as mentioned, no more than 10% latency regressions under load, and clear evidence of redaction working. If model falls short on Spanish, we'll consider a two-week fine-tune as a next step.
+[47:15] Priya: We'll flag regression alerts and provide per-prompt failure cases.
+
+[50:00] Alex: To recap next steps: I'll send the benchmark spreadsheet + pricing template + security pack. Priya will provision the dedicated test pool and share access. Mark will provide anonymized traffic samples and success metric file. We'll run the bench 01/24-02/06 and meet to review results week of 02/09.
+[50:30] Mark: That works. One ask — can you include a quick runbook for redaction and PHI handling so our compliance people can sign off faster?
+[50:45] Alex: Yes — we'll include the redaction runbook and a contact for our compliance team.
+
+[53:10] Nina: Thanks everyone, appreciate the clarity.
+[53:20] Alex: Thanks all — we'll follow up with materials.
+
+End of transcript.
+
+Shared artifacts referenced:
+- Benchmark plan spreadsheet (link: https://redwood.example.com/benchmarks/lakemount-poc)
+- Security pack & SOC2/HIPAA addendum (link: https://redwood.example.com/security/lakemount-pack)
+- Runbook for Dedicated pool provisioning (link: https://redwood.example.com/runbooks/dedicated-provision)

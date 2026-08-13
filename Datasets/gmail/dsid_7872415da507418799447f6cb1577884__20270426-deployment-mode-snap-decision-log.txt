@@ -1,0 +1,96 @@
+Post-call: deployment mode snap & latency/throughput checklist
+
+From: Diego Fernandez <diego@redwood.com>
+To: Sam Roh <sam@edgeretail.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: 2027-04-26T15:08:00-07:00
+Subject: Post-call: deployment mode snap & latency/throughput checklist
+
+Hi Sam — great to meet today. Quick recap + a short checklist so we can converge on the right deployment path (Hosted API vs Dedicated vs Private VPC). Please confirm the bold items below or correct them where needed.
+
+1) Goals and SLOs (what you told us)
+- Primary experience: product search & personalization API powering UI interactions (sub-200ms perceived).
+- Target p95 (inference only, at our edge): 80 ms. If network included, you said acceptable up to ~120 ms for most flows.
+- Steady-state throughput: ~500 qps. Peak burst window: 1500–1800 qps for up to 3–5 minutes during promotions.
+- Typical request size: ~25 tokens for model input, ~40 tokens output (short completions).
+
+2) Constraints and preferences
+- Data residency: US-only (cloud region preference: us-west).
+- Security: SOC2 audited vendor ok; private VPC is a consideration only if contract requires on-prem/VPC isolation.
+- Procurement: timeline target is Q2 commit; procurement contact is contracts@edgeretail.com.
+
+3) Recommended trial path (our suggestion)
+- Start with a 2-week Hosted API pilot (us-west region) to validate real-world latency variance and measure effective batching behavior on your request shape.
+- If sustained qps or latency variance indicates need for predictable headroom, transition to Dedicated capacity (reserved GPU pool) with a canary rollout + auto-fallback to Hosted as a safety net.
+- Private VPC/on-prem only if legal/procurement requires full network isolation; we can scope that separately.
+
+Actions / asks for you
+- Send a 48–72 hour sample of production traffic or a synthetic QPS profile (attachment: edge_latency_log_samples.csv). That will let us run a quick simulation and recommend pooling/quantization.
+- Confirm whether network-included p95 ≤ 120 ms is your hard SLA or whether the 80 ms figure is the target for end-to-end.
+- If procurement needs draft terms or an MSA, loop in contracts@edgeretail.com and we’ll send a standard redline-friendly packet.
+
+Attachments: pricing sketch and a simple log sample template (attached as stubs).
+
+Thanks — I’ll have Marissa pull together a preliminary Dedicated sizing/pricing doc once you confirm the traffic sample.
+
+Regards,
+Diego Fernandez
+Solutions Engineer, Redwood Inference
+
+From: Sam Roh <sam@edgeretail.com>
+To: Diego Fernandez <diego@redwood.com>
+Cc: Procurement <contracts@edgeretail.com>
+Date: 2027-04-27T09:12:00-07:00
+Subject: Re: Post-call: deployment mode snap & latency/throughput checklist
+
+Diego — thanks for the write-up and the suggested path. Quick clarifications below (copied to procurement).
+
+- Throughput: steady-state is closer to 600 qps during business hours; promotional peaks historically hit 1,800 qps (10–15 minute spikes).
+- Latency: end-to-end p95 target is 120 ms (includes network and client-side processing). If Redwood can guarantee inference p95 <= 80 ms consistently, we should be able to meet the 120 ms end-to-end target.
+- Request shape: chat-based flows with longer context for some users — average token length is higher than we said yesterday: input ~60–80 tokens, output ~70 tokens for the longer flows.
+- Data residency: must remain US; preference for region with lower inter-region egress.
+
+We like the idea of starting with Hosted API to validate variability. Two asks:
+1) Can Redwood demonstrate an example config where Hosted latency variability (p95) is within 20% of Dedicated? We want a short note on expected variance and fallback behavior.
+2) If we move to Dedicated, what is typical time-to-onboard (GPU pool ready) and what are commit levels (monthly v annual) that get meaningful discounts?
+
+Procurement — are you able to review a short pilot SOW and a 60-day evaluation clause?
+
+— Sam
+
+On Mon, Apr 26, 2027 at 3:08 PM Diego Fernandez <diego@redwood.com> wrote:
+> Hi Sam — great to meet today. Quick recap + a short checklist so we can converge on the right deployment path (Hosted API vs Dedicated vs Private VPC). Please confirm the bold items below or correct them where needed.
+> 
+> [original message truncated]
+From: Diego Fernandez <diego@redwood.com>
+To: Marissa Cole <marissa@redwood.com>, Aditya Rao <aditya_rao@redwood.com>
+Date: 2027-04-27T11:02:00-07:00
+Subject: Internal: EdgeRetail deployment preference and next steps (hosted pilot → dedicated if needed)
+
+Marissa / Aditya — quick internal note following Sam’s reply above. I’ve summarized the asks and proposed next moves so we can act quickly: 
+
+Summary of clarified signals from EdgeRetail:
+- Steady: ~600 qps; Peaks: up to ~1,800 qps for short promo windows.
+- End-to-end p95 target: 120 ms. They expect inference p95 to be <= 80 ms to meet that.
+- Request size for some flows is bigger (~60–80 input tokens; ~70 output). That increases VM memory / kv-cache considerations.
+
+Proposed technical trial and decision criteria
+1) Pilot (Hosted API, us-west1): 2-week run, real traffic routed via their test environment. Objective: measure p95 variance, effective batching, token-cost, and tail spikes.
+2) Dedicated sizing if pilot shows sustained p95 > 80 ms under load or if burst control is needed: recommend reserved pool (initial config suggestion: 3 dedicated nodes with GPU types tuned to long-context models; exact SKU TBD after we run the simulation).
+3) Fallback policy: configure auto-fallback from Dedicated to Hosted for planned maintenance and transient overloads.
+
+Commercial / enablement asks (who does what)
+- Marissa: please produce a short dedicated-pricing packet (monthly & annual commit tiers) and a 2-week pilot SOW we can send to procurement. Attach the updated pricing doc: redwood_dedicated_pricing_v2.pdf.
+- Aditya: can you run a quick simulation using the attached sample logs and return an estimated pooling suggestion (nodes / memory / expected p95) by EOD tomorrow? File for output: edgeretail_map_qps_estimates.xlsx.
+- Diego (me): I’ll draft the pilot email and handle the initial Hosted keys; I’ll also capture the SLO language we should propose for the 60-day evaluation.
+
+If procurement pushes for private VPC, we’ll escalate to Solutions + Security for an onboarding call — but avoid that unless procurement requires it.
+
+Next internal checkpoint: Marissa to share pricing packet, Aditya to post simulation results. I’ll set up a short call with Sam after we have the pilot SOW.
+
+Thanks — Diego
+
+--
+Diego Fernandez
+Solutions Engineer, Redwood Inference
+attachments: redwood_dedicated_pricing_v2.pdf (pricing sketch), edgeretail_map_qps_estimates.xlsx (simulation output placeholder)

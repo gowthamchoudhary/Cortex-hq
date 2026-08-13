@@ -1,0 +1,97 @@
+Prospecta p95 regression after seedling-h1n-v2 rollout — rollback authorization?
+
+From: Maria Rios <maria.rios@prospecta.com>
+To: Evelyn Hart <evelyn_hart@redwood.ai>
+Date: Fri, 30 Jun 2028 09:12:00 -0700
+Subject: Sudden p95 jump after today
+
+Hi Evelyn,
+
+We rolled seedling-h1n-v2 at ~08:45 this morning (staged in prod). Immediately after, our p95 for conversational-completion endpoint jumped from ~320ms to ~1.9s. This is affecting checkout validation flows and we are seeing increased timeouts in our frontend.
+
+Attached is a screenshot of our Dash (prospecta_p95_spike_20280630.png) and a short sample of logs around 08:50 (latency-sample-logs-20280630.gz).
+
+Can you advise on rollback options? Our CRO is on standby if this impacts checkout conversion; we'd prefer a revert to the prior variant until the issue is diagnosed.
+
+Thanks,
+Maria Rios
+Head of Platform Operations
+Prospecta
+(Attachment: prospecta_p95_spike_20280630.png)
+(Attachment: latency-sample-logs-20280630.gz)
+From: Evelyn Hart <evelyn_hart@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Maria Rios <maria.rios@prospecta.com>
+Date: Fri, 30 Jun 2028 09:28:00 -07:00
+Subject: RE: Sudden p95 jump after today
+
+Thanks Maria — I'm looking into this now. Initial read: rollout of seedling-h1n-v2 touched the dedicated-prod pool for Prospecta (pool-id: prsp-dedicated-07). We've seen similar tokenization/kv-cache regressions on large context paths before.
+
+Plan (proposed, pending approval):
+- Roll traffic off seedling-h1n-v2 to seedling-h1n-v1 via variant fallback (safe, non-disruptive route)
+- Run a controlled rollback on the dedicated pool if fallback proves insufficient
+- Enable aggressive prefix caching for prospecta routes for 30m while we validate
+
+Estimated blast radius: 100% of Prospecta prod traffic for the affected pool; rollback should take ~10-15 minutes with staged connection draining.
+
+Attachments: deploy manifest from today's rollout (seedling-h1n-v2-deploy-manifest.yaml) and a short rollback checklist (rollback-checklist.md).
+
+Marcus/Aditya/Rishi — need explicit go/no-go for the fallback + rollback. If we proceed, I'll notify the customer and start the NOC note.
+
+Evelyn Hart
+Sr. Solutions Engineer, Redwood Inference
+(Attachment: seedling-h1n-v2-deploy-manifest.yaml)
+(Attachment: rollback-checklist.md)
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Evelyn Hart <evelyn_hart@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Maria Rios <maria.rios@prospecta.com>
+Date: Fri, 30 Jun 2028 10:05:00 -07:00
+Subject: RE: Sudden p95 jump after today
+
+Agree with Evelyn's mitigation path. A few conditions before proceeding:
+1) We need a short customer-facing note (1-2 lines) that explains we're doing a conservative rollback to stabilize latency; product impact minimized. Evelyn, can you draft?
+2) Legal/sales should be looped for any credit discussions; put this on the renewal risk radar (PROS-5872).
+3) Aditya — confirm that rollback will not cause token mismatches for in-flight requests and the expected time to fully restore p95 target. If rollback is fast and reversible, you have my approval to proceed.
+
+Also, please record the exact timestamp of rollback start/end for SLA reconciliation.
+
+Marcus
+Head of Customer Reliability
+Redwood Inference
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Evelyn Hart <evelyn_hart@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Maria Rios <maria.rios@prospecta.com>
+Date: Fri, 30 Jun 2028 11:36:00 -07:00
+Subject: RE: Sudden p95 jump after today
+
+Quick technical update and checklist:
+- Ran a canary on 10% of Prospecta traffic to v1 and v2 states. v2 p95 = 2.1s; v1 p95 = 340ms for identical traces (attached aggregated logs).
+- Root cause hypothesis: kv-cache eviction threshold in v2 (different kv layout) causing O(N) cache rebuild for certain long-context completions.
+- Actionable steps:
+  1) Flip variant fallback at the routing layer (instant, non-destructive)
+  2) If fallback does not bring p95 < 500ms within 10 minutes, perform a staged rollback to seedling-h1n-v1 on the dedicated pool with 5-minute canary -> full traffic.
+  3) Post-rollback: run sanity traffic, then enable prefix cache and monitor for 30 minutes.
+
+I estimate the full staged rollback (if needed) will be ~12 minutes from start to stable, with <1% request loss risk (we'll drain connections). I can initiate at 11:50 PT with Marcus' sign-off.
+
+(Attachment: aggregated-canary-logs-20280630.gz)
+
+—Aditya
+From: Evelyn Hart <evelyn_hart@redwood.ai>
+To: Aditya Rao <aditya_rao@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Cc: Maria Rios <maria.rios@prospecta.com>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Fri, 30 Jun 2028 14:02:00 -07:00
+Subject: RE: Sudden p95 jump after today — executing fallback + rollback
+
+Proceeding with action per approvals: variant fallback enabled at 14:00 PT; within 4 minutes Prospecta p95 dropped to ~360ms.
+
+Because fallback restored target, we did NOT perform the full pool rollback. Post-mortem steps:
+- Keeping prefix caching enabled for prospecta routes for next 2 hours
+- Creating a post-incident ticket (JIRA-INF-9124) for deeper kv-cache analysis in v2 and a follow-up test plan before re-rollout
+- Sales/Legal notified about a potential SLA credit; CS will confirm with Prospecta.
+
+Maria — apologies for the disruption and thanks for the quick report. We'll follow up with the post-incident summary and remediation plan by EOD.
+
+Evelyn Hart
+Sr. Solutions Engineer, Redwood Inference
+(Attachment: post-fallback-metrics-20280630.png)

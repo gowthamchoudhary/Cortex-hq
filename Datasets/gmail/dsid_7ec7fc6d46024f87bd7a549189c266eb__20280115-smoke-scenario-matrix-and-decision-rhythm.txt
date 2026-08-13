@@ -1,0 +1,104 @@
+Smoke-scenario matrix + decision rhythm for eval signoff
+
+From: Alex Perez <alex.perez@novusdx.com>
+To: soojin_lee <soojin.lee@redwood.com>
+Cc: Priya Singh <priya.singh@novusdx.com>, QA Team <qa@novusdx.com>
+Date: 2028-01-15T09:12:00-08:00
+Subject: Eval signoff — can we standardize smoke scenarios and timing?
+
+Hi Soojin,
+
+Thanks again for the demo yesterday. Our QA lead asked if we can move from the high-level MAP into a concrete "smoke-scenario matrix" that maps the minimal tests we need to pass to consider the pilot successful. In particular Priya wants to see:
+
+- A compact list of acceptance checks (functional + perf) we can run in 1–2 days.
+- Clear pass/fail thresholds for each check.
+- Which checks are "hard exit gates" vs "risk-acceptance" items.
+- A suggested signoff cadence (who signs when).
+
+Can you send a draft by EOD today? We want to lock the MAP and schedule a 30-min signoff on Monday.
+
+Attachment: we can share our current QA checklist if helpful.
+
+Thanks,
+Alex
+Senior Product Manager
+NovusDX
+[Attachment stub: novus_qa_checklist.csv (text/csv)]
+From: soojin_lee <soojin.lee@redwood.com>
+To: Alex Perez <alex.perez@novusdx.com>
+Cc: Priya Singh <priya.singh@novusdx.com>, QA Team <qa@novusdx.com>, karthik_iyer <karthik.iyer@redwood.com>, neha_kapoor <neha.kapoor@redwood.com>
+Date: 2028-01-15T12:45:00-08:00
+Subject: Re: Eval signoff — can we standardize smoke scenarios and timing?
+
+Alex —
+
+Accepted, thanks for the prompt. Attached is a compact smoke-scenario matrix I prepared (novus-smoke-matrix-v1.xlsx) and a one-page MAP extract that highlights the decision rhythm. High level notes:
+
+1) Scope: 8 smoke scenarios that together exercise routing, latency under target load, KV cache correctness, token-cost regression, hallucination spot-checks on a 50-sample prompt set, and OOB safety triggers.
+
+2) Pass thresholds (proposals):
+  - 95th-percentile response latency < 350ms (for 8k context synthetic load)
+  - Token-cost variance <= +8% from baseline model profile
+  - Functional correctness: >= 92% on curated prompt set (binary pass/fail per prompt)
+  - Safety: 0 critical OOB hits in 500-sample run; flagged items <= 2%
+
+3) Exit gates vs risk items:
+  - Hard exit gates (must pass): latency, safety (critical), and functional correctness >90%
+  - Risk-accept (can be mitigated before GA): token-cost drift between 8–12% (requires follow-up quantization/ops)
+
+4) Decision rhythm and signoff:
+  - Day 0 (run smoke battery): Redwood runs automated suite with Novus-provided sample payloads.
+  - Day 1 morning (initial results): quick triage call (30m) to review failures.
+  - Day 1 afternoon (remediation window): ops/actions.
+  - Day 2 morning (final run + signoff): Novus QA provides formal signoff or issues a containment plan.
+
+5) Ownership:
+  - Redwood: run perf/safety instrumentation, provide evidence pack (logs, token breakdown, trace IDs).
+  - Novus: provide canonical prompt samples and acceptance owner (Priya).
+
+Next steps I propose: 1) you review and mark any thresholds you want tightened or relaxed; 2) confirm a 30-min signoff slot Monday 10:00–10:30 PT; 3) send the canonical sample payloads by end of day.
+
+Attachments: novus-smoke-matrix-v1.xlsx, MAP-draft-20280115.pdf
+
+Cheers,
+Soojin Lee
+Solutions Engineer, Redwood Inference
+[Attachment stubs: novus-smoke-matrix-v1.xlsx (spreadsheet), MAP-draft-20280115.pdf (pdf)]
+From: karthik_iyer <karthik.iyer@redwood.com>
+To: soojin_lee <soojin.lee@redwood.com>
+Cc: neha_kapoor <neha.kapoor@redwood.com>, Alex Perez <alex.perez@novusdx.com>, Priya Singh <priya.singh@novusdx.com>
+Date: 2028-01-15T14:02:00-08:00
+Subject: Re: Eval signoff — can we standardize smoke scenarios and timing?
+
+Looping in a couple of operational clarifications so the acceptance tests are actionable:
+
+- For latency profiling, please define the exact synthetic load shape (concurrency, arrival distribution). I recommend a 20rps sustained with 100 concurrent clients for 2 minutes to exercise batching behavior.
+- For functional correctness, include a simple rubric in the matrix: PASS if model output contains the expected entity + <= 10% noise tokens. We can add a small evaluation script (will attach in next rev).
+- Evidence pack format: CSV of sampled prompts/outputs + per-request latency + model variant id + token breakdown. This is what Novus should receive to verify reproducibility.
+
+Also — if the token-cost drift hits the risk band (>8% but <12%), ops will propose config changes (smaller batch size / quantization profile) and we will run a targeted re-run. That should be allowed without failing the whole eval provided remediation plan is submitted within 48 hours.
+
+I kept internal owners CC'd, Neha — please confirm we have instrumentation hooks ready (tracing + token accounting) and ETA to produce the evidence pack.
+
+Thanks,
+Karthik
+Director, Product — Redwood Inference
+From: Priya Singh <priya.singh@novusdx.com>
+To: soojin_lee <soojin.lee@redwood.com>
+Cc: Alex Perez <alex.perez@novusdx.com>, QA Team <qa@novusdx.com>, karthik_iyer <karthik.iyer@redwood.com>
+Date: 2028-01-16T11:45:00-08:00
+Subject: Re: Eval signoff — can we standardize smoke scenarios and timing?
+
+Soojin / Karthik —
+
+This looks good and much more actionable than our initial checklist. A few quick asks before Monday's signoff:
+
+1) Can you call out which specific test(s) need Novus sample payloads vs Redwood synthetic? We have limited time to curate the canonical set.
+2) Please add an explicit statement about rollback: if hard exit gate fails, what is the immediate rollback action and who authorizes it?
+3) Confirm the signoff slot: Monday 10:00–10:30 PT works for us.
+
+We will prepare the 50-sample canonical prompt set and send the file by EOD Sunday. If you can drop the evaluation script (karthik mentioned) as a Gist or Drive link, we can run a local sanity pass before the call.
+
+Thanks — Priya
+QA Lead, NovusDX
+[Attachment stub: novus_sample_payloads_v1.json (json)]

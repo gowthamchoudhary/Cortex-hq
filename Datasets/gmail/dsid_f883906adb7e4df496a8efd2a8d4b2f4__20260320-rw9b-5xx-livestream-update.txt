@@ -1,0 +1,123 @@
+Incident: elevated 5xx/timeouts affecting rw-9b (livestream workload)
+
+From: Alice Moreno <alice@brightstream.com>
+To: neha_kapoor@redwood.example
+Cc: ops@brightstream.com
+Date: Thu, 19 Mar 2026 22:07:00 +0000
+Subject: High 5xx rate from rw-9b on live stream ingestion
+
+Hi Neha,
+
+We started seeing a spike of 5xx and timeouts from the rw-9b model around 21:55 UTC. This is hitting our live captioning pipeline (ingest rate ~250 req/s) — roughly 18% of requests are returning 5xx or hanging for >10s. No config changes on our side. Can you confirm if there are platform issues? This is impacting two of our live events.
+
+Sample request IDs: brs-req-44312, brs-req-44345, brs-req-44398.
+
+We really need either a mitigation (fallback) or an ETA on recovery.
+
+Thanks,
+Alice
+VP Engineering, BrightStream
+
+From: Neha Kapoor <neha_kapoor@redwood.example>
+To: Alice Moreno <alice@brightstream.com>
+Cc: dev_patel@redwood.example, marcus_lin@redwood.example
+Date: Thu, 19 Mar 2026 22:12:00 +0000
+Subject: Re: High 5xx rate from rw-9b on live stream ingestion
+
+Thanks for the report, Alice — we see the spike on our monitoring as well and I’m escalating immediately.
+
+Quick asks so we can triage faster:
+- Can you confirm whether BrightStream is using the pinned variant rw-9b-v2 or the default rolling variant?
+- If possible, capture a few full request IDs and timestamps (the three you sent are helpful).
+
+I’ve looped in SRE (Marcus) and runtime (Dev) — we’ll post updates here. We may proactively route your traffic to a compatible variant while we investigate.
+
+–Neha
+Neha Kapoor
+Customer Reliability Manager, Redwood Inference
+
+From: Marcus Lin <marcus_lin@redwood.example>
+To: neha_kapoor@redwood.example, dev_patel@redwood.example
+Cc: hannah_schmitt@redwood.example
+Date: Thu, 19 Mar 2026 22:20:00 +0000
+Subject: rw-9b: elevated 5xx + timeouts (preliminary telemetry)
+
+Neha / team,
+
+We’re seeing a clear uptick in 5xx and long tail latencies for rw-9b across the us-west region starting ~21:50 UTC. Initial signals:
+- Error class: kernel OOM-ish traces and internal serve exceptions (5xx) on a subset of hosts (hostpool-a).
+- Correlated with a shift in token-length distribution (longer prefixes from some customers) and an increase in KV-cache churn.
+- Affected: ~7% of rw-9b requests cluster-wide, but for BrightStream’s ingestion pattern it’s ~18%.
+
+I attached a short trace bundle (rw9b-kernel-trace-20260319.zip). We’re standing up a quick mitigation runway: 1) route BrightStream to rw-9b-v1 (smaller memory profile) and 2) apply transient cache warmup config to hostpool-a.
+
+I’ll coordinate with Dev for quick routing change; Hannah, can you monitor downstream P99 latency for their routes?
+
+Thanks,
+Marcus
+SRE Lead, Redwood Inference
+
+From: Dev Patel <dev_patel@redwood.example>
+To: Marcus Lin <marcus_lin@redwood.example>, neha_kapoor@redwood.example
+Cc: hannah_schmitt@redwood.example
+Date: Thu, 19 Mar 2026 23:05:00 +0000
+Subject: Re: rw-9b: elevated 5xx + timeouts (preliminary telemetry)
+
+Marcus — thanks for the traces. Quick notes from runtime:
+- Root cause hypothesis: a recent kernel selection heuristic (deployed 2026-03-18) chooses a higher-memory attention kernel for sequences >1024 tokens. For workloads with bursty long prefixes that churn KV caches, that kernel increases temporary working set and on a small subset of hosts it caused transient OOMs and serve exceptions.
+- Short-term mitigation steps applied:
+  1) Fallback routing: BrightStream routes to rw-9b-v1 (confirmed, now live).
+  2) Reverted the new kernel heuristic on hostpool-a to previous selector (rollback planned cluster-wide after validation).
+  3) Increased KV cache retention on impacted hosts to reduce churn.
+
+I’ve pushed the routing config (fallback-routing-config.txt) and will monitor. Please note rw-9b-v1 is functionally compatible but has slight latency/cost differences — we informed the customer.
+
+If we remain stable for 2 hours, we’ll roll the rollback cluster-wide and follow with a controlled re-release after adding a guardrail.
+
+—Dev
+Runtime Engineer, Redwood Inference
+
+From: Neha Kapoor <neha_kapoor@redwood.example>
+To: Alice Moreno <alice@brightstream.com>
+Cc: dev_patel@redwood.example, marcus_lin@redwood.example, hannah_schmitt@redwood.example
+Date: Fri, 20 Mar 2026 01:14:00 +0000
+Subject: Re: High 5xx rate from rw-9b on live stream ingestion — mitigation applied
+
+Alice — quick status update:
+- We routed BrightStream traffic to rw-9b-v1 at 22:32 UTC; 5xx dropped to <1% for your routes and P99 latency returned to baseline within ~6 minutes.
+- We rolled back the kernel heuristic on the affected hostpool at 22:50 UTC.
+- No config changes required on your side.
+
+We’re preparing a short post-incident note and a more detailed postmortem. Draft is attached (postmortem-draft-rw9b-20260320.md) and we’ve shared a read-only Drive folder: https://drive.redwood.example/shared/rw9b-incident-20260320
+
+Apologies for the impact during your events — we’ll follow up with root cause and action items, including a guardrail to prevent the kernel heuristic from triggering on already-warm caches.
+
+If you prefer, we can schedule a short call to walk through the timeline.
+
+Best,
+Neha
+Customer Reliability Manager, Redwood Inference
+
+From: Neha Kapoor <neha_kapoor@redwood.example>
+To: Alice Moreno <alice@brightstream.com>
+Cc: dev_patel@redwood.example, marcus_lin@redwood.example, hannah_schmitt@redwood.example
+Date: Fri, 20 Mar 2026 10:30:00 +0000
+Subject: RW-9B incident: preliminary postmortem and action items
+
+Alice / BrightStream ops — attaching the preliminary postmortem and action list. Key points:
+- Timeline: first anomalies observed 21:50 UTC 2026-03-19; mitigation (fallback routing) at 22:32 UTC; kernel-selector rollback at 22:50 UTC; service stable by 22:58 UTC.
+- Root cause: new kernel-selection heuristic interacted poorly with workloads that have high KV cache churn and long prefix distributions, causing transient increased memory use and serve exceptions on a subset of hostpool-a.
+- Customer impact: BrightStream saw ~18% 5xx/hang rate during the window; other customers had <7% exposure.
+- Immediate remediations delivered: fallback routing, hostpool rollback, increased KV retention.
+- Next actions (owner / ETA):
+  * Add heuristic guard (Dev) — roll out 2026-03-24.
+  * Automated detection for token-distribution shifts (Marcus) — POC by 2026-03-30.
+  * Post-rollback verification runbook (Hannah) — 2026-03-22.
+
+Attachments: postmortem-draft-rw9b-20260320.md, rw9b-kernel-trace-20260319.zip, fallback-routing-config.txt
+
+We’ll finalize the postmortem in the shared Drive and mark action items in JIRA (LINK: https://jira.redwood.example/browse/INF-7892). Please let us know if you’d like a walkthrough — we can do one today or tomorrow.
+
+Thanks for your patience,
+Neha
+Customer Reliability Manager, Redwood Inference

@@ -1,0 +1,78 @@
+Request replay & error-paths demo — Skyward Health platform team
+
+Meeting header:
+Date/Time: Thu, 29 Jan 2026 — 15:00 PST (scheduled 45m)
+Duration: 48 minutes (recording)
+Location: Zoom
+Attendees: Jordan Pierce (Redwood AE), Maya Singh (Redwood SE), Liam Park (Redwood SE), Elena Torres (Skyward), Marcus Liu (Skyward SRE), Priya Raman (Skyward SecOps), Noah Kim (Skyward Eng)
+
+Summary:
+Quick console-focused demo to show request replay (playback), error path analysis, request logs with correlation ids, and how Redwood handles fallback to smaller quantized variants when a GPU pool runs low. Customer is evaluating hosted vs dedicated vs private VPC for regulated PHI-like workload; main concerns: audit logs, KMS, data residency, retention, and predictable 99th percentile latency.
+
+Topics covered:
+- Request replay / playback flow in the Console
+- Tracing: how request spans are captured and stitched to tokens
+- Error triage: identifying model vs infra vs prompt issues
+- Logs & download: exporting request logs for SOC-2 audit
+- Fallback policies: model variants / KV cache miss handling
+- Pilot and next steps: security docs and pilot scope
+
+Transcript body:
+[00:00] Jordan: hey everybody, thanks for joining, this is Jordan from Redwood, um I'm gonna hand over to Maya to drive the console demo, show the request replay, error paths and then we'll leave time for Q&A.
+[00:18] Maya: thanks Jordan, hi Elena, Marcus, Priya — hi team, quick agenda, I'll show a live request replay, then we'll step through traces and error analysis, and then show how you can download logs for audits. Note recordings will include some nudges cause the demo environment has slightly smaller load than your production.
+[00:36] Elena: sounds great, we interested in like how much we can reproduce problems and what we can hand to our auditors.
+[00:45] Maya: perfect. Starting in the Console, here's the request table. I'll filter by project and then by route name. You can see request IDs, timestamps, model variant, latency, tokens and status code.
+[01:02] Noah: a quick question, are those request IDs correlated with our app trace id or are they Redwood-only?
+[01:10] Liam: good one — we support passing a customer request id header (x-cust-request-id) so you can correlate. We also ingest OpenTelemetry spans if you push them, so stitching is possible.
+[01:25] Marcus: we push OTLP to our collector, so that's helpful. What about the kv cache — sometimes our assistant returns earlier cached prefix and that confuses the logs.
+[01:36] Maya: yeah so KV cache is surfaced as a span in the trace, but FYI the transcription sometimes renders KV as K V or kv-cash in exports, so if you search CSV watch both.
+[01:47] Priya: ha, noted.
+[01:50] Maya: I'm going to pick a failed request here, status code 502, and click 'Replay'. The replay opens a stepper: it shows original input, the model variant used, the kernel selection hints, and the token-by-token playback.
+[02:10] [02:10] Speaker 1: the playback is a bit jumpy, I think network on demo VM...
+[02:18] Maya: yes, playback uses streaming websocket to show tokens; sometimes demo infra drops frames, but the token timeline is preserved. Here you can scrub to the time the error happened.
+[02:30] Marcus: can you show how we identify if failure was model capacity versus a runtime OOM?
+[02:35] Maya: sure — check the trace timeline: infra-level spans are labeled with GPU id and kernel reason, so an OOM in the serving runtime will have a kernel error and the span includes memory metrics. Model capacity exhaustion or queued time shows up as scheduler queue spans.
+[02:50] Maya: see here, there's a long queue span before the final error; that indicates we batch and then the request timed out.
+[03:00] Noah: and the console shows the per-token latency histogram?
+[03:05] Maya: yes, per-request token histogram + a breakdown: model compute, scheduling, and serialization. You can click to expand per-kernel traces.
+[03:15] [03:15] Marcus: are compute kernel names human readable? Sometimes our infra team needs to map to driver traces.
+[03:22] Maya: we try to map kernels to friendly names where possible — but note, in some builds they show internal identifiers, so you might see something like cu-matmul-v3 in the trace; we add mapping tables in the debug export.
+[03:36] Elena: about security — how do you handle logs containing PHI-like prompts? We need controls for redaction and KMS.
+[03:44] Jordan: great question, Redwood Private supports customer-managed KMS and optional on-the-fly redaction before logs land in long-term storage. We can also configure retention windows and PII scrubbing rules.
+[03:56] Priya: can we get an SSO / SAML audit trail for who viewed a request?
+[04:02] Jordan: yes, Console access logs tie into SAML/SSO and we surface per-user access events in the audit trail; that's part of our enterprise package.
+[04:12] Maya: back to demo — I'm toggling to the error-analysis panel. There's an auto-classifier that suggests root cause categories: model, prompt, infra, network. It's not perfect but it surfaces likely suspects.
+[04:30] [04:30] Speaker 2: classifier pulled from past incidents, right?
+[04:33] Maya: yeah it's trained on past debug labels; you can override or add your own labels.
+[04:38] Marcus: if we want to run this on-prem, does the auto-classifier still work?
+[04:44] Maya: for Private deployments we ship the classifier as part of the control plane; inference for the classifier runs in your environment. There may be small config differences but functionally similar.
+[04:55] Noah: show the trace export flow for auditors.
+[04:58] Maya: sure — click export on the request group, pick time range and scrubbing options. You can choose full raw trace, redacted trace, or summarized CSV. The export is a signed URL and can be pushed to your S3-compatible bucket with SSE-KMS.
+[05:16] Elena: will that include stable identifiers or will IDs be rotated? We need stable ids for incident correlation but rotated for public share.
+[05:25] Maya: export options include 'anonymize' which replaces PII and rotates user ids, and 'preserve correlation' which keeps request ids. You choose per-export.
+[05:35] Marcus: performance question — if we enable continuous request logging for all requests, what is the cost/throughput impact?
+[05:42] Liam: continuous logging adds metadata overhead; on our side we stream lightweight spans and then, based on sampling you can retain full token payloads only for errors or sampled sessions. For cost we provide a unit estimate: delta tokens stored and egress.
+[05:58] [05:58] Marcus: okay send the cost model.
+[06:01] Jordan: will do.
+[06:05] Maya: next, fallback behavior — here's a failure policy: if a primary model variant is unavailable, Redwood can route to a quantized variant or a smaller model pinned in the route. The console shows the policy order and you can simulate fails.
+[06:20] Noah: do we lose output quality when fallback triggers?
+[06:23] Maya: usually yes a bit; Optimize gives suggested quantization profiles to reduce quality drop. You can set a SLO that prefers latency over absolute quality.
+[06:34] Priya: and what's the rollback / canary story?
+[06:37] Maya: Console supports canary rollouts across model versions and region-aware routing. If latency regressions exceed thresholds, automatic rollback can trigger.
+[06:47] Elena: about pilot scope, we want to test producer endpoints for triage and see how long we can keep logs. Also need to validate private deployment network setup.
+[06:56] Jordan: for the pilot we recommend: 1) 2-week running of 5 endpoints with tracing enabled, 2) run synthetic load to exercise queueing paths, 3) a security review with Priya's team and our compliance engineer.
+[07:10] Priya: okay we'll want SOC2 and encryption detail before we sign off.
+[07:15] Jordan: fine, I'll share the security whitepaper and SOC2 attestation.
+[07:18] [07:18] Speaker 3: can we do a short backlog of acceptance criteria?
+[07:21] Jordan: yes, we'll add to next steps.
+[07:25] Maya: one last pro tip — if you have recurrent flakiness, set up synthetic golden prompts and a periodic regression check; Optimize will highlight token-level regression and suggest model/quantization swaps.
+[07:38] Marcus: that could help. also curious about telemetry retention — can we keep 180 days for audit?
+[07:44] Jordan: retention is configurable; long-term retention is an add-on. For Private deployments you can manage the retention in your storage.
+[07:55] Elena: thanks — that was helpful.
+[07:58] Jordan: ok, quick recap of next steps: Jordan will send pricing + security docs; Maya will anonymize and send the demo trace clips and how-to GIFs; Marcus will supply example request IDs and retention needs; schedule follow-up 2/5. Anything else?
+[08:15] Priya: please include a short checklist of network ports and IP allowlists for VPC deployment.
+[08:20] Jordan: noted, will include.
+[08:24] Elena: thanks everyone, appreciate it.
+[08:27] Maya: thanks team, we'll follow up.
+
+End of recording.

@@ -1,0 +1,118 @@
+CoreBank reservation constraint — urgent capacity & exec readout
+
+From: Elaine Park <elaine.park@corebank.com>
+To: tessa.morgan@redwood.ai
+Cc: sre+corebank@corebank.com
+Date: Thu, 3 Jun 2027 09:02:00 -0700
+Subject: High latency and 5xx spike on reserved pool (production)
+
+Hi Tessa —
+
+We started seeing sustained p50/p95 latency increases around 08:45 PDT and an uptick in 5xx errors on our /v1/generate endpoint. Traffic pattern hasn't changed on our side — identical qps and payloads. A few quick notes:
+- p50 from 120ms -> 680ms; p95 spiking to ~2.2s
+- 5xx rate ~1.8% over the last 15 minutes (previously <0.05%)
+- Request IDs: rb-9153, rb-9154 (sample in attached log)
+
+We're on a reserved capacity plan and this is affecting checkout confirmations. Can Redwood confirm whether any dedicated GPU pools are saturated or if there's any throttling/fallback configured? We need ETA on mitigation and whether you can authorize burst capacity while we triage.
+
+I'm attaching a screenshot of our dashboard and a trimmed log excerpt.
+
+Thanks,
+Elaine Park
+Head of Platform Reliability, CoreBank
+
+Attachments:
+- corebank-slo-dashboard.png (image/png)
+- corebank-kvcache-sample.log (text/plain)
+
+From: tessa.morgan@redwood.ai <tessa.morgan@redwood.ai>
+To: david.kim@redwood.ai, rishi.malhotra@redwood.ai
+Cc: olga.petrov@redwood.ai
+Date: Thu, 3 Jun 2027 09:18:00 -07:00
+Subject: Fwd: High latency and 5xx spike on reserved pool (production)
+
+Forwarding CoreBank's alert — they report p95 >2s and ~1.8% 5xx rate on reserved throughput. Key asks: confirm Dedicated pool headroom, apply temporary burst if possible, and provide a short RCA/next steps for their execs.
+
+Immediate asks for infra / runtime:
+1) Is any dedicated GPU pool showing saturation for tenant corebank-prod (pool id cb-prod-7)?
+2) Are we seeing noisy neighbor or cross-tenant spillover?
+3) Can we authorize burst capacity (30% extra) for the next 2 hours from the shared overflow?
+
+If we can't burst immediately, we need to set a clear fallback message to CoreBank and offer compensatory credits. Please see attached internal sampling request.
+
+Thanks — Tessa
+
+--
+Tessa Morgan
+Senior Account Manager, Redwood Inference
+
+From: david.kim@redwood.ai <david.kim@redwood.ai>
+To: tessa.morgan@redwood.ai, rishi.malhotra@redwood.ai, olga.petrov@redwood.ai
+Date: Thu, 3 Jun 2027 10:04:00 -07:00
+Subject: Re: Fwd: High latency and 5xx spike on reserved pool (production)
+
+Quick diagnostic:
+- Confirmed: cb-prod-7 GPU utilization at 98% across the pool (NVIDIA A100 nodes).
+- KV cache backlog observed: avg pending KV requests-per-node ~320 (normal <40).
+- We are seeing high cross-tenant tail due to a large large-context batch job from a different tenant (job id batch-xf-334).
+- Autoscale for cb-prod-7 is disabled (reserved plan), burst gating requires manual approval.
+
+Immediate mitigation plan (can execute in ~18 minutes with approval):
+A) Throttle batch-xf-334 at runtime (reduce batch size) — ops can do immediately.
+B) Temporary burst authorization: allocate 6 gpus from overflow pool -> expected p95 back to ~400-600ms.
+C) Enable prefix-KV aggressive eviction for CoreBank's namespace to reduce KV backlog.
+
+Rishi / Ops: please confirm when throttling/burst will be applied. I will draft the customer note after we know ETA.
+
+-David
+
+Attachments: request-for-burst-draft.docx (internal memo)
+From: rishi.malhotra@redwood.ai <rishi.malhotra@redwood.ai>
+To: david.kim@redwood.ai, tessa.morgan@redwood.ai, olga.petrov@redwood.ai
+Date: Thu, 3 Jun 2027 10:27:00 -07:00
+Subject: Re: Fwd: High latency and 5xx spike on reserved pool (production)
+
+On it — Ops will:
+- Throttle job batch-xf-334 now (started at 10:30 PDT) and reduce concurrency by 60%.
+- Provision temporary burst: allocating 6 GPUs from overflow (authorization token: BURST-94) — provisioning ETA 12 minutes.
+- K/V eviction policy change for CoreBank namespace applied at 10:32 PDT.
+
+I'll post back with live metrics in 15 mins. If burst isn't enough we should prepare to route reads to the smaller quantized model for latency-sensitive endpoints.
+
+-Rishi
+Systems Reliability Lead, Redwood Inference
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Elaine Park <elaine.park@corebank.com>
+Cc: CoreBank SRE <sre+corebank@corebank.com>, david.kim@redwood.ai, rishi.malhotra@redwood.ai
+Date: Thu, 3 Jun 2027 17:48:00 -07:00
+Subject: RE: High latency and 5xx spike on reserved pool (production)
+
+Elaine — quick update and commitments: 
+
+What we did (summary):
+- Identified cross-tenant batch job causing spike; that job was throttled at 10:30 PDT.
+- We provisioned a short-term burst (6 GPUs) at 10:42 PDT; observed p95 reduced from ~2.2s -> ~520ms within 6 minutes.
+- Applied an aggressive KV cache eviction for CoreBank namespace to prevent backlog reformation.
+
+Current status:
+- p50: ~140ms; p95: ~520ms; 5xx rate: 0.03% (last 30m)
+- We've left burst in place for 2 hours and scheduled a follow-up with you at 18:15 PDT to confirm stability and next steps.
+
+Next steps and asks:
+1) Ops will deliver an RCA within 48 hours detailing root cause and permanent guardrails (quota enforcement + autoscale review).
+2) We'll propose a policy addendum to your reserved contract to allow pre-authorized bursts for short emergency windows (reduces approval latency).
+3) Credit offer: one day of reserved capacity credit for the next billing cycle as a gesture for the impact.
+
+If you'd like an exec-level readout for your CTO/Head of Ops I'll set up a 30-min bridge with David and Rishi.
+
+Apologies for the disruption — we know checkout is critical.
+
+Regards,
+Tessa Morgan
+Senior Account Manager, Redwood Inference
+Redwood Inference
+
+--
+Triage notes and internal logs uploaded: https://drive.redwood.ai/drive/folders/COREBANK-4821
+Attachments sent: corebank-slo-dashboard.png, corebank-kvcache-sample.log, request-for-burst-draft.docx

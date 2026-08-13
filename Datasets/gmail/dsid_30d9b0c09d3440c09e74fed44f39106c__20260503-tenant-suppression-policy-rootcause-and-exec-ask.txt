@@ -1,0 +1,121 @@
+Urgent: Clearline checkout latency and 429s — suspected quota/policy suppression
+
+From: Sanjay Mehta <sanjay@clearline.com>
+To: neha_kapoor@redwood.ai
+Date: Sat, 02 May 2026 08:13:00 -0000
+Subject: High latency and 429s in checkout (example traces attached)
+
+Hi Neha,
+
+We're seeing sustained latency spikes and a stream of 429s on Clearline's production checkout between 07:55-08:05 UTC this morning. Our users report slow page loads and failed payments. I've attached a small sample of request/response headers and timestamps (clearline_429_sample.txt).
+
+Key observations from our side:
+- 40% of requests return 429s or 502s, primarily token-generation endpoints.
+- Error rate correlates to traffic bursts from one of our promotional campaigns (~3x normal).
+- Our plan is Premium; expected throughput is 200 qps sustained, burst to 1k qps.
+
+This is customer-impacting and we need immediate help. Can you confirm whether a quota or policy change on your side could cause this?
+
+Sanjay
+Sanjay Mehta
+Head of Platform Ops, Clearline Health
+ops@clearline.com
+
+---
+Attachment: clearline_429_sample.txt (plain text, 12KB)
+From: Neha Kapoor <neha_kapoor@redwood.ai>
+To: karthik_iyer@redwood.ai, connor_obrien@redwood.ai
+Cc: grace_oconnor@redwood.ai, marissa_cole@redwood.ai, Sanjay Mehta <sanjay@clearline.com>
+Date: Sat, 02 May 2026 08:32:00 -0000
+Subject: ESCALATION: Clearline checkout latency/429s — immediate triage requested
+
+Folks — looping you in for urgent triage. Clearline (Premium) is experiencing significant latency and 429s under a promotional burst.
+
+Sanjay attached samples. Sanjay: thanks, we'll treat this as P1.
+
+Ask: Can engineering validate whether any recent rate limit, quota mapping, or burst window changes could have misrouted Clearline to a suppressed policy? If so, we need a temporary override and an exec-level note for Sales/Customer success.
+
+Urgency: high — customer-facing checkout failures. Please reply with initial findings and recommended mitigations within 30m. I can coordinate comms to Clearline if you want me to.
+
+-neha
+Neha Kapoor
+Head of Customer Escalations, Redwood Inference
+neha_kapoor@redwood.ai
++1 415-555-0198
+
+On Sat, 02 May 2026 at 08:13, Sanjay Mehta <sanjay@clearline.com> wrote:
+> Hi Neha,
+>
+> We're seeing sustained latency spikes and a stream of 429s on Clearline's production checkout between 07:55-08:05 UTC this morning....
+From: Connor O'Brien <connor_obrien@redwood.ai>
+To: neha_kapoor@redwood.ai, karthik_iyer@redwood.ai
+Cc: grace_oconnor@redwood.ai, marissa_cole@redwood.ai, Sanjay Mehta <sanjay@clearline.com>
+Date: Sat, 02 May 2026 09:05:00 -0000
+Subject: Re: ESCALATION: Clearline checkout latency/429s — initial triage
+
+Quick triage notes (initial):
+- I pulled tenant metrics and policy mappings from 07:30-08:30 UTC. I see a sharp drop in allowed qps starting 07:58 UTC for tenant_id=clearl-773.
+- The tenant was evaluated against the \"tenant-suppression\" rule (default safety net) instead of the Premium quota profile. The effective token-bucket for the tenant fell from 200 qps to 10 qps with a small burst allowance. That explains the flood of 429s when traffic spiked.
+- Evidence: policy diff shows that during a config deploy earlier this week a default policy id was overwritten for a range of tenant prefixes (rate_policy_diff.patch attached).
+- Root cause hypothesis: a deploy script changed the namespace-to-profile mapping; the script treated prefixes like \"clearl-*\" as low-tier during normalization.
+
+Immediate mitigations I propose:
+1) Emergency policy override: set effective quota for clearl-773 back to Premium profile (200 qps, burst 1k). Can be done via Control Plane toggle (will take effect within ~60s).
+2) Short-term traffic routing: move Clearline to dedicated pool routing for the next 2 hours while we validate. This avoids additional suppression side-effects.
+3) Rollback the mapping change in the next deploy and add a validation check to the mapping script to prevent prefix collisions.
+
+I attached: rate_policy_diff.patch and a quick dashboard link. I'm starting the override now (holding until Neha confirms we should proceed).
+
+-Connor
+Connor O'Brien
+SRE, Serving Runtime
+connor_obrien@redwood.ai
+
+On Sat, 02 May 2026 at 08:32, Neha Kapoor <neha_kapoor@redwood.ai> wrote:
+> Folks — looping you in for urgent triage. Clearline (Premium) is experiencing significant latency and 429s under a promotional burst....
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: neha_kapoor@redwood.ai, connor_obrien@redwood.ai, grace_oconnor@redwood.ai
+Cc: marissa_cole@redwood.ai, Sanjay Mehta <sanjay@clearline.com>
+Date: Sat, 02 May 2026 10:15:00 -0000
+Subject: Re: ESCALATION: Clearline checkout latency/429s — action plan and exec ask
+
+Thanks Connor — confirmed. Summary and ask for execs:
+
+What happened (one-liner): a recent config deployment unintentionally remapped a subset of tenant prefixes to the safety-net (tenant-suppression) profile, causing Premium customers like Clearline to be throttled to a 10 qps bucket during traffic bursts.
+
+Immediate actions taken/planned:
+- Connor will flip an emergency override to restore Clearline to Premium quotas now (in-progress).
+- Traffic will be routed to Dedicated pool for the next 2 hours as a safeguard.
+- We will schedule a rollback of the mapping change and ship a validation test to the deploy pipeline.
+- Postmortem owners: Karthik (root cause), Connor (mitigation/ops), Grace (customer comms).
+
+Executive ask: approval for a 2-hour SLA exception and for us to route Clearline to reserved capacity (estimated incremental cost $120 for the window). We need sign-off to avoid delaying the override and routing (customer is in production checkout).
+
+Suggested one-line for Sales/VP: \"Immediate override applied; routing to reserved capacity for two hours while we fix mapping — remediation cost covered as a short-term credit if needed.\"
+
+Marissa / Leadership — pls reply with approval or objections. If silent, we'll assume tacit approval and proceed in 10 minutes.
+
+Karthik Iyer
+Director, Serving Runtime
+karthik_iyer@redwood.ai
+
+On Sat, 02 May 2026 at 09:05, Connor O'Brien <connor_obrien@redwood.ai> wrote:
+> Quick triage notes (initial):
+> - I pulled tenant metrics and policy mappings from 07:30-08:30 UTC....
+From: Neha Kapoor <neha_kapoor@redwood.ai>
+To: karthik_iyer@redwood.ai, connor_obrien@redwood.ai
+Cc: marissa_cole@redwood.ai, grace_oconnor@redwood.ai, Sanjay Mehta <sanjay@clearline.com>
+Date: Sat, 02 May 2026 10:30:00 -0000
+Subject: Re: ESCALATION: Clearline checkout latency/429s — ack and comms
+
+Thanks Karthik / Connor — I approve the 2-hour SLA exception and the temporary routing to dedicated capacity. Please proceed with the override and confirm when Clearline's 429s drop and latency normalizes.
+
+I'll send a short, transparent update to Sanjay and loop Sales for credit discussion. Suggested public message (one-liner below) looks good — I'll use it.
+
+Neha
+Neha Kapoor
+Head of Customer Escalations, Redwood Inference
+neha_kapoor@redwood.ai
+
+On Sat, 02 May 2026 at 10:15, Karthik Iyer <karthik_iyer@redwood.ai> wrote:
+> Thanks Connor — confirmed. Summary and ask for execs:...

@@ -1,0 +1,140 @@
+Defining performance acceptance gates + mutual action map (post-demo)
+
+From: Jordan Blake <jordan.blake@redwood.inference.com>
+To: Erin Walsh <erin@novumhealth.com>
+Cc: Ben Carter <ben.carter@redwood.inference.com>, Lauren Bishop <lauren.bishop@redwood.inference.com>
+Date: Mon, 30 Jul 2028 15:12:00 -0700
+Subject: Defining performance acceptance gates + mutual action map (post-demo)
+
+Hi Erin / Samir —
+
+Thanks again for walking us through the flow today. Quick recap and a proposed set of acceptance gates so we can get alignment and lock a Mutual Action Plan (MAP). I captured the SLO targets you mentioned during the demo and added our suggested acceptance tests. Please confirm any adjustments.
+
+SLO targets (proposed)
+- Latency: p95 end-to-end generation <= 200 ms for typical 512-token responses (non-streaming).
+- Streaming: partial-token flush latency <= 120 ms; tail-token latency (final flush) <= 200 ms.
+- Throughput: sustained 250 req/s per tenant, with burst acceptance up to 450 req/s for short windows (60s).
+- Concurrency: support 35 concurrent active sessions without degradation of p95 latency.
+- Error budget: < 0.5% 5xx or stream disconnects during acceptance tests.
+
+Acceptance tests we propose
+1) Synthetic load (our harness) — run the attached bench template with your sample prompts to validate p95 and throughput.
+2) Representative payload set — run 10k requests from your sample set (attached) and compare latency histograms + token-level traces.
+3) Streaming validation — 1k streaming requests, measure partial and final flush latency distributions.
+4) Stall/fallback behavior — exercise fallback policy (degraded model variant) to confirm graceful degradation and request-level deterministic behavior.
+5) Observability check — ensure tracing/headers from your app map to Redwood traces (we'll provide a short tracing snippet).
+
+Data & operational constraints
+- Region: we'll run acceptance in us-west1 (same region used in demo).
+- Data handling: no persisted PII leaves the session; audit logs will be captured and shared.
+
+Proposed timeline / MAP
+- Wed Aug 2: Redwood runs initial synthetic bench using your sample payloads (we need final payloads by Tue EOD).
+- Mon Aug 7: Joint pilot run (representative traffic) — results and histogram review.
+- Aug 9: Acceptance review + decision (go/no-go for pilot expansion).
+
+Action items (initial)
+- Erin: confirm final sample payload set + any edge-case prompts (due Tue EOD).
+- Novum: confirm whether p95 target should be tightened (you mentioned possibly 180 ms in the call).
+- Ben: schedule bench run and assign test owner.
+- Jordan: share bench template and demo recording (attached).
+
+Attachments included: demo_recording_20280730.mp4, redwood_bench_template_v2.xlsx
+
+Open question: does Novum need a cost estimate for the pilot configuration (expected GPU hours for the acceptance window)? We can provide a short estimate once you confirm expected sustained RPS during the joint run.
+
+Happy to hop on a quick 20-min sync if it's helpful — otherwise, please reply here with the payloads and any changes to the SLOs above.
+
+Thanks,
+Jordan Blake
+Solutions Lead | Redwood Inference
+jordan.blake@redwood.inference.com | +1 (415) 555-0192
+
+--
+Redwood Inference — production-first inference platform
+
+From: Erin Walsh <erin@novumhealth.com>
+To: Jordan Blake <jordan.blake@redwood.inference.com>
+Cc: Samir Patel <samir.patel@novumhealth.com>, Ben Carter <ben.carter@redwood.inference.com>, Lauren Bishop <lauren.bishop@redwood.inference.com>
+Date: Tue, 31 Jul 2028 09:07:00 -0400
+Subject: Re: Defining performance acceptance gates + mutual action map (post-demo)
+
+Jordan —
+
+Thanks for the clear recap. We appreciated the demo. A few clarifications from our side after syncing with infra:
+
+Confirmed / tweaks
+- Latency: we'd like p95 = 180 ms if possible for our main inference endpoint for 512-token responses. If that's challenging, 200 ms is acceptable for initial pilot but we'd like a plan to reach 180 ms in production.
+- Concurrency: increase to 40 concurrent active sessions (our web app opens multiple parallel streams).
+- Throughput: we confirm target sustained 250 RPS, with occasional bursts up to ~500 for short load spikes.
+- Streaming flush: 120 ms for partial token flush is okay; 100 ms would be ideal.
+
+Questions
+- Billing: will prefix/KV caching change how tokens are billed for us? We saw a note in the demo about cache re-use and want to understand cost implications for our token accounting.
+- Observability: can you provide the tracing snippet you mentioned so we can route headers into our APM?
+
+Attachments: novum_sample_payloads.json (sample prompts / edge cases)
+
+We can deliver any additional payloads by Tue EOD (we included a small set attached). Pilot start of Aug 7 works for us if the bench run on Aug 2 shows green metrics.
+
+Thanks,
+Erin Walsh
+Director of Product
+Novum Health
+erin@novumhealth.com | +1 (617) 222-3344
+
+From: Ben Carter <ben.carter@redwood.inference.com>
+To: Erin Walsh <erin@novumhealth.com>, Jordan Blake <jordan.blake@redwood.inference.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.inference.com>
+Date: Tue, 31 Jul 2028 12:05:00 -0700
+Subject: Re: Defining performance acceptance gates + mutual action map (post-demo)
+
+Erin —
+
+Great questions. Quick operational notes from my side:
+
+- I'll own the bench scheduling. Derek (infra) will run the harness on Wed Aug 2 in us-west1 and post the raw CSV + dashboard link when complete.
+- On billing: caching does not change how we report tokens for billing — we’ll provide a short explainer doc. Caching primarily reduces compute/time-to-first-token but token billing remains transparent (we'll include examples).
+- I'll create the HubSpot task for the MAP and link to the Drive folder (added to related_links).
+
+Action: I will share the perf_plan_readme.md to the Drive folder and tag Derek on the run. Expect an invite to the quick run sync (15 mins) tomorrow.
+
+Thanks,
+Ben Carter
+Enterprise Sales
+ben.carter@redwood.inference.com
+
+From: Jordan Blake <jordan.blake@redwood.inference.com>
+To: Erin Walsh <erin@novumhealth.com>
+Cc: Ben Carter <ben.carter@redwood.inference.com>, Lauren Bishop <lauren.bishop@redwood.inference.com>
+Date: Tue, 31 Jul 2028 16:42:00 -0700
+Subject: Re: Defining performance acceptance gates + mutual action map (post-demo)
+
+Erin / team —
+
+Thanks — sounds good. Confirming MAP and owners below so we can close the loop and start the work: 
+
+Mutual Action Map (summary)
+- Novum: deliver final payload set and any high-variance prompts (owner: Erin) — due 2028-08-01 EOD
+- Redwood: run synthetic bench and streaming validation in us-west1 (owner: Derek / Ben) — run date 2028-08-02
+- Joint: pilot run with representative traffic (owner: Jordan / Novum infra) — target 2028-08-07
+- Decision: acceptance review, metrics sign-off (owner: Jordan / Erin) — 2028-08-09
+
+Acceptance criteria highlights (final)
+- p95 generation latency <= 180 ms (target) / 200 ms (acceptable for pilot)
+- streaming partial flush median <= 120 ms; target 100 ms for production
+- sustained 250 RPS with <0.5% error budget during acceptance window
+- concurrency validated at 40 active sessions without degradation
+
+Deliverables we will share
+- Bench raw CSV + Perf dashboard link (post-run)
+- Token-level traces for 1k streaming flows
+- Short billing explainer on cache effects (Ben)
+
+I'll schedule the 15-min sync tomorrow after Derek's run to run through the CSV and decide whether we proceed to the joint pilot. If anything changes on your side, flag here and we'll adjust.
+
+Cheers,
+Jordan
+
+--
+Jordan Blake | Solutions Lead, Redwood Inference

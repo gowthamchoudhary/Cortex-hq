@@ -1,0 +1,122 @@
+Promo credits — potential duplicate accounts / manual issuance request — Buenavida
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Aditya Rao <aditya_rao@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, security-ops@redwood.ai
+Date: 2026-10-28 09:12 PDT
+Subject: Promo credits — flagged signups for Buenavida org (see attached)
+
+Team,
+
+FYI — HubSpot HS-987654 surfaced a cluster of self-serve signups that requested the standard promo grant (free credits) over the last 36 hours. I pulled the list and attached a CSV with the account email, IP, signup timestamp, and device fingerprint. Early signals that worried me:
+- 8 accounts (email variants) tied to same device_fingerprint: dfp_9b7c2
+- Two distinct IP ranges but same ASN (cloud-hosted proxy)
+- Signup cadence: 6 accounts created within a 12-minute window
+
+Customer: Buenavida (contact: Julia Park). Sales had an open trial/demo; Julia is asking for a manual extension for the main account after the cluster was blocked. I haven’t taken action beyond flagging.
+
+Attachments: flagged_signups_20261028.csv, ip_device_table_20261028.tsv
+
+Requesting: Aditya — can you triage and advise whether this looks like high-confidence abuse (recommend revoke + rollback credits) or a noisy dev environment? Monica — if there's a path for a safe manual grant to the canonical account, outline what verification you need.
+
+Thanks,
+Sean
+Sean Gallagher
+Senior Sales Engineer | Redwood Inference
+sean_gallagher@redwood.ai
++1 (415) 555-1212
+
+---
+
+
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Sean Gallagher <sean_gallagher@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, security-ops@redwood.ai
+Date: 2026-10-28 11:05 PDT
+Subject: Re: Promo credits — flagged signups for Buenavida org (see attached)
+
+Sean — good catch. Quick triage notes after an initial pass on the CSV + device/IP table:
+- Device fingerprint dfp_9b7c2 appears across 8 emails and correlates to identical browser user-agent + Accept-Language. High likelihood these are sibling accounts from the same browser session or headless automation.
+- IPs resolve to two cloud VPS providers; reverse DNS and passive DNS show short TTLs consistent with rotating proxies.
+- Behavioral heuristic: token usage pattern is zero (accounts created only to claim promo); no API calls after issuance.
+
+Recommendation (priority):
+1) Revoke issued promo credits for the 8 flagged accounts and mark them as fraud. Set a rollback flag so customer billing is not affected for other accounts.
+2) Lock creation flow for that device_fingerprint for 48 hours and add to watchlist (rule: same device_fingerprint + creation_count > 3).
+3) If Sales wants to keep the principal account (julia@buenavida.ai) alive, require KYC/confirmation and limit any manual grant to a small canary amount (<=5k tokens) while we monitor for linked activity.
+
+I attached a short triage export to S3 and added the event to the fraud tracker. If you want I can run a cross-org linkability check (email hash, phone number, payment method) but will need at least one canonical identifier from the customer.
+
+- Aditya
+Aditya Rao
+Fraud Ops | Redwood Inference
+aditya_rao@redwood.ai
+
+---
+
+
+From: Julia Park <julia@buenavida.ai>
+To: Sean Gallagher <sean_gallagher@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Cc: product@buenavida.ai
+Date: 2026-10-28 10:05 PDT
+Subject: Re: Promo credits — flagged signups for Buenavida org (please advise)
+
+Hi Sean / Monica,
+
+Thanks for the heads up — I saw your note in HubSpot. I’m the founder at Buenavida. We were doing a small internal integration test ahead of our pilot next week and a couple of devs spun up throwaway accounts to validate the onboarding flow. Those are internal test accounts — we didn’t plan to use multiple promo grants to game the system. I understand if that looks suspicious.
+
+What I’d like: can we get a manual extension for our main production account (julia@buenavida.ai) — we need a modest top-up (30k tokens) to complete the pilot tests on Monday. I can provide company details (tax id, Google Workspace org) and a short signed attestation if that helps.
+
+I’m happy to hop on a call and verify anything you need. We’re on Pacific Time.
+
+Best,
+Julia Park
+Founder & CEO | Buenavida
+julia@buenavida.ai
++1 (628) 555-0199
+
+---
+
+
+From: Monica Patel <monica_patel@redwood.ai>
+To: Julia Park <julia@buenavida.ai>, Sean Gallagher <sean_gallagher@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>
+Date: 2026-10-29 08:30 PDT
+Subject: Re: Promo credits — flagged signups for Buenavida org (manual issuance path)
+
+Hi Julia — thanks for the quick reply and context. Sorry for the interruption.
+
+We can do a conservative manual path to help you run the pilot while keeping abuse risk low. Proposed process:
+- Step 1: Please complete the short attestation and provide company EIN or incorporation docs (PDF). I’ve shared a DocuSign template link below; sign and return.
+- Step 2: We will issue a canary manual grant of 5,000 tokens to julia@buenavida.ai immediately after we verify the docs. This grant will be flagged for 72-hour elevated monitoring (no auto-rollover).
+- Step 3: If usage looks normal and there are no linkability events from the previously flagged device_fingerprint, we will consider an additional 25,000 token top-up for the account.
+
+DocuSign: https://na1.docusign.net/secure/Sign?docId=EX-12345
+HubSpot note: https://app.hubspot.com/contacts/987654/deal/HS-987654
+
+Aditya — please proceed with your revoke for the 8 flagged accounts; we’ll keep the principal account active pending verification.
+
+Thanks,
+Monica Patel
+Customer Success Manager | Redwood Inference
+monica_patel@redwood.ai
+
+---
+
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Aditya Rao <aditya_rao@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Julia Park <julia@buenavida.ai>, security-ops@redwood.ai
+Date: 2026-10-30 16:42 PDT
+Subject: Re: Promo credits — potential duplicate accounts / manual issuance request — Buenavida
+
+All — summarizing next steps so we have an audit trail:
+1) Aditya: revoke promo credits and disable the 8 flagged accounts (flagged_signups_20261028.csv). Actioned now. Please confirm once done and include the rollback tokens count.
+2) Monica: verify the DocuSign attestation and company docs. On verification, issue the conservative canary grant of 5,000 tokens to julia@buenavida.ai and set the account to 72-hour monitoring mode.
+3) Security-ops: add device_fingerprint dfp_9b7c2 to the watchlist rule set for 30 days; block new account creation that matches this fingerprint + >3 creations in 24h.
+4) Sales/CS: update HubSpot HS-987654 with the triage outcome and set next touch to 2026-11-02 for a pilot check-in.
+
+Julia — appreciate your quick cooperation on the KYC. Monica will confirm once the DocuSign arrives.
+
+Sean
+Senior Sales Engineer | Redwood Inference
+sean_gallagher@redwood.ai
++1 (415) 555-1212
+
+[Audit attachments referenced: flagged_signups_20261028.csv, ip_device_table_20261028.tsv]

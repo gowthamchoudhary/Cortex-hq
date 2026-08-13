@@ -1,0 +1,156 @@
+Data retention carveout & cross‑border purge timeline
+
+From: Elaine Park <elaine@novusclinics.com>
+To: Kimberly Park <kimberly@redwood.com>
+Date: 2025-07-03T15:12:00Z
+Subject: Data retention carveout and purge timeline for Novus pilot
+
+Hi Kimberly,
+
+Quick note from Legal / Ops at Novus — as we ramp the pilot we'll likely need a short retention carveout for investigatory purposes. Two asks up front: 1) can Redwood provide a scoped backup purge timeline that supports a temporary +90 day investigatory window for subsets of patient metadata, and 2) we need confirmation on whether any backups or logs for EU data will transit outside the EU (we must avoid that).
+
+Also: we will need a DPA addendum that specifies temporary retention for forensic review, plus a current subprocessors list and SOC2 evidence. Can you share a preliminary timeline and whether you support an escrow/immutable-snapshot option?
+
+Appreciate a short reply — procurement needs an estimate for extended retention cost so we can budget.
+
+Thanks,
+Elaine Park
+Head of Compliance
+Novus Clinics
+
+[attachment: novus-data-scope.csv (csv)]
+From: Kimberly Park <kimberly@redwood.com>
+To: Elaine Park <elaine@novusclinics.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: 2025-07-03T19:04:00Z
+Subject: Re: Data retention carveout and purge timeline for Novus pilot
+
+Hi Elaine — thanks for the clear ask. Short answers up front: yes, we can support a scoped 90‑day investigatory window for patient metadata and we can provide an EU‑resident-only backup option.
+
+What I propose as next step:
+- We map the precise datasets (table names / log streams) you want exempted for the 90‑day window.
+- Redwood will produce a short runbook describing how the retention carveout is applied (immutable snapshot + tagged backup retention).
+- We produce a redlined DPA addendum for temporary retention + subprocessors and a cost estimate for the retention add‑on.
+
+I've attached a preliminary timeline and a short checklist — we'll refine once you confirm datasets. Can we set a 30‑minute call tomorrow (your morning) to walk through the list? Marissa from commercial is looped for cost/ordering.
+
+Attachments: novus-retention-proposal-v1.xlsx
+
+Best,
+Kimberly Park
+Director, Privacy & Compliance
+Redwood Inference
+[signature: kimberly@redwood.com | +1 415-555-0199]
+From: Karthik Iyer <karthik@redwood.com>
+To: Kimberly Park <kimberly@redwood.com>, Marissa Cole <marissa@redwood.com>
+Cc: Elaine Park <elaine@novusclinics.com>
+Date: 2025-07-04T02:18:00Z
+Subject: Re: Data retention carveout and purge timeline for Novus pilot
+
+Hi all — technical notes for the runbook and options we should surface on the call. I'm listing the log/backups surface area and recommended approach: 
+
+1) Data categories (examples):
+   - Application event logs (app-prod-logs) — low cardinality, retained 30 days by default.
+   - KV/embedding cache snapshots (kv-snapshots) — periodic immutable snapshots, normally 14 days.
+   - Full backups (s3-managed) — incremental daily + weekly fulls, default retention 90 days (configurable).
+   - Audit logs / token traces — retained 365 days for enterprise customers but can be scoped.
+
+2) Approach for a scoped 90‑day investigatory window:
+   - Tagging: add dataset tags (novus-pilot:retain-90d) at snapshot creation.
+   - Isolation: keep EU data in EU buckets/regions only; snapshots encrypted with customer KMS and never egress to non‑EU regions.
+   - Immutable snapshots & escrow: provide one immutable snapshot per week kept in an escrow container (read‑only) for the 90 days; can be exported on request.
+   - Deletion workflow: deletion requests flow through a two‑step orchestration (mark-for-delete -> retention grace -> purge). For carveouts we set a hold flag that prevents the purge job.
+
+3) Operational controls & audit:
+   - Every retention-hold change will write an audit event (user, reason, TTL) and create a signed manifest.
+   - We can surface a retention-hold report as a CSV if Legal needs evidence.
+
+4) Constraints / tradeoffs:
+   - Cost: immutable snapshot escrow increases storage and retrieval costs; we'll provide estimate.
+   - Time to restore: searching within immutable snapshots is slower; expected retrieval SLA 6–12 hours for full export.
+
+I'll attach the runbook draft and a small test checklist. Kimberly — if Novus confirms EU‑only constraint we'll mark the snapshots non‑egress and add the crossborder clause to the DPA addendum.
+
+Attachment: redwood-temp-retain-runbook.pdf
+
+—Karthik
+Senior Applied Infra Engineer
+Redwood Inference
+From: Elaine Park <elaine@novusclinics.com>
+To: Kimberly Park <kimberly@redwood.com>
+Cc: Novus Clinics Legal <legal@novusclinics.com>
+Date: 2025-07-05T09:37:00Z
+Subject: Re: Data retention carveout and purge timeline for Novus pilot
+
+Kimberly / Karthik — this is helpful. A couple clarifications from Legal:
+
+- The 90‑day investigatory window must apply only to a narrow dataset (patient contact metadata + access traces) — not full patient records.
+- EU data must not be exported outside the EU under any circumstance; an EU region escrow hosted in the EU is acceptable.
+- We will need a short addendum to the DPA (DocuSign) that: names the datasets, defines the hold lifecycle, and requires Redwood to provide an audit manifest on purge.
+
+Procurement note: budget needs a ballpark. Can you provide a 1) monthly storage delta estimate for immutable escrow (per 100 GB), and 2) retrieval fee estimate if Novus requests a snapshot export within the 90 days?
+
+If you can send the addendum + rough pricing by end of week, we can route to legal.
+
+Thanks,
+Elaine
+
+On Thu, Jul 03, 2025 at 15:12 Kimberly Park <kimberly@redwood.com> wrote:
+> Hi Elaine — thanks for the clear ask...
+>
+From: Marissa Cole <marissa@redwood.com>
+To: Elaine Park <elaine@novusclinics.com>, Kimberly Park <kimberly@redwood.com>
+Date: 2025-07-06T16:05:00Z
+Subject: Re: Data retention carveout and purge timeline for Novus pilot
+
+Hi Elaine — looping in commercial details. Quick proposal:
+
+- Extended retention add‑on: +$0.45 / GB / month for immutable escrow (EU region pricing).
+- One‑time escrow provisioning fee: $1,500 (covers immutable container setup + compliance attestation).
+- Retrieval window SLA: standard retrieval fee $250 per export request (plus egress if applicable).
+
+I've created a short mutual action plan and an order form for the pilot add‑on — link to DocuSign below. If Legal approves the DPA addendum, we can auto‑apply the add‑on to the pilot subscription and begin the escrow lifecycle immediately.
+
+DocuSign: https://docusign.com/req/ABC123-novus-retention-addendum
+Attachment: order-form-novus-extended-retention.docx
+
+Best,
+Marissa Cole
+Senior Account Executive
+Redwood Inference
+From: Kimberly Park <kimberly@redwood.com>
+To: Elaine Park <elaine@novusclinics.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: 2025-07-07T23:03:00Z
+Subject: Re: Data retention carveout and purge timeline for Novus pilot — next steps
+
+Thanks everyone — finalizing next steps so Legal / Procurement have a clear checklist: 
+
+Action items (Redwood):
+- Kimberly: produce DPA addendum draft naming the narrow datasets and the hold lifecycle (deliver by 2025-07-10).
+- Karthik: lock the retention-runbook with EU‑only escrow technical controls and the audit manifest format (deliver by 2025-07-09).
+- Marissa: send formal commercial quote and DocuSign order form + pricing worksheet (sent 2025-07-06).
+
+Action items (Novus):
+- Elaine: confirm final dataset list (CSV) and sign DocuSign addendum once Legal approves.
+- Novus Legal: confirm non‑egress clause language; review manifest requirements.
+
+Notes:
+- Attachments we've shared in thread: novus-retention-proposal-v1.xlsx, redwood-temp-retain-runbook.pdf, order-form-novus-extended-retention.docx.
+- Once the DPA addendum is signed, Redwood will apply a retention hold flag to matching snapshots and exclude them from automated purge jobs. All hold changes will be auditable and exported as CSV.
+
+If that timeline looks good I'll follow up with the DPA redline and a one‑page runbook summary for Legal.
+
+Best regards,
+Kimberly Park
+Director, Privacy & Compliance
+Redwood Inference
+[attachment: redwood-eu-subprocessors-list.csv]
+
+-----Original message-----
+From: Elaine Park <elaine@novusclinics.com>
+Sent: Thu, 3 Jul 2025 15:12:00 +0000
+Subject: Data retention carveout and purge timeline for Novus pilot
+
+(quoted for context)
+

@@ -1,0 +1,113 @@
+Air‑gapped delivery: signing matrix, verification flow, and emergency rollback
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Ellen Park <ellen.park@acmebank.com>; SecureTrans Logistics <ops@securetrans.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Dev Patel <dev_patel@redwood.com>
+Date: Mon, 2 Aug 2026 09:12:00 -0700
+Subject: Air‑gapped delivery: initial checklist and signing roles
+
+Hi Ellen / SecureTrans team,
+
+Thanks for confirming interest in the air‑gapped private deployment option. To avoid delays at handoff, I want to align on the minimal delivery package and the signing/verification authorities we expect at Acme. Below is the proposal from our side — please confirm or call out exceptions: 
+
+- Delivery media: encrypted USBs shipped via SecureTrans (tamper‑evident packaging). Manifest cover sheet included.
+- Artifacts: OCI image tarballs, release_manifest.yaml (sha256 checksums), signed_image_manifest.sig (Redwood infra signing key), optional attestation bundle (slsa provenance).
+- Signing matrix: Redwood signs images with our build key (keyid:RWD-BUILD-2026). Customer has two options to verify: provide your KMS public key to verify signatures, or we provide an HSM‑backed verification appliance during onsite ingest.
+- Verify steps at ingest: checksum verification, signature verification, scan for policy violations (hash allowlist), manual approval by Acme security (name + timestamp).
+- Emergency rollback: images remain immutable on media; we provide a rollback manifest and signed rollback authorization; rollback requires two Acme approvers plus one Redwood on‑call.
+
+Action items for Acme before we schedule the drop:
+1) Confirm verification approach (KMS pubkey vs on‑site verification appliance).
+2) Confirm approval authority names and emails for the manual approval step.
+3) Confirm any additional compliance artifacts you require (SOC artifact bundle, specific provenance fields).
+
+I'll attach a concise airgap_checklist.pdf and the sample release_manifest.yaml to illustrate the fields.
+
+Thanks,
+Marcus
+Marcus Lin
+Head of Private Deployments, Redwood Inference
+
+From: Ellen Park <ellen.park@acmebank.com>
+To: Marcus Lin <marcus_lin@redwood.com>
+Cc: SecureTrans Logistics <ops@securetrans.com>, Marissa Cole <marissa_cole@redwood.com>, Dev Patel <dev_patel@redwood.com>
+Date: Tue, 3 Aug 2026 10:03:00 -0700
+Subject: Re: Air‑gapped delivery: initial checklist and signing roles
+
+Marcus — thanks, this looks thorough. A few notes from Acme security: 
+
+- We prefer to verify signatures using our internal KMS (we will provide a verification public key and fingerprint).
+- Approval authority: Ellen Park (ellen.park@acmebank.com) and Rajiv Menon (rajiv.menon@acmebank.com) — both need to be able to sign off on ingest. Will you accept email‑signed timestamp (recommended) + audit log entry?
+- We need the manifest to include exact base image hashes (not just tags), the build timestamp, and the build pipeline id.
+
+Can SecureTrans confirm their chain‑of‑custody manifest format so we can correlate serial numbers to media?
+
+If we get the key fingerprint and sample manifest by EOD Friday we can proceed with procurement and schedule a KMS key exchange.
+
+— Ellen
+Ellen Park
+Sr. Cloud Security Engineer, Acme Bank
+
+From: SecureTrans Logistics <ops@securetrans.com>
+To: Ellen Park <ellen.park@acmebank.com>, Marcus Lin <marcus_lin@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Wed, 4 Aug 2026 08:26:00 -0700
+Subject: Re: Air‑gapped delivery: initial checklist and signing roles
+
+Ellen / Marcus,
+
+SecureTrans confirms we will provide: serial numbers for each encrypted USB, tamper seal id, pickup timestamp, and chain_of_custody.json (digital manifest). Media will be encrypted with AES‑256; we will not hold keys beyond transit. Delivery ETA to Acme datacenter loading dock: Aug 18 — will confirm pickup on Aug 13.
+
+Attached is a sample chain_of_custody.json and our shipping manifest format. We also support courier video capture on request (additional cost).
+
+Ops — SecureTrans
+
+From: Dev Patel <dev_patel@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Ellen Park <ellen.park@acmebank.com>
+Cc: Mina Haddad <mina_haddad@redwood.com>
+Date: Fri, 6 Aug 2026 11:45:00 -0700
+Subject: Re: Air‑gapped delivery: initial checklist and signing roles
+
+Folks, following up with the artifacts we plan to produce from our release pipeline (attached as release_manifest.yaml):
+
+- image_archive_20260813.tar.gz — contains OCI layers and metadata (sha256 checksums included)
+- release_manifest.yaml — fields: image_id, image_hash, build_pipeline_id, build_timestamp, provenance_url, signature_path
+- signed_image_manifest.sig — detached signature produced by our infra signing key; verification via openssl/gnupg flow is documented in the checklist
+
+Verification commands we recommend at ingest (example):
+1) sha256sum -c release_manifest.yaml
+2) openssl dgst -sha256 -verify acme_pubkey.pem -signature signed_image_manifest.sig release_manifest.yaml
+
+If Acme provides a verification public key file, we will include it in the drop paperwork and add an optional acme_pubkey.pem to the media root.
+
+Also calling out: any image rollback requires a signed rollback_authorization.json (two Acme approvers + Redwood oncall) — we can automate the check for two approver signatures if Acme wants us to integrate with your internal signing service.
+
+- Dev
+Dev Patel
+Release Engineer, Redwood Inference
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Ellen Park <ellen.park@acmebank.com>, Marcus Lin <marcus_lin@redwood.com>, Dev Patel <dev_patel@redwood.com>, SecureTrans Logistics <ops@securetrans.com>
+Cc: Mina Haddad <mina_haddad@redwood.com>
+Date: Mon, 9 Aug 2026 16:38:00 -0700
+Subject: Re: Air‑gapped delivery: initial checklist and signing roles
+
+Thanks everyone — quick summary and next steps (for the record):
+
+Summary decisions:
+- Verification approach: Acme will use internal KMS pubkey verification (Acme to share pubkey and fingerprint).
+- Chain of custody: SecureTrans will include serial numbers and chain_of_custody.json; Acme to confirm acceptance of format.
+- Approvers: Ellen Park + Rajiv Menon; Redwood oncall (rotation list attached) for rollback authorization.
+
+Action items:
+1) Acme (Ellen) — send verification public key + preferred format for email‑signed approvals by Aug 12.
+2) SecureTrans — confirm pickup on Aug 13 and provide sample chain_of_custody.json (received).
+3) Redwood (Dev) — generate final release artifacts on Aug 13 and produce signed_image_manifest.sig; include acme_pubkey.pem on media if provided.
+4) Marcus/Marissa — schedule an ingest dry run (logical verification only) for Aug 17 (virtual) ahead of physical drop.
+
+Attachments: airgap_checklist.pdf, release_manifest.yaml, signed_image_manifest.sig (sample).
+
+If there are policy or audit needs beyond the above (e.g., video proof at handoff, custody witness), call it out and we'll adapt the drop plan.
+
+Marissa Cole
+Director, Solutions (Private Deployments), Redwood Inference

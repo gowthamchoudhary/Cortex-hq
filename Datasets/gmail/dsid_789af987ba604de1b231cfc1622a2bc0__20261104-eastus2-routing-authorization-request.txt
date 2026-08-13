@@ -1,0 +1,104 @@
+Latency & 5xx spike in us-east-2 — request for cross-region routing authorization
+
+From: Timothy Lowe <tim.lowe@focusretail.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>, marissa_cole@redwood.com
+Cc: infra-sre@focusretail.com
+Date: Wed, 04 Nov 2026 08:45:12 -0000
+Subject: Production latency + 5xx spike in us-east-2
+
+Vanessa / team,
+
+We're seeing a large spike in latency and ~12% 5xx error rate for our production calls that hit us-east-2 starting ~08:30 UTC. Throughput looks normal but tail latency for inference endpoints is up 3–4x. This is causing checkout failures on ~8% of orders in the last 15 minutes.
+
+Attached is a screenshot from our monitoring dashboard (screenshot-500s.png) and a short snippet from our logs. Can you confirm if this is a routing/region issue on your side or something we should mitigate locally? We're starting to queue some backfilled requests, but customer impact is significant.
+
+Thanks,
+Timothy Lowe
+Sr. Platform Engineer — FocusRetail
+
+---
+Attachments: screenshot-500s.png (png)
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+To: Timothy Lowe <tim.lowe@focusretail.com>
+Cc: marissa_cole@redwood.com, connor_obrien@redwood.com
+Date: Wed, 04 Nov 2026 08:51:04 -0000
+Subject: Re: Production latency + 5xx spike in us-east-2
+
+Timothy — thanks for the alert and the screenshot. We're investigating immediately. I've looped in Connor (SRE) and Marissa (CS lead).
+
+Initial notes: our telemetry shows concurrent connection errors concentrated on instances in us-east-2 AZ B. There was an underlying infra autoscaling lag combined with degraded GPU host health metrics around 08:25 UTC. We are preparing a cross-region traffic shift (to westus-1) as a protective action.
+
+Before we proceed, we need an authorization to temporarily route your production traffic to westus-1 due to data residency constraints in your contract. Can you confirm you approve westus-1 for the next 90 minutes if we perform a live routing switch? If you prefer, we can execute a canary redirect for 10% then escalate.
+
+I'll post the runbook links and PagerDuty incident in a follow up.
+
+—Vanessa Ortiz
+Account Executive, Redwood Inference
+vanessa_ortiz@redwood.com | +1 (415) 555-0166
+
+---
+
+From: Connor O'Brien <connor_obrien@redwood.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Timothy Lowe <tim.lowe@focusretail.com>
+Date: Wed, 04 Nov 2026 09:12:28 -0000
+Subject: Re: Production latency + 5xx spike in us-east-2
+
+Team / Timothy,
+
+Quick technical summary:
+- Root cause signal: host GPU memory pressure + degraded network egress from AZ B in us-east-2. Instances are returning 503s when KV cache misses align with heavy batching.
+- Impact: increased tail latency and 5xxs for long-context requests (seq > 1024).
+- Mitigation options:
+  1) Live cross-region routing to westus-1 with weighted routing (canary 10% -> 50% -> 100%) — fastest user relief but requires FocusRetail sign-off for transient cross-region processing.
+  2) Force rollback to previous model variant on us-east-2 and scale up capacity — slower, risk of queuing.
+  3) Apply tighter shedding (reject long-context >2048) — reduces impact but is a degraded user experience.
+
+I recommend option 1 with a 10% canary for 10 minutes, monitor 5xx and latency, and then ramp if stable. We'll also enable prefix cache bypass mitigation to reduce memory churn. Expected customer-visible improvement within 6–12 minutes if routing shift is executed.
+
+Attachments: perf-logs-20261104.tar.gz (contain aggregated host metrics and model PID traces)
+
+Requesting: fast approval from FocusRetail to route to westus-1 for a temporary window and permission to escalate to full shift if canary meets SLOs. Also requesting exec-level awareness in case we need to expand to dedicated capacity.
+
+Connor O'Brien
+SRE — Redwood Inference
+connor_obrien@redwood.com
+
+---
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Jonas Weber <jonas_weber@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>, Connor O'Brien <connor_obrien@redwood.com>
+Cc: Timothy Lowe <tim.lowe@focusretail.com>, marissa_cs_alias@redwood.com
+Date: Wed, 04 Nov 2026 10:05:41 -0000
+Subject: Fwd: Production latency + 5xx spike in us-east-2 — routing authorization request
+
+Jonas — escalating for decision: FocusRetail (large PLG customer) is impacted by a region-specific outage causing checkout failures. Connor recommends an immediate cross-region canary (westus-1).
+
+Impact estimate: ~8% order failures; revenue at risk if unresolved >30 minutes. Customer has a contractual clause that requires explicit approval for cross-region processing when triggered. They have confirmed via Timothy (copied) that they can approve at the product-owner level, but we need a Redwood exec acknowledgment for the routing change and an authorization to proceed to 100% if canary is healthy.
+
+Options we need Jonas to sign off on (please reply-all with APPROVE / DENY / APPROVE-WITH-LIMITS):
+- APPROVE canary: 10% traffic to westus-1 for 10 minutes (auto rollback on >2% 5xx increase or >20% latency regression)
+- APPROVE full shift: immediate 100% shift to westus-1 for 90 minutes (requires temporary update to FocusRetail's routing policy and DR notice)
+- DENY: force the SRE team to pursue an in-region mitigation only
+
+If we get a quick APPROVE for the canary, Connor will run the shift and I will coordinate comms + a brief customer note.
+
+—Marissa Cole
+Head of Customer Success, Redwood Inference
+marissa_cole@redwood.com
+
+On Wed, Nov 4, 2026 at 09:12, Connor O'Brien <connor_obrien@redwood.com> wrote:
+> Team / Timothy,
+>
+> Quick technical summary:
+> - Root cause signal: host GPU memory pressure + degraded network egress from AZ B in us-east-2. Instances are returning 503s when KV cache misses align with heavy batching.
+> - Impact: increased tail latency and 5xxs for long-context requests (seq > 1024).
+> - Mitigation options:
+>   1) Live cross-region routing to westus-1 with weighted routing (canary 10% -> 50% -> 100%) — fastest user relief but requires FocusRetail sign-off for transient cross-region processing.
+>   2) Force rollback to previous model variant on us-east-2 and scale up capacity — slower, risk of queuing.
+>   3) Apply tighter shedding (reject long-context >2048) — reduces impact but is a degraded user experience.
+>
+> I recommend option 1 with a 10% canary for 10 minutes, monitor 5xx and latency, and then ramp if stable. We'll also enable prefix cache bypass mitigation to reduce memory churn. Expected customer-visible improvement within 6–12 minutes if routing shift is executed.
+>
+> Connor O'Brien
+> SRE — Redwood Inference

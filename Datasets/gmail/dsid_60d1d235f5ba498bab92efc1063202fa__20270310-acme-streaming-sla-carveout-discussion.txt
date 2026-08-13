@@ -1,0 +1,114 @@
+Streaming endpoint SLA carveout and throughput gating discussion
+
+From: Tamara Singh <tamara@acmecloud.com>
+To: Jordan Blake <jordan.blake@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Acme SRE <acme-sre@acmecloud.com>
+Date: Wed, 10 Mar 2027 09:08:12 -0700
+Subject: SLAs for streaming endpoints — TTFT & sustained token/sec carveout?
+
+Hi Jordan / Marissa,
+
+Thanks for the demo yesterday — the team was impressed with the latency profile. We have one follow-up from our SRE and procurement teams: for our billing & UX flows we need firm commitments around two things for streaming endpoints:
+
+- Time-to-first-token (TTFT) expectations (95th / 99th pctl) for sessions > 1k tokens
+- Sustained tokens/sec allowance for long streaming sessions (we see bursts of up to ~2k tokens/sec for short windows)
+
+Acme's compliance requires either (a) a documented carveout with clear fallback behavior when targets aren't met, or (b) a dedicated/reserved capacity arrangement. Can you outline how Redwood would commit here (or how an exception would be handled)?
+
+Also: are there specific mitigations (prefix caching, warm KV cache, model variants) we can adopt on our side to reduce failure surface? If you have a short matrix or a one-pager that maps guarantees to product options (hosted vs dedicated vs private), please attach.
+
+Goal: decide whether we proceed with a limited production pilot under an amendment.
+
+Thanks,
+Tamara Singh
+Head of Integrations, Acme Cloud
+--
+Acme SRE: acme-sre@acmecloud.com
+
+-----Original Message-----
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Tamara Singh <tamara@acmecloud.com>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Evelyn Hart <evelyn.hart@redwood.ai>
+Date: Wed, 10 Mar 2027 11:35:04 -0700
+Subject: Re: SLAs for streaming endpoints — TTFT & sustained token/sec carveout?
+
+Hi Tamara — really appreciate the clear ask. Quick summary and concrete next steps below.
+
+Summary (short):
+- Hosted API (shared pool): conservative default SLA is geared for median workloads; we do not guarantee 2k tokens/sec sustained on shared streaming endpoints.
+- Possible carveout: for a targeted pilot we can propose an exception with documented fallback: TTFT 250–350ms (95th) for streaming first-token when requests use prefix caching and small KV warming patterns; sustained burst windows permitted up to 1,500 tokens/sec for up to 15s, beyond that we transition requests to a compatible non-streaming variant or queued batch path.
+- Recommended path to meet your ask: Dedicated pool (reserved capacity) or a short-term Dedicated lane during peak windows — that gives predictable throughput and a firm SLA.
+
+Attachments: SLA_matrix_v2.pdf (matrix that maps option -> expected TTFT / sustained tokens/sec / cost delta)
+
+Next steps I propose:
+1) Internal tech check (Jordan + Evelyn) to confirm model variant and quantization we’d recommend for your workload (I’ve flagged this with Evelyn).
+2) 30-minute SRE-to-SRE call to confirm thresholds and fallback behavior (can you share a representative traffic trace?)
+3) If acceptable, we prepare an amendment for a 30-day pilot with specific carveouts and a DocuSign link for signatures.
+
+If you want, I can schedule the SRE call this week.
+
+—Jordan
+Jordan Blake
+Account Executive, Redwood Inference
+Direct: +1 (415) 555-0193
+
+-----Original Message-----
+From: Evelyn Hart <evelyn.hart@redwood.ai>
+To: Tamara Singh <tamara@acmecloud.com>, Jordan Blake <jordan.blake@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Thu, 11 Mar 2027 08:17:09 -0700
+Subject: Re: SLAs for streaming endpoints — TTFT & sustained token/sec carveout?
+
+Hi Tamara — I’m Evelyn (runtime lead); quick technical notes and the practical engineering constraints so you can see what a carveout would imply.
+
+Why TTFT varies:
+- Prefix/KV cache warmup: for chat sessions that reuse context we can serve first tokens much faster once KV cache is hot; cold sessions (new prompt + long context) need model KV population which increases TTFT.
+- Scheduling & batching: in a multi-tenant hosted pool we batch small requests to increase throughput and utilization which can add to first-token latency at p99.
+- Kernel/runtime path: certain optimized kernels for 8-bit quantized weights give better throughput but can slightly increase per-token latency; we pick kernels per model variant.
+
+What we can do (configurable):
+- Prefix caching: we can pin common prefixes for your flows (reduces TTFT for subsequent requests).
+- Model variant recommendation: use the low-latency variant (we shipped a 1.7B low-latency build) for interactive flows; switch to a higher-throughput quantized model for background batching.
+- Dedicated mini-pool: if you commit to a small Dedicated pool (e.g., 2 GPUs reserved), we can guarantee sustained 1.8k tokens/sec for short bursts and TTFT ~200–300ms (95th) for your chosen variant.
+
+Tradeoffs and runbook for fallback:
+1) If sustained token/sec crosses agreed threshold for >20s, we automatically triage to a queued non-streaming path (same model family) with clear client-side event indicating degraded streaming.
+2) We provide a header in responses indicating 'redwood-fallback: queued' and an estimated ETA.
+3) Ops play: we’ll set up trace-level logging and a small set of dashboards (per-route token/sec, TTFT p95/p99, queued rate) for the pilot.
+
+I attached a small sample of your anonymized usage we reviewed (acme_mvp_usage.csv) — that informed the 2 GPU Dedicated sizing above. If you’d like, I can run a 48-hour soak in our staging cluster with your traces to produce concrete percentiles.
+
+Evelyn Hart
+Runtime Lead, Redwood Inference
+E: evelyn.hart@redwood.ai
+
+Attachment: acme_mvp_usage.csv (rows: session_id,peak_tokens_sec,avg_tokens_sec,session_len_s)
+
+-----Original Message-----
+From: Tamara Singh <tamara@acmecloud.com>
+To: Jordan Blake <jordan.blake@redwood.ai>, Evelyn Hart <evelyn.hart@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Acme SRE <acme-sre@acmecloud.com>
+Date: Thu, 11 Mar 2027 12:02:45 -0700
+Subject: Re: SLAs for streaming endpoints — TTFT & sustained token/sec carveout?
+
+Thanks Jordan / Evelyn — that level of detail is exactly what we needed.
+
+Decision: Acme would like to run the 30-day pilot on a Dedicated mini-pool. Please go ahead and: 
+- Send an amendment (DocuSign) for the pilot with the carveout language you outlined and the fallback runbook.
+- Share the SRE call invite (we can do Friday 09:00 PT).
+
+Marissa — can you own the amendment and share rough pricing for the 2-GPU pilot?
+
+Appreciate the quick turnaround.
+Tamara
+
+--
+Tamara Singh
+Head of Integrations, Acme Cloud
+
+[Attachment stubs]
+- SLA_matrix_v2.pdf (PDF, 120KB)
+- acme_mvp_usage.csv (CSV, 18KB)
+
+[DocuSign/Procurement links to follow once amendment is drafted]

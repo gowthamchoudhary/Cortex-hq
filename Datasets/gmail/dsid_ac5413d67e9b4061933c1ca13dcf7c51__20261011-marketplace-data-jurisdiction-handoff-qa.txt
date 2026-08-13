@@ -1,0 +1,108 @@
+Marketplace data jurisdiction handoff — alignment questions
+
+From: Ayesha Khan <ayesha.khan@cloudfolio.io>
+To: logan_wright@redwood.com, ben_carter@redwood.com
+Cc: marketplace-procurement@cloudfolio.io, Cloudfolio Legal <legal@cloudfolio.io>
+Date: Mon, 05 Oct 2026 09:12:00 -0700
+Subject: Marketplace listing — data jurisdiction & retention handoff
+
+Hi Logan / Ben,
+
+Thanks again for the call this morning. As we prepare the Cloudfolio listing for the three public clouds, Legal asked us to confirm a few operational details so they can sign off on the listing terms and the partner contract. Can you confirm the following?
+
+1) For US customers selecting AWS or GCP regions, will customer data (logs, telemetry, and model inference traces) ever be replicated outside the requested region for Marketplace ingestion/analytics?
+2) If a customer requests deletion, what is the expected end-to-end timeline for: (a) metadata & logs, (b) cached inference KV stores, and (c) backups/snapshots?
+3) Are there any known behaviors where we might need to route requests through a central processing region (e.g., for billing or telemetry) that would require disclosure in the contract?
+
+I've attached a draft data_handoff_matrix we maintain — it maps assets and retention windows at a high level. Legal would like a short one-paragraph statement we can include in the annex describing which artifacts are region-locked vs. global.
+
+Appreciate a quick response — our timeline is tight for the marketplace go-live on Oct 25.
+
+Thanks,
+Ayesha
+Head of Partnerships, Cloudfolio
+
+Attachment: data_handoff_matrix.xlsx (xlsx, 42KB)
+From: logan_wright@redwood.com
+To: Ayesha Khan <ayesha.khan@cloudfolio.io>
+Cc: ben_carter@redwood.com, marissa_cole@redwood.com, jordan_blake@redwood.com
+Date: Mon, 05 Oct 2026 11:08:00 -07:00
+Subject: Re: Marketplace listing — data jurisdiction & retention handoff
+
+Ayesha — thanks for the clear list. Quick answers below; I'll follow up with a short paragraph for Legal and a proposed SLA-friendly retention summary.
+
+1) Replication: For marketplace-listed models we do not replicate customer inference data across regions by default. We pin customer tenancy and KV caches to the selected region (AWS/GCP/Azure) unless the customer explicitly enables cross-region analytics.
+
+2) Deletion timelines (expected):
+- Metadata & logs: searchable logs are deleted or anonymized within 30 days in-region; aggregated analytics may persist up to 90 days (aggregated, not PII).
+- KV cache / inference caches: Evicted immediately on request; TTLs mean cold-state data may take up to 24 hours to fully flush depending on active sessions.
+- Backups/snapshots: Snapshots are on a 30-day rotation; deletions trigger the next retention cycle but we provide an expedited deletion option for enterprise contracts (typically 7–10 days).
+
+3) Central processing: We do route billing/usage aggregation to a central telemetry ingestion pipeline in our US control plane. That pipeline consumes aggregated tokens/usage — no raw prompt text is routed there by default. If you require zero routing we can provide a Dedicated or Private deployment option where control plane telemetry is limited.
+
+I'll draft the one-paragraph annex and circulate. For clarity, looping in Marissa for legal framing and Jordan for marketplace ops nuances.
+
+— Logan Wright
+Product Ops, Redwood Inference
+
+From: ben_carter@redwood.com
+To: logan_wright@redwood.com, Ayesha Khan <ayesha.khan@cloudfolio.io>
+Cc: marissa_cole@redwood.com, jordan_blake@redwood.com
+Date: Wed, 07 Oct 2026 08:27:00 -07:00
+Subject: Re: Marketplace listing — data jurisdiction & retention handoff
+
+Ayesha — a couple of technical clarifications from infra so Cloudfolio can update the annex properly:
+
+- Active KV cache eviction: when we receive a deletion request we invalidate session-level KV entries immediately and mark the cache shards for GC. In high-throughput listings there can be delayed eviction windows (up to 24h) if the same session continues to push traffic; we can provide an SLA-backed path to shorten that to <6h on Dedicated.
+
+- Snapshots: periodic snapshots are incremental. If you need complete destruction immediately we do a full snapshot purge but that requires a support ticket and, depending on backup replication, may take the snapshot retention window (we can expedite under enterprise terms).
+
+- Audit log artifacts: admin/audit logs for marketplace onboarding (who requested what) are kept for 365 days by default for compliance; we can scope down to 90 days for Marketplace-only listings if you need.
+
+If Cloudfolio wants concrete wording for each bullet (eviction / snapshot / audit retention) I'll prepare short lines to drop into the contract.
+
+— Ben Carter
+VP, Partner Integrations, Redwood Inference
+
+From: marissa_cole@redwood.com
+To: Ayesha Khan <ayesha.khan@cloudfolio.io>, logan_wright@redwood.com
+Cc: ben_carter@redwood.com, jordan_blake@redwood.com, vanessa_ortiz@redwood.com
+Date: Thu, 08 Oct 2026 14:56:00 -07:00
+Subject: Re: Marketplace listing — data jurisdiction & retention handoff
+
+Ayesha / team — from a contractual perspective, Legal needs three short, unambiguous statements for the marketplace annex: region-locking, deletion timelines, and telemetry routing. Suggested wording below (please review):
+
+1) Region-locking: "Customer data (including inference inputs, outputs, and cache artifacts) for Marketplace listings is stored in the customer-selected cloud region and is not replicated to other regions unless explicitly enabled via cross-region analytics settings."
+
+2) Deletion timelines: "Upon customer deletion request, Redwood will: a) anonymize or delete searchable logs within 30 days, b) invalidate inference caches within 24 hours (expedited options available under enterprise plans), and c) remove snapshots within 30 days subject to backup replication windows (expedited removal available by support request)."
+
+3) Telemetry routing: "Aggregated usage telemetry (tokens and anonymized metrics) may be routed to Redwood's centralized control plane for billing/analytics. Raw prompt or PII is not routed by default. Customers requiring zero external telemetry flow may select Dedicated or Private deployment options."
+
+If Cloudfolio agrees, we can insert those three lines verbatim into your partner annex. Vanessa — can you drop the Marketplace listing checklist link for Ayesha?
+
+— Marissa Cole
+Sr. Counsel, Redwood Inference
+
+From: Ayesha Khan <ayesha.khan@cloudfolio.io>
+To: marissa_cole@redwood.com, logan_wright@redwood.com
+Cc: ben_carter@redwood.com, jordan_blake@redwood.com, vanessa_ortiz@redwood.com, Cloudfolio Legal <legal@cloudfolio.io>
+Date: Mon, 11 Oct 2026 16:48:00 -07:00
+Subject: Re: Marketplace listing — data jurisdiction & retention handoff
+
+Thanks — this is extremely helpful and clean. Cloudfolio Legal and Procurement reviewed Marissa's three lines and have two small asks:
+
+• Can Redwood confirm the "30 days" deletion window for backups is the maximum under Marketplace terms (they want to see that explicitly called out)?
+• For audit logs, can you provide an opt-in/opt-out checkbox for "Marketplace listing only: reduce admin audit retention to 90 days" on the procurement form so they can select it during purchase?
+
+We also confirmed the Drive folder with the matrix.
+
+Next steps per timeline:
+- If Redwood can confirm the 30-day maximum for backups, we'll accept the annex and move to DocuSign this week.
+- If you can expose the audit retention checkbox in the procurement flow, Procurement is happy to include it as a standard option (helps speed sign-off).
+
+Thanks everyone — appreciate the fast turnaround.
+
+— Ayesha
+Head of Partnerships, Cloudfolio
+
+Attachment: marketplace-geo-mapping-v1.pdf (pdf, 88KB)

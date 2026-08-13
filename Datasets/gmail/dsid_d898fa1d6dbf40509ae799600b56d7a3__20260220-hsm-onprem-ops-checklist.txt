@@ -1,0 +1,133 @@
+On-prem HSM integration & BYOK ops checklist
+
+From: Maya Rao <maya@securekms.io>
+To: hiro_tanaka <hiro@redwood.ai>, laura_bennett <laura@redwood.ai>
+Date: Sat, 14 Feb 2026 09:08:00 -0800
+Subject: On-prem HSM integration & initial spec
+
+Hi Hiro + Laura,
+
+Thanks for taking time last week. Attached is our HSM spec v2 and a short note on BYOK flows we typically support for on-prem/VPC customers (PKCS#11, KMIP, and a lightweight REST shim we provide for restricted environments).
+
+Quick summary of what we recommend for Acme Health Systems: 
+- Dedicated HSM appliance in the customer's co-lo with KMIP endpoint exposed over mutual TLS from the application subnet.
+- BYOK: customer generates and holds root keys (RSA-4096) in their HSM; we support wrapping/unwrapping for model encryption keys via KMIP.
+- Rotation: recommend 30–90 day envelope key rotation with automated rewrapping; do not perform root key import/rotation without manual checkpoints.
+
+Attachments: hsm_specs_v2.pdf
+
+Can you share the expected network egress constraints and whether Acme requires HSM logs forwarded to their SIEM?
+
+Best,
+Maya
+Senior Solutions Engineer
+SecureKMS, Inc.
+
+From: hiro_tanaka <hiro@redwood.ai>
+To: Maya Rao <maya@securekms.io>
+Cc: laura_bennett <laura@redwood.ai>, stephanie_nguyen <stephanie@redwood.ai>
+Date: Sat, 14 Feb 2026 11:25:00 -08:00
+Subject: Re: On-prem HSM integration & initial spec
+
+Maya — thanks for the spec, looks sensible. A couple quick operational questions before we bring infra/procurement into the loop: 
+
+1) Network: Acme wants a VPC-connected private deployment. They will only permit outbound TLS to specific vendor IPs and will require strict egress rules. Do you have a recommended CIDR/IP list or a short-lived hostname-based approach?
+
+2) BYOK lifecycle: we need clarity on the manual steps vs automated ones. Our ops playbook wants to automate envelope key rotation; we need to confirm whether SecureKMS can support remote rewraps via KMIP and whether any HSM firmware hooks are required.
+
+3) Audit/forensics: Acme asked for HSM audit log forwarder (syslog or S3). What formats and retention windows do you support?
+
+I can route this to Dev and Security next week — tagging Steph for compliance input.
+
+— Hiro
+Director, Platform Eng
+Redwood Inference
+
+From: Maya Rao <maya@securekms.io>
+To: hiro_tanaka <hiro@redwood.ai>
+Cc: laura_bennett <laura@redwood.ai>
+Date: Sun, 15 Feb 2026 08:12:00 -08:00
+Subject: Re: On-prem HSM integration & initial spec
+
+Hi Hiro — answering inline: 
+
+1) Network: we recommend using a short list of static egress IPs for the KMIP control plane (3 IPv4 addresses) and a DNS name for telemetry that rotates weekly. We can provide an allowlist once SOW is signed; during test we can use temporary IPs.
+
+2) BYOK lifecycle: our KMIP supports Create/Wrap/Unwrap/Destroy. For automated envelope rotation we provide an authenticated operator role that can request rewraps via KMIP. Root key rotations must be manual (customer performed) and you will need to re-establish trust after root rotation. No firmware hooks required for standard KMIP flows; if you want HSM-specific key material migration we have a vendor-assisted procedure in the attachment.
+
+3) Audit: HSM syslog (CEF) + KMIP audit events exported as JSON to an S3-compatible endpoint. We can keep events for 90 days by default, longer retention available as a paid option.
+
+Attaching: network_diagram.drawio
+
+Let me know if you want a 30-minute walkthrough with our field eng to go over the KMIP session lifecycle.
+
+Thanks,
+Maya
+
+From: hiro_tanaka <hiro@redwood.ai>
+To: dev_patel <dev@redwood.ai>, stephanie_nguyen <stephanie@redwood.ai>, laura_bennett <laura@redwood.ai>
+Date: Mon, 16 Feb 2026 14:40:00 -08:00
+Subject: Fwd: On-prem HSM integration & initial spec
+
+Team — forwarding the spec and network diagram from SecureKMS. Important asks from Acme and SecureKMS that we need to verify before procurement: 
+
+- Network allowlist: we should accept short-lived DNS for telemetry but require static egress for KMIP control plane. Ops needs to confirm firewall rules.
+- BYOK: envelope rotation automated; root/key-owner rotations manual. Need to document operator roles and audit sign-offs.
+- Audit export: customer wants copies forwarded to their Splunk. Confirm S3 endpoint TLS and VPC routing.
+
+Action items (assign):
+- Dev (Dev): draft KMIP connector and rewrap automation PoC (include failure/retry semantics, idempotency). Target: 2026-03-05.
+- Steph: review compliance checklist for manual root rotations and sign-off flow (who must approve).
+- Laura: coordinate procurement SOW and confirm IP allowlist cadence with SecureKMS.
+
+Quoted below:
+> On Sun, 15 Feb 2026 08:12:00 -0800 Maya Rao <maya@securekms.io> wrote:
+> > (network details and attachments)
+
+— Hiro
+
+From: dev_patel <dev@redwood.ai>
+To: hiro_tanaka <hiro@redwood.ai>, stephanie_nguyen <stephanie@redwood.ai>, laura_bennett <laura@redwood.ai>
+Date: Tue, 17 Feb 2026 09:05:00 -08:00
+Subject: Re: Fwd: On-prem HSM integration & initial spec
+
+Quick notes from engineering POV: 
+
+- KMIP connector: I'll prototype a sidecar-based KMIP client that exposes an internal secure gRPC to the runtime. It will handle key wrapping/unwrapping and maintain a local cache of envelope keys with TTL and strict LRU. We'll implement rotation as a two-phase swap: stage new envelope key, rewrap active data keys, then retire old envelope after verification.
+- Secrets handling: store only wrapped keys in our vault (Hashi-compatible path). Unwrapped keys never leave HSM. Use HSM-attested ephemeral sessions for derivations.
+- Rotation windows: propose rolling rotation at 03:00 UTC with a 2-hour maintenance window; include automatic rollback if >0.5% request error spike.
+- Network: require egress to SecureKMS KMIP CIDR; use mutual TLS pinned certificate; disable plaintext KMIP. For telemetry we will post to customer's S3 via VPC endpoint (no internet egress).
+
+I've attached the onboarding_playbook.md with checklist items and the PoC milestones. Will need one field eng pairing session with SecureKMS to validate KMIP sessions and the HSM firmware behaviors.
+
+— Dev
+
+From: hiro_tanaka <hiro@redwood.ai>
+To: Maya Rao <maya@securekms.io>, procurement@acmehealth.com
+Cc: laura_bennett <laura@redwood.ai>, stephanie_nguyen <stephanie@redwood.ai>, dev_patel <dev@redwood.ai>
+Date: Wed, 18 Feb 2026 16:22:00 -08:00
+Subject: Re: On-prem HSM integration & initial spec — next steps and SOW
+
+Maya / Acme procurement — thanks for the quick turn. Summary and next steps: 
+
+Decisions:
+- Use SecureKMS HSM appliance with KMIP over mutual TLS for the control plane.
+- BYOK: Acme will retain root keys in their HSM. Redwood will perform automated envelope rotations and will store only wrapped keys.
+- Audit export: SecureKMS will push CEF/KMIP events to Acme's S3 endpoint; Redwood will consume a copy for debugging and will retain only metadata in our internal audit index.
+
+Action items:
+- SecureKMS: provide final IP allowlist and test credentials (temp) for PoC.
+- Acme procurement: sign SOW at the link below; procurement_SOW.docx attached.
+- Dev: start KMIP connector PoC (Dev to book pairing with Maya w/ field eng).
+- Steph: finalize compliance checklist and sign-off flow for manual root rotations.
+
+Links: https://app.docusign.com/some/sow-link
+Jira: INFRA-1209 (KMIP connector PoC)
+
+Please confirm timelines by end of week. If no objections, we'll schedule the PoC for 2026-03-02.
+
+Thanks,
+Hiro
+Director, Platform Eng
+Redwood Inference
+Attachments: procurement_SOW.docx

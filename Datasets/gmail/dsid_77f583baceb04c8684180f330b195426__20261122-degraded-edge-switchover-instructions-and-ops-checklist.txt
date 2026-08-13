@@ -1,0 +1,122 @@
+Degraded edge capacity — switchover instructions and ops checklist
+
+From: markus.klein@redwood.ai
+To: ops@acme-retail.com
+Cc: laura.bennett@redwood.ai, connor.obrien@redwood.ai
+Date: 2026-11-22T08:12:00Z
+Subject: Degraded edge capacity — switchover instructions and ops checklist
+
+Hi Priya / Acme platform team,
+
+We’re seeing elevated 5xx/error rates for requests being routed through the us-east-1 and eu-west-1 cloud edges due to a partial networking degradation at one of our provider’s POPs. Impact is confined to a subset of customers whose DNS resolved to those POPs — Acme traffic is affected for ~30% of requests based on routing logs.
+
+Immediate guidance (short checklist):
+1) Prefer alternative regions: when calling the Redwood API, set the region query param or X-Redwood-Region header to one of our healthy endpoints: us-west-2 or eu-central-1. Example: 
+   curl -H \"Authorization: Bearer $REDWOOD_KEY\" -H \"X-Redwood-Region: us-west-2\" \"https://api.redwood.ai/v1/generate\" -d '{"prompt":"..."}'
+2) Reduce DNS TTL (if you control resolver): set TTL to 60s to accelerate client-side repoints.
+3) If you rely on long-lived KV caches/session affinity, add or continue sending your conversation-id header (x-redwood-session) so we can route sticky sessions to the fallback pool and avoid cold starts.
+4) Enable client-side retry/backoff for 502/503 with jitter and max 3 attempts.
+
+We’ve attached a short ops checklist and a tiny script that toggles region headers for your sidecar (switch-region-curl-scripts.sh). Our side (network/serve) is actively shifting routing and standing up extra capacity in us-west-2 and eu-central-1.
+
+We’ll keep you updated — internal escalation is open (ticket 83721). ETA for full traffic normalization is 2–4 hours pending provider confirmation. If you want us to perform a coordinated switch for your account (we can update preferred routing for your customer-id), reply with confirmation and a maintenance window.
+
+Sorry for the disruption — we know Acme runs customer-facing flows on low latency.
+
+Thanks,
+Markus Klein
+Director, Customer Reliability
+Redwood Inference
+
+Attachment: degraded-edge-switchover-checklist.pdf (pdf)
+Attachment: switch-region-curl-scripts.sh (bash)
+From: Priya Sharma <ops@acme-retail.com>
+To: markus.klein@redwood.ai
+Cc: platform@acme-retail.com
+Date: 2026-11-22T08:28:00Z
+Subject: Re: Degraded edge capacity — switchover instructions and ops checklist
+
+Markus,
+
+Thanks for the quick note — we see latency spikes and a handful of 502s on our checkout path. A couple of questions before we flip anything on our side:
+- If we set X-Redwood-Region to us-west-2, will open conversations (KV cache/state) continue to resolve or will users see degraded assistant memory?
+- Any token replay / double-billing risk with client retries? We need to understand idempotency implications for our existing calls.
+- If Redwood performs an account-level routing override, can you confirm the change is reversible within 15 minutes if we see adverse effects?
+
+We can do a small maintenance window at 09:30 PT if that helps coordinate. Please confirm recommended approach for minimizing user impact.
+
+—Priya
+Priya Sharma
+SRE Lead, Acme Retail
+ops@acme-retail.com
+From: laura.bennett@redwood.ai
+To: Priya Sharma <ops@acme-retail.com>
+Cc: markus.klein@redwood.ai, connor.obrien@redwood.ai
+Date: 2026-11-22T08:39:00Z
+Subject: Re: Degraded edge capacity — switchover instructions and ops checklist
+
+Hi Priya — quick answers: 
+
+1) Session / KV cache: we preserve conversation affinity if you continue to send your existing x-redwood-session header or conversation-id parameter. That header is how we lookup the KV cache; when we shift routing we attempt to proxy the KV access to the fallback pool for ~30 minutes to avoid cache misses. If you have extremely latency-sensitive flows, include the header and we’ll mark your conversation as sticky to the new pool.
+
+2) Idempotency / billing: client retries for 502/503 are safe for non-mutating calls. For create/generation endpoints, include an idempotency-key header (Idempotency-Key) you already use; if a request is retried and we receive the same Idempotency-Key within a 60s window we will dedupe and avoid double execution. Default token accounting will not double-charge for deduped requests.
+
+3) Account-level override: yes — we can flip a preferred-routing flag for account-id: ACME-1294 and revert within 5 minutes. Reversal is orchestrated through our control plane; we’ll schedule it as an atomic change and confirm via the ticket.
+
+Suggested plan for your 09:30 PT window:
+- 09:20 PT: you lower DNS TTL to 60s (if feasible)
+- 09:25 PT: you enable retries (+ Idempotency-Key for mutating calls)
+- 09:30 PT: we perform account-level routing override to route primary traffic to us-west-2 (failover to eu-central-1 if us-west-2 capacity becomes constrained)
+- 09:30–09:45 PT: monitor errors/latency; we’ll keep a dedicated channel open and can revert immediately if needed.
+
+I’ve attached a tiny curl script and the ops checklist; Connor will run the routing change and post the runbook output.
+
+—Laura Bennett
+Support Lead, Redwood Inference
+From: connor.obrien@redwood.ai
+To: markus.klein@redwood.ai, laura.bennett@redwood.ai, Priya Sharma <ops@acme-retail.com>
+Date: 2026-11-22T09:33:00Z
+Subject: Routing override executed — monitor link and provider ticket
+
+Team / Priya — performed account-level override for ACME-1294 at 09:30:12 PT. Steps executed:
+- Flipped preferred-routing to us-west-2 at control-plane (rollout id: r-20261122-acme-01)
+- Enabled sticky-session proxying for existing conversation-ids for 30m
+- Increased internal sampling for errors to 10% to expedite triage
+
+Immediate status: error rate dropped from 4.2% -> 0.8% for traffic we can observe. Latency reduced ~120ms median for checkout calls. Continue to watch your SLO dashboards.
+
+Provider ticket opened: 83721 — provider reports a degraded fabric in affected POP; they estimate full recovery in 3–5 hours but we will treat that as optimistic. We’ve attached ticket stub.
+
+Monitoring (read-only): https://console.redwood.ai/monitoring/route-health?ticket=83721
+
+Connor O’Brien
+Site Reliability Engineer, Redwood Inference
+
+Attachment: inc-20261122-cloud-ticket-83721.txt
+From: markus.klein@redwood.ai
+To: Priya Sharma <ops@acme-retail.com>
+Cc: laura.bennett@redwood.ai, connor.obrien@redwood.ai
+Date: 2026-11-22T11:09:00Z
+Subject: Follow-up: switchover complete and next steps / postmortem timeline
+
+Priya — quick follow-up after the coordinated switchover:
+
+Summary: account-level override and sticky proxying reduced visible errors for Acme to <1% and restored latency to pre-incident baselines for the majority of sessions. We kept the override active while the provider’s fabric is unstable.
+
+Next steps / timeline:
+- We will revert the override once the provider confirms full POP recovery; target revert window: within 6 hours but only after validation.
+- Full postmortem (root cause + mitigation) will be shared within 72 hours. We’ll include traffic logs, decision timeline, and recommended durable mitigations (DNS-prefetch strategy, permanent multi-region preference options).
+- As a gesture for the disruption, Redwood will apply a one-time billing credit for the incident window. I’ll coordinate credits with billing and include the amount in the postmortem package.
+
+If you noticed any user-facing regressions after 11:00 PT (missing conversation state, unexpected assistant behavior), please reply with specific examples and timestamps so we can include them in the RCA.
+
+Apologies again for the disruption — I know how critical low-latency checkout is for Acme. We’ll follow up with the full writeup.
+
+Regards,
+Markus Klein
+Director, Customer Reliability
+Redwood Inference
+
+P.S. If you want a technical sync call, we can set one up today — 13:00 PT works for us.
+
+Attachment: degraded-edge-switchover-checklist.pdf (pdf)

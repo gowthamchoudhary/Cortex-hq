@@ -1,0 +1,94 @@
+Vendor onboarding stuck at consent step — Workday supplier portal
+
+From: Liam O'Connor <liam.oconnor@wscc-supplies.com>
+To: Rachel Kim <rachel.kim@redwood.com>
+Date: Sun, 14 Sep 2025 09:12:00 -0700
+Subject: Onboarding stuck at consent step
+
+Hi Rachel,
+
+We started the supplier profile for WSCC Supplies this morning after receiving the Workday invite, but we hit a hard stop on the second screen — the final consent checkbox is visible but the "Accept and Continue" button stays greyed out.
+
+Steps we took:
+- Followed invite link 
+- Completed company & tax info (W-9 attached on our side)
+- Reached final consent screen; checkbox can be toggled but button inactive
+- Tried Chrome (latest), Safari, and a mobile browser — same result
+- Cleared cookies and retried, no change
+
+I attached a quick screenshot of the page and a console log snippet (wscc-onboard-steps-log.txt) that shows a 403 on POST /portal/consent. Our security team thinks it might be a CSRF or Referer check failing on redirects.
+
+Can you help unblock? We need to finish setup to accept PO #12345.
+
+Thanks,
+Liam O'Connor
+VP Procurement
+WSCC Supplies
+
+Attachment: wscc-screenshot-consent-button.png (image/png)
+Attachment: wscc-onboard-steps-log.txt (text/plain)
+From: Rachel Kim <rachel.kim@redwood.com>
+To: Liam O'Connor <liam.oconnor@wscc-supplies.com>
+Cc: ben.carter@redwood.com, marissa.cole@redwood.com, karthik.iyer@redwood.com
+Date: Sun, 14 Sep 2025 10:05:00 -07:00
+Subject: Re: Onboarding stuck at consent step
+
+Thanks for the clear repro, Liam — really helpful. Looping in Ben (sales) and Marissa (Procure Ops) + Karthik (Integrations) so we can triage quickly.
+
+Initial ask: if possible can you forward the browser console output (network tab) showing the 403 request headers (particularly Origin/Referer and the request payload)? That will help us narrow whether it's an SSO redirect or a cookie attribute issue.
+
+Short-term workaround we can try: Karthik, would you be able to generate a one-time "direct invite" link that bypasses the SAML/SSO handoff? If we can get them to complete via the sso-less flow we can move the PO. If not, Marissa, can your team reissue the invite from the legacy invite flow?
+
+Liam — if you're able to try an incognito window and the direct link, please confirm. We'll also escalate to infra if this looks like a SameSite/Referer rejection.
+
+Rachel Kim
+Senior Commercial Ops
+Redwood Inference
+
+---
+On Sun, Sep 14, 2025 at 9:12 AM Liam O'Connor <liam.oconnor@wscc-supplies.com> wrote:
+> [original message attached]
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Rachel Kim <rachel.kim@redwood.com>, ben.carter@redwood.com, marissa.cole@redwood.com
+Date: Mon, 15 Sep 2025 08:45:00 -07:00
+Subject: Re: Onboarding stuck at consent step
+
+Thanks for the tag, Rachel — quick triage from Integrations/Runtime.
+
+What I see from the logs (we pulled the request trace for Liam's invite id) is a rejected POST to /portal/consent returning 403 with message: "invalid origin". The flow is doing an external redirect from our SAML callback domain (sso.redwood.com) back to the tenant portal (wscc.redwood-portal.com). In several browsers the Referer header is being stripped during the cross-site redirect and our CSRF check (we rely on Referer + token) is rejecting the request. This looks like a SameSite cookie + redirect boundary problem rather than a user error.
+
+Workarounds (ranked):
+1) Generate a one-time "sso-less" onboarding link (token in query) that skips the SAML redirect and lands directly on the tenant portal with a valid session cookie set server-side. This bypasses the Referer check.
+2) Ask the vendor to use an incognito/private window and retry the original invite (sometimes old cross-site cookies interfere).
+3) Reissue invite from legacy flow (Marissa) which attaches an explicit token in the path (not via redirect).
+
+I can produce option (1) now. Creating a small support ticket INF-3421 to track the root cause — we should update the portal to accept stricter Origin-less POSTs from the SAML callback or switch to double-submit cookie CSRF to be resilient to redirect stripping.
+
+I attached the trimmed trace showing the failing headers. If Ops generates the direct invite, I'll watch the trace in real time.
+
+— Karthik
+Principal Engineer, Integrations
+Redwood Inference
+
+Attachment: trimmed-consent-trace.txt (text/plain)
+From: Liam O'Connor <liam.oconnor@wscc-supplies.com>
+To: Rachel Kim <rachel.kim@redwood.com>
+Cc: ben.carter@redwood.com, marissa.cole@redwood.com, karthik.iyer@redwood.com
+Date: Tue, 16 Sep 2025 14:03:00 -07:00
+Subject: Re: Onboarding stuck at consent step
+
+Hi all — quick update. Karthik's direct link worked: I opened the sso-less invite in a private window, completed the consent, and the portal accepted the submission. Profile now shows "Active" and I could view the pending PO #12345.
+
+Action items to close:
+- Ben/Marissa: please confirm the vendor is fully visible to finance and that PO routing is enabled (I can see the invoice upload tab but not payment terms)
+- Karthik: happy to share the full network trace if helpful for the infra ticket INF-3421
+
+Thanks for the fast help. Please send the PO next steps and any missing paperwork we need to upload.
+
+Best,
+Liam
+VP Procurement
+WSCC Supplies
+
+Attachment: wscc-w9-signed.pdf (application/pdf)

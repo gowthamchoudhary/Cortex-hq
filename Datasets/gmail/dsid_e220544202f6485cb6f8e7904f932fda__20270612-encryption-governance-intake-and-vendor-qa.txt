@@ -1,0 +1,113 @@
+Encryption governance intake and vendor QA kickoff
+
+From: Connor O'Brien <connor.obrien@redwood.ai>
+To: Daniel Reed <daniel.reed@clearpathtx.com>, Lydia Park <lydia.park@clearpathtx.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: 2027-06-12T15:02:00Z
+Subject: Encryption governance intake and vendor QA kickoff
+
+Hi Daniel / Lydia —
+
+Thanks again for taking time earlier today. Quick recap from our discovery and proposed next steps so we all have alignment: 
+
+Call highlights (short):
+- ClearPath is evaluating Redwood to serve NLP inference for clinical summarization and anonymization workflows (low-latency batch + streaming).
+- Primary compliance drivers: HIPAA (PHI at-rest and in-transit), SOC 2 type II for vendor controls, and encryption key custody requirements driven by internal policy.
+- Required capabilities called out: KMS integration (BYOK), HSM-backed key material for CMKs, audit logging retention 7+ years, and an ability to rotate keys with minimal downtime.
+
+Action items we agreed on:
+1) We'll kick off a vendor security questionnaire intake (see attached XLSX). Please fill the shaded rows that require company-specific details and return by EOD Thu 6/17.
+2) We'll provide a short focused write-up on Redwood's key management options (attached PDF): hosted KMS (Redwood-managed), customer-managed keys via cloud KMS integrations (BYOK with CMK pinning), and HSM-backed key escrow options for private deployments.
+3) Rishi (cc'd) will schedule a technical deep-dive to walk through our HSM/CMK flow and show a short demo of rotation + audit trails — target next week.
+4) Laura will coordinate SOC 2 evidence artifacts and a checklist for what ClearPath will need to validate during procurement.
+
+Open questions for you:
+- Do you have an existing KMS preference (AWS KMS, Google Cloud KMS, Azure Key Vault) or a strict requirement for FIPS 140-2/3 HSMs?
+- Any internal process constraints around bringing keys into a third-party platform (e.g., only asymmetric keys, strict key ceremony)?
+
+Next steps: please confirm preferred KMS vendor and attach any internal policy snippets that are helpful when you return the questionnaire. We'll treat the questionnaire as intake only — it doesn't lock anything on either side.
+
+Thanks — 
+Connor
+Sr. Solutions Engineer | Redwood Inference
+Mobile: (415) 555-0184
+redwood.ai
+
+Attachments: clearpath-security-questionnaire.xlsx (spreadsheet stub), redwood-kms-overview.pdf (PDF stub)
+From: Daniel Reed <daniel.reed@clearpathtx.com>
+To: Connor O'Brien <connor.obrien@redwood.ai>
+Cc: Lydia Park <lydia.park@clearpathtx.com>, security@clearpathtx.com
+Date: 2027-06-13T08:46:00Z
+Subject: Re: Encryption governance intake and vendor QA kickoff
+
+Connor —
+
+Appreciate the clear summary. A few quick answers from our side: 
+
+- KMS preference: We run primarily in AWS and would prefer AWS KMS with a HSM-backed CMK (FIPS validated) if possible. We also use a hardware key ceremony for critical keys (internal control).
+- We can provide portions of our key management policy (I'll attach the relevant excerpt). We do require control over key material for production PHI flows — our procurement language prefers BYOK where feasible.
+- Timeline: Procurement needs the vendor questionnaire returned within 5 business days; security wants a short architecture diagram and the SOC 2 scope items by next Wednesday 6/23.
+
+Two quick asks: 
+1) Can you include a brief statement about how Redwood logs key usage for audit (who/what/when) and whether those logs can be exported to our Splunk instance?
+2) Are there any limitations around performing live rotation for active streaming sessions? We need to understand potential downtime or fallbacks.
+
+I'll review the XLSX later today and push internally for sign-off.
+
+Thanks,
+Daniel Reed
+Director, IT Security | ClearPath Therapeutics
+D: +1 212-555-0147
+
+Attachments: clearpath_km_policy_excerpt.pdf (PDF stub)
+From: Connor O'Brien <connor.obrien@redwood.ai>
+To: Daniel Reed <daniel.reed@clearpathtx.com>, Lydia Park <lydia.park@clearpathtx.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Date: 2027-06-14T16:11:00Z
+Subject: Re: Encryption governance intake and vendor QA kickoff
+
+Daniel — great notes, thank you. Short answers inline and next steps below.
+
+Inline: 
+- AWS KMS + HSM-backed CMKs: supported. For Redwood Dedicated and Private deployments we can integrate with your AWS KMS CMK via external key policy. For hosted we offer envelope encryption where you can bring a root CMK in your account and we perform per-tenant data key wrapping; those keys can be HSM-backed (FIPS 140-2/3).
+- Audit logging: We log key usage (per-request metadata: key-id, operation, requester-id, timestamp, request-id) to our internal audit sink. For Private deployments we can configure export of audit logs to your Splunk/CloudWatch S3 bucket (mutual TLS and IAM role-based export). For Hosted customers we support log export via secure delivery to a customer-owned S3 with KMS-encryption.
+- Live rotation: Our runtime supports zero-downtime rotation for cached inference keys using a rolling rotate + KV cache invalidation. For streaming sessions there is a short (<2s) token rekey window where clients will retry; we instrument automatic fallback to a compatible key variant to avoid session termination. We'll demo this in the technical deep-dive.
+
+Attached: a short 2-page KMS operations note (redwood-kms-overview.pdf) and an intake version of the security questionnaire with a few Redwood-specific clarifications (clearpath-security-questionnaire.xlsx).
+
+Proposed next steps: 
+- Rishi to book a 60m technical deep-dive next Tue/Wed (please let us know your preferred slot).
+- Laura to assemble SOC 2 evidence list and share a gated link to our SOC 2 report (redwood: SOC 2 Type II, encryption in scope) — we'll share the report under NDA.
+- Connor to return the filled intake questionnaire with our recommended responses in 48 hours so procurement can progress.
+
+I'll draft the recommended questionnaire answers and include explicit notes where ClearPath needs to confirm policy language (BYOK ceremony, key export). Marcus will stand by for any cryptographic detail follow-ups.
+
+Connor
+
+Attachments: redwood-kms-overview.pdf, clearpath-security-questionnaire.xlsx
+
+> On 2027-06-13 08:46:00 Daniel Reed 
+> wrote:
+> > Connor —
+> > 
+> > Appreciate the clear summary. A few quick answers from our side: 
+> > 
+> > - KMS preference: We run primarily in AWS...
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Connor O'Brien <connor.obrien@redwood.ai>, Rishi Malhotra <rishi.malhotra@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: 2027-06-14T18:27:00Z
+Subject: RE: Encryption governance intake and vendor QA kickoff (internal)
+
+Quick internal note —
+
+Connor: I reviewed Daniel's policy excerpt and the questionnaire. I'll help draft the technical responses for sections 4–7 (key lifecycle, rotation, escrow) and map out exact audit fields we can commit to exporting.
+
+Rishi: when you schedule the deep-dive, flag a 15-min slot at the end for a short rotation demo — we should show the <2s rekey window and log export to S3. Laura: please prep a list of SOC 2 artifacts we will need to redact for the public report and which will require an NDA.
+
+I'll have a first draft of the questionnaire answers and the rotation test plan by EOD Monday 6/21.
+
+— Marcus
+Principal Cryptography Engineer | Redwood Inference
+
+(end of thread)

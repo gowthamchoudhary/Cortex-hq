@@ -1,0 +1,98 @@
+Orchard Systems Q4 Health & Roadmap Check-in
+
+Meeting header:
+Date: 2028-12-05
+Start: 15:00 UTC
+Duration: ~49 minutes
+Location: Zoom
+Recording ID: ff-2028-12-05-orchard-q4
+Attendees: Maya, Luis, Priya (Redwood); Samir, Aisha, Noah, Eleni (Orchard)
+
+Summary: Quick Q4 health check focused on cost drivers (quantization + batching), reliability incidents in November, and next quarter rollout/roadmap. Agreement to run a short synthetic load test and share pricing scenarios. Security follow-up requested.
+
+Topics: usage trends, tail latency spikes, dedicated vs hosted runway, model variants and quantization, SSO/KMS/data residency, pilot scope and metrics for success.
+
+Action items (recorded above)
+
+Transcript body:
+[00:00] Maya Chen: hey everybody, thanks for joining, quick intro from our side, um this is Maya (AE) with Luis (SE) and Priya (CSM), how're we all doing?
+[00:08] Samir Kapoor: good thanks, busy quarter. We wanted to focus on the November spike and planning for the Q1 rollout.
+[00:14] Maya Chen: perfect, goal is to surface what happened, get to root causes, and align on next steps — cost, reliability, and security.
+[00:22] Aisha Mbatha: quick note — we got the usage/export you asked, there was a missing bucket so some minutes were double counted, we cleaned that up.
+[00:29] Luis Ortega: ok thanks, helpful. I'm going to run through the latency profile we pulled from the shared runbook, and then we can talk cost levers.
+[00:37] [00:37] Luis Ortega: (screen share) so this is the 95/99 tail for token generation, you can see the jump on Nov 18th during the batch job; the 99 went from about 480ms to 1.6s, and that matched a background retrain triggering high prefix cache churn — or at least the logs suggest the KV cache got thrash.
+[00:57] Noah Greene: hmm yep that aligns with the deploy window, we had a heavy retrain cluster that pulled data and I think the autoscale didn't catch up for short lived spikes.
+[01:06] Eleni Park: small thing — the transcript of the incident said "V K cache" which made it confusing, but yes cache churn.
+[01:13] Luis Ortega: lol yea auto transcript :), but the technical bit is the cache TTLs and our batching behaviour — when you get intermittent high prefix diversity batching becomes suboptimal.
+[01:24] Samir Kapoor: can you remind us how Redwood routes to hosted vs dedicated? We may want to shift some high-volume routes to dedicated pools on peak windows.
+[01:32] Maya Chen: sure — routing policy can be by customer tier, latency SLO, or cost. For Orchard we'd recommend keeping critical low-latency routes on Dedicated (if you have reserved capacity) and non-critical async tasks on hosted cheaper endpoints.
+[01:45] Aisha Mbatha: cost question: our token bill jumped 28% month-over-month. How much of that is model choice vs inefficient batching?
+[01:54] Luis Ortega: rough split from our preliminary look: ~45% model size/sequence length, ~30% lack of KV cache hits due to prefix variability, ~25% suboptimal batching and retry storms. Quantization profile would reduce model cost by ~20-30% for your typical traffic.
+[02:12] [02:12] Samir Kapoor: what about quality? We can't have a hallucination regression when we quantize.
+[02:17] Luis Ortega: yes, you need to validate on your eval set. Our Optimize toolkit can produce candidate quantized variants and run your prompt families through them; we also score behavioral regressions and surface diffs. Typically 8-bit quant works with minimal quality loss on these models but we want to run your prompts to be sure.
+[02:34] Eleni Park: we'll need the tooling integrated with our CI; can Redwood's eval hooks run in our pipeline?
+[02:39] Priya Rao: yes, we have an API to push prompt sets and get regression alerts; Luis can show a demo but the integration is straightforward — it's an HTTP webhook and S3-compatible results.
+[02:52] [02:52] Aisha Mbatha: security follow-up — we need assurance around KMS and key rotation, plus SOC 2 scope.
+[02:58] Maya Chen: understood — Priya will set up a security deep-dive; we support KMS integrations and can provide our SOC 2 report and audit logs. For private deployments you can bring your own KMS in the VPC.
+[03:11] Noah Greene: do you support HSM or is it just cloud KMS?
+[03:14] Luis Ortega: we can integrate HSM via customer network for Private deployments; hosted supports cloud KMS with customer-controlled keys in many regions. We'll clarify exact HSM options in the follow-up.
+[03:24] [03:24] Samir Kapoor: timeline — we want to pilot Q1, ramp mid-Q1 into prod. What are realistic guardrails and milestones?
+[03:31] Maya Chen: pilot scope suggestion: 2 weeks of shadow load on dedicated instance, 24-72h peak soak, then ramp to 20% traffic for 2 weeks, check metrics (99 lat, error rate, cost per 1k tokens) and then full roll. We'll align on observability dashboards and alert thresholds.
+[03:48] Luis Ortega: and we'll run a synthetic 24h test to simulate your traffic shape (Luis to own), that will show batching behaviour and tail latency under sustained load.
+[03:57] [03:57] Aisha Mbatha: great — what's the expected cost delta if we go dedicated reserved vs hosted pay-as-you-go for our forecasted volume?
+[04:05] Maya Chen: depends on commitment length; rough math: for your projected Q1 volume a 3-month commit on Dedicated gives ~18-24% lower unit cost after accounting for throughput efficiency; we'll send a trimmed pricing sheet with scenarios.
+[04:18] Samir Kapoor: and bursting? We still need burst to hosted when dedicated saturates.
+[04:22] Luis Ortega: yes that's standard — routing policy supports burst to hosted with fallback model variants; that lets you keep a low-latency core while absorbing spikes.
+[04:33] [04:33] Eleni Park: question on model variants — if we pin a model, can Redwood automatically fallback to a quantized variant if the primary is unavailable?
+[04:39] Luis Ortega: yes you can configure a compatible fallback chain — e.g., full-precision -> 8-bit quant -> smaller architecture, and you can set thresholds for quality/regression alerts.
+[04:50] Priya Rao: also note we can run canary rollouts by route so you can gate new models on small traffic slices.
+[04:58] [04:58] Samir Kapoor: about the November incident, do you have a concrete remediation suggestion?
+[05:03] Luis Ortega: operationally: increase cache TTLs for stable prefixes, add a pre-warm step when a retrain kicks, and set autoscale faster on short pulses; plus route long-running batch jobs to a separate pool so they don't evict hot KV cache used by low-latency routes.
+[05:20] Noah Greene: that sounds doable, we'll need runbook changes.
+[05:23] Maya Chen: we can help with runbook templates and alert thresholds — Priya will share the templates.
+[05:30] [05:30] Aisha Mbatha: small nit — can you ensure logs include request IDs so we can reconcile with our service logs? Our compliance team demands traceability.
+[05:38] Luis Ortega: yes, request IDs and per-token tracing are available; there's a opt-in payload field for you to send a correlation ID.
+[05:45] [05:45] Samir Kapoor: success metrics for pilot — what should we measure?
+[05:49] Maya Chen: agreed pilot metrics: 99p latency < target, error rate < 0.1%, cost per 1k tokens within agreed delta, no regression in hallucination rate on sampled prompts, and successful SSO/KMS integration.
+[06:03] Eleni Park: can we get a dashboard template for those KPIs?
+[06:06] Priya Rao: yes — we'll provision a shared dashboard and set up alerts; you get token-level breakdowns and per-route tracing.
+[06:15] [06:15] Aisha Mbatha: about data residency — some of our EU customers require EU-only model execution. How does Redwood enforce region pinning?
+[06:22] Luis Ortega: route policy supports region pinning by model and by route; you can restrict certain routes to EU regions and disable cross-region fallback for those routes.
+[06:30] [06:30] Samir Kapoor: any gotchas with VPC on-prem customers? We may eventually move sensitive pipelines on-prem.
+[06:36] Maya Chen: on-prem requires additional setup (private control plane, network extents), longer lead time for upgrades, and different upgrade windows. We'll map that if you decide.
+[06:46] [06:46] Noah Greene: ok noted.
+[06:49] [06:49] Luis Ortega: quick run-through of the synthetic test plan: we'll replay representative prompts at actual concurrency, track batching stats, KV hit rates, token throughput, and tail lat. We'll share raw logs and a summary workbook.
+[07:05] Samir Kapoor: sounds good — we'll provide prompt families and representative traffic histogram.
+[07:10] [07:10] Aisha Mbatha: the prompts include some long sequences (700-1k tokens) — is that supported without degrading other routes?
+[07:17] Luis Ortega: longer sequences cost more CPU and memory; best practice is to route long sequence workloads to a separate pool or schedule them during off-peak; we can also recommend a quant/profile that handles long context more cheaply.
+[07:30] Priya Rao: I'll add that as a risk to pilot scope.
+[07:34] [07:34] Maya Chen: quick commercial note — there is a small onboarding credit for pilot customers that run through our Optimize program; Maya will include that in the pricing note.
+[07:44] [07:44] Eleni Park: nice, every bit helps.
+[07:47] [07:47] Samir Kapoor: any known regressions with the latest model family you surfaced? We saw one thread about increased repetitions on a few prompts.
+[07:55] Luis Ortega: some small distributional shifts, but we can evaluate; that's why we'll run the eval hooks on your prompts. We'll also monitor for latent regressions post-rollout.
+[08:06] [08:06] Aisha Mbatha: logistics — who will be the day-to-day contact during the pilot?
+[08:11] Priya Rao: Priya will be the CSM and Luis will handle SE tasks; Maya will be Exec sponsor. We'll include contact details in the follow-up.
+[08:21] [08:21] Samir Kapoor: ok good. Next — procurement timing: we need standard T&Cs and an example SOW for Dedicated pilot.
+[08:29] Maya Chen: I'll loop in legal but we'll send an example SOW and standard terms; for enterprise we can do a streamlined addendum for pilot.
+[08:36] [08:36] Aisha Mbatha: can you include a clause about data deletion timelines?
+[08:40] Maya Chen: yes, deletion and retention are negotiable in the enterprise SOW — we'll propose standard 30-day soft-delete plus enterprise options.
+[08:49] [08:49] Eleni Park: please add audit log retention windows to that doc too.
+[08:52] Priya Rao: will do.
+[08:55] [08:55] Luis Ortega: one more technical suggestion: enable prefix dedupe at the client side for high-cardinality prompts — we've seen big wins where customers do lightweight canonicalization before calling the API.
+[09:07] Samir Kapoor: good call, we'll prototype that.
+[09:10] [09:10] Maya Chen: ok wrapping up, quick recap: Redwood runs synthetic load (Luis), Orchard provides prompts and histograms (Samir), Redwood sends pricing and SOW (Maya), security deep-dive scheduled (Priya/Noah).
+[09:25] [09:25] Aisha Mbatha: timeline check — can we get the pricing and synthetic test plan this week?
+[09:30] Maya Chen: we'll aim for pricing by Friday and synthetic test kickoff early next week.
+[09:34] [09:34] Eleni Park: thanks all, this was productive.
+[09:36] Maya Chen: thanks everyone, we'll follow up with notes and links (pricing spreadsheet, test plan, runbook templates).
+[09:43] [09:43] Meeting end
+
+Shared artifacts referenced:
+- Deck: "Orchard Q4 Review" (link: drive.google.com/orchard-q4-deck)
+- Pricing spreadsheet (internal link will be shared by Maya)
+- Runbook templates and Eval hooks docs (link: redwood.com/docs/eval-hooks)
+- Incident logs (shared in workspace)
+
+Notes about transcript quality: speaker labels sometimes generic; some proper nouns mis-transcribed (KV -> V K, HSM -> H S M), occasional run-on sentences.
+
+End of transcript.

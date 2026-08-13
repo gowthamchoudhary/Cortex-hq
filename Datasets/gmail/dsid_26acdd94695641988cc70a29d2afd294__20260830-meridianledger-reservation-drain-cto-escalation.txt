@@ -1,0 +1,114 @@
+MeridianLedger reserved throughput shortfall and latency spike
+
+From: Daniel Santos <daniel.santos@meridianledger.com>
+To: irene.choi@redwood.ai
+Cc: ops@meridianledger.com, aisha.kapoor@meridianledger.com
+Date: 2026-08-30T08:12:00-07:00
+Subject: Reserved capacity failing — 500/429s and latency > 1.5s
+
+Irene,
+
+We're seeing a sustained spike across our production endpoints this morning — a lot of 429s and intermittent 500s. Tail latency for generation calls is above 1.5s and p95 is creeping toward 2s. This is happening even though our reserved throughput should cover our traffic.
+
+Attached are a short sample of request IDs and a screenshot of errors. This is impacting transaction enrichment flows in a customer-facing feature; revenues are affected. Please escalate — we need a mitigation plan and confirmation of whether our committed tokens/s is being honored.
+
+Request IDs: r-7a2c4, r-7a2c5, r-7a2f1
+SLA: reserved throughput 12k tokens/sec (committed)
+
+Thanks,
+Daniel Santos
+CTO, Meridian Ledger
+
+From: irene.choi@redwood.ai
+To: Daniel Santos <daniel.santos@meridianledger.com>
+Cc: priyom.das@redwood.ai
+Date: 2026-08-30T08:20:00-07:00
+Subject: Re: Reserved capacity failing — 500/429s and latency > 1.5s
+
+Thanks Daniel — I see the spike on our monitoring as well and appreciate the request IDs. I've looped in our on-call infra lead (Priyom) and am opening an incident for MeridianLedger. Quick answers up-front:
+
+- We have you mapped to a dedicated reserved pool (12k tokens/s nominal).
+- Early signal shows queueing and some token throttles on several workers serving that pool.
+
+Immediate asks: can you DM the request ID traces (if available) and confirm any recent traffic pattern changes (batch vs streaming)? We'll triage and propose an immediate mitigation within 2 hours.
+
+I'll follow up with the internal action plan. Apologies for the impact — we're treating this as priority.
+
+— Irene
+Irene Choi
+Account Lead, Enterprise
+Redwood Inference
+
+From: priyom.das@redwood.ai
+To: irene.choi@redwood.ai, marissa.cole@redwood.ai
+Cc: vivek.kulkarni@redwood.ai, hannah.schmitt@redwood.ai
+Date: 2026-08-30T09:01:00-07:00
+Subject: RE: Reserved capacity failing — initial findings and mitigation
+
+TL;DR — root cause appears to be transient headroom exhaustion in the MeridianLedger pool due to two concurrent large batched jobs from an internal partner region plus a misapplied autoscale knob. Immediate mitigations below.
+
+What we see:
+- Several hosts in the MeridianReservedPool entered queueing at ~07:55 PT. CPU/GPU metrics show 92–98% utilization on compute bound kernels.
+- Autoscaler policy was set to gradual scale (30s cooldown); a burst of three large batch jobs pushed the pool past its headroom before new nodes came up.
+- A small fraction of requests hit the fallback routing path and returned 429s while others experienced higher latency. Errors correlate with token throttle events.
+
+Immediate actions (in progress):
+1) Temporarily increase pool burst capacity +1 node (evicting lower-priority burst reservations) — ETA 8 min.
+2) Bypass gradual cooldown for this pool (force immediate scale) — ETA 6 min.
+3) Apply targeted prefix caching for high-frequency prompts from Meridian (hot key cache) — ETA 30–45 min.
+4) Route low-latency critical routes to the compatible hosted model variant in another region as a temporary fallback — requires ops approval for cross-region burst (Irene: approval?)
+
+Next steps: I'll post a short incident update to the Meridian incident channel and attach logs. We'll run a postmortem and a change to autoscale policy to prevent recurrence.
+
+Attachments: meridian_pool_snapshot_0830.txt (link in incident)
+
+— Priyom
+Priyom Das
+Engineering Lead, Serving Runtime
+Redwood Inference
+
+From: marissa.cole@redwood.ai
+To: priyom.das@redwood.ai, irene.choi@redwood.ai
+Cc: vivek.kulkarni@redwood.ai, hannah.schmitt@redwood.ai
+Date: 2026-08-30T10:25:00-07:00
+Subject: Re: Reserved capacity failing — exec visibility and ask
+
+Looping in execs — Vivek + Hannah, heads up. Meridian is a strategic expansion customer (annual committed spend > $750k); this is a revenue-impacting outage and needs executive visibility. Two asks:
+
+1) Short-term mitigation: authorize cross-region fallback to hosted variant (same model family) for up to 20% of traffic for the next 6 hours. This avoids dropping the customer to best-effort. We should offer a one-time service credit if the fallback is used.
+2) Longer-term: schedule a capacity review with Engineering + Sales to re-evaluate reserved buffer policy for top-tier customers and adjust burst settings.
+
+Irene — please coordinate the remediation message to Meridian and include an ETA and compensation offer.
+
+— Marissa
+Marissa Cole
+VP, Revenue Operations
+Redwood Inference
+
+From: irene.choi@redwood.ai
+To: Daniel Santos <daniel.santos@meridianledger.com>, Meridian Ledger Ops <ops@meridianledger.com>
+Cc: priyom.das@redwood.ai, marissa.cole@redwood.ai, vivek.kulkarni@redwood.ai, hannah.schmitt@redwood.ai
+Date: 2026-08-30T12:45:00-07:00
+Subject: Re: Reserved capacity failing — immediate remediation and next steps
+
+Daniel — quick update and remediation steps we've completed: 
+
+1) We forced a +1 node burst to your reserved pool and disabled the cooldown so the pool can absorb the current load. Queueing metrics dropped within 3 minutes.
+2) We applied a targeted hot-prefix cache for the top 10 prompt signatures we see from your traffic (reduces repeated token work).
+3) With exec sign-off we opened a temporary cross-region fallback route to our hosted model variant limited to 20% of requests; this cut error rates by ~85% on initial rollout.
+
+What we will do next (timeline):
+- 0–2 hours: continue monitoring; keep fallback active until traffic normalizes.
+- 24–48 hours: capacity postmortem and autoscaler config change to shorten cooldown for this pool and add a persistent 15% buffer for high-commit customers.
+- 72 hours: follow-up call to review PM/engineering remediation and formalize a new burst/SL policy.
+
+Compensation: We will issue a one-time service credit equivalent to 3 days of committed usage as a gesture while we finalize policy changes. I'll include a credit confirmation in a follow-up email.
+
+Attachments: meridian_latency_log_0830.tar.gz (logs), screenshot-429s.png (error screenshot)
+Related: https://app.redwood.example/customers/meridianledger/metrics (live dashboard), HUBSPOT-89234
+
+Apologies again for the impact — we are treating this with priority. Please let me know if you want an immediate call; we're available now.
+
+— Irene Choi
+Account Lead, Enterprise
+Redwood Inference

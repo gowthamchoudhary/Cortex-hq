@@ -1,0 +1,121 @@
+Quantified delivery: tokens/sec SLOs, bench plan & commit tiers
+
+From: Priya Rao <priya.rao@acme-cloud.com>
+To: vanessa.ortiz@redwood.com
+Cc: Michael Chen <michael.chen@acme.com>
+Date: Mon, 10 May 2027 09:12:00 -0700
+Subject: Dedicated commit — tokens/sec guarantees and measurement approach
+
+Vanessa,
+
+Thanks for the call today. To summarize Acme's ask so we can move toward a commercial offer: we need a reserved GPU pool for our inference tier that covers peak demand (we expect ~45M tokens/day), and we need firm throughput guarantees so our product teams can size their frontend routing. Specifically:
+
+- Tokens/sec guarantee (sustained) per committed GPU pool and per-request concurrency.
+- P95 latency budget for 512-token requests (we target <= 180ms tail).
+- A reproducible measurement methodology we both agree to for acceptance testing (we want to avoid subjective benching).
+
+We are open to a 12-month commit if pricing reflects operational certainty. High-level asks:
+
+1) What tokens/sec and requests/sec numbers do you guarantee per N-GPU pool (call it per-RTXX2-48)?
+2) How do you measure — what load profile, dataset, and measurement window?
+3) What are the discount bands for a 12-month commit and what concessions (credits for missed SLOs) are available?
+
+Can you put something in writing we can review with finance? We're aiming to finalize commercial terms by end of May.
+
+Thanks,
+Priya Rao
+Dir, Engineering Ops — Acme Cloud
+
+Attachment: (none)
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+To: Priya Rao <priya.rao@acme-cloud.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Tue, 11 May 2027 10:15:00 -0700
+Subject: Re: Dedicated commit — tokens/sec guarantees and measurement approach
+
+Priya —
+
+Appreciate the clear asks. Below is a concise proposal we can use as the basis for the commercial term sheet; I also attached a concise PDF that lays out commit tiers and the measurement playbook (proposed_commit_tiers.pdf). High level summary first, followed by the measurement protocol and proposed credit model.
+
+Summary (baseline model = Redwood-managed RTX X2-48-equivalent nodes):
+- Small pool (4 GPUs): nominal sustained 2.5M tokens/sec aggregate; ~120 reqs/sec at 512-token median payload when batched.
+- Medium pool (12 GPUs): nominal sustained 8.8M tokens/sec; ~420 reqs/sec at same profile.
+- Large pool (24 GPUs): nominal sustained 17.0M tokens/sec; ~820 reqs/sec.
+
+Latency targets: we can commit to P95 tail <= 180ms for the standard batching profile (512-token requests, dynamic batching enabled) under the accepted test load. For lower-latency requirements we offer a low-batch profile (reduced batching at higher cost) with P95 <= 120ms — we should scope that separately.
+
+Measurement methodology (short):
+1) Define canonical request set: you provide a 2k-sample set representing production payloads (we can redact).
+2) Use continuous replay agent: open connections / ramp to target QPS, run 3 independent windows of 30 minutes each during business hours, collect per-token throughput, P50/P95/P99 latency, and errors.
+3) Warm KV cache for 20 minutes before measurement window (we'll include cold-start and warmed scenarios in appendix).
+4) Report accepted: tokens/sec (sustained average over window), requests/sec (sustained), P95 latency under load, and error rate.
+
+Acceptance and credits: if measured sustained tokens/sec falls below committed band by >10% over the averaged windows, we propose crediting 10% of monthly fee for that month; for >25% shortfall, 25% credit and remediation runway. We are open to tighter credit terms in exchange for larger commits.
+
+Pricing/discount bands (12-month prepay examples):
+- 4-GPU commit: list $X/month -> 10% discount for 12mo prepay.
+- 12-GPU commit: list $3X/month -> 17% discount for 12mo prepay.
+- 24-GPU commit: list $5.4X/month -> 25% discount for 12mo prepay.
+
+Next steps I propose:
+- Marcus will propose the commercial concessions (ramp schedule + credits) and finalize the numbers.
+- We schedule an acceptance-run window (joint calendar link below) and you provide the sample payloads.
+
+Calendar: https://cal.example.com/redwood/acme/acceptance
+Drive (proposal & measurement playbook): https://drive.example.com/drive/folders/1a2b3c-acme-dedicated
+
+Attachment: proposed_commit_tiers.pdf (attached — commit tiers, measurement appendix, sample script)
+
+Regards,
+Vanessa Ortiz
+Sr. Account Executive — Redwood Inference
+Phone: +1 415 555 0117
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Priya Rao <priya.rao@acme-cloud.com>
+Date: Thu, 13 May 2027 14:22:00 -0700
+Subject: Re: Dedicated commit — tokens/sec guarantees and measurement approach
+
+Looping in pricing and delivery details. A few operational clarifications and a commercial suggestion for Acme's finance team to accelerate sign-off: 
+
+Operational clarifications:
+- The tokens/sec numbers above assume model type M (quantized) and default concurrency knobs. If Acme will use a larger model variant we need to re-run short bench.
+- Measurement will run in your dedicated onboarding cluster (isolated tenant) to avoid noisy neighbors. We'll provide the bench script we use internally; you can run it or grant us access for joint runs.
+
+Commercial concession I recommend to close: a staged ramp with a 60-day acceptance window + a one-time onboarding credit equal to 5% of first-quarter committed invoice. In exchange we ask Acme to sign a 12-month commit at 15% discount for the 12-GPU band (we can move to 18% for 24-GPU). This preserves SLAs while giving Acme protection during ramp.
+
+I attached a small CSV with our initial local bench results on a similar workload (acme_bench_results.csv) so you can see the measurement artifacts we collect (tokens/sec, p95, p99, concurrency).
+
+If that concession looks OK to you, Vanessa, I can draft the commercial term-sheet and hand it to legal.
+
+Thanks,
+Marcus Lin
+Head of Deals — Redwood Inference
+
+Attachment: acme_bench_results.csv (sample metrics only)
+
+From: Michael Chen <michael.chen@acme.com>
+To: Priya Rao <priya.rao@acme-cloud.com>, vanessa.ortiz@redwood.com
+Date: Mon, 17 May 2027 16:48:00 -0700
+Subject: Re: Dedicated commit — tokens/sec guarantees and measurement approach
+
+Vanessa / Marcus / Priya —
+
+Thanks for the detail. The staged ramp + 60-day acceptance window + onboarding credit is acceptable from our side; the proposed measurement methodology looks fair. Two quick asks before we sign:
+
+1) Can Redwood commit to a calendar for the acceptance run (we'd prefer week of May 24th)?
+2) For finance, please provide a single-line commercial summary (monthly committed $ by band, discount, onboarding credit) and a short statement of how credits are applied (bill-back vs. invoice credit).
+
+If you can send those in the next 48 hours we'll kick off PO approval.
+
+Michael Chen
+VP Product — Acme Cloud
+
+On Tue, May 11, 2027 at 10:15 AM Vanessa Ortiz <vanessa.ortiz@redwood.com> wrote:
+> Priya —
+> 
+> Appreciate the clear asks. Below is a concise proposal we can use as the basis for the commercial term sheet; I also attached a concise PDF that lays out commit tiers and the measurement playbook (proposed_commit_tiers.pdf). High level summary first, followed by the measurement protocol and proposed credit model.
+> 
+> [Quoted content trimmed]

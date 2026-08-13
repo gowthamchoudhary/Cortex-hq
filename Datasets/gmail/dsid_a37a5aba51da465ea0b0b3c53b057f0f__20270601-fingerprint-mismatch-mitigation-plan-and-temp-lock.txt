@@ -1,0 +1,101 @@
+Request: temporary pin & adaptive fallback for orion-13b-compact
+
+From: Laura Bennett <laura_bennett@redwood.example>
+To: Marcus Lin <marcus_lin@redwood.example>, Karthik Iyer <karthik_iyer@redwood.example>, Kimberly Park <kimberly_park@redwood.example>
+Cc: Acme Integration <pq@acme.com>
+Date: Tue, 1 Jun 2027 09:12:00 -0700
+Subject: Tokenizer fingerprint mismatch observed with orion-13b-compact — propose temp lock
+
+Team,
+
+During the Acme integration tests last night we started seeing rare but reproducible tokenization splits (multi-tokenization of hyphenated product IDs) when hitting orion-13b-compact v1.3.0. The same inputs are fine on v1.2.1. Acme observed downstream semantic drift in their entity extraction pipeline which blocks their rollout next week.
+
+Ask: Can we approve a temporary version lock of the orion-13b-compact family to v1.2.1 for Acme (and other customers using the legacy tokenizer mapping) while we ship a targeted tokenizer patch? Proposed window: 72 hours + 1 canary day, with adaptive fallback to lotus-11b if latency/cost thresholds breach.
+
+I've attached a small tokenizer diff and an abbreviated compat matrix showing where token counts changed on our test corpus. Key constraints:
+- Product team wants minimal user-visible change for Acme.
+- Infra needs a clear canary schedule and telemetry gating.
+- SRE needs routing fallback plan and cost impact estimate.
+
+Attachments: tokenizer-diff.txt, compat-matrix.csv
+
+Can you confirm feasibility and the exact timeline? If we approve, I'll notify Acme and loop procurement.
+
+Thanks,
+Laura
+Laura Bennett
+Senior Product Manager, Model Intake
+Redwood Inference
+
+From: Marcus Lin <marcus_lin@redwood.example>
+To: Laura Bennett <laura_bennett@redwood.example>
+Cc: Karthik Iyer <karthik_iyer@redwood.example>, Kimberly Park <kimberly_park@redwood.example>
+Date: Tue, 1 Jun 2027 10:03:00 -07:00
+Subject: Re: Tokenizer fingerprint mismatch observed with orion-13b-compact — propose temp lock
+
+Laura — thanks for the heads up and the artifacts. I skimmed the diff; this looks like a mapping table change that will affect prefix caching efficiency for some routes. I think a temporary pin to v1.2.1 for the Acme account is reasonable, but we need a concrete canary plan and telemetry gates before flipping any routing rules.
+
+Action items I need from infra/SRE before I greenlight the lock:
+1) Canary schedule (start time, region rollout) — prefer us-east-1 first.
+2) Telemetry gating thresholds (token inflation %, error rate delta, P95 latency).
+3) A runbook stub for rollback and model fallback (ideally < 10 steps).
+4) Cost delta estimate if we route traffic to lotus-11b as the fallback.
+
+I've drafted a short runbook and attached it as canary-runbook.md — please validate and add operational checks. Once we have those pieces, I can approve a short-lived lock and notify Acme and procurement.
+
+— Marcus
+Marcus Lin
+Director, Model Operations
+Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwood.example>
+To: Marcus Lin <marcus_lin@redwood.example>, Laura Bennett <laura_bennett@redwood.example>
+Cc: Kimberly Park <kimberly_park@redwood.example>
+Date: Tue, 1 Jun 2027 11:20:00 -07:00
+Subject: Re: Tokenizer fingerprint mismatch observed with orion-13b-compact — propose temp lock
+
+Agree with Marcus. A few notes from infra perspective:
+- The mapping mismatch looks like a changed tokenization boundary for hyphenated IDs (we see +1 token in ~0.7% of the Acme sample). That will increase cache misses for prefix caching but only for specific routes.
+- Proposed canary: 6 hours in us-east-1 at 5% of Acme traffic, then 24h at 25%, then full for Acme only (not global) if gates hold.
+- Telemetry gates (suggested): token inflation <= 1.5%, error rate delta <= +0.2pp, P95 latency delta <= +15ms. If any gate trips, fallback to lotus-11b for that route and throttle canary to 0%.
+- We can implement an adaptive fallback that routes only failing sessions to lotus-11b based on a short-lived session fingerprint. This reduces overall cost compared to global fallback.
+
+We estimate additional cost if we route entire Acme traffic to lotus-11b would be ~18% more token compute for that account. Adaptive routing should keep it under 6%.
+
+I'll update the runbook with the exact metrics and the canary cron.
+
+- Karthik
+Karthik Iyer
+Principal Infra Engineer
+Redwood Inference
+
+From: Kimberly Park <kimberly_park@redwood.example>
+To: Marcus Lin <marcus_lin@redwood.example>, Karthik Iyer <karthik_iyer@redwood.example>, Laura Bennett <laura_bennett@redwood.example>
+Date: Tue, 1 Jun 2027 14:05:00 -07:00
+Subject: Re: Tokenizer fingerprint mismatch observed with orion-13b-compact — propose temp lock
+
+Quick operational concerns:
+- Routing rule changes for a per-customer pin will require a short maintenance window (we should do this during the nightly low-traffic window unless Acme requests immediate action).
+- Will need a feature-flagged rollout so we can toggle the lock per account. I can carve out the change but need at least 2 hours of SRE runway for verification and a holdover monitor.
+- Telemetry collection: add an extra P95/P99 tokenization event metric to the canary dashboard so we don't miss micro-regressions.
+
+If everyone signs off on the canary thresholds from Karthik, I can schedule the maintenance and confirm rollback hooks.
+
+Kimberly
+Kimberly Park
+SRE Lead, Serving Runtime
+Redwood Inference
+
+From: Patricia Quinn <pq@acme.com>
+To: Laura Bennett <laura_bennett@redwood.example>
+Cc: Marcus Lin <marcus_lin@redwood.example>, Acme Procurement <procure@acme.com>
+Date: Thu, 3 Jun 2027 16:42:00 -07:00
+Subject: Re: Tokenizer fingerprint mismatch observed with orion-13b-compact — propose temp lock
+
+Laura, Marcus — thanks for the quick triage and the proposal. Acme agrees to the temporary lock to v1.2.1 for our account while you run the canary. We prefer the canary to start Friday 06:00 UTC so engineering can be available here for quick verification.
+
+Please confirm the exact rollback steps and the expected user-visible impact (if any). Procurement is standing by to sign off on the minor addendum if needed.
+
+— Patricia Quinn
+Integration Lead, Acme Corp
+pq@acme.com

@@ -1,0 +1,131 @@
+Noisy-neighbor mitigation paths & deployment next steps
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Emma Lopez <emma.lopez@healthshift.com>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Tue, 20 Oct 2026 09:12:00 -07:00
+Subject: Noisy-neighbor mitigation paths & deployment next steps
+
+Hi Emma — thanks again for the time on today’s call. Quick recap and suggested next steps so we’re aligned.
+
+Recap of requirements from HealthShift call:
+- Latency: p95 target <= 180ms for short responses (<=256 tokens), p99 important during steady-state.
+- Throughput: ~120 concurrent API sessions at peak, ~45 QPS sustained with burst to ~120 QPS.
+- Data controls: PHI in requests/results, must remain logically isolated and encrypted in transit and at rest. KMS/HSM integration required.
+- Compliance: SOC 2 plus audit log retention for 1 year; ability to produce per-tenant access logs.
+- Ops expectations: predictable tail latency (SLOs), ability to pin capacity for scheduled batch jobs.
+
+Key question areas we need to confirm to recommend a deployment path (Hosted vs Dedicated vs Private):
+1) How strict do you need physical isolation vs logical isolation? Is a dedicated GPU pool acceptable or must the model run inside your VPC/on-prem?
+2) Any hard constraints on quantization/precision (e.g., must use fp16/no-quantization)?
+3) Procurement timeline (PO / security review) and who is the contracting contact on your side?
+4) Can you share a short sample of peak concurrency patterns (hourly distribution) so we can size the autoscale profile?
+
+Recommended immediate next steps:
+- Technical workshop (60–90m) with your infra and security leads — we’ll bring our runtime engineers to walk the isolation controls and noisy-neighbor mitigations.
+- We’ll share a short TCO sketch comparing Hosted (strict tenancy config), Dedicated capacity (reserved GPU pools), and Private (VPC/on-prem) focusing on latency, cost, and operational overhead.
+- If you’re open, we can run a 2-week PoC on a small Dedicated pool to validate p99s under your traffic profile.
+
+I attached a one-pager that shows three architecture sketches and typical trade-offs (architecture-options-one-pager.pdf). If the above looks right I’ll book the workshop — propose Thu 10/22 11:00am PT or Fri 10/23 9:00am PT.
+
+Thanks — Marcus
+Marcus Lin
+Senior Solutions Engineer | Redwood Inference
+marcus.lin@redwood.ai | +1 (415) 555-0147
+
+--
+Attachment: architecture-options-one-pager.pdf (application/pdf, 187KB)
+
+From: Emma Lopez <emma.lopez@healthshift.com>
+To: Marcus Lin <marcus.lin@redwood.ai>
+Cc: Thomas Gray <thomas.gray@healthshift.com>
+Date: Tue, 20 Oct 2026 11:08:00 -05:00
+Subject: Re: Noisy-neighbor mitigation paths & deployment next steps
+
+Thanks Marcus — this is helpful, and the architecture sketches look sensible. A few clarifications from our side: 
+
+Answers to your questions:
+- Isolation: Our security team’s preference is logical isolation with strong cryptographic separation and auditability; physical co-tenancy is allowed provided we get per-tenant audit logs and the ability to prove no cross-tenant access. Private on-prem would be a last resort due to Ops overhead.
+- Precision: We prefer to avoid extreme quantization on clinical models; fp16 is fine, int8 only if you can demonstrate no measurable drop in AUC.
+- Procurement: We’re targeting board approval by end of Nov; procurement contact is Thomas Gray (cc’d). Security review will likely run in parallel.
+- Traffic sample: I’ll pull a 7-day aggregate of hourly traffic and share by end of day tomorrow. Peak is usually 7–9am PT and 3–4pm PT.
+
+Two asks from HealthShift:
+1) Can you outline the specific artifacts Redwood can provide for the security review (SOC 2 report, encryption whitepaper, network diagrams, per-tenant audit examples)?
+2) For the Dedicated option, what are your guarantees around noisy-neighbor isolation (e.g., how you prevent one tenant’s burst from increasing p99 for others)?
+
+We’re interested in the 2-week PoC if it can replicate our tail-latency profile. Please include cost estimate for the PoC in the TCO sketch.
+
+Best —
+Emma
+Emma Lopez
+Head of Platform Integrations | HealthShift
+emma.lopez@healthshift.com | +1 (650) 555-0199
+
+> On Tue, Oct 20, 2026 at 9:12 AM Marcus Lin <marcus.lin@redwood.ai> wrote:
+> > Hi Emma — thanks again for the time on today’s call. Quick recap and suggested next steps so we’re aligned.
+> > ...
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Emma Lopez <emma.lopez@healthshift.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Tue, 20 Oct 2026 18:34:00 -07:00
+Subject: Re: Noisy-neighbor mitigation paths & deployment next steps
+
+Hi Emma — Laura here (solutions/technical). Quick answers and what we can provide for your security reviewers.
+
+What Redwood can provide for security review:
+- SOC 2 Type II report (redacted) and our compliance matrix.
+- Encryption whitepaper showing TLS + KMS integration and support for customer-managed keys (CMK).
+- Network diagram variants: Hosted with strict VPC peering, Dedicated in our cloud with tenant-level logical separation, Private VPC appliance diagram.
+- Sample audit log extracts and schema for per-tenant request/response logs.
+
+Noisy-neighbor mitigation (Dedicated pool specifics):
+- Capacity isolation: Dedicated is implemented as reserved GPU nodes for a tenant. That prevents compute contention at the node level.
+- Scheduler controls: We pin long-running batch jobs to separate nodes; short-lived interactive sessions go to separate, autoscaling buckets.
+- Continuous batching & fair queuing: runtime uses request-weighted batching and a token bucket shaping per-tenant to protect tail latency.
+- Fallbacks: automatic route to a lower-cost model variant or to a neighbouring standby pool only if the tenant explicitly opts in; otherwise traffic is throttled rather than impacting others.
+- SLA: For Dedicated we offer an SLO-backed p95 latency target and an enterprise SLA for uptime. We can discuss a p99 SLO as part of an Enterprise add-on.
+
+Trade-offs summary (quick):
+- Hosted (logical isolation): fastest to onboard, lower ops overhead, slightly higher risk to tail latency under extreme global burst unless we pin capacity for you.
+- Dedicated (reserved pool): best isolation vs noisy neighbors, predictable tail latency, higher base cost but easier to guarantee p99 in practice.
+- Private (VPC/on-prem): maximum control, highest ops burden and cost; recommended when regulatory controls absolutely require customer-run infrastructure.
+
+PoC notes: a 2-week PoC on a small Dedicated pool is our recommended first step. We’ll simulate your peak patterns and measure p95/p99 under concurrent loads. I attached a quick spec for Dedicated sizing and an initial cost worksheet (redwood-dedicated-quickspec.xlsx).
+
+Next steps I propose we take after you share the traffic sample:
+- Marcus to schedule the technical workshop with your infra/security team.
+- Redwood to deliver the TCO + PoC cost estimate by EOD tomorrow.
+- If approved, we’ll spin up a Dedicated PoC environment within 72 hours of PO/commit.
+
+—Laura
+Laura Bennett
+Principal Solutions Architect | Redwood Inference
+laura.bennett@redwood.ai
+
+--
+Attachment: redwood-dedicated-quickspec.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, 24KB)
+Related link: https://app.redwood.ai/proposals/HS-2026-0061
+
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Emma Lopez <emma.lopez@healthshift.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>, Thomas Gray <thomas.gray@healthshift.com>
+Date: Wed, 21 Oct 2026 01:47:00 +00:00
+Subject: Re: Noisy-neighbor mitigation paths & deployment next steps
+
+Emma — looping in for commercial/reg timeline sync. Thanks for the speedy replies.
+
+I’ll book the technical workshop: proposed slot Thu 10/22 11:00am PT — Marcus, Laura, I’ll send a calendar invite for 60 minutes and include an agenda (architecture review, security artifacts, PoC plan).
+
+Emma / Thomas: procurement note — we can provide a scoped PoC quote and standard MSA for review. If you want, I’ll attach the PO routing and our procurement checklist in the invite.
+
+Action items:
+- Emma: share 7-day traffic sample (by EOD 10/20/2026) — we need this to size the PoC.
+- Redwood (Laura/Marcus): deliver TCO and PoC cost estimate (due EOD 10/20/2026).
+- Neha: send invite + procurement checklist (sent).
+
+Thanks — Neha
+Neha Kapoor
+Account Executive | Redwood Inference
+neha.kapoor@redwood.ai | +1 (212) 555-0102

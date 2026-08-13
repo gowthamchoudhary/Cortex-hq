@@ -1,0 +1,145 @@
+Monthly metrics playbook & QBR runbook — prep notes
+
+From: Naomi Feldman <naomi_feldman@redwood.com>
+To: laura_bennett@redwood.com, rishi_malhotra@redwood.com
+Cc: tessa_morgan@redwood.com
+Date: Mon, 15 Mar 2027 09:10:00 -0700
+Subject: Monthly metrics playbook & QBR runbook — prep notes
+
+Team —
+
+Attached are two artifacts I want us to treat as the canonical sources for the March QBR with Big Retail: KPI_dashboard_Mar2027.pdf and Playbook_QBR_checklist.xlsx. High-level asks before EOD Friday: 
+
+- Laura: please validate the latency slices (p50/p95/p99) across Hosted vs Dedicated for the last 30 days and call out any regressions. Target: p95 <= 180ms for Platinum routes.
+- Rishi: update the cost slide with the per-token unit economics and the 30-day rolling mean for inference spend by model family. Highlight spikes and the suspected causes.
+- Tessa: compile uptime exceptions (any incidents >1 min) and annotate whether they impacted billing or routing fallbacks.
+
+Immediate flags I already see in the dashboard:
+- Overall uptime 99.82% (we're shaving towards 99.9% target) — three short blips on 3/02, 3/08, 3/13.
+- A small but steady increase in token-unit cost for the llama-quantized family (~6% WoW).
+- Usage growth concentrated in a single enterprise workspace (Big Retail) — up 42% m/m on session starts.
+
+For the QBR runbook, prioritize: 1) short narrative on reliability and fallback behavior, 2) a concise cost mitigation plan (batching/quantization knobs we can flip), and 3) suggested canary for any model rollouts during the quarter.
+
+I put assignees in the checklist and left inline comments in the drive folder. If you need more raw logs, I can pull a 72h trace slice for any flagged route.
+
+Thanks — let's keep the thread tight (no long forwarded threads).
+
+—Naomi
+Naomi Feldman
+Head of Program Ops, Redwood Inference
+naomi_feldman@redwood.com
++1 415-555-0124
+
+Attachments: KPI_dashboard_Mar2027.pdf (pdf), Playbook_QBR_checklist.xlsx (xlsx)
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Naomi Feldman <naomi_feldman@redwood.com>
+Cc: rishi_malhotra@redwood.com, tessa_morgan@redwood.com
+Date: Tue, 16 Mar 2027 11:22:00 -0700
+Subject: Re: Monthly metrics playbook & QBR runbook — prep notes
+
+Naomi —
+
+Thanks for the heads-up and the artifacts. Quick read-through notes and what I'm attaching: compute-cost-breakdown.csv (token cost by model family + instance type), and inline comments on the dashboard PDF. Summary of what I found: 
+
+- Latency: Hosted p95 = 162ms, Dedicated p95 = 148ms. The regressions you see are concentrated on the eu-west region during two maintenance windows (3/02 and 3/08) — both correlate with a kernel upgrade and degraded batching for ~7–12 mins each.
+- Outliers: p99 spikes to 430ms (sessions >100 tokens) — likely KV cache warm-up on cold hosts.
+- Recommendation: pin a small fraction of Platinum traffic to pre-warmed pools during the QBR week and enable a conservative KV cache penalty to avoid cold starts for long sessions.
+
+Action items I'm taking now:
+1) Produce a 2-slide summary for the QBR lead deck covering Latency (slice chart + root cause) and Mitigations (pre-warm/kv-cache). Due: Thu 18 Mar COB.
+2) Work with infra to surface an hourly heatmap for p95 for the last 30 days so execs can see when spikes happen.
+
+On the cost side — the compute-cost-breakdown shows the ~6% bump is driven by increased traffic on higher-context requests; batching hasn't grown proportionally. Rishi, if you can provide the per-route batching ratios we can simulate unit-cost reduction for the QBR.
+
+—Laura
+Laura Bennett
+Sr. PM, Product Ops — Redwood Inference
+laura_bennett@redwood.com
+
+Attachments: compute-cost-breakdown.csv (csv)
+
+On Mon, Mar 15, 2027 at 09:10 AM Naomi Feldman <naomi_feldman@redwood.com> wrote:
+> Team —
+> 
+> Attached are two artifacts I want us to treat as the canonical sources for the March QBR with Big Retail: KPI_dashboard_Mar2027.pdf and Playbook_QBR_checklist.xlsx. High-level asks before EOD Friday: 
+> 
+> - Laura: please validate the latency slices (p50/p95/p99) across Hosted vs Dedicated for the last 30 days and call out any regressions. Target: p95 <= 180ms for Platinum routes.
+> - Rishi: update the cost slide with the per-token unit economics and the 30-day rolling mean for inference spend by model family. Highlight spikes and the suspected causes.
+> - Tessa: compile uptime exceptions (any incidents >1 min) and annotate whether they impacted billing or routing fallbacks.
+> 
+> Immediate flags I already see in the dashboard:
+> - Overall uptime 99.82% (we're shaving towards 99.9% target) — three short blips on 3/02, 3/08, 3/13.
+> - A small but steady increase in token-unit cost for the llama-quantized family (~6% WoW).
+> - Usage growth concentrated in a single enterprise workspace (Big Retail) — up 42% m/m on session starts.
+> 
+> For the QBR runbook, prioritize: 1) short narrative on reliability and fallback behavior, 2) a concise cost mitigation plan (batching/quantization knobs we can flip), and 3) suggested canary for any model rollouts during the quarter.
+> 
+> Thanks — let's keep the thread tight (no long forwarded threads).
+> 
+> —Naomi
+
+From: Jacob Reed <j.reed@hydra.ai>
+To: Naomi Feldman <naomi_feldman@redwood.com>, laura_bennett@redwood.com
+Cc: QBR Ops <qbr@bigretail.com>
+Date: Wed, 17 Mar 2027 14:30:00 -0700
+Subject: Re: Monthly metrics playbook & QBR runbook — prep notes
+
+Hi Naomi / Laura —
+
+Appreciate the proactive notes and the artifacts. Quick context from our side: Big Retail will want a short executive page on "Business impact" (how latency/cost changes map to conversion/throughput). I've looped in our QBR ops alias above. A couple asks from Big Retail before the QBR:
+
+- Can you include a short run-rate projection for cost if the current usage growth (~42% m/m) continues for the next two quarters?
+- Can you show the fallback behavior in a short trace (example request that triggered fallback to a smaller model) so our tech leads can validate correctness?
+
+We're available for a 45-min QBR slot next week. Proposed times (PT):
+- Wed 22 Mar, 10:00–10:45
+- Thu 23 Mar, 14:00–14:45
+
+Also attaching an agenda draft for your review: QBR_agenda_draft.docx.
+
+Thanks — Jacob
+Jacob Reed
+CTO, Hydra AI (Big Retail technical lead)
+j.reed@hydra.ai
+
+On Tue, Mar 16, 2027 at 11:22 AM Laura Bennett <laura_bennett@redwood.com> wrote:
+> Naomi —
+> 
+> Thanks for the heads-up and the artifacts. Quick read-through notes and what I'm attaching: compute-cost-breakdown.csv (token cost by model family + instance type), and inline comments on the dashboard PDF. Summary of what I found: 
+> 
+> - Latency: Hosted p95 = 162ms, Dedicated p95 = 148ms. The regressions you see are concentrated on the eu-west region during two maintenance windows (3/02 and 3/08) — both correlate with a kernel upgrade and degraded batching for ~7–12 mins each.
+> - Outliers: p99 spikes to 430ms (sessions >100 tokens) — likely KV cache warm-up on cold hosts.
+> - Recommendation: pin a small fraction of Platinum traffic to pre-warmed pools during the QBR week and enable a conservative KV cache penalty to avoid cold starts for long sessions.
+> 
+> —Laura
+
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+To: Naomi Feldman <naomi_feldman@redwood.com>, laura_bennett@redwood.com
+Cc: tessa_morgan@redwood.com
+Date: Thu, 18 Mar 2027 16:05:00 -0700
+Subject: Re: Monthly metrics playbook & QBR runbook — prep notes
+
+Naomi / team —
+
+Thanks — I can take the cost slide and the run-rate projection. Quick notes from my side: 
+
+- I ran a preliminary projection with current growth assumptions: if Big Retail stays on +42% m/m for two quarters, their monthly inference spend would ~3.1x vs today. I added three lever scenarios in the attached: (1) no change, (2) batching +15%, (3) switch 30% of long sessions to a quantized model family.
+- I also pulled a short trace of a fallback event and included it in the shared drive (trace id: fb-20270317-1142). The trace shows correct fallthrough and no data leakage — should be fine for their tech review.
+
+I'll drop the updated slides and the run-rate table into the drive by EOD Friday. If we go with the recommended pre-warm plan, I suggest we propose a short canary for Wed 22 Mar (start with 10% of Platinum routes).
+
+—Rishi
+Rishi Malhotra
+Lead, Cost & Performance — Redwood Inference
+rishi_malhotra@redwood.com
+
+On Wed, Mar 17, 2027 at 02:30 PM Jacob Reed <j.reed@hydra.ai> wrote:
+> Hi Naomi / Laura —
+> 
+> Appreciate the proactive notes and the artifacts. Quick context from our side: Big Retail will want a short executive page on "Business impact" (how latency/cost changes map to conversion/throughput). I've looped in our QBR ops alias above. A couple asks from Big Retail before the QBR:
+> 
+> - Can you include a short run-rate projection for cost if the current usage growth (~42% m/m) continues for the next two quarters?
+> - Can you show the fallback behavior in a short trace (example request that triggered fallback to a smaller model) so our tech leads can validate correctness?
+> 
+> Thanks — Jacob

@@ -1,0 +1,127 @@
+SLA modernization: monthly credit mechanics and latency carve-outs
+
+From: Alex Reynolds <alex.reynolds@streamline.com>
+To: sofia.ivanova@redwood.com
+Cc: Evelyn Turner <eturner@streamline.com>; procurement@streamline.com
+Date: Tue, 19 May 2026 09:12:00 -0700
+Subject: Streamline - proposed SLA redlines and monthly credit model
+
+Hi Sofia,
+
+Thanks for the call this morning. Attached is a redline of Redwood's standard SLA with two asks we need to resolve before internal approval: an explicitly defined monthly credit formula tied to measured uptime, and a carve-out for predictable high-latency maintenance windows affecting batch inference jobs.
+
+High level:
+- Baseline uptime: they suggest 99.9% in the draft; our legal team is pushing for 99.95% across production endpoints.
+- Remedy: they propose a pro-rata credit up to 30% of the monthly invoice for partial-month degradation; our procurement wants a firm monthly cap and a smoothing mechanism so a single incident doesn't wipe out credits for unrelated months.
+- Latency carve-outs: because some of our workloads are large batched requests (analytics pipelines), we need an explicit maintenance and burst window carve-out that won't trigger credits for known scheduled activities or predictable cache warm-ups.
+
+Attaching Streamline_SLA_Redlines_v1.docx — redline comments inline (Evelyn did the legal pass). Could Redwood propose amendment language that: (a) sets a measurable monthly remedy pool with a cap, (b) defines maintenance and burst carve-outs with objective criteria (scheduled window, sliding 1-hour warmup after deployment, per-request queueing thresholds), and (c) clarifies how we measure uptime across routed models (hosted vs dedicated).
+
+Can you share an updated position by end of this week? We have an internal steering meeting next Tuesday. Also happy to jump on a 30-min bridge to walk redlines if easier.
+
+Thanks,
+Alex Reynolds
+Head of Procurement — Streamline Systems
+
+Attachments: Streamline_SLA_Redlines_v1.docx
+
+From: Sofia Ivanova <sofia.ivanova@redwood.com>
+To: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 19 May 2026 10:05:00 -07:00
+Subject: Fwd: Streamline - proposed SLA redlines and monthly credit model
+
+Team — forwarding Streamline's redlines (attached). Key asks summarized above. High-level thoughts:
+
+1) Uptime target: Streamline wants 99.95%; they currently run mostly hosted API + some dedicated pools for heavy batch jobs. Moving baseline to 99.95 materially increases exposure on credits.
+
+2) Monthly remedy mechanics: We should propose a formula that scales credits by minutes of unavailability within the month, but cap exposure at a percentage of the monthly invoice (not a hard 100% payout). Typical market caps are 10-25% depending on commitment level.
+
+3) Latency carve-outs: we can accept scheduled maintenance carve-outs and a 1-hour KV-cache-warmup window after deploys for dedicated pools. For 'burst' load patterns, we should require a minimum notice or an onboarding SLA that identifies burst-prone endpoints.
+
+Requests: Ben — can you assess the operational risk (cost exposure) if we concede 99.95% vs 99.9% and propose a suggested cap? Marissa — commercial suggestion for a phased concession (pilot months higher cap, then standard). Laura — I'll need a short list of legal-safe amendment language (maintenance carve-outs, measurement windows, definition of 'availability' across model routing).
+
+I will draft a customer-facing compromise once we have your inputs.
+
+Thanks,
+Sofia
+Head of GTM Partnerships, Redwood Inference
+
+Attachments: Streamline_SLA_Redlines_v1.docx
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 19 May 2026 11:30:00 -07:00
+Subject: Re: Fwd: Streamline - proposed SLA redlines and monthly credit model
+
+Sofia — quick operational analysis below.
+
+Summary: moving baseline from 99.9% to 99.95% halves the tolerated monthly downtime (99.9% = ~43.2 minutes/month; 99.95% = ~21.6 minutes). That materially increases frequency of credit triggers for small incidents. With our current multi-region routing + automated fallbacks, most incidents are localized and short-lived; however, incidents that affect KV cache warming or regional capacity (e.g., a noisy spike on a dedicated pool) could easily exceed the 21.6 minute threshold if we don't allow carve-outs.
+
+Proposed operational guardrails we can support:
+- Measurement: availability computed at the customer-account-model-route level, aggregated hourly and rolled up to calendar month.
+- Remedy formula: credit = (monthly_invoice * downtime_minutes / total_minutes_in_month) * weighting_factor, where weighting_factor = 1 for unplanned downtime, 0.5 for partial degradation (P95 latency breach) — and a monthly cap.
+- Cap: For hosted customers on pay-as-you-go we cap at 12.5% monthly invoice. For customers with reserved/dedicated commits (Streamline has a dedicated pool), cap at 20% for the first 90 days of the amendment (pilot), dropping to 10% thereafter. This gives Streamline some protection while limiting Redwood exposure.
+- Latency carve-outs: accept scheduled maintenance windows (>=72 hours prior notice for planned rolling maintenance) and post-deploy warm-up window (60 minutes per deployment per pool). For burst windows without notice, require customers to register endpoints as 'high-burst' during onboarding: we then apply a higher remedial threshold for those routes.
+
+Operational notes: we cannot accept a 30% unlimited cap. Also, we should avoid subjective language like 'predictable' — opt for objective triggers (scheduled notice, per-deploy timestamp, request rate thresholds).
+
+I can convert this into redline language for Laura to sign off.
+
+- Ben
+Director, Reliability — Redwood Inference
+
+Attachments: uptime_sample_window_q1.csv
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Cc: Laura Bennett <laura_bennett@redwood.com>
+Date: Wed, 20 May 2026 09:00:00 -07:00
+Subject: Re: Fwd: Streamline - proposed SLA redlines and monthly credit model
+
+Thanks Ben — this framing looks good. Commercially I propose we structure the amendment as a two-phase compromise:
+
+Phase A (first 3 months after amendment execution):
+- Temporary uptime baseline: 99.95% (to meet Streamline's ask)
+- Monthly cap on credits: 20% of monthly invoice (pilot protection)
+- We include a one-time service credit of $10k if we exceed three incidents that individually trigger credits in the pilot window
+
+Phase B (from month 4 onward):
+- Baseline reverts to contract standard 99.9% unless both parties agree to keep 99.95% (and then cap reduces to 10%)
+- Remedy calculation defaults to Ben's proposed formula
+
+Rationale: wins them the higher headline uptime for negotiation leverage, but materially limits long-term exposure for Redwood. Also gives Streamline runway to stabilize traffic patterns and for us to instrument additional caching/route policies.
+
+Next steps: Laura — please draft amendment text for the pilot language and the phase transition; Ben — if you can produce a short SLA exhibit that shows the exact calculation and the deployment warm-up marker, I'll package the amendment and propose a 30-min sync with Streamline for Thursday.
+
+- Marissa
+VP, Revenue Operations — Redwood Inference
+
+From: Sofia Ivanova <sofia.ivanova@redwood.com>
+To: Alex Reynolds <alex.reynolds@streamline.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, Evelyn Turner <eturner@streamline.com>
+Date: Fri, 21 May 2026 15:40:00 -07:00
+Subject: Re: Streamline - proposed SLA redlines and monthly credit model
+
+Alex / Evelyn — thanks for the redlines and patience while we pulled internal stakeholders together. Below is Redwood's proposed compromise (we've summarized the key points and attached a marked PDF).
+
+Proposed compromise (summary):
+- Baseline uptime: 99.95% for an initial 90-day pilot (effective on amendment signature). After 90 days, baseline will revert to 99.9% unless both parties agree to extend 99.95% in writing.
+- Remedy mechanics: credits calculated pro-rata by minutes of unavailability per calendar month using the following formula: credit = monthly_invoice * (downtime_minutes / total_month_minutes) * severity_weight. Severity_weight = 1.0 for complete unavailability, 0.5 for verified partial degradation (P95 latency breach).
+- Monthly cap: pilot cap = 20% of monthly invoice; post-pilot cap = 10% of monthly invoice. For customers on dedicated capacity we will treat the account as higher exposure and therefore the pilot cap can be accepted at 20% (as above).
+- Maintenance & latency carve-outs: scheduled maintenance (>=72 hours notice) is excluded. Post-deploy KV-cache warm-up window: 60 minutes per deployment per dedicated pool. Burst/no-notice events are not excluded unless the endpoint has been registered as 'high-burst' during onboarding and agreed in writing.
+- Measurement: availability measured at account+route level, using hourly aggregation and Redwood's standard monitoring (sampled at 1-min resolution); logs and traces will be provided as evidence for any claimed downtime.
+
+Attachments: Redwood_SLA_Amendment_v1.pdf (contains redline with exact language replacements and remedy formula). We've also attached uptime_sample_window_q1.csv to show how we calculate minutes and rolling aggregation.
+
+Next steps:
+1) Please review the attached amendment and redline. If acceptable, we can route to DocuSign and execute the pilot amendment.
+2) If you'd like, let's book a 30-min session early next week to walk the mechanics (Ben and Laura will join).
+
+Thanks — appreciate the collaborative tone. We want Streamline to have a predictable protection model while keeping the contract commercially sensible for Redwood.
+
+Best,
+Sofia Ivanova
+Head of GTM Partnerships — Redwood Inference
+
+Attachments: Redwood_SLA_Amendment_v1.pdf; uptime_sample_window_q1.csv

@@ -1,0 +1,104 @@
+Private deploy observability: evidence retention & SIEM acceptance criteria
+
+From: Alex Sun <alex.sun@gammahealth.com>
+To: Kimberly Park <kimberly.park@redwood.com>
+Cc: security@gammahealth.com
+Date: Mon, 14 Sep 2026 09:12:00 -0700
+Subject: Observability evidence & SIEM acceptance criteria for private deployment
+
+Hi Kimberly,
+
+Thanks again for the walkthrough last week. As part of our compliance review we need a concrete list of the evidence GammaHealth must receive from the on-prem/VPC deployment to close the SIEM integration and retention questions with our Security team. Primary asks from my side:
+
+- What artifacts will you deliver to demonstrate logs and metrics are being exported securely (example: signed manifest, sample payloads)?
+- Retention guarantees / configurable windows for customer logs (we need to show 13-month retention for audit data).
+- Trace propagation: will Redwood ship OTEL trace hooks and sample traces that show header propagation across components?
+- TLS client auth, cert rotation cadence, and a contact for key rollover testing.
+- Any filtering or PII redaction options configurable by the customer.
+
+Can you send a short acceptance checklist we can hand to our vendor review team? Also attaching the SOC questionnaire sections that reference evidence types.
+
+Thanks,
+Alex
+Security Program Manager
+GammaHealth
+
+--- Attachment: Gamma_SOC_sections_excerpt.pdf (pdf)
+
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Alex Sun <alex.sun@gammahealth.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Laura Bennett <laura.bennett@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 14 Sep 2026 13:45:00 -0400
+Subject: Re: Observability evidence & SIEM acceptance criteria for private deployment
+
+Alex — thanks for the clear list. I put a concise acceptance checklist together and outlined the delivery artifacts below. Attaching a draft PDF and a sample SIEM payload. Quick summary:
+
+Acceptance deliverables (what we will provide):
+- Evidence manifest (signed): lists exported topics, retention windows, and SHA256 of sample files.
+- Sample log/metrics payloads: redacted JSON examples for syslog, application logs, and metrics ingestion (we'll include Splunk HEC and generic syslog examples).
+- OTEL trace snippets: examples showing trace-id/span-id propagation across the runtime -> sidecar -> exporter.
+- TLS & auth docs: cert thumbprint, rotation schedule (90 days default), instructions for mutual TLS test harness.
+- Data filtering matrix: config knobs for PII/sensitive field redaction and sample regexes we apply by default.
+- Acceptance checklist CSV for your security operations team to sign off once validations pass.
+
+Notes / constraints:
+- We do not ship raw gzipped tokenized traces; we provide sampled, redacted traces for acceptance and full retention options are configurable in the private control plane.
+- Retention: our private package supports configurable retention up to the customer-specified period. We will propose an example 13-month retention policy and show how to set it in the UI and via the API.
+- SIEM ingestion: supported via Splunk HEC and Syslog over TLS; for high-volume customers we recommend the dedicated forwarder pattern to avoid head-of-line blocking.
+
+Next steps / asks from GammaHealth:
+1) Confirm acceptance test window (we recommend a 48-hour validation window with synthetic traffic).
+2) Tell us which SIEM (Splunk / Sumo Logic / QRadar) you will validate with so we can provide connector tuning guidance.
+
+I'm attaching the draft acceptance checklist and a sample siem-ingest payload. Ben — can you confirm the trace hook examples and the suggested sampling rates for a 48-hour validation run? Marissa / Laura, please review the retention wording before I send to Gamma.
+
+Best,
+Kimberly Park
+Director, Product Security & Compliance
+Redwood Inference
+
+--- Attachments: evidence-retention-draft.pdf (pdf); siem-ingest-sample.json (json)
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Kimberly Park <kimberly.park@redwood.com>, Alex Sun <alex.sun@gammahealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 15 Sep 2026 08:10:00 -0400
+Subject: Re: Observability evidence & SIEM acceptance criteria for private deployment
+
+Kimberly / Alex — quick technical clarifications on tracing and telemetry delivery:
+
+- Traces: we'll provide OTEL proto JSON examples showing header propagation and baggage usage. For the acceptance run, set sampling to 100% for a 48-hour window; after acceptance we suggest probabilistic sampling (0.5-2%) depending on qps.
+- Spans: examples will include the runtime inference span, network sidecar span, and exporter span with clear start/stop timestamps so you can verify ordering in your SIEM.
+- Delivery: 
+  * Splunk HEC: we support HEC over TLS with token auth. We'll include a HEC payload example and recommended batch_size and max_events_per_request.
+  * Syslog over TLS: RFC5424-compliant messages; we recommend facility=local0 and structured-data fields for service and customer_id.
+- Rate limiting & backpressure: the private control plane includes configurable backpressure; for your validation plan, we'll demonstrate burst handling with a dedicated forwarder and a traffic ramp script.
+
+I'll attach a sample trace file and a short script to generate synthetic traffic for the 48-hour window. One caveat: any PII redaction must be validated against your sample records — we can show the config and run a validation pass but we cannot certify redaction for unknown custom fields without test data.
+
+Ben
+Senior Infra Engineer, Redwood Inference
+
+--- Attachment: trace-samples.otlp.json (json); validation-traffic-generator.sh (bash)
+From: Laura Bennett <laura.bennett@redwood.com>
+To: Alex Sun <alex.sun@gammahealth.com>, Kimberly Park <kimberly.park@redwood.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 15 Sep 2026 10:38:00 -0400
+Subject: Re: Observability evidence & SIEM acceptance criteria for private deployment
+
+Alex — attached is the acceptance-checklist.csv populated with the validation steps, expected artifacts, and owners. High-level items included:
+
+- Artifact: evidence-manifest.json (Delivered) — Owner: Redwood Security
+- Artifact: siem-ingest-sample.json (Delivered) — Owner: Redwood Infra
+- Validation: TLS mTLS handshake test (Pass/Fail) — Owner: Gamma ops, Tester: Redwood infra
+- Validation: 48-hour synthetic traffic run (Pass/Fail) — Owner: Gamma ops, Notes: Ben's script attached
+- Validation: Trace propagation sample matches OTEL example (Pass/Fail) — Owner: Gamma security
+- Validation: Retention policy configured to 13 months (Pass/Fail) — Owner: Gamma infra, Tester: Redwood support
+
+Please review the checklist and add any additional test cases in column F. Once you confirm we'll schedule a joint 2-hour validation session next week and publish the evidence bundle to the Drive folder linked below.
+
+Laura Bennett
+Customer Solutions Manager, Redwood Inference
+
+--- Attachment: acceptance-checklist.csv (csv)
+--- Drive link: https://drive.google.com/drive/folders/1aB_example_drive_link

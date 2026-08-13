@@ -1,0 +1,121 @@
+Slate model 5xx surge — rollback and recovery update
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Clearline Ops <ops@clearline.ai>
+Cc: Soojin Lee <soojin_lee@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Date: Sun, 1 Nov 2026 08:12:00 -0700
+Subject: Slate model 5xx surge — initial notice
+
+Hi Sam / Clearline team,
+
+We’re seeing a spike in 5xx and timeout responses coming from the slate-7b model that your account has been routed to since ~07:45 PT. Error rates peaked at ~18% for generation requests with long contexts (>8k tokens) — shorter requests are mostly unaffected.
+
+Immediate steps we’re taking:
+- Routing new requests to slate-3b (compatible variant) for affected routes to preserve availability.
+- Rolling back a kernel optimization that was deployed across the slate pool at 07:30 PT while we triage.
+- Capturing heap snapshots and request traces for your failing requests (I’ve attached a short error excerpt).
+
+We’ll update you with a mitigation timeline in the next 60–90 minutes. Apologies for the disruption — I’ll keep you looped in as we learn more.
+
+—Marcus
+Marcus Lin
+Customer Reliability Engineer
+Redwood Inference
+
+Attachment: slate-error-snippets-20261101.txt (text/plain, 14 KB)
+
+---
+
+From: Sam Jenkins <sam.jenkins@clearline.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>
+Date: Sun, 1 Nov 2026 08:28:10 -0700
+Subject: Re: Slate model 5xx surge — initial notice
+
+Thanks Marcus — we started seeing failed outputs in our production workers right around then. Short-term question: will routing to slate-3b change any response format or inference latency that we should be prepared for?
+
+Also attaching a sample request id: cf3b2f90 for reference.
+
+—Sam
+
+---
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Sam Jenkins <ops@clearline.ai>
+Date: Sun, 1 Nov 2026 09:02:35 -0700
+Subject: Re: Slate model 5xx surge — triage notes
+
+Sam — quick answers: routing to slate-3b preserves the same API schema; you may see a slight increase in median latency (~30–60ms) on long-context calls but error rates should drop to <1% after the fallback completes. We’ve pushed the route change now; you should observe fewer 5xx within the next minute.
+
+On our side: initial traces point to a memory-growth pattern in the slate-7b attention KV cache when requests contain many repeated named-entity tokens and instruction blocks. The kernel rollback removed a speculative attention pooling change that appears correlated with the leak.
+
+Next actions:
+- We’re running a targeted canary (20 hosts) with the rollback and additional KV-eviction guard (ETA 15–30m).
+- If stable, we’ll roll the fix across the pool and then resume routing to slate-7b (ETA 2–3 hours).
+- Collecting heap dumps and sample requests for postmortem — attaching two snapshots in shared Drive.
+
+—Soojin
+Soojin Lee
+Senior Platform Engineer, Serving Runtime
+Redwood Inference
+
+Attachment: heap-snapshots-20261101.tar.gz (archive, 28 MB)
+Drive link: https://drive.redwood.ai/drive/folders/1A2B3C-slate-logs
+
+---
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>, Sam Jenkins <ops@clearline.ai>, Rachel Kim <rachel_kim@redwood.ai>
+Date: Sun, 1 Nov 2026 11:05:00 -0700
+Subject: Re: Slate model 5xx surge — rollback in progress
+
+Update — canary looks stable for the last 40 minutes: 5xx < 0.8% and tail latency back within SLA for canary hosts. We’ve started a progressive rollout across the slate-7b pool with automatic health gating.
+
+Customer impact timeline:
+- 08:00–08:45 PT: error spike observed (initial incident window)
+- 08:45–09:05 PT: automated fallback to slate-3b for new sessions (reduced availability risk)
+- 09:05–11:00 PT: kernel rollback + KV-eviction guard canary (stabilizing)
+- 11:00 PT: progressive rollout started; routing to slate-7b resumed for ~30% of capacity (monitoring)
+
+We’ll keep the fallback policy in place for your routes until we hit 24 hours of stable signals. We’ll also run a regression test against your large-context prompt set to avoid recurrence.
+
+—Vanessa
+Vanessa Ortiz
+Technical Account Manager
+Redwood Inference
+
+---
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Clearline Ops <ops@clearline.ai>
+Cc: Soojin Lee <soojin_lee@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Rachel Kim <rachel_kim@redwood.ai>
+Date: Mon, 2 Nov 2026 10:09:00 -0700
+Subject: Slate model 5xx surge — recovery confirmation and next steps
+
+Hi Sam — following up with a recovery confirmation and a short list of post-incident commitments:
+
+What happened (short summary):
+- A recent serving kernel optimization introduced a change to attention pooling that, in combination with specific repeated-token prompts, caused incremental memory growth in slate-7b’s KV cache leading to elevated 5xx/timeouts under long-context workloads.
+
+Immediate mitigations we executed:
+- Rolled back the kernel change (07:30–09:00 window).
+- Deployed a KV-eviction guard to force safe eviction thresholds for long-context sessions.
+- Temporarily routed traffic to slate-3b while canaries validated stability.
+
+Status:
+- Slate-7b rollout completed and health indicators are within normal ranges. Your production traffic has been routed back to slate-7b for ~70% of requests with automatic fallback enabled. Error rate is currently under 0.5% for your sample set.
+
+Postmortem / Next steps (commitments):
+1) We will publish a technical postmortem outlining the root cause, a timeline, and the code change that caused the regression by 2026-11-05.
+2) We’ll add your large-context prompt suite to our pre-deploy regression tests and run a one-off evaluation of slate-7b and slate-3b across your prompts.
+3) We’ll provide a 48-hour elevated-monitoring window and a follow-up call to review the findings (I’ll propose times).
+4) Engineering will ship a permanent kernel patch and a KV-eviction unit test to prevent similar regressions (ETA 2 weeks).
+
+If you want, we can keep an open channel for the next 72 hours while we complete the postmortem artifacts. Thanks for the quick collaboration during the incident — please let us know if you saw any lingering issues.
+
+Best,
+Marcus Lin
+Customer Reliability Engineer
+Redwood Inference
+
+References: incident dashboard — https://dashboard.redwood.ai/incidents/SLATE-20261101
+Attachments: slate-error-snippets-20261101.txt, heap-snapshots-20261101.tar.gz

@@ -1,0 +1,142 @@
+Private deployment: "Sundown" maintenance window + safety ladder (rollback plan)
+
+From: marissa_cole@redwood.ai
+To: ops@edgebank.com, cloudmgr@tjsol.com
+Cc: irene_choi@redwood.ai, karthik_iyer@redwood.ai, neha_kapoor@redwood.ai
+Date: Thu, 05 Nov 2026 08:03:00 -0800
+Subject: Private deployment: "Sundown" maintenance window + safety ladder (rollback plan)
+
+Hi EdgeBank team and TJ,
+
+We are planning the next scheduled maintenance for your private VPC deployment (internal name: "Sundown") to address the 2026-11 runtime security patches and the minor model runtime upgrade (v1.12 -> v1.13).
+
+High level:
+- Proposed maintenance window: Sat 2026-11-14 02:00–06:00 UTC (US-west primary)
+- Expected user impact: <5% p99 latency spike for <15m during canary; full cutover target 02:30–03:30 UTC
+- Rollback safety ladder: staged unpin -> canary -> pin-targeted rollback -> full rollback (details in attached runbook)
+
+Attachments: maintenance_runbook_v1.pdf (runbook & gating criteria), risk-table.csv (p0/p1 triggers), network-diagram.png (post-change routing).
+
+Immediate asks from EdgeBank: please confirm the blackout window and whether TJ should be on the bridge for the kernel/firmware patch coordination. If we don’t hear back by EOD Tue (11/10), we’ll assume the proposed window is acceptable and schedule the dry run on 11/11.
+
+Notes for internal teams: Irene — will you own the canary gating telemetry? Karhtik — please confirm KV-cache pin-unpin automation and fallback script locations. Neha — I’d like your team on standby for DB connection drain if the rollback path needs expedited cutback.
+
+Thanks,
+
+Marissa Cole
+Senior Product Manager, Private Deployments
+Redwood Inference
+marissa_cole@redwood.ai
++1 (415) 555-0192
+
+---
+(Attachment stubs: maintenance_runbook_v1.pdf [22 pages], risk-table.csv [12 rows], network-diagram.png [PNG, 1.2MB])
+From: ops@edgebank.com
+To: marissa_cole@redwood.ai, irene_choi@redwood.ai
+Cc: cloudmgr@tjsol.com, karthik_iyer@redwood.ai, neha_kapoor@redwood.ai
+Date: Thu, 05 Nov 2026 11:28:00 -0800
+Subject: Re: Private deployment: "Sundown" maintenance window + safety ladder (rollback plan)
+
+Marissa,
+
+Thanks for the heads up — window looks acceptable from EdgeBank's side. We request TJ be on the A/bridge during the firmware piece and for Redwood to avoid any disruptive network topology changes between 02:15–03:45 UTC.
+
+Two clarifications:
+1) Can you confirm whether persistent volume snapshots will be taken pre-cutover (we prefer a filesystem-level snapshot ahead of the kernel patches)?
+2) If we hit the "canary fail" criteria, what is the expected time to restore from the latest pinned image vs. full fleet rollback?
+
+We’ll hold the internal approvers on standby — please add the DocuSign link for SLA exception approvals when you have it.
+
+— Jaime R.
+Sr Ops Engineer, EdgeBank
+ops@edgebank.com
+
+On Thu, Nov 5, 2026 at 08:03 AM marissa_cole@redwood.ai wrote:
+> [original message]
+
+From: irene_choi@redwood.ai
+To: marissa_cole@redwood.ai, karthik_iyer@redwood.ai, neha_kapoor@redwood.ai
+Cc: ops@edgebank.com, cloudmgr@tjsol.com
+Date: Fri, 06 Nov 2026 09:15:00 -0800
+Subject: Re: Private deployment: "Sundown" maintenance window + safety ladder (rollback plan)
+
+Thanks — quick update after scan through the attachments and INF-4821:
+
+- Canary gating: I will own the canary telemetry. Primary metrics: 95/99 latency, KV cache hit rate, and request error rate (5xx). Gating thresholds are in maintenance_runbook_v1.pdf (Section 3).
+- Snapshots: we will request an LVM/fs snapshot pre-cutover; TJ, can you confirm the snapshot script location and retention?
+- Rollback RTOs:
+  * Pin-targeted rollback (single-region canary revert): target 15–25m to stabilize (depends on KV warmup)
+  * Full fleet rollback (unwind to last pinned image): target 45–75m, network drain permitting
+
+I recommend we add a fast-evacuation step to the ladder: if KV miss rate > 40% and p99 latency > 1.8s for 10m, we immediately scale the dedicated read-only fallback pool and cut traffic via route-weights while initiating the pin rollback. Details in runbook.
+
+I’ll prepare the Drift and Telemetry dashboard by 11/11 for the dry run.
+
+Irene Choi
+Lead Site Reliability Engineer
+Redwood Inference
+
+On Thu, Nov 5, 2026 at 11:28 AM ops@edgebank.com wrote:
+> [EdgeBank reply]
+
+From: cloudmgr@tjsol.com
+To: marissa_cole@redwood.ai, ops@edgebank.com
+Cc: irene_choi@redwood.ai, karthik_iyer@redwood.ai, neha_kapoor@redwood.ai
+Date: Fri, 06 Nov 2026 12:40:00 -0800
+Subject: Re: Private deployment: "Sundown" maintenance window + safety ladder (rollback plan)
+
+Hi all — TJ here. We will run the snapshot pre-cutover and host the snapshot script at s3://tjsol-edgebank/snapshots/sundown-precut.sh. Retention policy: 7 days by default (can extend on request).
+
+We will also be on the bridge for the firmware kernel portion; Jaime, please share the maintainer contact for your hardware team and we’ll coordinate the firmware task at 02:25 UTC.
+
+Two items for Redwood: please confirm the exact command we’ll call for the KV-cache pin/unpin so our runbook aligns (I can add a verification step in our snapshot script to call the pin status endpoint and wait for a green state).
+
+Thanks,
+Alex M.
+Cloud Infrastructure Lead
+TJ Solutions
+cloudmgr@tjsol.com
+
+On Fri, Nov 6, 2026 at 09:15 AM irene_choi@redwood.ai wrote:
+> [Irene reply]
+
+From: marissa_cole@redwood.ai
+To: irene_choi@redwood.ai, karthik_iyer@redwood.ai, neha_kapoor@redwood.ai
+Cc: ops@edgebank.com, cloudmgr@tjsol.com
+Date: Mon, 09 Nov 2026 07:45:00 -0800
+Subject: Re: Private deployment: "Sundown" maintenance window + safety ladder (rollback plan) — final preflight checklist
+
+Team — final preflight for the dry run on 11/11 and the proposed window on 11/14: action items and owners below. Please confirm by EOD Wed 11/10.
+
+Action items:
+- Irene: Telemetry dashboard + automated gating (SLOs wired to Slack alert channel) — due 11/10 16:00 PT
+- Karthik: pin/unpin script + fallback orchestration (include warmup guidance) — due 11/10 18:00 PT; ensure script path at /opt/redwood/runbooks/pin-unpin.sh and provide curl verification example in the runbook
+- Neha: DB drain play and read-only replica scale policy — due 11/10 18:30 PT
+- TJ (cloudmgr@tjsol.com): confirm snapshot execution and retention; include verification hook that calls /v1/admin/pin-status — due 11/10 12:00 PT
+- EdgeBank (ops@edgebank.com): confirm approvers for SLA exception DocuSign (link in related_links) — due 11/10 20:00 PT
+
+Contingencies: full rollback will be executed if any two p0 triggers from risk-table.csv occur simultaneously (examples: sustained >2% client error rate for 15m AND KV miss rate >50%). Canary failures route to pin-targeted rollback first.
+
+Once confirmed I will publish the final signed runbook and create the shiproom schedule.
+
+Marissa
+
+On Fri, Nov 6, 2026 at 12:40 PM cloudmgr@tjsol.com wrote:
+> [TJ reply]
+
+From: ops@edgebank.com
+To: marissa_cole@redwood.ai, cloudmgr@tjsol.com
+Cc: irene_choi@redwood.ai, karthik_iyer@redwood.ai, neha_kapoor@redwood.ai
+Date: Sat, 06 Nov 2026 16:45:00 -0800
+Subject: Re: Private deployment: "Sundown" maintenance window + safety ladder (rollback plan) — EdgeBank confirmations
+
+Marissa,
+
+Confirmed the blackout window and approvers list. Jaime will be on the bridge; hardware maintainer is Miguel Soto <miguel.soto@edgebank.com>. We will sign the SLA exception DocuSign by 11/10 EOD.
+
+One last ask: please include a post-mortem template in the runbook so we can quickly capture incident timelines if we escalate to a full rollback.
+
+See you on the dry run — Jaime
+
+---
+EdgeBank Ops (attachment: approvers_list.csv)

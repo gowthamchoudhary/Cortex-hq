@@ -1,0 +1,108 @@
+Post-demo: AtlasHR model fit proposal & structured-output QA
+
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Sanjay Rao <sanjay@atlashr.com>, Priya Shah <priya@atlashr.com>
+Cc: Dylan Brooks <dylan_brooks@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Tue, 3 Nov 2026 15:12:00 -0700
+Subject: Post-demo: AtlasHR model fit proposal & structured-output QA
+
+Hi Sanjay / Priya — thanks again for the time today. Quick recap and a pragmatic proposal so we can move to a short evaluation: 
+
+Summary of demo highlights
+- Use case: candidate-screening summarization + structured hire-eligibility output (JSON for ATS ingestion).
+- Key non-functional asks: 95th percentile latency < 200ms for single-turn summaries, deterministic JSON schema compliance for downstream systems, and PII controls for candidate data.
+
+Redwood model-fit recommendations
+- Start with a mid-sized instruction-tuned open model (we recommend "redwood-7b-instruct" for quality/cost tradeoff) and keep a fallback to a 13B variant for edge cases.
+- Run a small benchmark suite (attached prompt set + 200 representative records) that includes schema validation checks and bad-input resilience.
+
+Structured output & function-calling plan
+- We'll validate against the attached schema (atlas_schema_spec_v2.json). Primary checks: required fields present, correct enums, and nested array sizes.
+- Implement function-calling for 3 deterministic ops: normalize_name(), extract_experience_years(), map_role_codes(). This reduces ambiguity and improves downstream idempotency.
+- Retry policy suggestion: 1 immediate retry on transient model timeout, otherwise return structured error with reason codes for the ATS.
+
+Next steps (proposed timeline)
+1) You share the 200-record evaluation sample (anonymized) and any reject/accept labels — target: 48 hours.
+2) Redwood runs a 5-day evaluation (model comparisons, schema pass-rate, latency p95) and provides a short report with recommended knobs (batching, quantization profile).
+3) Joint canary: run production on 10% traffic with schema enforcement + automatic fallback to 13B variant for schema failures.
+
+Attachments & links
+- Attached: atlas_trial_promptset_v1.jsonl (prompt/label pairs), atlas_schema_spec_v2.json (schema we used in demo).
+- Drive: https://drive.google.com/drive/folders/1a2b3AtlasTrial
+
+I can kick off the evaluation as soon as we have the sample. Happy to hop on a 30-min follow-up to finalize success criteria.
+
+Thanks,
+Mina Haddad
+Senior Solutions Engineer | Redwood Inference
+mina_haddad@redwood.com
+
+
+From: Sanjay Rao <sanjay@atlashr.com>
+To: Mina Haddad <mina_haddad@redwood.com>
+Cc: Priya Shah <priya@atlashr.com>
+Date: Tue, 3 Nov 2026 17:03:00 -05:00
+Subject: Re: Post-demo: AtlasHR model fit proposal & structured-output QA
+
+Mina — appreciate the clear plan. A couple quick clarifications before we share data: 
+1) Can you send SOC2 summary and details on data residency/retention? Procurement will need that.
+2) On the schema enforcement: what happens to rejected records? We need a clear retry/error pattern for our ingestion pipeline.
+
+I'll check with Priya on the anonymized sample and get back by EOD tomorrow.
+
+Sanjay
+SVP Product | AtlasHR
+
+
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Sanjay Rao <sanjay@atlashr.com>, Priya Shah <priya@atlashr.com>
+Cc: Dylan Brooks <dylan_brooks@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Wed, 4 Nov 2026 09:21:00 -07:00
+Subject: Re: Post-demo: AtlasHR model fit proposal & structured-output QA
+
+Thanks Sanjay — quick answers inline and some resources: 
+
+On SOC2 / compliance
+- SOC2 summary attached (redwood_soc2_summary.pdf) and full compliance pack available on request. Data residency: hosted in US regions by default; Private (VPC) option available for enterprise contracts.
+
+On rejected records / error policy
+- Default flow we propose: if schema validation fails after 1 retry, we tag the record with a structured error payload (error_code, failure_fields, model_response) and send to an error queue for manual review. For high-sensitivity PII workflows we recommend a policy that routes to manual review before ATS ingestion.
+
+Concrete artifacts I uploaded for the eval (Drive)
+- atlas_trial_promptset_v1.jsonl (200 prompts + expected structured outputs)
+- atlas_schema_spec_v2.json (schema + enum maps)
+- small README with success criteria and labels
+
+Proposed immediate actions (internal & yours)
+- Action (Atlas): share anonymized 200-row sample to procurement@atlashr.com and cc me.
+- Action (Redwood): Dylan & Monica will set up the benchmark harness and run initial model comparisons (3 variants, schema pass-rate, latency p95).
+
+If that works I’ll schedule a 30-min sync for Friday to review the initial results.
+
+Best,
+Mina
+
+On Wed, Nov 3, 2026 at 17:03, Sanjay Rao <sanjay@atlashr.com> wrote:
+> Mina — appreciate the clear plan. A couple quick clarifications before we share data: 
+> 1) Can you send SOC2 summary and details on data residency/retention? Procurement will need that.
+> 2) On the schema enforcement: what happens to rejected records? We need a clear retry/error pattern for our ingestion pipeline.
+>
+> I'll check with Priya on the anonymized sample and get back by EOD tomorrow.
+>
+> Sanjay
+
+
+From: Dylan Brooks <dylan_brooks@redwood.com>
+To: Mina Haddad <mina_haddad@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Thu, 5 Nov 2026 09:04:00 -07:00
+Subject: RE: Post-demo: AtlasHR model fit proposal & structured-output QA (internal)
+
+Internal note / plan before Friday sync: 
+- I will provision the harness and run redwood-7b-instruct, redwood-13b-instruct, and a quantized 13B variant. Metrics to capture: schema pass-rate, slot-level precision/recall, top-token p95 latency, and failure-mode examples (schema errors).
+- Implement the function-calling mocks for normalize_name(), extract_experience_years(), map_role_codes() so we can measure difference in deterministic outputs vs freeform.
+- Start with 1 immediate retry on timeouts and circuit-break if retry rate > 5% (tunable).
+
+I'll post the initial bench results to the Drive folder and ping Mina for the Friday sync.
+
+— Dylan
+

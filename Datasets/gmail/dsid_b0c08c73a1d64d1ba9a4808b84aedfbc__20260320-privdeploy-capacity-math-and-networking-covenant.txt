@@ -1,0 +1,117 @@
+PrivDeploy Capacity Math & Network Covenant
+
+From: Logan Wright <logan.wright@redwood.ai>
+To: ACME Infra <infra@acme@acme.com>, Katie Simmons <katie.simmons@acme.com>
+Cc: Laura Bennett <laura.bennett@redwood.ai>
+Date: Fri, 20 Mar 2026 09:12:00 -0700
+Subject: PrivDeploy Capacity Math & Network Covenant
+
+Hi Katie / ACME Infra team,
+
+Following our sync, attaching an initial capacity model and a quick diagram for the private GPU pool we're proposing inside ACME's VPC. High-level assumptions are below — please confirm or correct by EOD Monday so we can lock the sizing math before procurement.
+
+Assumptions (ask: confirm):
+- Target steady-state throughput: 12M tokens/min (aggregate across model variants) for business-hours peak (US).
+- 95th pct latency SLO: 150ms tail for 2k token end-to-end generation on the production model (gpt-like).
+- Primary model profile: 1.5T dense variant; operational quantized variant for cost (int8). Typical per-token GPU cost baseline in spreadsheet.
+- Replica sizing: target 48 inferencing pods (A100 80GB equiv) to meet sustained throughput with 20% headroom for admission control.
+- Average batch size target: 8 tokens/batch, dynamic batching enabled; KV cache warm-hit expected for 65% of requests.
+- Warm pool: 6 hot nodes reserved for <100ms warm path, plus autoscale up to full size in staged increments.
+- Network: each GPU node expects ~6 Gbps avg egress (model KV, embeddings, logs) with 40 Gbps burst capacity per host. Verify NIC oversubscription permitted.
+- Cross-AZ traffic: we assume cross-AZ egress budget of 80 Gbps for the cluster.
+
+Operational controls proposed:
+- Tiered admission: gold/silver/free routing with soft and hard limits; fallback to smaller model variant when queue depth > threshold.
+- Cache affinity by tenant to reduce cross-host KV fetches.
+- Autoscale policy: scale at 70% CPU/GPU utilization sustained for 120s, cooldown 180s.
+
+Attachments: capacity_model_v1.xlsx (spreadsheet), network-diagram.png (PNG)
+
+Ask: please review NIC, cross-AZ limits, any egress caps or firewall NAT constraints. Also: is a reserved subnet for the pool possible to avoid noisy-neighbor NAT egress?
+
+Thanks — want to finalize numbers before Monday procurement sync.
+
+— Logan
+Logan Wright
+Senior Infra PM, Redwood Inference
+logan.wright@redwood.ai
+
+
+From: ACME Infra <infra@acme@acme.com>
+To: Logan Wright <logan.wright@redwood.ai>, Katie Simmons <katie.simmons@acme.com>
+Cc: ACME Procurement <acme-procurement@acme.com>
+Date: Fri, 20 Mar 2026 12:30:00 -0700
+Subject: Re: PrivDeploy Capacity Math & Network Covenant
+
+Logan —
+
+Thanks for the detailed note. A few constraints from the infra side that will affect the math:
+
+1) NICs & Oversubscription: Standard hosts in the target VPC provide dual 40Gb NICs. We strictly allow 2:1 oversubscription on NICs for tenant workloads. That reduces sustained per-host egress from 40Gbps burst to ~20Gbps sustainable if other tenants present.  
+2) Cross-AZ egress: Our current inter-AZ backbone guarantees 200 Gbps but shared with other infra. Reserving 80 Gbps exclusively for your pool requires a formal request and SLA signoff — lead time 3–4 weeks.
+3) Firewall/NAT: Outbound egress to public endpoints is SNAT'd through a pool of 2 NAT gateways per AZ. Burst scaling of NAT can introduce 30–50ms variability for flows that re-establish connections.
+4) Procurement note: procurement requires final host count + reserved subnet CIDR before purchase order.
+
+We can support a dedicated subnet and tag-based egress carveout, but that will add a one-time infra provisioning window (~5 business days) and a small charge for static IP reservation.
+
+Adding Katie for procurement and to validate ordering constraints.
+
+— ACME Infra (via Mike Chen)
+ACME Infrastructure Team
+infra@acme.com
+
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Logan Wright <logan.wright@redwood.ai>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.ai>, Priyom Das <priyom.das@redwood.ai>
+Date: Sat, 21 Mar 2026 08:45:00 -0700
+Subject: Re: PrivDeploy Capacity Math & Network Covenant
+
+Thanks — I ran the numbers with ACME constraints in mind. Key adjustments and recommended plan: 
+
+Summary of changes:
+- Reduce initial provision to 36 inferencing pods (A10080 equiv) instead of 48 assuming 2:1 NIC oversubscription; keep 20% compute headroom via admission control instead of raw replicas.
+- Expect sustained per-host egress average to be ~4 Gbps (given model & KV hit assumptions) and 18–20 Gbps burst headroom based on NIC policy. Use cache affinity to reduce cross-host fetches by ~30%.
+- Canary staging: 6-node canary in single AZ with synthetic load tests targeting 3x expected per-tenant QPS to validate tail latency. If tail SLOs breach, enable fallback to quantized variant and temporary rate-limiting.
+- Queue and admission control math: with a 36-node plan and median batch size 8, admission threshold should cap at 82k concurrent request tokens in flight before rolling into fallback. Exact derivation in attachment (admission-control-proposal.pdf).
+
+Action items proposed: 
+- Logan: finalize which NIC oversubscription policy ACME will apply (2:1 confirmed by infra) and whether we can get a reserved subnet (yes/no).
+- Rishi: prepare canary test harness and target load generator; include connection churn tests to exercise NAT path latency variability.
+- Priyom: update autoscale policy to consider egress saturation (not just GPU utilization).
+
+If ACME agrees to carve out the reserved 80 Gbps, we keep a smaller initial replica count and scale smoothly. If not, we proceed with the 36-node plan and accept increased mode-busting risk during sustained spikes.
+
+— Laura
+Laura Bennett
+Head of Private Deploy, Redwood Inference
+laura.bennett@redwood.ai
+
+
+From: Logan Wright <logan.wright@redwood.ai>
+To: Laura Bennett <laura.bennett@redwood.ai>, Rishi Malhotra <rishi.malhotra@redwood.ai>, Priyom Das <priyom.das@redwood.ai>
+Cc: Katie Simmons <katie.simmons@acme.com>, ACME Infra <infra@acme@acme.com>
+Date: Sun, 22 Mar 2026 10:15:00 -0700
+Subject: Re: PrivDeploy Capacity Math & Network Covenant
+
+Appreciate the quick turn. Agree with Laura's adjusted plan. Final call items and timeline: 
+
+Decisions:
+- Initial commit: 36 inferencing pods (A10080 equiv) with 6-node warm pool; admission-based headroom to target 20% spare compute.
+- Canary: 6-node single-AZ canary run next Thursday (Mar 25) — Rishi to own load tests; include NAT churn and KV miss surge.
+- Reserved subnet: ACME to confirm by Tue (Mar 24). If confirmed, we will request 80 Gbps carveout (non-blocking but preferred).
+- Procurement: Laura to send finalized host count + CIDR to acme-procurement by EOD Mon (Mar 23).
+
+Action owners:
+- Laura: finalize PO host count and CIDR, update procurement thread (due Mon EOD).
+- Rishi: build canary harness & test plan (due Wed EOD).
+- Priyom: update autoscale policies in the runbook and include egress saturation thresholds (due Wed EOD).
+- ACME Infra (infra@acme.com): confirm subnet carveout feasibility and any chargebacks (due Tue EOD).
+
+I'll draft a short runbook entry and publish the capacity workbook link once we have procurement confirmation. Attaching the admission-control proposal for visibility.
+
+Thanks — will follow up after canary prep.
+
+— Logan
+Senior Infra PM, Redwood Inference
+logan.wright@redwood.ai

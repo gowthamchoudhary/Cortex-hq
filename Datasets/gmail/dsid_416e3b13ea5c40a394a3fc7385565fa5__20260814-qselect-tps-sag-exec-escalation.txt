@@ -1,0 +1,133 @@
+Hosted API p95/p99 spike + TPS sag after QSelect rollout — urgent
+
+From: Rajiv Mehta <rajiv@fastcommerce.com>
+To: soojin_lee@redwood.com, support@redwood.com
+Date: 2026-08-14T08:12:00Z
+Subject: Spike in p95/p99 and big TPS drop since yesterday's build
+
+Hi Soojin / Redwood support,
+
+We started seeing degraded behavior on our Hosted API integration yesterday around 17:15 UTC. P95 and P99 latencies for our chat routes jumped ~2.5x and token-per-second throughput dropped by ~40% during steady-state generation. Error rates briefly spiked ~0.8% (timeouts).
+
+This coincided with the rollout note in the status page referencing a "QSelect kernel optimization" — can you confirm if that change was applied to our tenant and whether it could explain the throughput regression? Our service level agreements require us to have predictable token throughput; this regression is impacting customer-facing flows.
+
+Attached: tps_timeseries.csv (minute-level), p99_traces.png (sample waterfall).
+
+We need:
+- Immediate confirmation whether our traffic was routed to the new kernel/quant profile.
+- Short-term mitigation (rollback / route to previous variant) while you investigate.
+- ETA on resolution.
+
+Thanks,
+Rajiv
+Sr. Ops Engineer, FastCommerce
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Rajiv Mehta <rajiv@fastcommerce.com>
+Cc: vivek_kulkarni@redwood.com, marissa_cole@redwood.com
+Date: 2026-08-14T08:34:00Z
+Subject: Re: Spike in p95/p99 and big TPS drop since yesterday's build
+
+Rajiv — sorry you're hitting this. Thanks for the quick data. I'm escalating now.
+
+Immediate notes:
+- I do see a platform-wide QSelect kernel rollout that started 2026-08-13 16:00 UTC. Some customers were targeted for the early stage.
+- I have asked infra to confirm whether FastCommerce traffic was included; tagging Vivek and Marissa to confirm details and next steps.
+
+Short-term: I'll request a rapid rollback or traffic pin to the previous kernel variant for your tenant if available. We'll update you within 30–60 minutes.
+
+Soojin
+Account Executive — Redwood Inference
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: soojin_lee@redwood.com, marissa_cole@redwood.com, aditya_rao@redwood.com
+Cc: support@redwood.com
+Date: 2026-08-14T08:46:00Z
+Subject: Re: Spike in p95/p99 and big TPS drop since yesterday's build
+
+On it. Quick findings from infra telemetry:
+- FastCommerce traffic was routed to kernel variant qselect-v2 at 2026-08-13T16:22:14Z (can provide routing logs).
+- qselect-v2 uses an aggressive 4-bit quant profile for the last-layer GEMM and a kernel scheduling change that increases micro-batching (better for throughput generally).
+- For long-context gen (avg seq len ~1.2k) we've surfaced a drop in tokens/sec when KV cache hit patterns are heavy — micro-batching + the new kernel's memory-access pattern is causing CPU-side stalls in host-thread IO for these tenants.
+
+Proposed immediate mitigation:
+1) Pin FastCommerce to qselect-v1 (previous kernel/quant profile) — should return to baseline.
+2) If pin unavailable, route to a near-equivalent older variant in the same region.
+
+I'll start the pin; will report when complete. Aditya, can you prepare the rollback runbook (low risk path)?
+
+Vivek
+Senior SRE — Redwood Inference
+
+From: Aditya Rao <aditya_rao@redwood.com>
+To: vivek_kulkarni@redwood.com, soojin_lee@redwood.com, marissa_cole@redwood.com
+Date: 2026-08-14T09:05:00Z
+Subject: Re: Spike in p95/p99 and big TPS drop since yesterday's build
+
+Agree with pin. Runbook steps (starting now):
+- Step A: Route tenant -> variant qselect-v1 via routing control plane (2 min prop delay).
+- Step B: Flush prefix/KV caches for affected shards to avoid stale cache/format mismatch (30–45s risk window).
+- Step C: Monitor p95/p99 and TPS over next 20 minutes.
+- Rollback will be marked as done once p95/p99 within 5% of baseline and TPS restored to >=90% baseline.
+
+I'll attach the rollback runbook to the ticket and start the change with on-call.
+
+Aditya
+Infra Engineering
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Rajiv Mehta <rajiv@fastcommerce.com>
+Cc: vivek_kulkarni@redwood.com, marissa_cole@redwood.com, aditya_rao@redwood.com
+Date: 2026-08-14T09:22:00Z
+Subject: Re: Spike in p95/p99 and big TPS drop since yesterday's build
+
+Rajiv — we have a mitigation plan underway: infra is pinning FastCommerce to the prior kernel/quant variant (qselect-v1) and will flush caches as part of the change. Expect a short risk window (~1 minute) where a few requests may time out as caches rotate.
+
+We'll confirm when p95/p99 and TPS stabilize. I'll keep you updated in-line here; if you prefer Slack/phone for a live update please send a contact.
+
+Soojin
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.com>
+To: soojin_lee@redwood.com, marissa_cole@redwood.com, aditya_rao@redwood.com
+Cc: support@redwood.com, hannah_schmitt@redwood.com
+Date: 2026-08-14T09:41:00Z
+Subject: Re: Spike in p95/p99 and big TPS drop since yesterday's build
+
+Change completed at 2026-08-14T09:36:27Z:
+- Routing pin to qselect-v1 applied for tenant FastCommerce in us-west-2.
+- KV/prefix caches flushed for shards 12,13,14.
+- Initial telemetry: p95 dropped from 420ms -> 160ms, p99 from 1.8s -> 600ms (partial), TPS increased from 620 tps -> 980 tps (baseline ~1050 tps). Error rate returned to <0.05%.
+
+Notes for engineering follow-up: the qselect-v2 scheduling interacts poorly with our host-thread IO when average sequence length and KV cache hit-rate are both high. We'll need either a revised kernel patch or an adaptive route rule (don't enable qselect-v2 for tenants with average seq >1k until mitigations in place).
+
+Vivek
+
+From: Maya Singh <maya.singh@fastcommerce.com>
+To: soojin_lee@redwood.com, rajiv@fastcommerce.com
+Cc: soojin_lee@redwood.com, marissa_cole@redwood.com, hannah_schmitt@redwood.com, vivek_kulkarni@redwood.com
+Date: 2026-08-15T19:04:00Z
+Subject: RE: Spike in p95/p99 and big TPS drop since yesterday's build
+
+Thanks all for the quick turnaround. We saw user impact during the afternoon window and appreciate the rollback and the interim communication. A couple asks from our side:
+- Can you share a short RCA on exactly why qselect-v2 caused host-thread stalls? High-level is fine — we need to brief our execs.
+- Please include a timeline for a permanent fix (kernel patch or configurable routing guard).
+- We may request a one-time SLA credit for the impacted hour — I understand this needs review; please advise next steps.
+
+Maya
+CTO, FastCommerce
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Maya Singh <maya.singh@fastcommerce.com>, Rajiv Mehta <rajiv@fastcommerce.com>
+Cc: vivek_kulkarni@redwood.com, marissa_cole@redwood.com, hannah_schmitt@redwood.com, aditya_rao@redwood.com
+Date: 2026-08-15T19:30:00Z
+Subject: Re: Spike in p95/p99 and big TPS drop since yesterday's build
+
+Maya — appreciate the note and totally understand the asks. Next steps: 
+- Vivek/infra and Hannah (engineering lead for kernels) will draft an RCA and target a kernel patch timeline (ETA estimate: initial patch and adaptive routing guard within 10 business days).
+- I'll open a formal credit request with Finance and Legal; copying Hannah here for SLA context.
+- Attached runbook (runbook-qselect-rollback.md) and the minute-level TPS CSV for your records.
+
+We'll follow up with the RCA doc and an internal timeline by EOD tomorrow.
+
+Soojin
+Account Executive — Redwood Inference

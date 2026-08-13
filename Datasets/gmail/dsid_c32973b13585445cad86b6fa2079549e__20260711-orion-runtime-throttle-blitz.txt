@@ -1,0 +1,118 @@
+Urgent: Orion customers seeing 5xx/429 bursts and timeouts this morning
+
+From: Dana Park <dana@orion.ai>
+To: karthik_iyer@redwood.com, laura_bennett@redwood.com
+Cc: sre@orion.ai
+Date: Sat, 11 Jul 2026 08:12:00 -07:00
+Subject: Urgent: spike of 5xx errors + timeouts from Redwood inference this morning
+
+Hi Karthik / Laura —
+
+We started seeing a sharp increase in 5xx and timeouts against Redwood endpoints for several of our production routes beginning ~07:45 PDT. Error rate jumped to ~28% for text-gen requests (many 5xx, some 429s), and our downstream workers are timing out and retrying which makes the problem worse.
+
+Attached are a small sample of logs and an error-rate snapshot. Key symptoms:
+- 5xx bursts across multiple model routes between 07:45–08:05 PDT
+- Latency tail spiked (p95 from 220ms to 2.3s)
+- We observed many identical client retries that look like exponential backoff wasn’t respected (retry waterfall)
+
+This is customer-facing and impacting live user flows. Can you confirm you’re seeing the same on Redwood side and share immediate mitigations? We need an ETA for stabilization and any recommended short-term config changes (fallback, throttles, credits).
+
+Thanks — Dana
+Dana Park
+Head of Platform, Orion AI
+
+Attachments: orion_5xx_spike_logs.zip, orion_error_rates_chart.png
+
+From: karthik_iyer@redwood.com
+To: markus_klein@redwood.com, marissa_cole@redwood.com
+Cc: laura_bennett@redwood.com
+Date: Sat, 11 Jul 2026 08:22:00 -07:00
+Subject: Re: Urgent: spike of 5xx errors + timeouts from Redwood inference this morning
+
+Markus / Marissa —
+
+Just got this from Orion (Dana). They’re seeing a sustained 5xx/429 burst and timeouts; looks customer-impacting. Initial notes from their logs attached.
+
+Hypothesis: Dedicated pool autoscaler lag + retry amplification. Practical impacts we should check right away:
+- GPU pool utilization and recent pod evictions (did maintenance / rolling update coincide?)
+- Autoscaler events and scale-up latency (how long between scale signal and warm instance availability)
+- Any kernel OOMs or model-initialization failures that would return 5xx on new nodes
+- Gateway-level retry policy: are we letting client retries bypass token-bucket throttles?
+
+Immediate asks:
+1) Markus — pull autoscaler events, instance provisioning timestamps, pod OOMs, and the serving runtime logs for the affected model IDs. Capture last 30 minutes.
+2) Marissa — please open a customer bridge, loop Orion SRE and account team, and communicate we’re on it; advise a short-term client-side backoff if their client allows it.
+3) If autoscaler lag is confirmed, propose temporary mitigations: enable Dedicated burst-capacity (if available), route heavy routes to hosted pool fallback, and temporarily lower max concurrency per worker to reduce OOM frequency.
+
+I’m going to ask Laura to prepare a brief for execs if this needs credit/compensation. Keep this high priority.
+
+—Karthik
+Director, Sales Engineering
+Redwood Inference
+
+From: markus_klein@redwood.com
+To: karthik_iyer@redwood.com, marissa_cole@redwood.com
+Cc: laura_bennett@redwood.com
+Date: Sat, 11 Jul 2026 08:39:00 -07:00
+Subject: Re: Urgent: spike of 5xx errors + timeouts from Redwood inference this morning
+
+Quick update from runtime/infra:
+- We confirmed a rapid drain in Orion's Dedicated GPU pool starting 07:40 PDT; one of their node groups had a scheduled kernel patch that kicked off concurrently with higher-than-normal seq-lengths from their jobs.
+- Autoscaler observed pressure and made scale-up requests at 07:42 and 07:46, but several of the new instances failed health checks due to an initialization OOM in the model loader (large LLAMA variant + long sequence warmups). Those 1st-wave failures produced 5xx for the in-flight requests.
+- Retry amplification: Orion’s client retries every 200ms for up to 5 attempts by default; because new instances were returning 5xx while the autoscaler was still provisioning, we observed a retry storm that pushed queue depth higher and caused the autoscaler to thrash.
+
+Concrete actions executed (08:10–08:30 PDT):
+1) Applied emergency burst: enabled Dedicated burst-capacity for Orion (temporary) and added 4 warm spare GPUs to their pool (expected stabilizing effect within 2–4 minutes).
+2) Applied gateway-level short-circuit: temporarily reject identical repeat requests with 429+Retry-After if they exceed a short client-side hash window (to break the retry spiral).
+3) Fallback routing: routing rule added to send non-critical routes to a smaller quantized variant (redwood-quant-small) hosted pool for graceful degradation of latency.
+4) Reduced per-worker concurrency for affected model to reduce the chance of model-loader OOMs while new nodes finish warmup.
+
+Next steps:
+- I’m collecting the autoscaler event timeline + instance boot logs and will attach a condensed log bundle.
+- Recommend we work with Orion to increase client-side backoff to 500ms, and to consider a jittered exponential backoff to avoid synchronized retries.
+
+I’ll attach the timeline (autoscaler_timeline_orion_20260711.log) to the bridge notes.
+
+—Markus
+Senior SRE, Redwood Inference
+
+From: karthik_iyer@redwood.com
+To: dana@orion.ai, sre@orion.ai
+Cc: laura_bennett@redwood.com, marissa_cole@redwood.com, markus_klein@redwood.com
+Date: Sat, 11 Jul 2026 09:05:00 -07:00
+Subject: Re: Urgent: spike of 5xx errors + timeouts from Redwood inference this morning
+
+Dana — thank you for the quick report and the sample logs. We have the following to share immediately: 
+
+What we saw and did (short summary):
+- Root cause (interim): Dedicated pool node drain + model-loader OOMs on a first wave of autoscaled instances, amplified by client retry behavior leading to a retry storm and queue backlog.
+- Stabilization steps performed (complete as of 08:30 PDT):
+  • Emergency Dedicated burst applied (4 warm GPUs added)
+  • Gateway-level short-circuit + 429+Retry-After to break retry spiral
+  • Fallback routing to smaller quantized model for non-critical routes
+  • Reduced worker concurrency and increased model-loader timeouts during warmup window
+
+Immediate customer-facing guidance:
+- We recommend Orion update client retry policy to 500ms initial backoff with jitter and max 3 retries for production traffic while we complete the root-cause remediation.
+- We will keep the burst capacity for an additional 2 hours while we confirm stability and then perform a controlled scale-down.
+
+Next steps (owner):
+- Markus (SRE) — will deliver autoscaler event timeline and a log bundle within 60 min (done).
+- Marissa (CS) — will run the customer bridge and coordinate post-incident follow-up (owner for post-mortem).
+- Laura (AE) — will prepare an account brief for execs including a small goodwill credit proposal pending severity assessment.
+
+We appreciate the heads-up and will keep this thread updated. If Orion would like an immediate bridge, Marissa is standing by to host.
+
+Best,
+Karthik Iyer
+Director, Sales Engineering | Redwood Inference
+karthik_iyer@redwood.com
+612-555-0199
+
+On Sat, Jul 11, 2026 at 08:39 AM markus_klein@redwood.com wrote:
+> Quick update from runtime/infra:
+> - We confirmed a rapid drain in Orion's Dedicated GPU pool starting 07:40 PDT; one of their node groups had a scheduled kernel patch that kicked off concurrently with higher-than-normal seq-lengths from their jobs.
+> - Autoscaler observed pressure and made scale-up requests at 07:42 and 07:46, but several of the new instances failed health checks due to an initialization OOM in the model loader (large LLAMA variant + long sequence warmups).
+> - Applied emergency burst and short-circuit, fallback routing, reduced per-worker concurrency.
+>
+Attachments: autoscaler_timeline_orion_20260711.log, orion_5xx_spike_logs.zip

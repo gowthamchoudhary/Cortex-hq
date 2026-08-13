@@ -1,0 +1,121 @@
+Post-call: streaming load profile & p95 targets (next steps)
+
+From: Soojin Lee <soojin.lee@redwood.inference>
+To: Alex Turner <alex.turner@finlytics.ai>, Priya Singh <priya.singh@finlytics.ai>
+Date: Tue, 29 Jun 2027 15:08:00 -0700
+Subject: Post-call: streaming load profile & p95 targets (next steps)
+
+Thanks again for taking the time today — good discussion. I wanted to capture the key pain points we heard and outline the immediate next steps so we have a single source of truth. High level summary first, then specifics:
+
+Pain points (from the call)
+- User-facing chat is experiencing choppy streaming: initial tokens arrive but later chunks spike (UX feels stuttery).
+- Tail latency spikes during bursts (not steady-state): website peak windows see large p95 increases.
+- Current infra is self-hosted Triton + custom autoscaler; team lacks an easy way to measure per-request token-level latencies.
+
+Current stack (what you shared)
+- Model: Llama-2-70B (4-bit quantized) served via Triton on EC2 (p4 & g5 mix).
+- Frontend: multiplexed websocket connections to a worker pool; typical session length ~120 tokens per query; some long-form flows up to 512 tokens.
+- Traffic profile: normal load ~50 RPS, burst to ~300 RPS during batch batch jobs and marketing spikes.
+
+Success criteria you listed
+- End-to-end p95 generation latency: < 600ms for 90% of traffic, goal < 400ms for interactive flows.
+- Streaming chunk latency (TTFB per chunk): < 150ms on steady-state.
+- Sustained concurrency: support 250–350 concurrent live sessions without visible UX degradation.
+
+Immediate next steps (owner / ETA)
+1) You: share a representative capacity_profile.xlsx (sample payloads, token distributions, burst pattern) — Alex/Priya said you'll share by EOD tomorrow. (attachment stub referenced)
+2) Redwood: prepare a quick bench plan to reproduce spikes and propose dedicated pool sizing + canary config — target internal draft by Thu 7/1. (I'll loop Karhtik)
+3) Run a short trial: we can spin a Redwood Dedicated trial with the most similar model variant and run a baseline test against your payloads. We will provide instructions and a one-click harness.
+4) SLA/cost: we'll produce a back-of-envelope estimate for a committed pool vs. on-demand based on the capacity profile.
+
+Open questions we flagged (please confirm)
+- What % of requests use streaming vs. full-response (server-side aggregation)? You estimated ~85% streaming.
+- Are there any RPC or network middleboxes modifying websocket frames? (Priya, you mentioned a proxy in front of the worker pool.)
+
+Attachments referenced: capacity_profile.xlsx (needed), finlytics-infra-overview.pdf (you mentioned), sample logs if available.
+
+Proposed times for the bench kickoff call: Thu 7/1 10:00am PT or Fri 7/2 9:00am PT — which works for you?
+
+Thanks — I put action owners inline, will update this thread as we get the files.
+
+— Soojin
+Soojin Lee
+Account Executive | Redwood Inference
+soojin.lee@redwood.inference
++1 (415) 555-0127
+
+
+From: Alex Turner <alex.turner@finlytics.ai>
+To: Soojin Lee <soojin.lee@redwood.inference>
+Cc: Priya Singh <priya.singh@finlytics.ai>
+Date: Tue, 29 Jun 2027 16:01:42 -0700
+Subject: Re: Post-call: streaming load profile & p95 targets (next steps)
+
+Thanks Soojin — this looks good, echoing priorities from our side. A few clarifications and I'm attaching the infra overview PDF we referenced.
+
+Quick clarifications:
+- Streaming usage is ~78% of requests (the rest are batched, server-side).
+- Typical interactive session: 3–4 turns, 100–150 tokens each. Long-form report generation is on a separate pipeline.
+- We use a light frontend proxy (Envoy) that terminates websockets; it shouldn't mutate frames but does apply TLS and rate limits.
+
+Attachments: finlytics-infra-overview.pdf (see attachment)
+
+We will upload the capacity_profile.xlsx to the Drive link you suggested by tomorrow EOD. For the trial, we'd prefer Thu 7/1 10:00am PT.
+
+On Tue, Jun 29, 2027 at 15:08 Soojin Lee <soojin.lee@redwood.inference> wrote:
+> Thanks again for taking the time today — good discussion. I wanted to capture the key pain points we heard and outline the immediate next steps so we have a single source of truth. High level summary first, then specifics:...
+
+Alex Turner
+Head of Engineering | FinLytics
+alex.turner@finlytics.ai
++1 (206) 555-0199
+
+
+From: Soojin Lee <soojin.lee@redwood.inference>
+To: Alex Turner <alex.turner@finlytics.ai>, Priya Singh <priya.singh@finlytics.ai>
+Date: Tue, 29 Jun 2027 16:45:12 -0700
+Subject: Re: Post-call: streaming load profile & p95 targets (next steps)
+
+Perfect — thanks for confirming, Alex. We'll plan for Thu 7/1 10:00am PT for the bench kickoff.
+
+Action items for Redwood before the call:
+- Karhtik (cc'd on a separate internal note) will draft a bench plan that covers: steady-state throughput, burst replay to 300 RPS, KV-cache warmup scenarios, and streaming chunk latency measurement.
+- We'll provision a short-lived Dedicated trial environment using a compatible quantized model variant; the goal is to replicate your p95 and streaming TTFB numbers under controlled load.
+- I'll create the trial instructions doc and include a small harness (curl/websocket examples) so your SREs can run the same test locally.
+
+Deliverables we will bring to the kickoff:
+- Bench plan (draft)
+- Trial environment access + credentials
+- Preliminary sizing recommendation (committed pool vs. burstable)
+- Request for any sample logs or traces you can share ahead of time
+
+If you can drop the capacity_profile.xlsx and a small sample of 50 representative sessions into the Drive folder before the call that will help us reduce setup time.
+
+— Soojin
+
+
+From: Soojin Lee <soojin.lee@redwood.inference>
+To: karthik.iyer@redwood.inference
+Cc: Ben Carter <ben.carter@redwood.inference>, Alex Turner <alex.turner@finlytics.ai>, Priya Singh <priya.singh@finlytics.ai>
+Date: Tue, 29 Jun 2027 17:10:00 -0700
+Subject: Fwd: Post-call: streaming load profile & p95 targets (next steps)
+
+FYI — forwarding the recap and attaching the initial ask. Can you own the bench plan draft? Key constraints: reproduce 300 RPS bursts, measure p95 token-level latencies and streaming chunk TTFB, and include a small experiment on prefix caching vs cold-start cost.
+
+Please outline:
+- Test harness (tools + versions)
+- Workload shapes (steady, jerk, long-tail sessions)
+- Baseline metrics to capture (p50/p95/p99, per-chunk latency, tokens/sec, GPU utilization)
+- Quick checklist for trial env provisioning (model variant, quant settings, instance type suggestions)
+
+Ben — please add any prior bench scripts we can reuse.
+
+Thanks — Soojin
+
+--- Forwarded message ---
+From: Soojin Lee <soojin.lee@redwood.inference>
+Date: Tue, 29 Jun 2027 15:08:00 -0700
+Subject: Post-call: streaming load profile & p95 targets (next steps)
+To: Alex Turner <alex.turner@finlytics.ai>, Priya Singh <priya.singh@finlytics.ai>
+
+(see above)

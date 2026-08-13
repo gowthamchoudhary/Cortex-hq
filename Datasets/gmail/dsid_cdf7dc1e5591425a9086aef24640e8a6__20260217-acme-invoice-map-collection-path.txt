@@ -1,0 +1,102 @@
+Acme Analytics — invoice aggregation mapping & collection path (SFTP vs email)
+
+From: Samantha Lee <accounts-payable@acme-analytics.com>
+To: rafael.mendes@redwood.com
+Date: Sun, 15 Feb 2026 09:12:00 -0800
+Subject: Consolidated monthly invoices + VAT evidence delivery options
+
+Hi Rafael,
+
+Thanks for the demo last week. Our AP team (I cc'd accounts-payable) wanted to confirm how Redwood can deliver invoices for multiple legal entities under our umbrella. We have two functional asks:
+
+1) We prefer a consolidated monthly invoice per legal entity (one PDF/XML per entity) with line-level charge breakdowns and VAT columns.
+2) Delivery: our AP team prefers SFTP pickup (to sftp.acme-analytics.com) for automated ingesting into Coupa, but we also need a fallback email copy to invoices@acme-analytics.com for teams that still rely on manual processing.
+
+Can you confirm:
+- whether you can produce a consolidated monthly file and a corresponding machine-readable XML that maps to invoice lines and PO references,
+- whether VAT evidence (tax_id / VAT certificate) can be attached or referenced per invoice, and
+- expected filename conventions and sample schema so we can map fields into our AP pipeline?
+
+Attached is our vendor onboarding VAT form for your reference.
+
+Best,
+Samantha Lee
+Sr. AP Manager — Acme Analytics
+[Attachment: vendor_vat_form_acme.pdf (pdf)]
+From: rafael.mendes@redwood.com
+To: Samantha Lee <accounts-payable@acme-analytics.com>
+Cc: kimberly.park@redwood.com, connor.obrien@redwood.com
+Date: Mon, 16 Feb 2026 08:45:00 -0800
+Subject: Re: Consolidated monthly invoices + VAT evidence delivery options
+
+Samantha — thanks for laying this out, and glad the demo was useful. Short answer: yes, we can do the consolidated monthly bill per legal entity and provide both XML and PDF payloads. A few specifics and asks so we can lock the integration: 
+
+- Format: We produce a per-entity PDF + accompanying XML (InvoiceList with Invoice -> LineItem structure). The XML can include VAT fields (tax_rate, tax_amount, vendor_vat_id) and a reference to stored VAT certificate metadata.
+- Delivery: We can push via SFTP or push the file to your pickup bucket; alternatively we can send email copies to a designated mailbox. We typically recommend SFTP for Coupa automation.
+- Filename convention proposal: redwood_<entity>_<YYYYMM>_invoice.xml / .pdf. If you need PO-level grouping in the filename we can add po_<PO#> segments.
+
+Kimberly (billing ops) — can you confirm XML schema version and whether we need to include signed VAT certificate as an embedded file or a link to a hosted PDF?
+
+Connor — could you send me the exact SFTP target path and whether keys or user/pass will be used? We prefer key-auth.
+
+I attached our example schema and a short SFTP instructions stub. If that looks good we can provision a test file for March invoices.
+
+Thanks,
+Rafael Mendes
+Account Exec, Redwood Inference
+[Attachment: invoice_schema_v2.xml (xml)]
+From: kimberly.park@redwood.com
+To: rafael.mendes@redwood.com, Samantha Lee <accounts-payable@acme-analytics.com>
+Cc: connor.obrien@redwood.com
+Date: Mon, 16 Feb 2026 11:03:00 -0800
+Subject: Re: Consolidated monthly invoices + VAT evidence delivery options
+
+Hi all — chiming in from Billing Ops. A couple of operational notes: 
+
+- VAT evidence: we store VAT certificates in our secure object store and include a metadata pointer in the XML (vat_certificate_url). If Acme requires the certificate as an embedded PDF in the invoice package, we can also attach it, but that increases payload size. Which do you prefer?
+- PO mapping: please confirm whether your Coupa ingestion will match on invoice_number or a custom field (we can emit supplier_reference and customer_po fields).
+- POC for test: we'll send a sample consolidated XML on 1 March to your test SFTP. Rafael — I'll need the test path and preferred username; we will use SSH key auth by default.
+
+Samantha — attaching a short file that documents the fields we include by default. If Acme needs additional fields (entity_legal_name, remit_account_id) say so.
+
+Thanks,
+Kimberly Park
+Billing Operations — Redwood Inference
+[Attachment: sftp_inbound_instructions.txt (txt), invoice_schema_v2.xml (xml)]
+From: Samantha Lee <accounts-payable@acme-analytics.com>
+To: kimberly.park@redwood.com, rafael.mendes@redwood.com
+Cc: connor.obrien@redwood.com
+Date: Tue, 17 Feb 2026 09:20:00 -0800
+Subject: Re: Consolidated monthly invoices + VAT evidence delivery options
+
+Thanks — good details. A few answers from our side: 
+
+- VAT evidence: we need the VAT certificate PDF attached to the monthly package for our audit trail (not just a link). Can Redwood include the certificate as a separate PDF in the same SFTP directory, named identically except for the suffix (e.g., redwood_acme_202603_vat.pdf)?
+- PO mapping: Coupa will match on supplier_reference (vendor_id) + invoice_number. Please include supplier_reference in the XML.
+- SFTP details (test): sftp.acme-analytics.com, inbound path = /incoming/redwood/tests/, we will provision a dedicated user redwood_acme_test and can accept an uploaded public key. I attached the signed VAT certificate for reference.
+
+We also want an email fallback to invoices@acme-analytics.com with the PDF only, in case the SFTP job fails. Can Redwood include an automated failover email within 30 minutes of an SFTP error?
+
+Attached: vat_certificate_acme.pdf
+
+Best,
+Samantha
+[Attachment: vat_certificate_acme.pdf (pdf)]
+From: rafael.mendes@redwood.com
+To: Samantha Lee <accounts-payable@acme-analytics.com>
+Cc: kimberly.park@redwood.com, connor.obrien@redwood.com
+Date: Tue, 17 Feb 2026 15:05:00 -0800
+Subject: Re: Consolidated monthly invoices + VAT evidence delivery options
+
+Samantha — perfect, thanks for the details and the certificate. Next steps from our side: 
+
+1) Kimberly will prepare a test package (XML + PDF + VAT PDF) and push to /incoming/redwood/tests/ on 1 March. We will upload our public key to your team today.
+2) Kimberly — please enable the email-fallback rule (PDF to invoices@acme-analytics.com) triggered if the SFTP upload fails or if the file is not picked up within 30 minutes.
+3) Connor — once we have the test file validated, we'll create an invoice addendum (DocuSign) that documents the delivery method and filename conventions. Rafael to route the DocuSign link to Samantha.
+
+I'll send the key and schedule the test. Appreciate the quick turnaround.
+
+Cheers,
+Rafael
+Account Exec, Redwood Inference
+[Related link: https://app.hubspot.com/contacts/123456/company/ACME-3249]

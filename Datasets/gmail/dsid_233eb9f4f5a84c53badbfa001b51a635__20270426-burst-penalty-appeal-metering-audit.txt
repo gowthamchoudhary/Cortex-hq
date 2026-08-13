@@ -1,0 +1,129 @@
+Burst usage penalty appeal — audit & credit
+
+From: Liam O'Neill <liam.oneill@acme.ai>
+To: Priyom Das <priyom.das@redwood.com>
+Cc: ACME Billing <billing@acme.ai>
+Date: Tue, 20 Apr 2027 09:12:00 -0700
+Subject: Unexplained token spike on 2027-04-20 / penalty notice
+
+Hi Priyom —
+
+ACME noticed a large jump in consumption on 2027-04-20 that triggered an overage penalty on our April invoice. We see a ~3.6M token delta concentrated in a 5-minute window around 11:15 UTC. A few quick facts from our side:
+
+- Account: acme.ai-prod (org id 98123)
+- Observed spike window: 2027-04-20 11:12–11:20 UTC
+- Approx extra tokens: ~3,600,000
+- Invoice line: April overage + penalty (ref INV-2027-04-ACME)
+
+We believe this was caused by accidental replay from our side (deploy rollback triggered retries), but we were not notified of any runaway call pattern by Redwood. Before we escalate procurement, can you: 
+
+1) Share an export of the raw request logs and token counts for that window,
+2) Confirm whether any burst-protection or penalty threshold was applied automatically, and
+3) Put a temporary hold on the penalty while we investigate (we'll provide evidence on our end).
+
+We'd like to resolve this without a formal dispute. Please let me know the expected ETA for the logs and whether you can temporarily waive the overage penalty.
+
+Thanks,
+Liam
+Liam O'Neill
+Head of Platform Engineering, Acme AI
+liam.oneill@acme.ai
+[ACME internal ticket: PLAT-8897]
+
+[Attachment: sample_client_trace.txt (TXT, 4KB)]
+From: Priyom Das <priyom.das@redwood.com>
+To: Liam O'Neill <liam.oneill@acme.ai>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Tue, 20 Apr 2027 11:00:00 -0700
+Subject: Re: Unexplained token spike on 2027-04-20 / penalty notice
+
+Hi Liam —
+
+Thanks for the heads up and the context. We can absolutely pull a full export for the 11:00–11:30 UTC window and run a quick audit on our side. I've looped in Vivek (infra/serving) and Monica (CS) to help.
+
+Action plan:
+- Vivek: pull raw request logs + token accounting for acme.ai-prod for 11:00–11:30 UTC and look for duplicate request IDs / retries.
+- Monica: confirm if we have any platform-side alerts or automatic burst penalties applied; also check whether the account hit any configured rate cap.
+- Priyom: I'll follow up with a remediation proposal and the export as soon as we have it.
+
+ETA: I expect to send you the export and an initial finding within 48 hours. In the meantime I will flag billing not to apply any irreversible adjustments pending the audit.
+
+Can you share any request IDs or traces from your side (that will speed things up)?
+
+Best,
+
+Priyom Das
+Head of Sales, Redwood Inference
+priyom.das@redwood.com
+Phone: +1 (415) 555-0157
+[Attachment: none]
+From: Priyom Das <priyom.das@redwood.com>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Wed, 21 Apr 2027 09:23:00 -0700
+Subject: Fwd: Unexplained token spike on 2027-04-20 / penalty notice — quick audit items
+
+Forwarding Liam's note. Summary / tasks below — please treat as urgent (ACME is a strategic deal).
+
+Summary of what's needed:
+- Pull the raw request-level export for account acme.ai-prod covering 2027-04-20 11:00–11:30 UTC (UTC timestamps; include request_id, model, prompt_length, completion_length, total_tokens, client_ip, user_agent).
+- Identify any request_id duplicates or identical prompt hashes that indicate retries/replays.
+- Cross-reference with our rate-limiter/burst-protection logs to see if automated throttles or penalties triggered.
+- Estimate the "billable delta" attributable to duplicate/replay calls (tokens and dollar amount).
+
+Hypothesis: customer-side retry loop produced ~1,200 duplicate requests to the same endpoint which multiplied token consumption. Also check whether a model variant fallback (e.g., gptx-large -> gptx-medium) occurred mid-window — that can change token accounting if tokenization differs.
+
+Vivek: please prioritize the raw export and a short CSV summary. Monica: please pull any billing rule applications for the account and confirm whether we already applied an overage penalty flag.
+
+Thanks — please reply with status and attach the exports to the thread.
+
+--
+Priyom
+From: Priyom Das <priyom.das@redwood.com>
+To: Liam O'Neill <liam.oneill@acme.ai>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Sun, 25 Apr 2027 15:40:00 -0700
+Subject: Re: Unexplained token spike on 2027-04-20 / penalty notice — findings & credit
+
+Hi Liam —
+
+Thanks for your patience while we audited the event. Short version: we found that a misconfigured client-side retry loop caused ~1,187 identical requests to be issued between 11:14:30–11:19:50 UTC which produced an additional 3,572,400 billable tokens. Details below and next steps.
+
+What we ran:
+- Raw export (attached) of request_id, model, prompt_tokens, completion_tokens, total_tokens, timestamp for acme.ai-prod between 11:00–11:30 UTC. [Attachment: redwood_usage_export_20270420.csv]
+- Trace sample (attached) showing identical prompt hash + incrementing retry counter for 1,187 requests. [Attachment: trace_sample_20270420.jsonl]
+- Cross-check with our burst protection: no automated penalty was triggered during that window (our systems marked the account as "high usage" but did not auto-apply a hard penalty). Monica confirmed the billing system later applied a standard overage charge during invoice finalization because the consumption exceeded the committed threshold.
+
+Findings:
+- Root cause: client-side retry loop (deploy misconfiguration) that replayed requests. The requests are identical by prompt hash and client request_id.
+- Metering: our token accounting uses per-request token totals (prompt + completion). The duplicate requests are therefore billable according to our published metering rules.
+- Penalty: the invoice included an overage amount consistent with our tier-based pricing; the separate penalty line you referred to was a manual invoice comment from billing ops and not an automated system penalty.
+
+Resolution proposal:
+1) We will credit Acme AI the dollar amount attributable to the duplicate requests: $1,120.00 (calculated from 3,572,400 tokens at your plan's overage rate).
+2) We will remove the manual penalty comment from the April invoice and reissue a corrected invoice.
+3) As a courtesy, we will add a one-month buffer to the committed threshold while you complete the postmortem.
+
+Attachments included:
+- redwood_usage_export_20270420.csv (CSV, 732KB): raw rows for the window.
+- trace_sample_20270420.jsonl (JSONL, 48KB): three example request traces showing the retry counter and identical prompt hash.
+- SLA-billing-guidelines.pdf (PDF, 120KB): excerpt of metering and credit policy.
+
+Next steps for you:
+- Confirm you received the attachments and that the request_ids in your traces match our export (I highlighted the matching IDs in the CSV).
+- Confirm you accept the credit and removal of the penalty; if so I will instruct billing to reissue the invoice and apply the $1,120 credit.
+
+If you prefer a joint call with Vivek and Monica to walk through the export, we're happy to schedule one — otherwise, reply with a confirmation and we'll take care of the billing changes.
+
+Best regards,
+
+Priyom Das
+Head of Sales, Redwood Inference
+priyom.das@redwood.com
+Phone: +1 (415) 555-0157
+
+--
+Monica Patel
+Customer Success Manager, Redwood Inference
+monica.patel@redwood.com
+
+[Attachment stubs included above]

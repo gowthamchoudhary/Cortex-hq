@@ -1,0 +1,141 @@
+Rate card + tokenization impact on monthly cost (DataScale)
+
+From: Elena Martinez <elena@datascale.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.com>
+Date: 2025-11-05T09:14:00-08:00
+Subject: Quick ask: rate card + tokenization impact
+
+Hi Sofia,
+
+Thanks for the demo last week — Ben and I dug into the performance numbers and our procurement team needs a clearer rate card before we map to internal chargeback. Two quick asks to get us unblocked: 
+
+1) Can you share the hosted API baseline rate card (1M input/output token buckets) you’d expect for a trial-scale account?
+2) We have an outstanding question: our engineering lead is worried about tokenization differences. We run lots of mixed-language text and use SentencePiece in our preprocessing for some models — what kind of token-count delta should we expect relative to BPE models (and how would that affect monthly cost)?
+
+I attached a small sample payload (sample_token_output.csv) with ~420k characters so you can run a quick tokenization check. Also cc’ing procurement.
+
+Appreciate a concise breakdown we can drop into our vendor comparison doc.
+
+Best,
+Elena
+Elena Martinez
+Head of Platform Partnerships
+DataScale Inc.
+
+Attachment: sample_token_output.csv (csv, 420KB)
+From: Sofia Ivanova <sofia.ivanova@redwood.com>
+To: Elena Martinez <elena@datascale.com>
+Cc: Ben Rogers <ben.rogers@datascale.com>, Procurement Team <procurement@datascale.com>
+Date: 2025-11-05T11:02:00-08:00
+Subject: Re: Quick ask: rate card + tokenization impact
+
+Hi Elena — thanks, and great sample file. High level first, then I’ll attach a couple of quick artifacts: our baseline hosted API rate card (see redwood_ratecard_v2.pdf) and a one-page note with tokenization numbers from your sample.
+
+Baseline hosted (trial-scale / standard):
+- Input tokens: $1.50 per 1M tokens
+- Output tokens: $4.00 per 1M tokens
+- Streaming: same output rate; we don’t bifurcate streaming pricing.
+- Note: these are list prices for hosted API with pay-as-you-go. Committed volume discounts apply (see below).
+
+Tokenization delta (your sample):
+- We ran your CSV through our internal tokenizer suite (BPE variant used by our default model vs SentencePiece). On this sample the SentencePiece token count was ~1.09x the BPE count (range: 1.03–1.14 across segments). That implies ~9% higher token consumption for inputs encoded with SP vs BPE if the model expects BPE.
+- Output side: not always symmetric — generated outputs produced by an SP-native model vs BPE-native model can differ; empirically we saw ~+6% output tokens on SP model variants for this dataset.
+
+Rough cost example (using your sample normalized to 1M BPE input + 1M BPE output):
+- Baseline (BPE): input $1.50 + output $4.00 = $5.50 per 1M in/out
+- If your pipeline uses SP and consumes 9% more input tokens and 6% more output tokens, effective cost becomes ~ $5.50 * (1 + (0.09+0.06)/2) ≈ $5.99 per 1M in/out (approx +9%).
+
+Discounts / committed tiers (summary):
+- 10% off list at $50k/month committed usage
+- 18% off list at $150k/month committed usage
+- 25% off list at $500k/month committed usage or Dedicated discussions
+
+I’ll forward the sample tokenization report to our pricing & technical lead for confirmation and to see if we can offer a short-term promo to offset tokenizer delta for the trial. Attaching: redwood_ratecard_v2.pdf and a quick CSV of token counts.
+
+Would you like a formal line-item in a draft SOW/procurement sheet or is a one-page note sufficient for now?
+
+— Sofia
+Sofia Ivanova
+Senior Account Executive, Redwood Inference
+
+Attachments: redwood_ratecard_v2.pdf (pdf, 220KB); token_counts_summary.csv (csv, 12KB)
+From: Sofia Ivanova <sofia.ivanova@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Kar thik Iyer <karthik_iyer@redwood.com>, Neha Kapoor <neha_kapoor@redwood.com>
+Date: 2025-11-06T08:45:00-08:00
+Subject: Fwd: Quick ask: rate card + tokenization impact — pricing check and possible promo
+
+FYI — DataScale (potential mid-market account) raised a tokenization/cost variance question. Elena attached sample and wants list + practical delta. I outlined ~9% input / ~6% output delta and shared list tiers. Can we consider a short-term trial credit or promo to offset tokenization delta? They’re evaluating vendors and this is a gating item for procurement.
+
+Key asks: 
+- Marissa: commercial ok to offer a time-limited token-credit to offset first month (e.g., up to $7.5k) to neutralize variance?
+- Kar thik: confirm the tokenization run — I attached token_counts_summary.csv. Are these deltas consistent across our catalog? Any model-specific gotchas (multilingual SP-heavy models)?
+- Neha (SE): can we offer a quick webhook to normalize tokenization client-side or a recommended pre-tokenization script to bring counts down?
+
+Thanks — need a response by EOD Monday to keep momentum.
+
+— Sofia
+
+On Nov 5, 2025, 11:02 AM, Sofia Ivanova <sofia.ivanova@redwood.com> wrote:
+> Hi Elena — thanks, and great sample file. High level first, then I’ll attach a couple of quick artifacts: our baseline hosted API rate card (see redwood_ratecard_v2.pdf) and a one-page note with tokenization numbers from your sample.
+> 
+> [snip]
+From: Kar thik Iyer <karthik_iyer@redwood.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Neha Kapoor <neha_kapoor@redwood.com>
+Date: 2025-11-06T12:17:00-08:00
+Subject: Re: Fwd: Quick ask: rate card + tokenization impact — pricing check and possible promo
+
+Sofia / team — quick technical readout:
+
+- We validated token_counts_summary.csv. The ~9% input delta vs BPE on this sample is plausible; multilingual segments and certain punctuation-heavy records amplify the difference.
+- Across our supported models, deltas vary: for English-only corpora SP vs our BPE baseline tended to be +3–8%; for mixed-language (CJK + Indic + Latin) we saw 8–14% on samples similar to theirs.
+- Recommendation: for procurement discussions we should present a conservative estimate of +10% token consumption for engines that expect BPE input but where the client is using SP pre-processing.
+
+Commercial impact: if the client commits to a volume band, the delta is less material. For a 3-month pilot at low volume, offering a token credit is reasonable to short-circuit procurement.
+
+I can also provide a tiny client-side normalization snippet (Python) that collapses common SP tokenization artifacts — would reduce the delta by ~2–4% in practice.
+
+— Kar thik
+Engineering Lead, Model Integrations
+
+On Nov 6, 2025, 08:45 AM, Sofia Ivanova <sofia.ivanova@redwood.com> wrote:
+> FYI — DataScale (potential mid-market account) raised a tokenization/cost variance question. Elena attached sample and wants list + practical delta. I outlined ~9% input / ~6% output delta and shared list tiers. Can we consider a short-term trial credit or promo to offset tokenization delta?
+From: Elena Martinez <elena@datascale.com>
+To: Sofia Ivanova <sofia.ivanova@redwood.com>
+Cc: Procurement Team <procurement@datascale.com>, Ben Rogers <ben.rogers@datascale.com>
+Date: 2025-11-11T15:02:00-08:00
+Subject: Re: Rate card + tokenization impact on monthly cost (DataScale)
+
+Thanks for the quick turnaround, Sofia / Kar thik. The conservative +10% estimate makes procurement comfortable — helps us model worst-case. A couple of follow-ups before we circulate: 
+
+1) Can Redwood offer an explicit one-month token credit to neutralize the delta for the pilot? Something like $6k–$8k to cover our expected trial volume would be ideal.
+2) If we commit to 12 months at a $60k/month run rate, what discount do you see as feasible off list? Please share an illustrative committed pricing row we can drop into our procurement matrix.
+
+If those two items are favorable, we can move to a short commercial term and sign the pilot SOW next week.
+
+— Elena
+
+On Mon, Nov 6, 2025 at 12:17 PM Kar thik Iyer <karthik_iyer@redwood.com> wrote:
+> Sofia / team — quick technical readout: ...
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Elena Martinez <elena@datascale.com>, Sofia Ivanova <sofia.ivanova@redwood.com>
+Cc: Kar thik Iyer <karthik_iyer@redwood.com>, Neha Kapoor <neha_kapoor@redwood.com>
+Date: 2025-11-11T16:10:00-08:00
+Subject: Re: Rate card + tokenization impact on monthly cost (DataScale)
+
+Hi Elena — nice to meet you (virtually). We can do the following to get you over procurement: 
+
+1) One-month token credit: $7,500 (applied to pilot invoice) to cover tokenization delta for trial volume.
+2) Committed pricing illustrative row at $60k/month (12-month): 15% off list on hosted rates (applies to input+output token charges). That would make your effective per-1M in/out cost approximately $4.675 (down from $5.50 list) before the one-month credit.
+
+We’ll prepare a short SOW with these rows and a DocuSign link. Attaching an internal cost calc and the draft SOW link: https://www.docusign.net/ABCDEF123456.
+
+Sofia — please send the token-normalization snippet and the token_counts_summary.csv back to Elena so they can validate locally.
+
+Looking forward to getting the pilot signed.
+
+Best,
+Marissa Cole
+Director, Commercial Sales, Redwood Inference
+
+On Nov 11, 2025, 03:02 PM Elena Martinez <elena@datascale.com> wrote:
+> Thanks for the quick turnaround, Sofia / Kar thik. The conservative +10% estimate makes procurement comfortable — helps us model worst-case. ...

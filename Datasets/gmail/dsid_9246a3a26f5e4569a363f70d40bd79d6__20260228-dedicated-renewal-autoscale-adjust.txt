@@ -1,0 +1,160 @@
+Renewal: Dedicated capacity & autoscaling adjustments
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Ops Team <ops@fintechcorp.com>, Emma Suarez <emma.suarez@fintechcorp.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.com>, Dev Patel <dev.patel@redwood.com>
+Date: 2026-02-18T08:15:00-08:00
+Subject: Renewal: Dedicated capacity & autoscaling adjustments
+
+Hi Emma / Fintech ops —
+
+Our renewal for your Dedicated deployment is coming up and I wanted to surface an option we think will better support the next 12 months of your traffic. Based on the usage curve you shared, we recommend:
+
+- Add 4x A100-equivalent GPUs to your reserved pool (total reserved = 12 GPUs)
+- Increase committed throughput to 2M tokens/day (monthly averaged) with a burst allowance
+- Adjust autoscaling policy on the reserved pool: min_replicas: 3, max_replicas: 18, warm_pool: 2, target_scale_up_lag: 30s
+
+Attached is a short proposal with pricing tiers and a draft SLA addendum. If you prefer, we can do a 6- or 12-month committed term; pricing and credits change slightly by term length.
+
+Next steps I suggest:
+1) Confirm committed throughput and preferred term (6 or 12 months)
+2) Rishi and I will finalize commercial terms + DocuSign
+3) Dev will schedule the warm pool rollout during your maintenance window
+
+I looped in Dev (SE) for the autoscale config and Rishi for commercial / discount.
+
+Thanks — happy to hop on a quick call if that helps.
+
+Best,
+Marissa Cole
+Account Executive | Redwood Inference
+marissa.cole@redwood.com
+Attachment: 2026-02-18_DedicatedCapacity_Proposal.pdf
+
+From: Ops Team <ops@fintechcorp.com>
+To: Marissa Cole <marissa.cole@redwood.com>
+Cc: Emma Suarez <emma.suarez@fintechcorp.com>, Procurement <procurement@fintechcorp.com>
+Date: 2026-02-19T09:12:00-08:00
+Subject: Re: Renewal: Dedicated capacity & autoscaling adjustments
+
+On Thu, Feb 18, 2026 at 08:15 AM Marissa Cole <marissa.cole@redwood.com> wrote:
+> Hi Emma / Fintech ops —
+>
+> Our renewal for your Dedicated deployment is coming up and I wanted to surface an option we think will better support the next 12 months of your traffic. Based on the usage curve you shared, we recommend: ...
+
+Thanks for the proposal, Marissa. A few clarifying Qs from the ops side before we route this to our finance team:
+- Can you define exactly how "committed throughput" is measured? (per-service tokens, aggregated across routes?)
+- Warm pool: do the warm GPUs count against committed capacity billing when idle?
+- If we hit sustained >2M tokens/day, what happens? Automatic overage billing or throttling? Can we have credits applied?
+
+Also, we have a weeknight window Thu 03/04 00:00-03:00 UTC that works for rolling changes.
+
+Regards,
+FintechCorp Ops (on behalf of Emma Suarez)
+ops@fintechcorp.com
+
+From: Dev Patel <dev.patel@redwood.com>
+To: Ops Team <ops@fintechcorp.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.com>
+Date: 2026-02-20T11:05:00-08:00
+Subject: Re: Renewal: Dedicated capacity & autoscaling adjustments — technical details
+
+Hi — answering the ops questions and adding implementation notes.
+
+1) Committed throughput: we measure token consumption per model endpoint aggregated at the Dedicated pool level (all routes mapped to the pool). We report daily totals and 30-day rolling averages in the Console.
+
+2) Warm pool billing: warm_pool instances are reserved (startup/idle) and counted toward reserved capacity for availability guarantees. For billing: warm instances are billed at the reserved rate (i.e., part of your commit); they do not incur additional on-demand charges while idle.
+
+3) Overage behavior: by default we allow overage up to a configurable burst threshold (e.g., +25% daily) and bill the overage per-token at the on-demand rate. For renewals we can negotiate an overage credit schedule or usage true-up (example in attachment).
+
+Autoscaling specifics we recommend:
+- min_replicas: 3 (keeps KV caches warm for baseline tail-latency)
+- max_replicas: 18 (supports peak throughput with sharded worker pools)
+- warm_pool: 2 (pre-warmed GPUs with model and KV cache warmed)
+- target_scale_up_lag: 30s (time from metric trigger to accepting requests; includes instance spin + model load)
+- scale_up_cooldown: 45s, scale_down_grace: 600s
+
+Operational notes:
+- We'll pre-stage model shards to warm pool during your maintenance window to minimize cold-start.
+- For KV cache priming, we recommend a short prewarm script that replays recent active prefixes — we can provide that script.
+
+Attached: capacity_calc_20260220.xlsx (cost/throughput scenarios).
+
+—Dev
+Dev Patel
+Solutions Engineer | Redwood Inference
+dev.patel@redwood.com
+Attachment: capacity_calc_20260220.xlsx
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Emma Suarez <emma.suarez@fintechcorp.com>, Procurement <procurement@fintechcorp.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Dev Patel <dev.patel@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: 2026-02-22T10:22:00-08:00
+Subject: Mutual action plan & SLA addendum (FT-3927)
+
+Emma / Procurement —
+
+Thanks for the quick review. Attached is a proposed Mutual Action Plan that captures the commercial terms and the technical deliverables:
+- Committed term: 6 months (option to extend to 12 months)
+- Committed throughput: 2M tokens/day (monthly averaged)
+- Reserved GPUs: additional 4 A100-eq GPUs, bringing reserved pool to 12
+- Autoscale policy: min_replicas=3, max_replicas=18, warm_pool=2, scale_up_lag target 30s
+- SLA: 99.9% availability for the Dedicated control plane and 200ms p50 within region for routed requests (see SLA addendum)
+
+Commercials: 8% term discount on reserved capacity for a 6-month commit; 12% for 12 months. We can also include a 1-month credit in the event of a missed throughput guarantee (details in SLA addendum).
+
+Action items I propose:
+1) Procurement to review SLA_Addendum_20260222.docx and confirm edits
+2) Fintech legal + our legal to align on the addendum and DocuSign flow
+3) Post-signature: schedule warm_pool rollout (Dev to lead) during your 03/04 window
+
+DocuSign link: https://docusign.com/FT-3927
+Attachment: SLA_Addendum_20260222.docx
+
+Regards,
+Rishi Malhotra
+Account Executive, Redwood Inference
+rishi.malhotra@redwood.com
+
+From: Emma Suarez <emma.suarez@fintechcorp.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Procurement <procurement@fintechcorp.com>, Ops Team <ops@fintechcorp.com>
+Date: 2026-02-24T14:38:00-08:00
+Subject: Re: Mutual action plan & SLA addendum (FT-3927)
+
+Thanks Rishi — a few procurement/finance clarifications before legal reviews SLA: 
+- Measurement: Please confirm the Console report that will be our source of truth for tokens/day and that it's exportable to S3 or CSV for our auditors.
+- If sustained usage exceeds committed throughput for more than 14 consecutive days, we want an automatic notification and a cadence for true-up billing rather than surprise overage charges. Can you add a 14-day notification window plus a capped overage rate?
+- Is the warm_pool included in the reserved capacity for redundancy? We want visibility: show warm_pool instances separately in the billing line item.
+
+If you can add those three items to the SLA addendum draft, procurement will green-light moving to signatures.
+
+—Emma Suarez
+CFO (FintechCorp)
+emma.suarez@fintechcorp.com
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Dev Patel <dev.patel@redwood.com>, Ben Carter <ben.carter@redwood.com>, Hannah Schmitt <hannah.schmitt@hannah.schmitt@redwood.com>
+Date: 2026-02-28T16:45:00-08:00
+Subject: FT-3927 — Renewal summary & next steps (implementation schedule)
+
+Team — quick internal summary for tracking and ops handoff: 
+
+What we agreed (pending signed DocuSign):
+- Term: 6 months commit, 2M tokens/day committed throughput, 12 reserved GPUs (4 added)
+- Autoscale: min=3, max=18, warm_pool=2, scale_up_lag target 30s; scale_up_cooldown=45s; scale_down_grace=600s
+- Billing: warm_pool shown as separate line item but billed at reserved rate; 14-day notification window before overage true-up; capped overage rate per Rishi's addendum
+
+Owner assignments:
+- Dev: implement warm_pool and prewarm scripts during maintenance window 03/04 (Dev to run checklist)
+- Hannah (CS): prepare runbook and run post-rollout latency + correctness checks for top-5 routes
+- Ben: finance ops contact to confirm billing line item presentation in invoice
+- Rishi/Marissa: finalize DocuSign bundle and follow procurement review edits
+
+I've updated HubSpot: https://hubspot.com/deal/FT-3927. Once signed, we'll trigger the provisioning workflow and schedule the rollout.
+
+Thanks — I'll follow up after signature.
+
+Marissa Cole
+Account Executive | Redwood Inference
+marissa.cole@redwood.com

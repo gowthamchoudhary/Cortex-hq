@@ -1,0 +1,157 @@
+Clarifying production SLOs & deployment options for Centriq AI
+
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Ellie Ramos <ellie.ramos@centriq.ai>, Marcus Lee <marcus.lee@centriq.ai>
+Cc: Grace O'Connor <grace_oconnor@redwood.com>
+Date: Fri, 11 Dec 2027 09:18:00 -0800
+Subject: Clarifying production SLOs & deployment options for Centriq AI
+
+Hi Ellie / Marcus —
+
+Thanks again for the call this morning. Quick recap so we have shared expectations and clear next steps. High-level notes: 
+
+- Primary pain: conversational latency causing user drop-off on mobile (95th percentile spikes to ~1.4s for short prompts).
+- Business goal: reduce tail latency to <700ms 95th while preserving model quality for multi-turn support (customer context ~512 tokens).
+- Current stack: Centriq is running an in-house endpoint on standard A100 instances with per-request KV store per session and occasional cold-starts that hurt latency.
+
+Key technical constraints you flagged:
+- Cannot send plaintext PII outside customer VPC for medical PII flows (HIPAA-similar controls).
+- Peak QPS expected: 200 qps for inference at 95th concurrency windows, baseline 40 qps.
+- Target rollout: pilot in Q1 (10% traffic) then full roll by end of Q2.
+
+Suggested next steps from our side:
+1) We’ll provide a short SLO template and two deployment topology options (hosted with private peering vs. dedicated in your VPC).
+2) Schedule a technical deep-dive with our infra lead (Sean) to map latency/throughput tradeoffs, batching, and KV cache strategy.
+3) You to share (by next Tue): representative sample latency traces and a short list of top 50 prompts for evals.
+
+Attachments: centriq_slo_template.xlsx (SLO & acceptance criteria), deployment_options_diagram.png (initial topology sketches).
+
+If that matches your memory, I’ll loop Sean in for a 45-minute technical session next week.
+
+Thanks —
+Kimberly Park
+Head of Sales, Redwood Inference
+kimberly_park@redwood.com
++1 (415) 555-0124
+
+--
+Redwood Inference — production-first inference for LLMs
+
+From: Ellie Ramos <ellie.ramos@centriq.ai>
+To: Kimberly Park <kimberly_park@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Cc: Marcus Lee <marcus.lee@centriq.ai>
+Date: Fri, 11 Dec 2027 10:05:00 -0800
+Subject: Re: Clarifying production SLOs & deployment options for Centriq AI
+
+Thanks, Kimberly — this is a great summary and captures the constraints. A few clarifications from our side: 
+
+- The 1.4s tail is for our support-chat flow when requests hit cold KV lookups. The baseline 40 qps is more like our average during off-peak; peak windows hit 180–220 qps.
+- We already have a narrow-band PII filter that can tag records; we need the deployment to ensure the raw text never leaves our VPC without encryption + customer-managed keys.
+
+We’ll attach traces and the prompt list by Monday EOD. Pilot timeline: we’re comfortable starting with a 2-week pilot at 5–10% traffic, then evaluate. 
+
+One ask: please include estimated token-cost delta between quantized vs. fp16 variants in the topology notes (rough %, ballpark).
+
+Happy to do the deep-dive — Wed or Thu next week looks best for Sean to meet with our infra lead.
+
+—Ellie
+Ellie Ramos
+Director of Product, Centriq AI
+ellie.ramos@centriq.ai
+
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Ellie Ramos <ellie.ramos@centriq.ai>, Marcus Lee <marcus.lee@centriq.ai>
+Cc: Sean Gallagher <sean_gallagher@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Fri, 11 Dec 2027 15:22:00 -0800
+Subject: Re: Clarifying production SLOs & deployment options for Centriq AI
+
+Great — thanks Ellie. Looping Sean (infra lead) and Grace (CS/ops) so we can align the technical agenda.
+
+Sean / Grace — can you cover the following in the deep-dive?
+- Precise 95th/99th latency estimates for each topology (hosted/private peering/dedicated VPC) given 200 qps peaks and 512-token context.
+- KV cache approaches: local in-GPU KV vs external Redis caching patterns, expected cold-start cost and mitigation options (warm pools, prefetch).
+- Quantization tradeoffs: expected throughput and latency differentials for int8/4-bit QAT vs fp16 and estimated token-cost change.
+- Network & key-management sketch for private deployment (how we integrate with your KMS + TLS termination).
+
+Ellie — Sean proposes Wed 2027-12-15 11:00 AM PST or Thu 2027-12-16 9:00 AM PST. Which works for your infra lead?
+
+Kimberly
+
+From: Sean Gallagher <sean_gallagher@redwood.com>
+To: Ellie Ramos <ellie.ramos@centriq.ai>, Kimberly Park <kimberly_park@redwood.com>, Grace O'Connor <grace_oconnor@redwood.com>
+Date: Mon, 13 Dec 2027 08:42:00 -0800
+Subject: Technical deep-dive: latency/throughput estimates & topology options (pre-read)
+
+Hi team — thanks for the intro. Per Kimberly’s note, here’s a concise pre-read so the live deep-dive can be focused. I’ve attached two artifacts (centriq_slo_template.xlsx, deployment_options_diagram.png).
+
+Summary of assumptions we used for the estimates below:
+- Model family: medium-sized Llama-like open model (~13B) running with 512-token context.
+- Hardware scenarios: RTX A5500 equivalent (single-GPU per-replica) vs DGX-class (multi-GPU shards) vs dedicated private pool (8x L4-like per-pod) for density comparisons.
+- Workload: 200 qps peak; average prompt ~60 tokens; response avg ~40 tokens; session stickiness 70% (multi-turn).
+
+Topline SLO estimates (95th percentile latency, end-to-end generation):
+- Hosted (private-peered) – warm paths with KV cache in-GPU: 95p ~450–650ms; 99p ~900–1,200ms.
+- Dedicated VPC (single-GPU optimized + aggressive autowarm): 95p ~380–580ms; 99p ~850–1,000ms.
+- Sharded multi-GPU setup (for larger model variants): 95p ~600–900ms depending on interconnect and batching window.
+
+Notes on batching & throughput management:
+- Continuous batching at 10–30ms windows gives best cost/latency tradeoff for your QPS; tighter windows reduce latency but raise unit cost.
+- For 200 qps peak, target pod sizing: 6–10 single-GPU replicas with hotspot autoscale (burst to 14) depending on model quantization.
+
+KV cache strategy (recommendation):
+- Primary: in-GPU KV for highest hit-rate and lowest tail latency (works well for >60% reuse).
+- Fallback: external Redis cluster with local smart prefetch for cold sessions; this avoids cold-GPU penalty but adds network hop ~20–40ms.
+- Warm pool: maintain a small set of warmed GPUs per region preloaded with top sessions to eliminate cold-starts during spikes.
+
+Quantization & cost delta (ballpark):
+- int8: ~1.6–2x throughput improvement vs fp16, tail latency typically reduced 10–25%; token-cost delta depends on licensing and throughput but raw compute cost per token down ~35–45%.
+- 4-bit: additional throughput but requires careful quality checks; expect another 15–25% compute savings vs int8 in favorable models.
+
+Security & KMS integration (private deployment):
+- We support customer-managed KMS via standard envelope encryption + HSM-backed keys. For private VPC deployments we terminate TLS inside your VPC and never store plaintext outside.
+
+Open questions for the call (prioritized):
+1) Can you share sample trace that includes cold-session events so we can calibrate cache hit assumptions?
+2) Is there a hard upper bound on acceptable 99th latency for support-chat flows?
+3) Will you consider a quantized variant for the pilot or prefer fp16-only for quality first?
+
+Attachments (see Drive link):
+- centriq_slo_template.xlsx (SLOs + acceptance criteria table)
+- deployment_options_diagram.png (hosted private-peering vs dedicated VPC sketch)
+
+Proposed next: Wed 2027-12-15 11:00 AM PST — 45 minutes. I’ll bring microbench numbers and a short demo of in-GPU KV hit improvements.
+
+Thanks,
+Sean Gallagher
+Senior Infra Engineer, Redwood Inference
+sean_gallagher@redwood.com
+
+On Fri, 11 Dec 2027 at 09:18 AM Kimberly Park <kimberly_park@redwood.com> wrote:
+> Hi Ellie / Marcus —
+> 
+> Thanks again for the call this morning. Quick recap so we have shared expectations and clear next steps. High-level notes: 
+> 
+> - Primary pain: conversational latency causing user drop-off on mobile (95th percentile spikes to ~1.4s for short prompts).
+> - Business goal: reduce tail latency to <700ms 95th while preserving model quality for multi-turn support (customer context ~512 tokens).
+> - Current stack: Centriq is running an in-house endpoint on standard A100 instances with per-request KV store per session and occasional cold-starts that hurt latency.
+> 
+> Attachments: centriq_slo_template.xlsx, deployment_options_diagram.png
+
+From: Marcus Lee <marcus.lee@centriq.ai>
+To: Sean Gallagher <sean_gallagher@redwood.com>, Kimberly Park <kimberly_park@redwood.com>, Ellie Ramos <ellie.ramos@centriq.ai>
+Date: Mon, 13 Dec 2027 16:05:00 -0800
+Subject: Re: Technical deep-dive: latency/throughput estimates & topology options (pre-read)
+
+Sean / Kimberly — thanks for the detail. That pre-read is helpful and aligned with what we hoped to see. A couple quick commitments from Centriq: 
+
+- We’ll share the 48-hour trace that includes peak events and a list of the top 50 prompts by Monday morning.
+- For the pilot we’re open to testing an int8 variant if you can produce an AB eval showing quality within 1.5% of fp16 on our top 50 prompts.
+- Wed 12/15 11:00 AM PST works for our infra lead; we’ll send a calendar invite and an internal pre-brief.
+
+See you Wednesday.
+
+Marcus
+Marcus Lee
+VP Engineering, Centriq AI
+marcus.lee@centriq.ai
++1 (650) 555-0899

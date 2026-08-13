@@ -1,0 +1,120 @@
+Staggered deletion runbook, backup purge window & log-hold for EU subprocessors
+
+From: Amy Jensen <amy.jensen@acme-health.com>
+To: tessa.morgan@redwood.com
+Cc: legal@acme-health.com
+Date: Thu, 09 Jul 2026 09:12:00 -0700
+Subject: Question on backup purge windows and logs (Acme incident)
+
+Hi Tessa,
+
+Quick one — we are preparing for a regulatory review tied to an incident that touched logs stored via one of your EU subprocessors. Our audit team flagged that our retained logs appear to be purged in a single sweep, which would prevent us from producing a 45-day slice requested by auditors. Can you confirm: 1) whether Redwood runs a single bulk purge or a staggered purge for backups/logs at Glacier Storage (your subprocessor), and 2) the typical delay between retention expiry and physical deletion from cold storage?
+
+We may need to place an immediate legal hold on affected objects; please share your deletion runbook and any emergency hold instructions (who to contact at Glacier).
+
+Thanks — Amy
+Amy Jensen
+Head of Compliance, Acme Health
+amy.jensen@acme-health.com
++44 20 5555 1234
+
+Attachments: none
+
+From: Tessa Morgan <tessa.morgan@redwood.com>
+To: Amy Jensen <amy.jensen@acme-health.com>
+Cc: kimberly.park@redwood.com, marcus.lin@redwood.com
+Date: Thu, 09 Jul 2026 11:03:00 -0700
+Subject: Re: Question on backup purge windows and logs (Acme incident)
+
+Hi Amy — thanks for flagging.
+
+Short answers up front: we support staggered purges (canary windows) for critical accounts and we have an emergency hold process that stops purge jobs within 2 hours of request for affected partitions. Physical removal from Glacier-tiered cold storage (deep archive) is typically completed within 7–14 days after a purge job begins, but that depends on the subprocessor's finalization workflow.
+
+I attached the current deletion runbook and our retention matrix for Q2 so you can see the configured windows per data class. The runbook includes the emergency hold contact for Glacier Ops; Marcus has the formal subprocessor policy (I’ve looped him in).
+
+Proposed next steps:
+- Let us know the affected object ids or prefixes (we can apply a scoped hold).
+- If you want, we can enable a 30-day canary purge for non-critical buckets and stagger the rest (30/60/90 days) while the review completes.
+- Legal: please confirm whether this needs a documented SLA change; if so we’ll route a DocuSign amendment.
+
+I’ve cc’d Kimberly for DPA implications and Marcus for the subprocessor snapshot policy.
+
+Best,
+Tessa Morgan
+Manager, Security & Compliance — Redwood Inference
+tessa.morgan@redwood.com
+(415) 555-0192
+
+Attachments: redwood_deletion_runbook_v1.pdf; retention_matrix_q2.xlsx
+
+From: Kimberly Park <kimberly.park@redwood.com>
+To: tessa.morgan@redwood.com, marcus.lin@redwood.com
+Cc: neha.kapoor@redwood.com
+Date: Fri, 10 Jul 2026 08:27:00 -0700
+Subject: Re: Question on backup purge windows and logs (Acme incident)
+
+Tessa / Marcus —
+
+Couple of legal/contract points to surface for Acme:
+- Under the EU addendum in our DPA, we must preserve personal data where an active preservation request is received from the controller (Acme). We should treat this as a controller-directed hold.
+- Staggered purge is fine operationally, but for auditability we need an immutable hold marker in both Redwood's control plane and the subprocessor’s snapshot metadata; please confirm both are supported.
+- If Acme asks us to change retention behavior (e.g., stop automatic purges for a region), that is a policy change requiring an SLA amendment. Legal will need to sign off on the DocuSign amendment Tessa referenced.
+
+I recommend we: 1) create a scoped preservation ticket (include object prefixes and date ranges), 2) apply the hold in Redwood control plane immediately, and 3) dispatch a Glacier Ops hold request with high priority.
+
+Neha — could you draft the preservation ticket template (object list + justification + requested expiry or release condition)?
+
+-Kimberly
+Kimberly Park
+Head of Privacy & Legal Ops — Redwood Inference
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Amy Jensen <amy.jensen@acme-health.com>, tessa.morgan@redwood.com
+Cc: kimberly.park@redwood.com, neha.kapoor@redwood.com, cloudops@glacierstorage.com
+Date: Sat, 11 Jul 2026 14:15:00 -0700
+Subject: Re: Question on backup purge windows and logs (Acme incident)
+
+Hi Amy — following up with operational detail and the Glacier snapshot policy attached.
+
+Operational summary:
+- We run incremental purge jobs per-account, grouped by data-class, on a staggered cadence by default for enterprise tenants. For accounts without an enterprise hold, standard cadence is a 48-hour sweep after the retention expiry. Enterprise accounts (contracted) can have canary windows (30/60/90) configured — this prevents full-batch deletion at a single time.
+- Emergency preservation: send the preservation ticket (see Tessa’s attachments) to cloudops@glacierstorage.com and mark it HIGH. Glacier will suspend delete jobs for the affected namespace; we also set an immutable hold flag in our control plane which prevents retries.
+- Rollback/restore: if deletion begins and you need a rollback, Glacier provides a 7–14 day retrieval window for deep-archive objects; we coordinate expedited restores and prioritize retrieval for compliance requests.
+
+We can start a scoped canary purge for non-sensitive buckets while preserving the audit-scope objects you identify. If Acme decides a permanent change to retention cadence is needed, we will route a DocuSign amendment (link provided below).
+
+Reference: https://confluence.redwood.com/display/OPS/Retention+Runbook+v1
+
+Attachments: subprocessor_snapshot_policy_glacier.txt
+
+—Marcus
+Marcus Lin
+Principal Site Reliability Engineer — Redwood Inference
+marcus.lin@redwood.com
+
+From: Amy Jensen <amy.jensen@acme-health.com>
+To: tessa.morgan@redwood.com, marcus.lin@redwood.com
+Cc: legal@acme-health.com
+Date: Mon, 12 Jul 2026 15:48:00 -0700
+Subject: Re: Question on backup purge windows and logs (Acme incident)
+
+Thanks — that helps.
+
+We will prepare an object prefix list and send the preservation ticket by EOD tomorrow. For now, please:
+- Place an immediate scoped hold on prefix: /acme-prod/logs/(2026-06-01..2026-07-08)
+- Start the 30-day canary schedule on non-critical buckets as you suggested
+
+Legal will review the DocuSign SLA amendment but do not pause that process — we may need the documented change.
+
+On Sat, Jul 11, 2026 at 14:15 Marcus Lin <marcus.lin@redwood.com> wrote:
+> Hi Amy — following up with operational detail and the Glacier snapshot policy attached.
+> 
+> Operational summary:
+> - We run incremental purge jobs per-account, grouped by data-class, on a staggered cadence by default for enterprise tenants.
+> - Emergency preservation: send the preservation ticket (see Tessa’s attachments) to cloudops@glacierstorage.com and mark it HIGH.
+
+Appreciate the quick turn — Amy
+Amy Jensen
+Head of Compliance, Acme Health
+amy.jensen@acme-health.com
+

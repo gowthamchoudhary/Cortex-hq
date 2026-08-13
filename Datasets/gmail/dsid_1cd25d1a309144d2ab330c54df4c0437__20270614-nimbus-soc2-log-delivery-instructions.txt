@@ -1,0 +1,136 @@
+Request: exportable audit log manifest + delivery options (SOC 2 / SIG) - Nimbus Bank
+
+From: Taylor Reed <taylor.reed@nimbusbank.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Laura Bennett <laura.bennett@redwood.ai>
+Date: Mon, 14 Jun 2027 09:12:00 -0700
+Subject: Evidence request: admin activity and audit log extracts (SOC 2 + SIG) — Nimbus Bank
+
+Hi Ben / Laura,
+
+We're kicking off a SOC 2 + SIG evidence pull for an internal audit and Nimbus needs demonstrable extracts of admin activity and related audit logs. Can you confirm the following and, if possible, provide a delivery option by EOD next Tuesday (2027-06-21):
+
+1) Canonical list of events you log that are relevant to our controls (admin console changes, user provisioning, role changes, API token issuance/revocation, key/KMS operations, model deploys, data export events, authentication / SSO successes/failures, IP addresses and user agents, request IDs).
+
+2) Retention policy for each event class and whether there is a cold/archived store beyond the standard window.
+
+3) Export options: ad-hoc snapshot, scheduled export to our S3 bucket, streaming to SIEM, presigned download URLs, or a secure transfer with chain-of-custody manifest. For each option we need expected time-to-deliver and checksum/manifest details.
+
+4) Any PII redaction or masking applied to logs, and whether a full unredacted set can be delivered to a designated security mailbox under an NDA.
+
+5) Preferred manifest format and examples for verifying completeness (MD5/SHA256, file sizes, counts).
+
+If helpful I can share our SOC evidence template — Jordan (procurement) is looping on the timeline.
+
+Thanks,
+Taylor Reed
+Senior InfoSec Manager, Nimbus Bank
+security@nimbusbank.com
+
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Taylor Reed <taylor.reed@nimbusbank.com>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Mon, 14 Jun 2027 10:05:00 -0700
+Subject: Re: Evidence request: admin activity and audit log extracts (SOC 2 + SIG) — Nimbus Bank
+
+Hi Taylor — thanks for the clear list. Quick ack — we can provide everything you requested with a few options depending on scope and sensitivity. Below is an overview and recommended default for SOC 2/SIG evidence pulls.
+
+What we log (high level):
+- admin_activity: user/agent identity, action (create/update/delete), target resource, timestamp, request_id, IP, user_agent, region
+- operator_trail: full operator calls (API payloads for control plane operations) — stored as redacted blobs by default; full blobs available under escrow/NDA for certain customers
+- auth_events: SSO/OAuth token issuance, refresh, revocation, MFA events, failed logins
+- config_changes: model rollouts, routing policy changes, quota changes, key rotations (KMS events)
+- data_access: embedding/response access logs (model, prompt_id, tokens_count, caller_id)
+- system_health: service restarts, node reassignments (typically lower fidelity; included only if requested)
+
+Default retention (our hosted prod):
+- Hot audit logs: 90 days (searchable in Console)
+- Cold / archived logs: 365 days retained in compressed archive (S3 standard IA for 1 year)
+- Operator trail escrow: 7 years (measure for regulated customers; can be extended via Private deployments)
+
+Export/delivery options (summary):
+A) Ad-hoc snapshot (recommended for point-in-time SOC evidence) — we generate an export bundle (gzip per-table) + manifest (SHA256) and provide a presigned S3 URL. Typical turnaround: same day for small datasets (<10GB), 24-48h for larger.
+B) Scheduled push to customer S3 (preferred for recurring audits) — daily/hourly objects to a customer-owned bucket with per-file manifest and checksum. Initial delivery/setup 2–4 business days.
+C) Streaming to SIEM (syslog/HTTPS) — near-real-time; requires customer endpoint and validated TLS.
+D) BigQuery/Log sink export — for customers who want analytics-ready exports.
+E) Secure courier (rare) — physical drive + chain-of-custody for extreme regulatory needs.
+
+Security & integrity: every bundle includes a machine-readable manifest (file paths, SHA256, byte counts, generation timestamp, request_id). We can sign manifests with an HSM-backed key or provide PGP-encrypted bundles on request.
+
+Attachments: I attached a quick log inventory and an export-options matrix to help you pick.
+
+Next steps: please confirm which export option you prefer and whether Nimbus requires an unredacted operator trail under NDA. Once confirmed we'll schedule the snapshot and provide the presigned URL or start configuration for scheduled exports.
+
+Best,
+Ben Carter
+Director, Security Solutions — Redwood Inference
+ben.carter@redwood.ai | +1 (415) 555-0132
+
+[attachment: redwood_log_inventory_20270614.csv]
+[attachment: export_options_matrix.pdf]
+
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: Taylor Reed <taylor.reed@nimbusbank.com>
+Date: Mon, 14 Jun 2027 14:30:00 -0700
+Subject: Re: Evidence request: admin activity and audit log extracts (SOC 2 + SIG) — Nimbus Bank
+
+Ben / Neha — putting down technical constraints and a proposed manifest spec so we can hand this off to SRE for an export. Taylor I've included the minimal checks we will produce by default.
+
+Recommended snapshot plan (for SOC 2 scope):
+- Snapshot window: 2027-01-01T00:00:00Z to 2027-06-13T23:59:59Z (adjustable on request).
+- Files produced: admin_activity.csv.gz, operator_trail_redacted.jsonl.gz, auth_events.csv.gz, config_changes.csv.gz
+- Per-file columns (example for admin_activity): timestamp, actor_email, actor_id, action, target_type, target_id, ip_address, user_agent, request_id, region
+- Operator trail: by default we redact request_body.* fields that may contain PII; provide 'unredacted_operator_trail' only under NDA with explicit retention instructions.
+
+Manifest spec (manifest-spec.txt attached):
+- TSV manifest: path	sha256	bytes	rows	generation_timestamp
+- Top-level metadata: export_id, generated_by, environment, timezone, requested_by, chain_of_custody_signature (optional)
+- Presigned URL policy: default 72h expiry for one-time download; if Nimbus prefers a shorter window we can issue 24h links.
+
+S3 prefix suggestion: s3://nimbus-evidence/redwood/nimbusbank-<export_id>/20270614/
+Checksum & verification: we will provide both per-file SHA256 and a bundle-level signed manifest. SRE will also produce a delivery log with transfer start/end timestamps and transfer request_ids.
+
+For secure delivery to Nimbus S3 we need:
+- Target S3 bucket name + write policy OR temporary credentials we can use to push
+- If you prefer presigned pull: recipient email to send link to and expected download window
+- PGP public key (if you want encrypted bundles) or we will use TLS + signed manifest
+
+I attached the manifest spec and an example presign instruction file. I'll open a ticket for SRE once we get Nimbus's preference.
+
+Thanks,
+Laura Bennett
+Senior Product Ops — Redwood Inference
+laura.bennett@redwood.ai
+
+[attachment: manifest-spec.txt]
+[attachment: s3_presign_example.txt]
+
+
+From: Taylor Reed <taylor.reed@nimbusbank.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Jordan Lee <procurement@nimbusbank.com>, Laura Bennett <laura.bennett@redwood.ai>
+Date: Tue, 15 Jun 2027 11:02:00 -0700
+Subject: Re: Evidence request: admin activity and audit log extracts (SOC 2 + SIG) — Nimbus Bank
+
+Ben / Laura — this looks good, thank you. We will accept option A (ad-hoc snapshot) for the initial pull and will request scheduled S3 pushes for future quarters. A few follow-ups:
+
+- Please send a presigned S3 URL for the snapshot bundle by EOD Wednesday 2027-06-16.
+- We require SHA256 checksums and the signed manifest. PGP encryption is preferred; I'll upload our public key to the link below.
+- For the operator_trail, Nimbus requires an unredacted copy under our data transfer NDA. Can you confirm the steps to enable that?
+
+Forwarding to procurement to confirm any formal paperwork needed.
+
+Thanks,
+Taylor Reed
+security@nimbusbank.com
+
+On Mon, Jun 14, 2027 at 10:05 AM Ben Carter <ben.carter@redwood.ai> wrote:
+> Hi Taylor — thanks for the clear list. Quick ack — we can provide everything you requested with a few options depending on scope and sensitivity. Below is an overview and recommended default for SOC 2/SIG evidence pulls.
+> 
+> [snip — attachments referenced]
+
+[attachment: redwood_log_inventory_20270614.csv]
+

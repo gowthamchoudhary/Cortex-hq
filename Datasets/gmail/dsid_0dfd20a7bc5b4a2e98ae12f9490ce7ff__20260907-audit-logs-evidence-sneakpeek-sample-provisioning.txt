@@ -1,0 +1,114 @@
+Provisioning a sample of audit logs for SOC 2 / SIG - sample provisioning options
+
+From: Melissa Chang <melissa@blueriverhealth.com>
+To: Ben Carter <ben_carter@redwood.ai>
+Cc: security@blueriverhealth.com
+Date: Tue, 7 Sep 2026 09:12:00 -0700
+Subject: Request - sample audit logs and retention mapping for upcoming SIG review
+
+Hi Ben,
+
+We have a SIG review scheduled next month and the reviewers want to see a short (2-3 day) sample of admin activity + API audit logs to validate scope and redaction approaches. Can Redwood provide one of the following for evaluation?
+
+- A timeboxed S3 bundle (signed manifest + checksums) with examples of: user/role changes, token issuance, model route changes, and operator impersonation events
+- OR an on-demand query job (CSV/NDJSON) scoped to "admin_actions" + sample retention metadata
+
+Also important for the reviewers: the retention policy mapping (what we log, retention windows by event type, and recommended export formats). We attached our internal audit-scope.xlsx as a starting point.
+
+Questions from our SOC lead: will exported timestamps preserve original timezone/UTC offsets, and can Redwood redact PII (IP addresses, email local parts) from sample bundles before delivery?
+
+Can you confirm options, typical lead times, and any constraints so I can update the SIG packet?
+
+Thanks,
+Melissa Chang
+BlueRiver Health — Sr. Security Operations
+
+Attachments: audit_scope_template.xlsx
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Melissa Chang <melissa@blueriverhealth.com>
+Cc: kimberly_park@redwood.ai, priyom_das@redwood.ai
+Date: Tue, 7 Sep 2026 11:04:00 -07:00
+Subject: Re: Request - sample audit logs and retention mapping for upcoming SIG review
+
+Melissa — thanks for the clear ask and for sending the scope file. We can absolutely provide a short, representative bundle. High level options and trade-offs below: 
+
+1) Timeboxed S3 bundle (recommended for SIG)
+   - Contents: NDJSON files for admin_activity, auth_events, route_changes; a signed manifest with SHA256 checksums; sample policy mapping CSV.
+   - Redaction: we can apply automated redaction rules (mask IPs, hash email local parts) before packaging. Redactions are reversible only if you provide a re-key (we do not store cleartext).
+   - Timestamps: we preserve original UTC timestamps and include tz offset mapping in manifest.
+
+2) On-demand query job (CSV/NDJSON via secure link)
+   - Faster turnaround for small slices (<10k events) but no signed artifact or attestation. Good for rapid review.
+
+3) Streaming proof-of-export (for live evidence)
+   - Near-real-time replication to a customer S3 if you prefer continuous visibility; requires a short onboarding window and IAM exchange.
+
+Constraints & lead times:
+- Timeboxed bundle: ~3 business days after we lock scope and redaction rules.
+- On-demand query: 1 business day if scope is narrow.
+- Streaming onboarding: 2-3 weeks (onboarding + IAM).
+
+Next steps I propose:
+- Ben/Redwood to produce a 48-hour sample bundle with redactions (option 1) for the SIG packet;
+- Kimberly to confirm retention windows and whether BlueRiver wants hashed or removed email local parts;
+- Priyom to propose packaging format and manifest schema.
+
+I can deliver a first cut by Fri 2026-09-10 if you approve option 1.
+
+Best,
+Ben
+Senior Solutions Engineer, Redwood Inference
+
+Attachment: proposed_manifest_template.csv (stub)
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Melissa Chang <melissa@blueriverhealth.com>
+Cc: priyom_das@redwood.ai, monica_patel@redwood.ai
+Date: Wed, 8 Sep 2026 09:18:00 -07:00
+Subject: Re: Request - sample audit logs and retention mapping for upcoming SIG review
+
+Quick clarifications from the retention/controls side:
+
+- Retention mapping: we will produce a single CSV that lists event_type, default_retention_days, retention_class (short/medium/long), and export_notes. Example entries: admin_action=365, auth_event=90, model_config_change=540.
+- Redaction choices: we support three modes: "mask" (first/last octet for IPs, local-part -> first char + ****), "hash" (salted SHA256), or "remove" (omit field). For SIG packets we typically recommend "hash" for identifiers plus "mask" for IPs.
+- Manifest: will include field-level schema, sample counts, checksum, and timezone normalization notes.
+
+Melissa — to confirm: do you want email local parts hashed or removed for the sample bundle? That will determine whether we include replaceable hashed ids in the manifest.
+
+Also attaching a short checklist we use for attested deliveries (checksums, PGP signature option).
+
+-kim
+Product Compliance, Redwood Inference
+
+Attachments: sample-manifest-checksum.txt
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Melissa Chang <melissa@blueriverhealth.com>
+Cc: kimberly_park@redwood.ai, priyom_das@redwood.ai, monica_patel@redwood.ai
+Date: Fri, 10 Sep 2026 15:04:00 -07:00
+Subject: Re: Request - sample audit logs and retention mapping for upcoming SIG review
+
+Melissa — thanks. Based on Kimberly's note and your original ask, summary and delivery plan below: 
+
+Scope agreed: 48-hour window (2026-08-23 00:00 UTC -> 2026-08-24 23:59 UTC) covering admin_activity, auth_events, route_changes, policy_changes.
+Redaction: email local parts will be hashed (salted SHA256); IPs will be masked (first two octets).
+Packaging: timeboxed S3 bundle (NDJSON), signed manifest with SHA256 checksums, retention-mapping.csv included.
+Delivery ETA: initial bundle to BlueRiver secure S3 by end of day Mon 2026-09-13 (we will provide presigned link + manifest).
+Open items for you: confirm the destination S3 bucket or let us stage the artifact and provide presigned download link.
+
+If you want a short readme for the SIG packet I can draft a one-page attestation note describing the redaction steps and manifest verification.
+
+Next: I will kick off the extraction with Priyom and Monica; Kimberly will attach the manifest checklist.
+
+Thanks — Ben
+
+--
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+Phone: +1 415-555-0123
+
+Quoted text below for context:
+> On Wed, Sep 8, 2026 at 09:18, Kimberly Park <kimberly_park@redwood.ai> wrote:
+> > Quick clarifications from the retention/controls side:
+> > - Retention mapping: we will produce a single CSV ...

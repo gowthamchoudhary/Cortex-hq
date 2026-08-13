@@ -1,0 +1,148 @@
+Integration constraints & deployment fit — follow-up and required evidence
+
+From: karthik_iyer <karthik_iyer@redwood.com>
+To: Ari Khan <ari.khan@medtech.ai>
+Cc: ben_carter <ben_carter@redwood.com>, marissa_cole <marissa_cole@redwood.com>
+Date: Sun, 30 May 2027 15:12:00 -0700
+Subject: Integration constraints & deployment fit — follow-up and required evidence
+
+Hi Ari —
+
+Thanks again for the time today. Quick recap and the follow-ups we promised. High-level callouts that will push this toward Private vs Dedicated: SSO, KMS/HSM requirements, and long-term log retention.
+
+Summary of their stated requirements from the demo:
+- SSO: SAML 2.0 IdP required for core user portal; OIDC desired for integrations. SCIM provisioning preferred.
+- KMS/HSM: FIPS 140-2 compliant HSM support is a hard requirement for some PHI workflows; procurement is asking about BYOK and HSM-backed key wraps.
+- Logging/retention: security/audit want at least 7 years for some telemetry and audit logs; SOC reports for vendor assessment.
+
+Why this matters for deployment mode:
+- Hosted API: fast, but we cannot meet HSM/BYOK requirements or guarantee full physical isolation for 7-year retention scenarios.
+- Dedicated: can support customer-managed KMS via cloud KMS (key import) in many regions and gives better isolation; may still not meet HSM-on-prem needs for FIPS 140-2 hardware unless complemented by Private.
+- Private (VPC/on-prem): full control over HSM, retention export pipelines, and custom logging retention policies — aligns with the strongest controls requested.
+
+Attachments: redwood_sso_kms_faq.pdf (FAQ on SSO and KMS options), retention_matrix.xlsx (mapping of retention vs deployment mode).
+
+Clarifying questions for you (so we can land recommendation):
+1) Is FIPS 140-2 HSM mandatory for go-live or only for a subset of workloads?
+2) Would MedTech accept Dedicated if we can provide imported customer-managed keys (KMIP/cloud KMS) and a documented process for secure key lifecycle?
+3) Who on your procurement/legal side should we send the SOC2+evidence packet to?
+
+Next steps I propose:
+- Technical follow-up with Ben to validate KMS paths (Ben, can you propose a 60-minute slot?)
+- Marissa to provide a short procurement one-pager and any draft MOU language we can pre-fill
+- I’ll send the SOC2 stub and the Drive link for artifacts for procurement review
+
+Thanks — will keep this tight.
+
+Best,
+
+Karthik Iyer
+Account Executive, Redwood Inference
+karthik_iyer@redwood.com
++1 (415) 555-0123
+
+From: Ari Khan <ari.khan@medtech.ai>
+To: karthik_iyer <karthik_iyer@redwood.com>
+Cc: ben_carter <ben_carter@redwood.com>, marissa_cole <marissa_cole@redwood.com>, Procurement <procurement@procurement.medtech.ai>
+Date: Mon, 31 May 2027 09:05:00 -0700
+Subject: Re: Integration constraints & deployment fit — follow-up and required evidence
+
+Karthik —
+
+Appreciate the recap. A few clarifications from our side after internal alignment:
+- HSM: FIPS 140-2 validated HSM is mandatory for any environment that will touch PHI; at initial launch ~30% of traffic will be PHI-tagged, so we need a path to HSM before GA for those flows.
+- Keys/Bring-your-own-key: We prefer a BYOK model. If Dedicated offers imported keys via the major cloud KMS (AWS KMS, Google Cloud KMS) that could be acceptable, provided we can show key lifecycle controls and attestations.
+- SCIM and SAML: Must support SAML IdP with group-based assertions and SCIM provisioning. OIDC for service-to-service is a plus.
+- Retention: Security and Legal require 7 years for audit logs related to a small subset of regulated traces. They will accept cold storage exports if we can show tamper-proofing and chain-of-custody.
+
+Procurement (cc’d) will want the SOC2 report and a short technical appendix showing KMS integration options and log retention architecture.
+
+Can Ben and the team share a short technical note outlining: (1) Dedicated KMS import model and limitations; (2) Private HSM options and how data flow would be segmented; (3) options for 7-year retention (export to S3/nearline, WORM configs, or on-prem storage).
+
+We’re still deciding between Dedicated with an expedited path to Private for HSM workloads vs going Private from the start. The cost delta is material, so procurement wants the comparison.
+
+Thanks — Ari
+Ari Khan
+Head of Platform Integrations, MedTech AI
+ari.khan@medtech.ai
+
+From: ben_carter <ben_carter@redwood.com>
+To: Ari Khan <ari.khan@medtech.ai>
+Cc: karthik_iyer <karthik_iyer@redwood.com>, marissa_cole <marissa_cole@redwood.com>
+Date: Mon, 31 May 2027 11:40:00 -0700
+Subject: Re: Integration constraints & deployment fit — follow-up and required evidence
+
+On Mon, May 31, 2027 at 9:05 AM Ari Khan <ari.khan@medtech.ai> wrote:
+> Can Ben and the team share a short technical note outlining...
+
+Hi Ari — thanks for the clear list. Quick technical notes below; I’ll follow up with a 1-pager and the SOC2 packet.
+
+1) Dedicated + Customer-Managed KMS:
+- We support integration with AWS KMS (imported key material using KMS Import Key feature) and Google Cloud KMS with imported keys. Keys remain under your control; Redwood requests an envelope-wrapped DEK for runtime operations.
+- Limitations: Cloud KMS imported keys do not equate to an HSM appliance in your data center; they are FIPS-compliant at the provider level depending on region and KMS config.
+
+2) Private (VPC / On-prem) + HSM:
+- Private allows colocating a hardware HSM (YubiHSM/Thales) or connecting to your on-prem HSM cluster via a secure tunnel. This meets FIPS 140-2 hardware requirements and gives you full control over key lifecycle and attestation.
+- We can run an on-prem agent to keep keys off the cloud if required.
+
+3) Retention and tamper-proof exports for 7 years:
+- Short term: Dedicated can retain logs for X days (configurable per workspace). For 7-year obligations we recommend an ETL that exports signed log bundles to customer-controlled cold storage (S3 Glacier with Object Lock/WORM or on-prem immutable store).
+- Private: we can deploy direct-to-cold-storage export and integrate with your SIEM/archival policies.
+
+Attachments included: SOC2_evidence_stub.txt (redacted list of controls), plus I’ll drop a short architecture diagram in the Drive link.
+
+Suggested next steps:
+- 60 min technical deep-dive (Ben + infra engineers) to validate HSM connectivity and key workflow.
+- Provide procurement-facing one-pager (Marissa, can you draft?) and our standard MOU for review.
+
+If you’re available Wed/Thu this week we can schedule the deep dive.
+
+Best,
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+ben_carter@redwood.com
+
+From: marissa_cole <marissa_cole@redwood.com>
+To: Ari Khan <ari.khan@medtech.ai>, karthik_iyer <karthik_iyer@redwood.com>, ben_carter <ben_carter@redwood.com>
+Date: Tue, 1 Jun 2027 08:20:00 -0700
+Subject: Re: Integration constraints & deployment fit — follow-up and required evidence
+
+Ari / team —
+
+Thanks for surfacing the procurement asks. Quick business approach:
+- We can present a two-phased commercial path: start on Dedicated with customer-managed KMS + documented migration plan to Private for PHI/HSM workloads.
+- Alternative: Private from day one — higher TCO but simplifies compliance and long-retention controls.
+
+I’ll put together a short procurement one-pager that shows: pricing delta, migration milestones, evidence list (SOC2 + attestation process), and a recommended timeline. Also happy to offer a limited credit to cover migration proof-of-concept work — I’ll confirm internal approvals.
+
+Action for procurement: please confirm the contact email we should send the SOC2 + appendix to (cc’d Procurement on this thread). If we need an NDA/MOU first, we can pre-fill the DocuSign link.
+
+Marissa Cole
+Director, Customer Success (Compliance & GTM)
+marissa_cole@redwood.com
+
+From: karthik_iyer <karthik_iyer@redwood.com>
+To: Ari Khan <ari.khan@medtech.ai>, Procurement <procurement@procurement.medtech.ai>
+Cc: ben_carter <ben_carter@redwood.com>, marissa_cole <marissa_cole@redwood.com>
+Date: Wed, 2 Jun 2027 10:03:00 -0700
+Subject: Re: Integration constraints & deployment fit — follow-up and required evidence
+
+Ari / Procurement —
+
+Consolidated next steps and owners (quick action list):
+1) Technical deep-dive (Ben) — validate KMS import, HSM connectivity, and retention export. Target window: Jun 3–4. Owner: ben_carter@redwood.com.
+2) Procurement one-pager & MOU pre-fill (Marissa) — target Jun 4 COB. Owner: marissa_cole@redwood.com.
+3) SOC2 + evidence packet (Redwood) — redacted SOC2 and control summary attached (SOC2_evidence_stub.txt). We uploaded the fuller packet to Drive: https://drive.google.com/drive/folders/1a2b3cdf-example. Owner: karthik_iyer@redwood.com.
+4) DocuSign MOU for initial POC credits (if needed) — link: https://app.docusign.com/nextstep/ABC-12345. Owner: marissa_cole@redwood.com.
+5) Decision checkpoint: MedTech to confirm whether HSM is mandatory at GA or can be phased. Target: Jun 9. Owner: Ari Khan.
+
+Attachments: redwood_sso_kms_faq.pdf, retention_matrix.xlsx, SOC2_evidence_stub.txt (high level).
+
+Please reply with availability for the deep-dive and procurement contact to send the full packet.
+
+Thanks — excited to get this moving.
+
+Karthik Iyer
+Account Executive, Redwood Inference
+karthik_iyer@redwood.com
++1 (415) 555-0123

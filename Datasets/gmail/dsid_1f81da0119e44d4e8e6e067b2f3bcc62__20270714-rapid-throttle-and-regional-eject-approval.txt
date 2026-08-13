@@ -1,0 +1,85 @@
+URGENT: Aurora - rapid throttle + error amplification (requesting regional ejection & exec approval)
+
+From: Rachel Cho <rachel.cho@aurora.ai>
+To: Tessa Morgan <tessa_morgan@redwood.ai>
+Cc: Aurora SRE Team <sre@aurora.ai>
+Date: Wed, 14 Jul 2027 08:12:00 -0700
+Subject: P0: sudden latency + 5xx amplification impacting checkout
+
+Tessa,
+
+We started seeing a sharp spike at ~07:45 PDT: 99th percentile latency for our Redwood calls increased from ~120ms to ~1.2s, and 5xx error rate climbed to ~4.6% (previous baseline ~0.2%). Throughput for our tokens has dropped by ~35% despite steady upstream traffic. This is impacting our checkout flows in production — roughly 18% of sessions now failing to complete.
+
+Attached are sample logs and a short KPI snapshot. Our SREs did quick checks: no obvious config change on our side, and other vendors are stable. We urgently need:
+- Immediate mitigation plan (routing/failover)
+- ETA for restoration or temporary workarounds (model variant, lower QPS burst allowance)
+- Whether you can do a cross-region redirect to US-EAST while you investigate
+
+This is P0 for us — leadership is watching. Please advise next steps and who from Redwood will be executing.
+
+Thanks,
+Rachel Cho
+Head of Platform Engineering, Aurora Health
+
+Attachments: aurora_error_sample_logs.txt, kpi_snapshot_20270714.png
+From: Tessa Morgan <tessa_morgan@redwood.ai>
+To: Hannah Schmitt <hannah_schmitt@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Date: Wed, 14 Jul 2027 08:30:00 -07:00
+Subject: Fwd: P0: sudden latency + 5xx amplification impacting checkout
+
+Forwarding Aurora P0. Key asks from customer: geo-redirect to US-EAST (they're in US-WEST), immediate mitigation, and frequent updates to execs.
+
+My read: this looks like a rapid error-amplification cascade — likely KV cache contention + prefetched prefix invalidation causing per-token stalling on west region. If we don't reduce tail latency quickly, customer will see more errors and higher retry load.
+
+Asking for:
+- Hannah: immediate runbook (routing steer + model fallback) and quick call with Aurora SREs
+- Marcus: exec sign-off for temporary customer credit (they asked for remediation guarantees) and permission to perform cross-region ejection (US-WEST -> US-EAST) for a subset of traffic
+
+I attached the logs the customer sent. Planning to send Aurora a short acknowledgement now once we have a plan.
+
+Tessa
+Principal Account Lead, Redwood Inference
+
+---- Forwarded message ----
+(See original from Rachel attached)
+From: Hannah Schmitt <hannah_schmitt@redwood.ai>
+To: Tessa Morgan <tessa_morgan@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Date: Wed, 14 Jul 2027 09:05:00 -07:00
+Subject: Re: Fwd: P0: sudden latency + 5xx amplification impacting checkout
+
+Plan (immediate, 0-60m):
+1) Activate short-term routing steer: move 40% of Aurora's traffic from US-WEST to US-EAST endpoints (can be done at LB/policy level). Target start within 10m.
+2) Model variant fallback: swap serving profile to the q4_0 quantized variant (lower per-token latency, slight quality trade-off) for diverted traffic only.
+3) Extend KV prefix TTL for Aurora keys to reduce cache churn.
+4) Apply transient rate-window (100% burst allowance) to allow in-flight retries to succeed without further cascading throttles.
+5) Monitoring: push a dedicated dashboard and enable alert throttling so we don't create noise loops.
+
+Risks: cross-region introduces ~40-80ms extra RTT for individual requests; however this is preferable to current 99th percentile spikes and 5xx amplification. We will keep canary at 40% and watch errors, ramp further only on success.
+
+Customer comms (proposed, short): "We're seeing a service anomaly that causes high tail latency in US-WEST. We are diverting a portion of your traffic to US-EAST and applying a temporary model fallback to stabilize response times. We will run this as a canary and provide updates every 30 minutes."
+
+Requesting from Marcus:
+- Approval to execute the cross-region canary (40% initial)
+- Sign-off for a provisional customer credit up to $12,000 for today while we remediate (we can reconcile later based on duration).
+
+Playbook ref: https://drive.redwood.ai/playbooks/cross-region-eject-v2 (see section 3 for canary steps).
+
+Hannah
+Director, Site Reliability
+
+Attachments: playbook-cross-region-eject-v2.pdf
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Tessa Morgan <tessa_morgan@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Date: Wed, 14 Jul 2027 11:05:00 -07:00
+Subject: Re: Fwd: P0: sudden latency + 5xx amplification impacting checkout
+
+Approved.
+- Execute the 40% cross-region canary immediately. Keep the model fallback to q4_0 for diverted traffic and monitor closely.
+- Approve provisional credit up to $12,000 for today; have finance track and I will review final reconciliation after we stabilize.
+- Keep customer-facing comms tight and avoid technical noise — Tessa, lead the external message cadence.
+
+Hannah/ops: confirm when steer is live and send the first 30-minute update to Aurora.
+
+Marcus Lin
+Head of Product Operations
+Redwood Inference

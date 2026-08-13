@@ -1,0 +1,129 @@
+Clarify: ephemeral prefixes, heartbeat pings, and billing units
+
+From: Maya Green <maya@datascape.ai>
+To: Vivek Kulkarni <vivek@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: 2028-08-09T15:12:00-07:00
+Subject: Clarify: ephemeral prefixes, heartbeat pings, and billing units
+
+Hi Vivek / Marissa,
+
+We're ramping an edge SDK that opens very short-lived sessions (many live for < 20s) and we currently emit a lightweight keepalive/heartbeat ping on connect and then again every 30s while a UI session is active. Some observations from our side:
+
+- The heartbeat payloads are tiny (typically a 12–40 byte JSON with an ephemeralPrefix and timestamp) and we do not request completions on the heartbeats.
+- We do occasionally warm the KV cache with a small prefix probe when a new ephemeralPrefix hits the backend.
+- With 1M ephemeral sessions/day and a median life of ~10s we estimate 500k heartbeats/day (most sessions will have 0 or 1), but conservative estimate for our peak could be ~2M heartbeat events/day.
+
+Questions:
+1) Do such heartbeat calls count as billed token usage? If so, how are they rounded (per-request quantum, per-token, per-window)?
+2) Are ephemeralPrefix-only probes (no completion) treated differently than generation calls for the purposes of the 15-minute conversation rollup / session floor?
+3) Do KV-cache warmups that only fetch a small prefix get charged against the same batching/windowing rules as user-facing completion calls?
+
+For context I've attached a recent invoice snapshot (current-invoice-sample.pdf) and a tiny CSV with our event density (metering-example.csv). We need a clear accounting approach so we can model ARR and negotiate credits if needed.
+
+Thanks — Maya
+Maya Green
+Head of Platform, Datascape
+maya@datascape.ai
+
+-----
+
+From: Vivek Kulkarni <vivek@redwood.com>
+To: Maya Green <maya@datascape.ai>
+Cc: Jordan Blake <jordan@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: 2028-08-09T16:05:00-07:00
+Subject: Re: Clarify: ephemeral prefixes, heartbeat pings, and billing units
+
+Hi Maya — thanks for the detail and the attachments. Looping in Jordan (pricing) and Marissa (AE) to confirm. Quick note: we treat "requests" and "session aggregation" separately in our metering pipeline, but I'll let Jordan outline the exact rules and a sample calc for the volumes you shared.
+
+Vivek
+VP, Global Sales Engineering
+Redwood Inference
+
+-----
+
+From: Jordan Blake <jordan@redwood.com>
+To: Vivek Kulkarni <vivek@redwood.com>, Marissa Cole <marissa@redwood.com>, Maya Green <maya@redwood.com>
+Date: 2028-08-10T09:20:00-07:00
+Subject: Re: Clarify: ephemeral prefixes, heartbeat pings, and billing units
+
+Hi all — dug into the metering behavior and produced a short explainer + sample math. TL;DR: yes, heartbeats can incur charge but our rules and aggregation windows significantly limit billing impact for tiny maintenance payloads. Details below.
+
+Metering primitives (high-level):
+- Tokenization: every request body is tokenized; tokens are the base billing unit.
+- Per-request quantum: we apply a minimum per-request token quantum of 8 tokens for very small payloads (this covers protocol overhead and avoids microbilling on tiny network probes).
+- Conversation rollup window: messages that share a stable conversation/session identifier (ephemeralPrefix or conversation_id) are rolled up into a 15-minute aggregation window for context billing; that window has a per-window floor of 120 tokens per active conversation per 15-minute window.
+- Maintenance bucket: heartbeats that are strictly < 64 bytes and are flagged as "maintenance" by the SDK are subject to a special suppression rule: if the maintenance request is the only event in the conversation window it will incur the per-request quantum only; if it accompanies a generation request in the same window the maintenance payload is zero-rated (not double-billed) because we attribute cost to the generation.
+
+How this maps to your numbers (assumptions):
+- 1,000,000 ephemeral sessions/day
+- median lifetime 10s => ~0.4 heartbeats per session (since heartbeats every 30s)
+- conservative peak estimate 2,000,000 heartbeats/day
+
+Scenario A — no generation calls for the session (pure connect + idle heartbeats):
+- Each heartbeat tokenized -> small payload => per-request quantum = 8 tokens billed
+- 2,000,000 heartbeats/day * 8 token-quantum = 16,000,000 billed tokens/day
+- At your agreed rate (example) that maps to X unit cost — we can translate to dollars in the term sheet.
+
+Scenario B — ephemeral session includes at least one generation in the 15-min window (typical UX):
+- The first generation in the window captures the context and is billed normally; maintenance heartbeats in that same window are zero-rated.
+- With your traffic profile, if ~60% of sessions trigger a gen within the same window we would only bill the remaining 40% heartbeats as per-request quantum.
+
+KV-cache warmups:
+- Small prefix probes that hit the fetch path are tokenized and billed; however we apply a cache-warmup credit for the first prefix probe per unique ephemeralPrefix within a 24-hour rolling window (to limit charges from migrations/reconnects). Subsequent probes are billed normally under the per-request quantum or rolled into an existing conversation window if applicable.
+
+Rounding/minimums/aggregation note:
+- Billing totals are computed by aggregating token counts across your account and then rounding each invoice line item to the nearest 1,000 token bucket (to keep invoices readable). This rounding is applied after discounts/credits.
+
+Sample back-of-envelope (peak conservative):
+- 2,000,000 heartbeats/day * 8 tokens = 16M tokens/day => ~480M tokens/month (30d)
+- If 60% of sessions have a gen in-window -> billable heartbeats drop to 192M tokens/month
+
+I'll attach an example CSV with per-minute line items for your numbers; Marissa, can you propose a pilot credit to offset initial overage risk while they tune the SDK?
+
+Jordan Blake
+Director, Pricing Strategy
+Redwood Inference
+
+-----
+
+From: Marissa Cole <marissa@redwood.com>
+To: Maya Green <maya@datascape.ai>, Vivek Kulkarni <vivek@redwood.com>, Jordan Blake <jordan@redwood.com>
+Date: 2028-08-10T10:02:00-07:00
+Subject: Re: Clarify: ephemeral prefixes, heartbeat pings, and billing units
+
+Maya — thanks, Jordan — great write-up. Maya, two commercial options that have worked for other customers:
+
+1) Pilot credit + instrumentation period (30–60 days): Redwood issues a one-time credit that covers up to N tokens/month while Datascape enables SDK debouncing + websocket keepalives which reduce heartbeat volume. We set an SLA for weekly syncs and a cutover plan.
+
+2) Metering carve-out for maintenance traffic: contractually define maintenance events (size < 64 bytes, flagged by SDK) to be billed at a fixed discounted quantum (we can agree on 2 token-equivalents per event) and cap monthly maintenance billing to M tokens. This requires a clean SDK flag implementation and agreement on audit traces.
+
+I recommend option 1 for the initial rollout (faster) with a follow-up to instrument the maintenance flag and potentially move to option 2 after validation. I'll draft language for a term sheet and share it (redwood-pricing-term-sheet.pdf).
+
+Marissa Cole
+Account Executive, Strategic Accounts
+Redwood Inference
+Phone: +1 415-555-0123
+
+Attachment: redwood-pricing-term-sheet.pdf (term outline + sample credit)
+
+-----
+
+From: Maya Green <maya@datascape.ai>
+To: Marissa Cole <marissa@redwood.com>, Vivek Kulkarni <vivek@redwood.com>, Jordan Blake <jordan@redwood.com>
+Cc: Accounts Payable <ap@datascape.ai>, Procurement Team <procurement@datascape.ai>
+Date: 2028-08-11T08:15:00-07:00
+Subject: Re: Clarify: ephemeral prefixes, heartbeat pings, and billing units
+
+Thanks — this is helpful and clearer than I expected. A few follow-ups:
+
+- Could you turn Jordan's explainer into a short "metering note" PDF we can include with our procurement packet? That will help internal auditors.
+- We'd like to accept a pilot credit but need to see proposed credit size and duration to sign off.
+- Please send an example invoice that shows the rounding/1,000-token-bucket behavior (your billing team can redact dollar figures).
+
+I've re-attached our small invoice snapshot to help you map fields (current-invoice-sample.pdf). Our AP team is on CC for payment/credit logistics.
+
+Best,
+Maya
+Head of Platform, Datascape
+
+[Attachment: current-invoice-sample.pdf]

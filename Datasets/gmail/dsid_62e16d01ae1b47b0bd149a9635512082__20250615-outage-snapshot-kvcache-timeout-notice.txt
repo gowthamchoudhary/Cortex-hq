@@ -1,0 +1,101 @@
+Hosted inference — service snapshot: intermittent 503s and p99 latency (US-WEST)
+
+From: Sergio Alvarez <sergio@redwood.ai>
+To: Alice Park <alice@novaprod.com>, Support Team <support@novaprod.com>
+Cc: Marissa Cole <marissa@redwood.ai>, Evelyn Hart <evelyn@redwood.ai>
+Date: Sun, 15 Jun 2025 09:12:00 -0700
+Subject: Hosted inference — service snapshot: intermittent 503s and p99 latency (US-WEST)
+
+Alice / NovaProd support team,
+
+I wanted to share a quick incident snapshot: starting ~08:45 PT we observed intermittent 503 responses and elevated p99 generation latency for the hosted inference endpoints backed by the us-west GPU pool. Impact is concentrated on models that keep large KV caches (conversational sessions with long histories) and appears as timeouts during KV lookups.
+
+What we've done so far:
+- Fault isolation: routed a portion of traffic to a fallback model variant without KV prefetching (reduced error rate for affected customers).
+- Short-term mitigation: disabled aggressive KV prefetch on the us-west routing tier to reduce cache churn.
+- Monitoring: enabled additional debug logs for KV manager to capture eviction sequences (attached a small sample for context).
+
+Immediate customer-facing actions:
+- Status page: incident "US-WEST: intermittent 503s and elevated p99" is live (link below).
+- We are providing a rolling update to affected tenants and have prioritized NovaProd per the SLA.
+
+Next steps (we'll keep this thread updated):
+- Ops will continue to collect traces and determine root cause (KV index corruption vs. orchestration race).
+- We'll follow with a more detailed timeline and a postmortem doc within 72 hours.
+
+Apologies for the disruption — I'll be monitoring and will update as we learn more.
+
+Thanks,
+Sergio
+Director, Customer Reliability
+Redwood Inference
+
+Attachments: incident-timeline-20250615.pdf (timeline summary), sample-logs-uswest-09-12.txt (truncated log snippet)
+
+Status: https://status.redwood.ai/incidents/INC-20250615-usw-kvcache
+
+From: Alice Park <alice@novaprod.com>
+To: Sergio Alvarez <sergio@redwood.ai>
+Date: Sun, 15 Jun 2025 09:34:00 -0700
+Subject: Re: Hosted inference — service snapshot: intermittent 503s and p99 latency (US-WEST)
+
+Sergio, thanks for the heads up.
+
+A couple quick asks from our side:
+1) Can you confirm whether our production workspace (novaprod-prod) is in the affected cohort?
+2) Do you have an ETA for a fix or a reliable mitigation window? Our support queue is filling with customers.
+
+If helpful, I can open a dedicated shared channel for real-time updates.
+
+Thanks,
+Alice
+Head of Platform Engineering, NovaProd
+
+On Sun, Jun 15, 2025 at 09:12 AM Sergio Alvarez <sergio@redwood.ai> wrote:
+> Alice / NovaProd support team,
+>
+> I wanted to share a quick incident snapshot: starting ~08:45 PT we observed intermittent 503 responses and elevated p99 generation latency for the hosted inference endpoints backed by the us-west GPU pool...
+
+From: Marissa Cole <marissa@redwood.ai>
+To: Sergio Alvarez <sergio@redwood.ai>, Evelyn Hart <evelyn@redwood.ai>
+Cc: Connor O'Brien <connor@redwood.ai>
+Date: Sun, 15 Jun 2025 10:05:00 -0700
+Subject: Re: Hosted inference — service snapshot: intermittent 503s and p99 latency (US-WEST)
+
+Sergio, looping in ops and product — quick notes:
+- Ops: shifting traffic to fallback variant reduced observed error rate from ~7% -> ~0.6% for a small cohort. Need to confirm whether fallback affects quality for NovaProd's model; we should flag to Alice if we expect any hallucination/regression risk.
+- Product: we'll schedule canary config rollout to the remaining AZs once KV manager fix is validated.
+
+Connor — can you prioritize the KV index integrity check and share ETA?
+
+Marissa
+Sr. PM, Platform Reliability
+
+On Sun, Jun 15, 2025 at 09:34 AM Alice Park <alice@novaprod.com> wrote:
+> Sergio, thanks for the heads up.
+>
+> A couple quick asks from our side:...
+
+From: Connor O'Brien <connor@redwood.ai>
+To: Marissa Cole <marissa@redwood.ai>, Sergio Alvarez <sergio@redwood.ai>, Evelyn Hart <evelyn@redwood.ai>
+Date: Sun, 15 Jun 2025 14:47:00 -0700
+Subject: Re: Hosted inference — service snapshot: intermittent 503s and p99 latency (US-WEST)
+
+Short ops update and next-capture: we ran a read-only KV index integrity sweep on the affected nodes at 12:30 PT and found several index entries with inconsistent offsets after a scheduled compaction job — that appears to have caused stale pointers and transient KV lookup timeouts.
+
+What we did:
+- Disabled compaction window for the KV tier to prevent additional index rewrites (immediate stabilization).
+- Deployed a targeted patch that skips in-flight compaction when active sessions are reading the same prefix.
+- Continued traffic routing to fallback variants while we validate.
+
+Impact for NovaProd: we have their workspace in the affected cohort but the fallback route preserved availability. Quality impact should be minimal; we'll run a short validation test and report back to Alice in the next 90 minutes.
+
+Follow-up items:
+- Postmortem doc (internal draft) will be available under the incident link; public-facing postmortem planned once we finish validation and confirm mitigations.
+- Recommend offering NovaProd a brief credits/SL concession depending on the window of degraded throughput — happy to coordinate with sales/legal if you want to make the call.
+
+Connor O'Brien
+SRE Lead, Redwood Inference
+
+On Sun, Jun 15, 2025 at 10:05 AM Marissa Cole <marissa@redwood.ai> wrote:
+> Sergio, looping in ops and product — quick notes:...

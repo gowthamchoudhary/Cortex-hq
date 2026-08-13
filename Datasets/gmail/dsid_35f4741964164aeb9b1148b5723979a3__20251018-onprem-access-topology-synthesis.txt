@@ -1,0 +1,123 @@
+On-prem access topology: peering vs PrivateLink vs site-to-site VPN
+
+From: alice.jensen@acme-analytics.com
+To: rishi_malhotra@redwoodinference.com, kimberly_park@redwoodinference.com
+Cc: netops@acme-analytics.com
+Date: 2025-10-18T09:12:00-07:00
+Subject: Re: On-prem access topology: initial requirements
+
+Hi Rishi / Kimberly,
+
+Thanks again for the quick intro last week. NetOps pulled together our initial constraints and asked me to confirm a few things before we move to a technical review:
+
+- We need predictable latency for inference calls (p95 < 120ms) for a set of regional hotspots.
+- Our network team cannot change our CIDR plan for production clusters (IP space overlaps are possible).
+- We require encryption in transit and mutual auth (mTLS) to Redwood endpoints.
+- Auditability: we must have per-connection logs retained for 1 year and proof of key management controls.
+- Procurement is asking for a cost envelope estimate for month-to-month vs committed options.
+
+Can you confirm whether PrivateLink, VPC Peering, or a site-to-site VPN (with appliance HA) is the recommended first path for a small pilot (1 region) and why? Also please flag operational risks and anything our security team should escalate.
+
+Attachments: acme-netops-topology-reqs.pdf
+
+Cheers,
+Alice Jensen
+Head of Platform Engineering, Acme Analytics
+
+--
+This message is from Acme Analytics.
+
+From: rishi_malhotra@redwoodinference.com
+To: alice.jensen@acme-analytics.com
+Cc: kimberly_park@redwoodinference.com, marcus_lin@redwoodinference.com
+Date: 2025-10-18T11:05:00-07:00
+Subject: Re: On-prem access topology: initial requirements
+
+Alice — thanks, this is very clear. High level recommendation up front: for your constraints I suggest starting with PrivateLink (interface endpoints) for the pilot, with a site-to-site VPN as a complementary administrative/backchannel for management traffic and as a fallback.
+
+Why PrivateLink first (short):
+- Non‑transitive, cross-account endpoint: avoids CIDR overlap issues because traffic is encapsulated to the endpoint and routed via ENIs in your VPC rather than relying on route-table peering across overlapping IP ranges.
+- Strong isolation: we can provision customer-specific endpoints, apply per-endpoint security groups, and minimize blast radius.
+- Easier to lock down egress and audit: CloudTrail + VPC Flow Logs give you fine-grained visibility; we can map connections to specific endpoints for retention requirements.
+
+Operational caveats and trade-offs:
+- Throughput/scale: interface endpoints have quota limits and per‑ENI bandwidth. For bursty ML inference you must size endpoints and consider multi-AZ endpoints. We’ll provide recommended ENI counts and a batching plan to smooth peaks.
+- Cost: PrivateLink adds per-hour endpoint + data processing charges — for steady high throughput peering or Transit Gateway can be cheaper. We’ll produce an estimate spreadsheet (attached).
+- Regions & multi-account: if you want cross-region low-latency, pair PrivateLink with regional endpoints + our routing policy; Transit Gateway is an alternative for many accounts but reintroduces CIDR and transitive routing complexity.
+
+When to prefer Peering or S2S instead:
+- VPC Peering is attractive only when there is no IP overlap and you control both VPCs (direct L3 routing is lower cost and lower latency). However it is transitive-unfriendly: if you later need to route via a hub, peering becomes unmanageable.
+- Site-to-site VPN is useful for low-volume administrative access, or when you must traverse on-premises firewalls/NAT. VPNs have higher and more variable latency — not great for p95-sensitive inference, but OK as a control plane/backchannel.
+
+Security and compliance specifics we can support:
+- mTLS termination: we can require client certificates at the endpoint and integrate with your KMS for cert rotation.
+- Audit trails: CloudTrail + endpoint logging + our request-level tracing (we can ship logs to your S3 or forward to your SIEM).
+- Key management: support for customer-managed KMS keys (bring-your-own) and HSM-backed KMS if required.
+
+Next actions I propose:
+1) We produce a short sizing estimate (ENIs, expected egress cost) — I’ll loop Marcus for bandwidth numbers.
+2) Run a two-week PrivateLink pilot in one region with synthetic load to validate p95 and throughput.
+3) Stand up a low-bandwidth S2S VPN for admin access and log transfer.
+
+I’ll attach a quick matrix comparing the three options and flag immediate security questions below.
+
+Best,
+Rishi Malhotra
+Senior Solutions Architect | Redwood Inference
+
+--
+Attachment: privatelink-cost-estimates.csv
+
+From: kimberly_park@redwoodinference.com
+To: rishi_malhotra@redwoodinference.com
+Cc: alice.jensen@acme-analytics.com, marcus_lin@redwoodinference.com, hannah_schmitt@redwoodinference.com
+Date: 2025-10-19T09:30:00-07:00
+Subject: Re: On-prem access topology: initial requirements
+
+Adding a few operational questions from our side and Acme NetOps so nothing is missed during the pilot:
+
+- MTU and fragmentation: Acme has appliances on 1500 MTU; PrivateLink ENIs often work fine but if we traverse SD-WANs/Tunnel endpoints we should validate MTU and path MTU discovery.
+- Failover behavior: if an endpoint AZ goes down what is expected connection drop/recovery behavior and client-side retry guidance?
+- Monitoring: what dashboards and alerts will we provide for queueing, endpoint ENI saturation, and authentication failures?
+- Certificate lifecycle: recommend an automatic rotation cadence for client certs and how we’ll notify Acme before expiry.
+- On-prem egress auditing: can we mirror request identifiers in our logs so Acme can reconcile calls end-to-end?
+
+Also — quick ask from procurement: can you provide a month-by-month cost delta for PrivateLink vs VPC Peering for the pilot volumes (we expect ~150M tokens/month initially)? Marcus, can you prepare rough bandwidth numbers and p95 test targets we should hit in the pilot?
+
+Kim
+Kimberly Park
+Director, Customer Solutions | Redwood Inference
+
+From: rishi_malhotra@redwoodinference.com
+To: kimberly_park@redwoodinference.com, alice.jensen@acme-analytics.com
+Cc: marcus_lin@redwoodinference.com, hannah_schmitt@redwoodinference.com
+Date: 2025-10-20T16:45:00-07:00
+Subject: Re: On-prem access topology: initial requirements (next steps + pilot plan)
+
+Team — summary and concrete next steps to get Acme into pilot:
+
+Pilot approach (agreed):
+1) PrivateLink interface endpoints in the target region (primary path) — configure 3 ENIs across AZs, security groups to allow mTLS from Acme IP ranges, and endpoint-specific logging to their S3 bucket.
+2) Site-to-site VPN (HA pair) for the control plane: log shipping, certificate provisioning, and emergency access. VPN will not be on the critical inference path for p95-sensitive calls.
+3) Load generator + trace reconciliation for 2 weeks to validate p95 < 120ms at 90% of expected load and identify ENI saturation points.
+
+Operational items I will deliver by EOW:
+- Detailed ENI sizing table and a cost delta (PrivateLink vs peering) for the expected token volumes (attachment: privatelink-cost-estimates.csv).
+- Monitoring runbook and a Grafana dashboard template (ENI utilization, endpoint error rate, client auth failures).
+- A certificate rotation schedule and automated renewal playbook integrated with Acme KMS/Redwood KMS (or BYOK model).
+
+Risks / Known unknowns:
+- If Acme adds more accounts/VPCs later and expects hub-and-spoke routing, PrivateLink will require additional endpoints per VPC; in that case Transit Gateway might be worth revisiting despite CIDR and transitive concerns.
+- Very high sustained throughput could push PrivateLink costs above peering; we’ll quantify breakeven in the cost sheet.
+
+Marcus: can you confirm bandwidth assumptions and draft the synthetic load profile? Hannah: please prepare the dashboard template and the log retention S3 bucket policy (1 year).
+
+Alice: Are you free for a 30-minute call Thursday 10/23 10:00–10:30 PT to kick off pilot scoping? If that works I’ll send a calendar invite.
+
+Thanks — Rishi
+Rishi Malhotra
+Senior Solutions Architect | Redwood Inference
+Phone: +1 (415) 555-0123
+
+--
+Forwarded message header preserved for audit purposes.

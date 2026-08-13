@@ -1,0 +1,168 @@
+ConnectPay: sudden p99 latency + throughput drop — cross-functional action
+
+From: Asha Rao <ops@connectpay.com>
+To: soojin_lee@redwood.com
+Date: Fri, 1 Jun 2028 09:12:00 -0700
+Subject: Re: [EXT] Spike: p99 latency to 3.2s and downstream throughput drop
+
+Hi Soojin,
+
+We started seeing a sustained p99 jump around 08:50 PDT and overall tokens/second dropped ~36% for our gen endpoints. Attached are our side logs and a screenshot of your SLO dashboard. This began immediately after your 08:45 deploy window. Traffic profile was unchanged from baseline.
+
+Can you confirm whether there's an active fallback or kernel change on Redwood side? This is impacting our checkout flows; we need a mitigation plan and timeline.
+
+Thanks,
+Asha
+Asha Rao
+Sr. Platform Ops — ConnectPay
+
+Attachments: connectpay-spike-20280601-logs.txt, slo-dashboard-screenshot.png
+
+---
+From: soojin_lee@redwood.com
+To: ben_carter@redwood.com, marissa_cole@redwood.com, jonas_weber@redwood.com, evelyn_hart@redwood.com
+Date: Fri, 1 Jun 2028 09:22:00 -07:00
+Subject: ConnectPay p99/throughput spike — triage request (INC-8241)
+
+Team,
+
+Customer ConnectPay (Asha Rao) reported a p99 climb to ~3.2s and a ~36% throughput drop starting 08:50 PDT. They note this coincides with our 08:45 deploys. I opened INC-8241 and attached their logs.
+
+Asks:
+- Ben: Can SRE validate whether any kernel selection / quantization path flips occurred during the 08:45 rollout? Any evidence of KV cache eviction runs or batching regressions?
+- Jonas/Product: If this is rollout-related, can we pause the release and identify the release artifact (model variant, runtime config)?
+- Marissa/CS: Draft initial customer-facing note with what we know, mitigation steps, and expected ETA. Keep it calm; include rollback as an option.
+- Evelyn/AM: Keep ConnectPay updated and coordinate any SLA credits if this extends beyond 4 hours.
+
+Priority: P1. I will coordinate bridge and own the customer comms draft. Please reply with concrete steps ASAP.
+
+Soojin Lee
+Director, Reliability
+Redwood Inference
+
+---
+From: Ben Carter <ben_carter@redwood.com>
+To: soojin_lee@redwood.com, marissa_cole@redwood.com, jonas_weber@redwood.com
+Cc: evelyn_hart@redwood.com
+Date: Fri, 1 Jun 2028 10:05:00 -07:00
+Subject: Re: ConnectPay p99/throughput spike — triage request (INC-8241)
+
+On Fri, Jun 1, 2028 at 09:22 AM Soojin Lee <soojin_lee@redwood.com> wrote:
+> Team,
+>
+> Customer ConnectPay (Asha Rao) reported a p99 climb to ~3.2s and a ~36% throughput drop starting 08:50 PDT.
+
+Checked infra telemetry and runtime logs. Quick summary:
+- No host-level CPU/memory pressure on the dedicated fleet for CP; GPUs are stable.
+- There was a kernel selector change rolled at 08:43 that enabled an experimental attention kernel for long-seq paths (artifact id: kernel-0.9-expB). Rollout was to 10% of requests on the model family used by CP.
+- At 08:49 we observed an unexpected KV cache miss storm correlated to requests routed to hosts with kernel-0.9-expB. Miss rate jumped from 2% -> 22% for that cohort.
+
+Immediate actions taken:
+1) Throttled kernel-0.9-expB rollout to 0% at 09:02 (effectively paused).
+2) Triggered KV cache warmup on affected hosts; starting to see miss rate normalize after 09:18.
+3) Enabled temporary adaptive-batching to limit worst-case latency on those hosts.
+
+Preliminary hypothesis: kernel change interacts poorly with our LRU-based KV cache partitioning under certain request fanouts; it increases cache churn. This yields higher per-token recompute and batching inefficiencies, hence both p99 and throughput impact.
+
+Next steps:
+- We'll run a canary rollback of kernel-0.9-expB on the small cohort and collect histograms for p50/p95/p99 across 15-minute windows.
+- If rollback confirms, we will not promote kernel-0.9-expB and will open a post-mortem with the runtime team.
+
+I’ll update the ticket with metrics and a short timeline.
+
+-ben
+Ben Carter
+Principal SRE, Serving Runtime
+
+Attachments: runtime-canary-log-snippet.txt (added to INC-8241)
+
+---
+From: Jonas Weber <jonas_weber@redwood.com>
+To: soojin_lee@redwood.com, ben_carter@redwood.com, marissa_cole@redwood.com
+Date: Fri, 1 Jun 2028 10:28:00 -07:00
+Subject: Re: ConnectPay p99/throughput spike — triage request (INC-8241)
+
+Thanks Ben — that aligns with what product telemetry flagged. Quick clarifications from product side:
+- kernel-0.9-expB was flipped to reduce long-seq compute on xformers and thought to be transparent to KV behavior. We missed a specific interaction with multi-tenant cache partitions and the new scheduling hook.
+- Release was tagged under release/2028-06-01/runtime with the model routing change and kernel toggle.
+
+Actions:
+- I’m pausing the rest of release/2028-06-01/runtime immediately and opening a rollback PR for the kernel toggle.
+- Product will provide a short technical note for the customer: cause (kernel vs cache interaction), steps taken (pause + rollback + cache warmup), and ETA for confirmation (~2 hours for stabilization; aggressive: ~45 min observable improvement).
+
+We should decide whether we want to offer ConnectPay a temporary routing policy (pin to pre-release variant) until we validate the revised kernel.
+
+-Jonas
+Staff Product Manager
+
+---
+From: marissa_cole@redwood.com
+To: Asha Rao <ops@connectpay.com>
+Cc: soojin_lee@redwood.com, ben_carter@redwood.com, jonas_weber@redwood.com, evelyn_hart@redwood.com
+Date: Fri, 1 Jun 2028 11:01:00 -07:00
+Subject: Re: ConnectPay: sudden p99 latency + throughput drop — interim update
+
+Asha —
+
+Thanks for the quick heads up and for the logs; this is helpful. We have a P1 bridge open (INC-8241) and the initial investigation points to a runtime kernel toggle we rolled this morning that impacted KV cache behavior for a subset of hosts.
+
+What we’ve done so far:
+- Paused the kernel rollout to 0% at 09:02 PDT.
+- Warmed affected KV cache partitions; miss rates are trending down.
+- Enabled adaptive batching to limit latency impact for in-flight requests.
+
+What to expect:
+- Observable improvement likely within 45–90 minutes as caches stabilize.
+- If you prefer, we can pin your traffic to the unaffected variant (no config change needed on your end). That would eliminate risk while we fully validate the runtime fix.
+
+Next steps:
+- We’ll confirm stabilization at 12:00 PDT and follow up with a short post-mortem of root cause and remediation timeline.
+
+Sorry for the disruption — we’re prioritizing your warm path traffic.
+
+Best,
+Marissa Cole
+Customer Success Manager
+Redwood Inference
+
+---
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Asha Rao <ops@connectpay.com>
+Cc: soojin_lee@redwood.com, marissa_cole@redwood.com, ben_carter@redwood.com, jonas_weber@redwood.com
+Date: Fri, 1 Jun 2028 12:47:00 -07:00
+Subject: Re: ConnectPay: sudden p99 latency + throughput drop — stabilizing update
+
+Asha — quick update from account side: I’m monitoring the bridge and I’ll escalate internally if we miss our 12:00 stabilization window. We can also open an SLA exception conversation if this persists.
+
+Please let me know if you’d like us to pin your traffic to the stable variant; happy to initiate immediately.
+
+Evelyn Hart
+Customer Account Lead
+Redwood Inference
+
+---
+From: soojin_lee@redwood.com
+To: Asha Rao <ops@connectpay.com>
+Cc: ben_carter@redwood.com, marissa_cole@redwood.com, jonas_weber@redwood.com, evelyn_hart@redwood.com
+Date: Fri, 1 Jun 2028 15:48:00 -07:00
+Subject: ConnectPay: incident resolution & next steps
+
+Asha —
+
+Quick resolution note: after pausing the kernel toggle and rolling back kernel-0.9-expB on the canary cohort, KV miss rates returned to baseline by ~09:20 PDT and throughput recovered fully by 09:40 PDT. We left adaptive-batching enabled on the small cohort for an additional hour during validation.
+
+Root cause (short): interaction between kernel-0.9-expB scheduling hook and multi-tenant KV partitioning that increased cache churn under certain fanouts.
+
+Remediation and next steps:
+- Kernel toggle will remain disabled for rollout/2028-06-01/runtime until runtime + kernel engineering patch cache partition handshake.
+- We will run a targeted test against ConnectPay traffic pattern in staging and share a timeline for a safe re-roll.
+- Post-mortem and remediation RFC will be shared by June 4 with technical detail, mitigations, and any recommended routing policy changes.
+
+If you’d like us to pin your traffic to the pre-release variant as a precaution, say the word and we’ll enact immediately (no change required from you).
+
+Thanks for your patience and for the quick signal — it helped us reduce impact.
+
+Soojin Lee
+Director, Reliability
+Redwood Inference
+

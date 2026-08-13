@@ -1,0 +1,121 @@
+Vendor evidence deduplication: proposed retention & exception flow
+
+From: Riley Summers <riley@novanet.com>
+To: Markus Klein <markus.klein@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Jordan Blake <jordan.blake@redwood.com>
+Date: Fri, 09 Oct 2027 09:12:00 -0700
+Subject: Initial: proposed evidence deduplication + retention window (Novanet)
+
+Hi Markus / team,
+
+Thanks again for the onboarding call yesterday. Per our discussion, attached is a short proposal outlining how Novanet intends to handle deduplication of evidence artifacts across vendor portals (Vendr / Whistic) and the preservation window for temporary credentials/proofs (ephemeral tokens, presigned manifests).
+
+High-level summary:
+- We will store canonical proof items and keep a single signed manifest linking derived uploads (portal claims) to canonical artifacts.
+- Retention window for ephemeral proofs: 90 days by default, 365 days for SOC2-relevant items unless otherwise negotiated.
+- Exception flow: when a third party (like Redwood) requests shorter retention or an immediate delete, we can tag items with an "exception" flag and provide a signed attestation with timestamps.
+
+Open questions for Redwood:
+1) Is the 90/365 split acceptable for your SOC 2 mapping, or do you need different buckets for CAIQ/SIG items?
+2) Do you require a copy of the canonical file uploaded directly into your Vendr instance, or is the signed manifest sufficient?
+3) For ephemeral credentials, would you accept a hashed proof + signed timestamp in place of the raw token?
+
+Attachments: novanet-dedupe-proposal.xlsx (spreadsheet with mapping)
+
+Would love to get your comments so we can update the proposal and push the claim to Vendr this week. If useful, Ingrid (copied) can join a 30-min sync.
+
+Thanks,
+Riley Summers
+Head of Security Operations
+Novanet
+
+---
+[Attachment stub: novanet-dedupe-proposal.xlsx (xls, 120KB)]
+From: Markus Klein <markus.klein@redwood.com>
+To: Riley Summers <riley@novanet.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Jordan Blake <jordan.blake@redwood.com>
+Date: Fri, 09 Oct 2027 10:03:00 -07:00
+Subject: Re: Initial: proposed evidence deduplication + retention window (Novanet)
+
+Riley — thanks for the file and the clear proposal. Quick thoughts from Redwood's perspective: we appreciate the canonical-manifest approach; that maps well to our internal evidence model and will reduce churn during portal reclaims. A few asks and clarifications below so we can sign off with CS / Compliance: 
+
+1) SOC 2 mapping: for anything you tag as "SOC2-relevant" we need a 365-day preservation by default, plus a mapped SIG/CAIQ question id in the manifest. Can you add a column in the spreadsheet mapping each artifact to the exact SIG question or CAIQ control? If you can't map to SIG, map to SOC 2 control family (CC1/CC2 etc).
+
+2) Vendr upload: the signed manifest is fine as the primary proof, but for any artifacts that are proofs-of-possession (e.g., KMS-signed logs, exported cert chains) we require the canonical binary be uploaded to our Vendr instance or an S3 presigned link that Redwood can fetch. Hash-only proofs for cert chains are OK if you also include a signed timestamp plus signer identity.
+
+3) Ephemeral tokens: hashed proof + signed timestamp is acceptable provided the attestation includes the creation TTL and the token type (API key, presign, service account).
+
+4) Exception flow: propose we agree on a pull-based delete API call — when Redwood flags an artifact for early removal, Novanet responds with attest + request id within 48 hours and confirms deletion with a signed receipt. We'll need that receipt saved against the Vendr claim.
+
+Next steps: please add the SIG/CAIQ mapping and flag any cert/log artifacts that you'll push to Vendr vs provide as hashes. We'll coordinate with Marissa on the actual claim submission.
+
+-markus
+Markus Klein
+Head of Trust & Safety
+Redwood Inference
+
+[Attachment referenced: preservation_policy_draft.pdf (pdf, 54KB) — internal draft mapping suggestions]
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Riley Summers <riley@novanet.com>, Markus Klein <markus.klein@redwood.com>
+Cc: Jordan Blake <jordan.blake@redwood.com>
+Date: Mon, 11 Oct 2027 08:21:00 -07:00
+Subject: Re: Initial: proposed evidence deduplication + retention window (Novanet)
+
+Riley — small technical checklist from our onboarding playbook; sharing so you can align the manifest fields with Vendr claim expectations.
+
+Minimum manifest fields we require for dedupe mapping (please add these as columns in your spreadsheet):
+- artifact_id (uuid)
+- artifact_type (cert | kms-log | config-snapshot | screenshot | qna-fragment)
+- sig_question_id OR soc2_control
+- canonical_hash (sha256)
+- canonical_location (s3://bucket/path OR vendr-claim-id)
+- uploader_identity (email)
+- signed_manifest_link (https)
+- preservation_window_days
+- exception_flag (yes/no)
+- deletion_receipt_link (post-deletion)
+
+Operational notes: 
+- For presigned S3 links we ingest the object immediately and store the canonical hash — links should be valid for 24 hours.
+- If Novanet wants to dedupe across Whistic and Vendr claims, we need a single canonical_id that you reference in both portal claims.
+
+Jordan, can you add the Vendr upload checklist and the internal playbook link to the spreadsheet once Riley returns the updated file?
+
+Marissa
+Marissa Cole
+Security Onboarding Lead, Redwood Inference
+
+[Attachment stub: onboarding-checklist-vendr.txt (txt, 3KB)]
+From: Riley Summers <riley@novanet.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Markus Klein <markus.klein@redwood.com>
+Cc: Ingrid Park <ingrid@novanet-sec.com>
+Date: Mon, 11 Oct 2027 15:05:00 -07:00
+Subject: Re: Initial: proposed evidence deduplication + retention window (Novanet)
+
+Thanks Markus / Marissa — this is helpful and aligns with what we can deliver. Quick answers: 
+- We'll add a SIG/CAIQ mapping column and the full manifest fields you listed.
+- For SOC2-tagged certs/logs we'll upload canonical binaries to the Vendr claim (we'll include S3 presigns for initial ingestion).
+- We'll implement the delete/receipt flow; Novanet will provide a signed deletion receipt within 48 hours of an API delete request.
+
+Next step: I will update the spreadsheet and push an initial Vendr claim (NC-98421) by EOD Wednesday. Can we do a 30-min sync Wednesday at 10am PT to confirm the mapping and ingest run? Ingrid will join to cover the portal upload.
+
+Riley
+Riley Summers
+Head of Security Operations
+Novanet
+
+On Wed, 09 Oct 2027 at 10:03, Markus Klein <markus.klein@redwood.com> wrote:
+> Markus — thanks for the file and the clear proposal. Quick thoughts from Redwood's perspective: we appreciate the canonical-manifest approach; that maps well to our internal evidence model and will reduce churn during portal reclaims. A few asks and clarifications below so we can sign off with CS / Compliance: 
+>
+> 1) SOC 2 mapping: for anything you tag as "SOC2-relevant" we need a 365-day preservation by default, plus a mapped SIG/CAIQ question id in the manifest. Can you add a column in the spreadsheet mapping each artifact to the exact SIG question or CAIQ control? If you can't map to SIG, map to SOC 2 control family (CC1/CC2 etc).
+>
+> 2) Vendr upload: the signed manifest is fine as the primary proof, but for any artifacts that are proofs-of-possession (e.g., KMS-signed logs, exported cert chains) we require the canonical binary be uploaded to our Vendr instance or an S3 presigned link that Redwood can fetch. Hash-only proofs for cert chains are OK if you also include a signed timestamp plus signer identity.
+>
+> 3) Ephemeral tokens: hashed proof + signed timestamp is acceptable provided the attestation includes the creation TTL and the token type (API key, presign, service account).
+>
+> 4) Exception flow: propose we agree on a pull-based delete API call — when Redwood flags an artifact for early removal, Novanet responds with attest + request id within 48 hours and confirms deletion with a signed receipt. We'll need that receipt saved against the Vendr claim.
+>
+> -markus
+> Markus Klein
+> Head of Trust & Safety
+> Redwood Inference

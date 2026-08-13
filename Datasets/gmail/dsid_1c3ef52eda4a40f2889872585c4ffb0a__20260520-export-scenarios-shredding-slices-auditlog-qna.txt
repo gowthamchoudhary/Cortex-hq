@@ -1,0 +1,112 @@
+Audit log exportability + per-user erasure (shredding) — options & evidence
+
+From: Greenwave Health Compliance <compliance@greenwavehealth.com>
+To: kimberly.park@redwood.com
+Date: Wed, 20 May 2026 09:12:00 -0700
+Subject: Audit log retention: per-user deletion and export options
+
+Hi Kimberly,
+
+We're preparing for an audit and need clarity on Redwood's capabilities around tenant-scoped audit/access logs. Specific asks:
+
+- Can Redwood permanently remove ("shred") an individual user's audit trail on request? If so, describe exact scope (live index, backups, archived snapshots).
+- What export formats do you support for tenant-sliced audit logs (NDJSON, Parquet, CSV)? Are exports per-day/hour available?
+- How do you provide evidence of deletion? Do you supply a signed manifest/timestamped attestation?
+- If we require EU residency for exported logs and separate data plane, is that available for Greenwave?
+
+Background: this request is driven by a subject access / right-to-be-forgotten case and our SOC2 reviewer. Please include expected timelines and any required contractual addenda or fees.
+
+Thanks,
+Lena Park
+Compliance Manager, Greenwave Health
+compliance@greenwavehealth.com
+
+(Attachment: none)
+From: kimberly.park@redwood.com
+To: compliance@greenwavehealth.com
+Cc: karthik.iyer@redwood.com, marissa.cole@redwood.com
+Date: Wed, 20 May 2026 10:05:00 -0700
+Subject: Re: Audit log retention: per-user deletion and export options
+
+Lena — thanks for the clear list. Quick summary up front, then we can schedule a short call if you want a walkthrough: 
+
+- Exports: we can produce tenant-scoped exports in NDJSON or Parquet, compressed and encrypted. You can request full-window snapshots (e.g., 2026-01-01 -> 2026-05-19) or sliced windows (per-day/per-hour).
+- Live erasure vs backups: we support targeted erasure from live indices and can emit a deletion manifest (signed). However, immutable backups and long-term archival slices may retain the data until their retention window expires — we offer a redaction workflow for those artifacts rather than raw shredding in every case.
+- Evidence: our standard deliverable is an export bundle + SHA256 manifest and a signed attestation including timestamps and the operator ID. For SOC2 purposes we can also provide chain-of-custody logs and an ops runbook excerpt.
+- EU residency: yes, we can route exports to an EU region and store them in a region-specific bucket under an addendum.
+
+Operationally: we'll need to confirm whether Greenwave has a legal hold on the subject (if yes, we cannot run erasure until lift). Typical turnaround for a tenant-scoped export + erasure run is 48–72 business hours after intake and PO/addendum. There may be a separate fee for on-demand bulk exports.
+
+Looping in Karthik and Marissa for technical/ops details and to attach the export schema and redaction playbook.
+
+—Kimberly
+Kimberly Park
+Manager, Trust & Safety — Redwood Inference
+kimberly.park@redwood.com
+(Attachment referenced: export_spec_schema.pdf)
+From: karthik.iyer@redwood.com
+To: kimberly.park@redwood.com, compliance@greenwavehealth.com
+Cc: marissa.cole@redwood.com
+Date: Thu, 21 May 2026 11:30:00 -0700
+Subject: Re: Audit log retention: per-user deletion and export options
+
+Lena / Kimberly — technical follow-up and constraints from the runtime side: 
+
+1) Export formats & slices
+- We support NDJSON (newline-delimited JSON) and Parquet for exports. Parquet is preferable for large multi-day exports (better compression / schema).
+- Exports can be partitioned by tenant_id/date/hour; we generate a manifest.csv listing all files, SHA256 checksums, record counts and time ranges.
+
+2) Erasure (shredding) semantics
+- Live indexes: we can run targeted deletions against the serving index and purge associated KV cache entries and any cached prefetched fragments. That results in the data no longer being queryable. We then generate a deletion manifest with timestamps and operator IDs.
+- Backups & immutable snapshots: many customers have immutable snapshot retention (forensic timeline). By design those snapshots are not modified; for these we provide two options: (A) scheduled retention expiry (set TTL shorter going forward) or (B) redaction at export time — we strip or hash PII in the archived files and issue a redaction attestation. Full retroactive removal from immutable backups is operationally complex and often not feasible without reingesting datasets; we can discuss a one-off remediation plan if required but it is heavier (project scope, cost, longer timeline).
+
+3) Proof & auditability
+- We produce: export bundle (NDJSON/Parquet) + manifest.csv (file list + checksums) + signed attestation PDF where our Security lead signs off on the deletion/export event. For higher assurance we can deliver a time-stamped notarized attestation (third-party) — needs procurement.
+
+4) Residency & encryption
+- Exports can be staged to an EU region bucket and encrypted with a customer-managed key (KMS) if requested. We can also deliver via SFTP to an EU endpoint.
+
+5) Edge cases
+- Legal hold: if there's an active legal hold, we will not execute erasure until revoked.
+- Related objects: activity that references the user (e.g., session records in aggregated metrics) may remain as non-identifying aggregates unless specifically requested for removal.
+
+Attachments: redaction_playbook.docx, sample_manifest.csv
+
+Happy to run a short technical session and map the timeline.
+—Karthik
+Senior Staff, Inference Platform Engineering — Redwood Inference
+From: marissa.cole@redwood.com
+To: kimberly.park@redwood.com, karthik.iyer@redwood.com, compliance@greenwavehealth.com
+Date: Thu, 21 May 2026 13:05:00 -0700
+Subject: Re: Audit log retention: per-user deletion and export options
+
+Lena — operational notes / next steps from Ops: 
+
+- Intake: please submit a formal export/erasure request via the secure intake form (we'll send link). Include tenant_id, subject user_id, export window and whether EU-residency is required.
+- SLA & timing: standard bulk export + live erasure run: 3 business days after intake + signed addendum/PO. If you request remediation of immutable backups, that is a scoped project (estimate 4–8 weeks depending on scope).
+- Fees: one-time export fee applies for large historical slices; redaction runs on archived snapshots are quoted per-GB. We can provide a formal quote once we have the export window and size estimate.
+- Evidence we provide: export bundle (NDJSON/Parquet), manifest.csv, signed attestation.pdf, chain-of-custody runbook excerpt. For SOC2, we'll include a runbook execution log showing operator ID and UTC timestamps.
+
+If you're ready, we can prepare a short addendum to your contract to cover EU routing + export terms and include the fee schedule. After we get PO/addendum we'll queue the job in Ops.
+
+Marissa Cole
+Sr. Technical Program Manager, Customer Ops — Redwood Inference
+(Attachment referenced: sample_manifest.csv)
+From: Greenwave Health Legal <legal@greenwavehealth.com>
+To: kimberly.park@redwood.com
+Cc: compliance@greenwavehealth.com, marissa.cole@redwood.com
+Date: Fri, 22 May 2026 08:00:00 -0700
+Subject: Re: Audit log retention: per-user deletion and export options
+
+Thanks, Kimberly / Karthik / Marissa — this addresses our immediate questions. Two quick items: 
+
+1) Please prepare the addendum for EU residency + export SLA and route a DocuSign link to my inbox.
+2) We confirm there is no active legal hold on the subject in question; Greenwave wishes the live index erasure + tenant-scoped export to EU buckets.
+
+Please proceed with a formal intake link and send the DocuSign envelope. We'll raise a PO on receipt of the addendum.
+
+Best,
+Victor Stone
+General Counsel, Greenwave Health
+legal@greenwavehealth.com
+(Attachment: none)

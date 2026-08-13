@@ -1,0 +1,130 @@
+Private deployment connectivity: gateway selection (VPC peering / PrivateLink / S2S VPN)
+
+From: Anita Rao <anita@medigene.com>
+To: jordan_blake@redwood.ai
+Cc: lauren_bishop@redwood.ai, neha_kapoor@redwood.ai
+Date: Sun, 30 May 2027 09:12:00 -0700
+Subject: Private deploy networking — quick ask
+
+Hi Jordan,
+
+Thanks again for yesterday's demo. We're moving this to an internal network review for our private deployment (VPC + on-prem). Our infra/security leads asked for a short recommendation: when should we prefer VPC peering, PrivateLink (interface endpoints), or a site-to-site VPN for connecting our on-prem environment to Redwood's private control/data plane?
+
+Constraints: 1) We need to keep egress through our firewalls for compliance, 2) we have modest bandwidth (200–400 Mbps steady; 10 Gbps bursts during batch jobs), 3) data must not traverse public internet in plaintext (TLS+), and 4) we need predictable latency for token-rate billing.
+
+Can you put together a one-page set of tradeoffs and a recommended default? Attaching our rough network diagram.
+
+Thanks,
+Anita
+Anita Rao
+Director, Infrastructure — Medigene Therapeutics
+attachments: network-diagram-v2.png
+
+From: jordan_blake@redwood.ai
+To: Anita Rao <anita@medigene.com>
+Cc: lauren_bishop@redwood.ai, neha_kapoor@redwood.ai, vivek_kulkarni@redwood.ai
+Date: Mon, 31 May 2027 10:03:00 -0700
+Subject: Re: Private deploy networking — quick ask
+
+Anita —
+
+Thanks for the diagram and constraints. Quick summary up front: for most Medigene workloads I recommend PrivateLink for control-plane and API traffic (low latency, secure interface endpoints) plus a negotiated S2S IPSec connection for bulk data transfers and large model syncs. VPC peering is attractive for single-region, same-account/link use cases but has routing and transitive limitations that make it brittle for mixed VPC/Dedicated patterns.
+
+Below are concise tradeoffs and practical recommendations (we can expand into a decision memo if you want):
+
+- PrivateLink (Redwood-hosted interface endpoints)
+  * Pros: private connectivity without route table changes, supports least-privilege access, easy to expose only the API/control ports. Predictable latency and you avoid exposing your on-prem CIDR to our VPC. Works well for the low-latency RPC paths (token streaming).
+  * Cons: per-hour/per-GB endpoint charges (AWS model), not ideal for very high-volume bulk model syncs; requires endpoint service setup and IAM/endpoint policy work.
+
+- Site-to-site VPN (IPSec + BGP)
+  * Pros: straightforward for customers who want their traffic to traverse their firewall, supports large bulk transfer, preserves on-prem access controls. Good when you must egress through your perimeter for compliance.
+  * Cons: higher latency/jitter vs PrivateLink, possible throughput limits on appliance-based VPNs (watch MTU and fragmentation), operational overhead (BGP/BFD tuning), and NAT traversal complexity depending on customer firewall. We recommend HA VPN (two tunnels across AZs) and optional SD-WAN for better throughput.
+
+- VPC Peering
+  * Pros: low-latency L3 routing inside AWS, no endpoint hourly charges.
+  * Cons: non-transitive (doesn't naturally scale across many peers), requires route table exposure of customer CIDRs to Redwood VPCs — raises blast-radius and complicates cross-account set-ups. Not our default recommendation for multitenant Dedicated/private control plane mixes.
+
+Practical default for Medigene:
+1) API/control traffic: PrivateLink (interface endpoints) to expose only the Redwood API & streaming endpoints.
+2) Bulk/model syncs & admin traffic: HA S2S VPN with BGP; enable parallel SCP/s3-multipart uploads over the VPN.
+3) Optionally, for single-VPC, high-throughput internal-only deployments, consider peering but only after negotiating route exposure and security review.
+
+I'll attach a short cost sketch and a sample SOW clause for interconnect SLA. Happy to jump on a call with your network/security teams.
+
+Best,
+Jordan Blake
+Account Executive, Redwood Inference
+Redwood Inference | jordan_blake@redwood.ai | +1 (415) 555-0192
+attachments: cost-estimate-medigene-202705.xlsx, sow-draft-medigene.pdf
+
+From: lauren_bishop@redwood.ai
+To: jordan_blake@redwood.ai
+Cc: Anita Rao <anita@medigene.com>, neha_kapoor@redwood.ai
+Date: Tue, 1 Jun 2027 08:27:00 -0700
+Subject: Re: Private deploy networking — quick ask
+
+Looping in a few operational notes from our side that will matter for implementation:
+
+- If Medigene wants PrivateLink, we need the customer to add an endpoint service acceptance or provide principal ARNs for the interface endpoint. That takes ~1 day to validate but procurement might add time.
+- For S2S VPN, we require a public IP on the customer side and either a static route or BGP. We recommend BGP for automatic failover and route advertisement.
+- We will provision cross-AZ VPN endpoints; please confirm whether Medigene has active-active firewall appliances or a single device — this affects throughput guidance.
+- MTU: recommend 1400–1420 on VPN tunnels to avoid fragmentation with encrypted traffic.
+
+Anita — if you can confirm the firewall vendor/model and whether the datacenter uses NAT44/64, we can give a specific sizing and an HA config.
+
+-Lauren
+Lauren Bishop
+Head of Dedicated Deployments, Redwood Inference
+
+From: Anita Rao <anita@medigene.com>
+To: lauren_bishop@redwood.ai, jordan_blake@redwood.ai
+Cc: neha_kapoor@redwood.ai
+Date: Tue, 1 Jun 2027 09:40:00 -0700
+Subject: Re: Private deploy networking — quick ask
+
+Thanks Lauren/Jordan —
+
+Firewall details below: Palo Alto PA-5220 pair (active/active), NAT44 at the edge, public IPs available, we can do BGP. Burst windows are predictable (nightly batch model syncs 0200–0300 PST). Security requires that all control-plane traffic is filtered through our IDS/IPS.
+
+Accept PrivateLink for API traffic and we'll put the model syncs over VPN. Can you confirm expected latencies for RPC over PrivateLink (p95) and a rough egress/ingress cost estimate for monthly traffic of ~6 TB?
+
+-Anita
+
+From: vivek_kulkarni@redwood.ai
+To: Anita Rao <anita@medigene.com>, jordan_blake@redwood.ai, lauren_bishop@redwood.ai, neha_kapoor@redwood.ai
+Date: Wed, 2 Jun 2027 14:05:00 -0700
+Subject: Re: Private deploy networking — quick ask
+
+Anita — quick numbers to inform your TCO calculation:
+
+- Latency: PrivateLink p95 observed in our Palo Alto/AWS customers is ~12–25 ms (US-west), dependent on on-prem egress & colo fiber. RPC streaming latency typically sits ~15 ms p50, p95 under 30 ms when tunnel-less.
+- Throughput & costs: for ~6 TB/month (approx 200 GB/day) expect interface endpoint data processing + data transfer charges — rough ballpark $0.06–0.14/GB depending on region and AWS pricing tiers. VPN egress via site-to-site will incur NAT/egress costs on both sides and likely a lower per-GB vendor charge but may require appliance scaling for peak windows.
+- Operational: PrivateLink simplifies firewall rules (allow only endpoint ENIs) and reduces blast radius vs peering. VPN is cheaper at high volumes but carries operational overhead and variable latency.
+
+We'll include a short appendix with exact AWS pricing lines and an optional hybrid: use PrivateLink for control and an authenticated S3 endpoint over the VPN for model syncs to optimize cost.
+
+-Vivek
+VP, Solutions Engineering, Redwood Inference
+
+From: Simon Blake <simon@cloudbridge.io>
+To: Anita Rao <anita@medigene.com>, jordan_blake@redwood.ai
+Cc: lauren_bishop@redwood.ai
+Date: Wed, 2 Jun 2027 16:40:00 -0700
+Subject: Fwd: quick note — marketplace/private link option
+
+On Wed, 2 Jun 2027 at 16:20, Simon Blake <simon@cloudbridge.io> wrote:
+> Anita / Jordan —
+>
+> Quick add from the cloud partner side: if Medigene prefers a managed experience and faster onboarding, we can broker a PrivateLink marketplace integration that reduces setup time and bundles endpoint costs under a single contract. Also supports audit logging to your SIEM via our connector.
+>
+> Happy to demo the integration; we typically do a 2–3 day pilot for tunnel verification and endpoint policy testing.
+>
+> —Simon
+> CloudBridge — Partner Integrations
+
+Anita — if you'd like, we can schedule a 30m joint call tomorrow to walk through the S2S HA template and endpoint policy.
+
+--
+Simon Blake
+CloudBridge — Partner Integrations
+attachments: none

@@ -1,0 +1,165 @@
+Wardrobe renewal: bakeoff results, capacity uptick request, and counteroffer
+
+From: Elena Rossi <elena@wardrobe.com>
+To: lauren_bishop@redwood.com, marissa_cole@redwood.com
+Cc: procure@wardrobe.com
+Date: 2027-09-02T09:12:00-07:00
+Subject: Wardrobe renewal — bakeoff results and requested capacity uplift
+
+Hi Lauren / Marissa,
+
+Thanks again for running the bakeoff last week. The execs asked me to share the consolidated feedback and a short list of asks so we can move toward a renewal conversation:
+
+- Performance: we saw comparable latency on short queries but LatticeAI had a 15% lower tail latency on long-form generation in our tests.
+- Throughput: during our peak simulation (1500 qps), we experienced several throttled requests and 503s across the mid-night window.
+- Contract: our renewal is up Oct 15. We are evaluating cost, SLA, and operational guarantees.
+
+Immediate asks:
+1) A short technical write-up that explains the throttling events and whether Redwood can commit to a 20% capacity uplift during Black Friday prep.
+2) A commercial counterproposal that addresses list pricing vs committed throughput (we have an incumbent discount request).
+3) A 30-day side-by-side runbook we can execute with our SREs.
+
+Attached: Wardrobe_bakeoff_requirements.pdf with our baseline workload and LatticeAI vendor notes.
+
+Appreciate a response by EOD Friday — procurement needs a near-term path to present to the CFO.
+
+Best,
+Elena Rossi
+Head of Platform Engineering
+Wardrobe Inc.
+
+From: lauren_bishop@redwood.com
+To: Elena Rossi <elena@wardrobe.com>
+Cc: marissa_cole@redwood.com, marcus_lin@redwood.com
+Date: 2027-09-02T11:05:00-07:00
+Subject: Re: Wardrobe renewal — bakeoff results and requested capacity uplift
+
+Elena — thanks for the clear summary and the attachment. We're aligned on urgency. Quick notes and next steps from our side: 
+
+- I've looped in Marcus (infra) to reproduce the throttling pattern and provide a short root-cause/mitigation note.
+- We can put together a commercial counterproposal that ties committed throughput tiers to unit price and dedicated capacity options. Marissa will lead that.
+- We have a standard 30-day side-by-side template; I'll share a tailored runbook and can propose an SLA-backed window for the trial.
+
+One clarifying question: the 1500 qps number — is that sustained over 6 hours or a 30-minute blast? Our capacity recommendations differ between sustained vs spiky.
+
+I copied Marcus and Marissa. We'll aim to return the technical report and a commercial counter by EOD Thursday so you have time before your CFO review.
+
+Link to working folder: https://drive.google.com/drive/folders/wardrobe-bakeoff
+
+Regards,
+Lauren Bishop
+Account Executive, Redwood Inference
+lauren_bishop@redwood.com
+
+From: marcus_lin@redwood.com
+To: lauren_bishop@redwood.com, Elena Rossi <elena@wardrobe.com>
+Cc: marissa_cole@redwood.com
+Date: 2027-09-03T08:40:00-07:00
+Subject: Re: Wardrobe renewal — bakeoff results and requested capacity uplift
+
+Elena / Lauren — I reproduced the workload from Wardrobe_bakeoff_requirements.pdf against the same model variant we ran in the bakeoff. High-level findings below (full log in the shared Drive):
+
+- Observed behavior: the 503s correlate with concurrent KV-cache eviction under long sequences and an aggressive client retry pattern. When client concurrency spiked above 1,200 active streams, we saw transient connection queueing on the serving layer.
+- Tail latency: median=42ms, p95=380ms, p99=1.6s on our test harness; LatticeAI numbers you reported show lower p99 for long sequences but we observed better stability when we apply an adaptive batching config.
+- Recommendations to reach 20% uplift:
+  * Provision a small dedicated pool (2x the current reserved nodes) for your Black Friday window and enable prefetch + prefix caching.
+  * Apply adaptive batching with a 40ms wait window for long-form jobs.
+  * Short-term mitigation: add an ingress rate limiter per-tenant to avoid retry storms.
+
+I attached a short proof PDF (Redwood-proof-report-20270902.pdf) with test config, kernel selection, and token-level cost delta. With the dedicated pool and config changes we validated steady-state ~1.4x throughput without higher p99.
+
+Happy to run a 2-hour joint test with your SREs tomorrow to validate the plan.
+
+—Marcus Lin
+Solutions Architect, Redwood Inference
+
+From: marissa_cole@redwood.com
+To: Elena Rossi <elena@wardrobe.com>, lauren_bishop@redwood.com
+Cc: neha_kapoor@redwood.com, marcus_lin@redwood.com
+Date: 2027-09-03T10:22:00-07:00
+Subject: Commercial counterproposal for Wardrobe renewal / capacity uplift
+
+Elena — following Marcus' technical note, here's a pragmatic commercial path to keep Wardrobe on Redwood and give you the capacity guarantees you requested. This is intended to be the negotiating anchor we can present to finance/procurement: 
+
+Option A — 12-month renewal (preferred)
+- Committed baseline: current usage + 20% uplift (committed monthly units).
+- Pricing: list price minus 18% with a further 5% early-signing credit if signed within 10 business days.
+- Dedicated pool: small reserved pool for Black Friday week (2x nodes) available as part of the commit; additional burst capacity at an agreed rate.
+- Credits: one-time operational credit equal to 2 weeks of average consumption if we miss agreed p95 SLA for 2 consecutive days during the Black Friday window.
+
+Option B — 6-month bridge
+- Shorter term with higher unit price (list minus 10%) and a one-time migration credit to help with bakeoff retesting.
+
+We can include a 60-day side-by-side trial as part of Option A with clear KPIs and a runbook. Neha (CC) will coordinate the contract language and MAP constraints.
+
+Next steps: if Option A looks acceptable in principle, we can send a draft MAP and an exec summary for your CFO.
+
+Thanks,
+Marissa Cole
+Senior Account Manager, Redwood Inference
+marissa_cole@redwood.com
+
+From: Raj Patel <raj.patel@wardrobe.com>
+To: marissa_cole@redwood.com, lauren_bishop@redwood.com
+Cc: procure@wardrobe.com, Elena Rossi <elena@wardrobe.com>
+Date: 2027-09-04T09:18:00-07:00
+Subject: Re: Commercial counterproposal for Wardrobe renewal / capacity uplift
+
+Marissa — appreciate the thoughtful options. A few points from procurement and procurement leadership: 
+
+- Price: LatticeAI is offering a headline 22% discount vs list for a 12-month commit; they are pushing heavily on price.
+- Operational risk: their performance during our internal runs looked worse under sustained 6-hour load, but their commercial team has offered a migration credit and a shorter termination window which is attractive to finance.
+- Trial ask: we want a 30-day side-by-side in production traffic (not synthetic) before we sign. If Redwood will run that and provide a formal escalation path and the credit you mentioned, we can put Option A in front of our CFO.
+
+Procurement requests: please confirm the exact credit language and whether you can shorten the legal review (we're on a compressed calendar).
+
+Regards,
+Raj Patel
+Head of Procurement
+Wardrobe Inc.
+
+From: lauren_bishop@redwood.com
+To: Raj Patel <raj.patel@wardrobe.com>, Elena Rossi <elena@wardrobe.com>
+Cc: marissa_cole@redwood.com, neha_kapoor@redwood.com, marcus_lin@redwood.com
+Date: 2027-09-04T13:45:00-07:00
+Subject: Re: Commercial counterproposal for Wardrobe renewal / capacity uplift
+
+Raj / Elena — understood. We want to keep Wardrobe on Redwood and remove the migration risk. Here's a concrete save & test plan we can execute immediately: 
+
+1) 60-day production side-by-side (we're willing to extend to 60 days to remove sampling risk)
+   - Scope: shadow traffic + 25% mirror for selected SKU paths; agreed KPIs: p95 latency, error rate, and end-to-end success.
+2) Service commitments
+   - Dedicated small reserved pool for the trial window; scaling policy pre-approved for Black Friday week to hit your 20% uplift.
+   - SLA: p95 latency target with a credit equal to the 2-week average consumption if missed for two consecutive high-traffic days during the Black Friday window.
+3) Commercials & MAP
+   - Option A as proposed by Marissa stands; we'll include a 5% early-signing credit and the operational credit described above.
+   - We'll provide a DocuSign link with the MAP-draft for expedited signature and circulate a short legal appendix that limits exposures.
+
+Attached: Signed-MAP-draft.docx (draft version for procurement review). DocuSign link: https://www.docusign.com/WD-2027-045
+
+If that sounds acceptable, Neha will confirm final contract language and we can kick off the trial as early as next Monday. Marcus will run the initial 2-hour joint validation with your SREs this afternoon if you can spare the slot.
+
+Thanks,
+Lauren Bishop
+Account Executive, Redwood Inference
+lauren_bishop@redwood.com
+
+From: neha_kapoor@redwood.com
+To: procure@wardrobe.com, Raj Patel <raj.patel@wardrobe.com>, lauren_bishop@redwood.com
+Cc: marissa_cole@redwood.com
+Date: 2027-09-04T16:22:00-07:00
+Subject: Contract language and expedited review for Wardrobe — confirmation
+
+Raj — thanks for the clarity. To confirm Redwood's position for procurement: 
+
+- We will include the 2-week consumption credit for SLA misses (exact formula: average daily consumption * 14 days) and the early-signing 5% credit in the MAP.
+- We can move to an accelerated review: sales ops and legal will accept a redline-limited review period of 4 business days if Wardrobe agrees to the Option A principal terms and returns a signed DocuSign envelope for the MAP-draft.
+- We will also include a short runbook appendix and an escalation playbook for your SREs.
+
+Next steps: Please confirm acceptance of the principal terms by close of business Monday so we can route the signature and schedule the test.
+
+Regards,
+Neha Kapoor
+Director, Commercial Operations
+Redwood Inference
+neha_kapoor@redwood.com

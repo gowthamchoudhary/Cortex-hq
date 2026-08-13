@@ -1,0 +1,119 @@
+Unexpected VPC control-plane surge during agent rollout — action plan
+
+From: Caleb Moore <caleb.moore@vitalsync.com>
+To: priyom_das@redwood.ai
+Cc: ops@vitalsync.com
+Date: 2027-02-22T09:12:00-08:00
+Subject: High 502/503 spike from Redwood agents after last night's rollout
+
+Hi Priyom,
+
+We started seeing elevated 502/503 responses from the control-plane API around 02:30 PT this morning, coincident with the agent-side upgrade you rolled last night (per the canary we received). Latency spiked and a subset of our ingestion pipelines timed out/failed.
+
+Quick summary:
+- First observed: ~02:28 PT
+- Impact: transient ingestion failures across 5 internal services; automatic retries recovered most traffic after ~6 minutes
+- Our preliminary logs attached (controlplane-logs-20270222.zip) — we can share more if helpful.
+
+Can you confirm whether any rollout flags or orchestration changes were in effect during that window? We escalated internally because this touched SLAs.
+
+Caleb
+Senior SRE, VitalSync Health
+
+Note: attaching the logs we pulled.
+
+From: priyom_das@redwood.ai
+To: Caleb Moore <caleb.moore@vitalsync.com>
+Cc: monica_patel@redwood.ai, ben_carter@redwood.ai
+Date: 2027-02-22T09:34:00-08:00
+Subject: Re: High 502/503 spike from Redwood agents after last night's rollout
+
+Caleb — thanks for flagging and for the logs. We saw a correlated rise in control-plane request volume starting at 02:27 PT tied to the agent rollout orchestration steps.
+
+Immediate actions we've taken:
+- Opened an incident and paused the remaining rollout batches at the 20% mark.
+- Triggered an automatic fallback to the previous agent revision for nodes in the affected VPC subnet.
+- Enabled verbose control-plane tracing and collected the logs you've attached; we'll add Redwood-side traces to the zip and send back.
+
+Bridge in 15? Monica and Ben are looped in to support the triage. Would like to confirm: did your retries cause any client-side amplification? Any other symptoms (DNS, egress rules) you observed?
+
+— Priyom
+Principal Solutions Engineer
+Redwood Inference
+
+Attachment: vpc-rollout-timeline.csv (brief rollout timestamps)
+
+From: monica_patel@redwood.ai
+To: Caleb Moore <caleb.moore@vitalsync.com>, priyom_das@redwood.ai
+Cc: ben_carter@redwood.ai
+Date: 2027-02-22T09:48:00-08:00
+Subject: Re: High 502/503 spike from Redwood agents after last night's rollout
+
+On Tue, Feb 22, 2027 at 09:34 AM -08:00, priyom_das@redwood.ai wrote:
+> Caleb — thanks for flagging and for the logs. We saw a correlated rise in control-plane request volume starting at 02:27 PT tied to the agent rollout orchestration steps.
+
+Caleb — quick clarifying notes from operations:
+- The rollout plan included a short-lived health probe change to accelerate agent warmup; that probe increased HEAD requests to the management endpoint for ~90s per host during install.
+- Under normal traffic that probe is safe, but combined with VitalSync's aggressive retry window it produced a transient storm to the control plane.
+
+Proposed near-term mitigation:
+1) We will permanently revert the health-probe change for the VitalSync rollout and roll forward a fix behind a stricter canary (10% with 15-min observation).
+2) We'll push a control-plane rate-limiter rule specifically for management probes per-customer to avoid noisy probe amplification.
+3) We'll share a short runbook for client-side retry backoff recommendations we think will help.
+
+Can we get a one-hour bridge so we can align on the rollback confirmation and next steps?
+
+— Monica
+Engineering Manager, Customer Reliability
+Redwood Inference
+
+From: Caleb Moore <caleb.moore@vitalsync.com>
+To: priyom_das@redwood.ai
+Cc: ops@vitalsync.com, monica_patel@redwood.ai
+Date: 2027-02-22T10:05:00-08:00
+Subject: Re: High 502/503 spike from Redwood agents after last night's rollout
+
+Thanks — joining the bridge now.
+
+For context: our ingestion retry policy is conservative (3 immediate retries then exponential backoff), which likely amplified the probe traffic. We can tweak that but would prefer Redwood add the per-customer soft-rate cap so this doesn't recur.
+
+Also, we've uploaded additional traces to the shared folder. We'll stay on the call and give you live access to our dashboards.
+
+-Caleb
+
+From: priyom_das@redwood.ai
+To: Caleb Moore <caleb.moore@vitalsync.com>, monica_patel@redwood.ai, ben_carter@redwood.ai
+Date: 2027-02-23T14:35:00-08:00
+Subject: Post-incident summary & next steps — VitalSync VPC rollout surge
+
+Caleb / VitalSync ops — follow-up after the bridge and our internal triage. Summary below and agreed action items.
+
+What happened (summary):
+- At 02:27 PT on 2027-02-22 an agent rollout introduced a temporary health probe that increased management-plane HEAD/GET checks during install.
+- VitalSync's client retry behavior coincided with the probe window, causing a transient amplification of control-plane traffic and a short window of elevated 502/503 responses.
+- Our automatic fallback and paused rollout limited customer impact; most pipelines recovered within ~6 minutes.
+
+Root causes identified:
+- Rollout change: new health-probe behavior (regression in agent installer).
+- Amplification: client retry pattern + lack of per-customer soft-rate caps on management endpoints.
+
+Actions completed (since incident):
+- Reverted the health-probe change for VitalSync and completed a rollback across affected batches (complete as of 03:05 PT).
+- Deployed a per-customer soft-rate limiter for management probes (pilot for VitalSync, active).
+- Updated our rollout orchestration to add a stricter canary policy (10% cap, 15-min observation) for future agent upgrades for this account.
+- Shared a client retry guidance note (attached) and recommended small backoff adjustments to avoid amplification.
+
+Action items (owners & ETA):
+- Redwood: add automated preflight check to detect high-probe-volume changes in rollout artifacts (owner: Monica; ETA: 2027-03-08).
+- Redwood: patch agent installer regression so health probe only activates after management quotas are confirmed (owner: Ben; ETA: 2027-03-01).
+- VitalSync: evaluate client retry window changes and test with staged traffic (owner: Caleb; ETA: 2027-03-05).
+
+Attachments: controlplane-logs-20270222.zip, vpc-rollout-timeline.csv, bridge-call-recording-20270222.mp4
+
+We will follow up with a short postmortem doc (link below) once completed; immediate contact for any regressions is ben_carter@redwood.ai.
+
+Thanks for working through this with us — apologies for the disruption.
+
+— Priyom
+Principal Solutions Engineer
+Redwood Inference

@@ -1,0 +1,136 @@
+Implementation: SSO/SCIM cutover & service-account mapping for ElloraHealth
+
+From: Hannah Schmitt <hannah.schmitt@redwood.com>
+To: Asha Menon <asha.menon@ellorahealth.com>, Tom Delgado <tom.delgado@ellorahealth.com>
+Cc: monica.patel@redwood.com, marissa.cole@redwood.com
+Date: Wed, 28 Oct 2026 09:12:00 -0700
+Subject: Implementation: SSO/SCIM cutover & service-account mapping for ElloraHealth
+
+Hi Asha / Tom —
+
+Thanks for the kickoff earlier this week. Per our call, we want to lock in the cutover plan for SSO (SAML) + SCIM provisioning and the service-account mapping that will be used for our API calls from your side. Quick summary / asks: 
+
+- Proposed cutover window: Nov 5, 0200–0400 PT (we'll keep the maintenance page up and route production to the standby cluster). Please confirm no business-critical jobs run in that window.
+- SCIM scope: user and group provisioning only (no entitlements sync). If you need group attribute sync, call it out.
+- IP allowlist: provide static egress CIDRs for your clients (we need those to pre-authorize).
+- Service accounts: Tom, please attach the mapping file with service accounts + intended scopes. See Monica's attachment template in the next message.
+
+Attachments: ellora_sso_scim_requirements.xlsx (draft requirements, SAML metadata checklist)
+
+Next steps: once Tom confirms CIDRs and Asha confirms the go/no-go window, Monica will share the final service-account CSV and our runbook. We'll schedule a 30-minute dry-run on Nov 3 (tech-only).
+
+Hannah
+Hannah Schmitt
+Senior Customer Success Manager | Redwood Inference
+
+From: Asha Menon <asha.menon@ellorahealth.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>
+Date: Wed, 28 Oct 2026 12:45:00 -07:00
+Subject: Re: Implementation: SSO/SCIM cutover & service-account mapping for ElloraHealth
+
+Hannah —
+
+Thanks, that window looks fine from our side. Confirming:
+
+- No overnight billing jobs between 0200–0400 PT on Nov 5.
+- We will provide the static egress CIDRs by EOD Thu (10/29).
+- Tom will own the service-account CSV and will share it with Monica for review.
+
+Can we add a rollback trigger based on >1% auth error rate measured in the first 15 minutes after cutover? Happy to accept Redwood's default metrics but want it documented.
+
+Asha
+Asha Menon
+Head of IT Operations, ElloraHealth
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Tom Delgado <tom.delgado@ellorahealth.com>, Asha Menon <asha.menon@ellorahealth.com>
+Cc: Hannah Schmitt <hannah.schmitt@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Thu, 29 Oct 2026 08:30:00 -07:00
+Subject: Re: Implementation: SSO/SCIM cutover & service-account mapping for ElloraHealth
+
+Hi all —
+
+Uploading a template for the service-account mapping and some implementation notes. Attached: service-account-mapping.csv (columns: account_name, principal_email, intended_scopes, api_key_rotation_window_days, notes). A few operational bullets:
+
+- For SCIM, we recommend scoped tokens that expire every 90 days. Redwood can support longer TTLs if you require, but shorter TTLs reduce blast radius.
+- Service accounts used for automated provisioning should have a distinct principal per environment (prod/stage). Please do not reuse prod credentials in stage.
+- Our runbook will automatically seed SCIM with existing users; the dry-run will show a non-destructive preview.
+
+Action: Tom, please fill the CSV and return by COB Mon (11/2). I will validate the principals and return a signed-off CSV with our recommended scope trimming.
+
+Attachments: service-account-mapping.csv
+
+Thanks —
+Monica
+Monica Patel
+Solutions Engineer, Redwood Inference
+
+From: Tom Delgado <tom.delgado@ellorahealth.com>
+To: Monica Patel <monica.patel@redwood.com>, Hannah Schmitt <hannah.schmitt@redwood.com>
+Date: Thu, 30 Oct 2026 17:05:00 -07:00
+Subject: Re: Implementation: SSO/SCIM cutover & service-account mapping for ElloraHealth
+
+Monica —
+
+Attached is our initial service-account CSV and the network ranges. Note a couple of constraints on our side:
+
+- Egress CIDRs (from our firewall team): 198.51.100.0/24, 203.0.113.128/26. These are static and apply to your API endpoints only.
+- We have one legacy provisioning account (legacy-provision@ellorahealth.com) that cannot be rotated immediately; we flagged it in the CSV.
+
+Replying inline to your bullets:
+> For SCIM, we recommend scoped tokens that expire every 90 days.
+We can do 90 days for new accounts. Legacy account will stay 365d for now — planning to rotate to 90d by Q1.
+
+> Our runbook will automatically seed SCIM with existing users; the dry-run will show a non-destructive preview.
+Copy that — we want to confirm the preview includes group membership and admin flags before write.
+
+Attachments: service-account-mapping.csv, network-allowlist.txt
+
+-Tom
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Asha Menon <asha.menon@ellorahealth.com>, Tom Delgado <tom.delgado@ellorahealth.com>
+Cc: Hannah Schmitt <hannah.schmitt@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Sun, 01 Nov 2026 10:00:00 -07:00
+Subject: Re: Implementation: SSO/SCIM cutover & service-account mapping for ElloraHealth
+
+Asha / Tom —
+
+Thanks for the CSV and CIDRs. I've drafted the execution checklist attached; highlights below: 
+
+1) Pre-cutover (Nov 3 dry-run):
+   - Dry-run in staging shows SCIM preview with group membership and admin flags (non-destructive).
+   - Verify SAML metadata exchange and response signature algorithm (we recommend RSA-SHA256).
+2) Cutover (Nov 5 window):
+   - Enable SAML on Redwood prod, route auth to Ellora's IdP for auth flow validation.
+   - Apply IP allowlist to the control plane so your callers can hit our internal endpoints.
+   - Monitor auth error rate; rollback if >1% auth failure in first 15m.
+3) Post-cutover (30m/2h/24h checks):
+   - 30m: basic auth success rate, error budget sample.
+   - 2h: provisioning counts vs preview.
+   - 24h: reconciliation report and closeout meeting.
+
+Attachment: ellora_access_execution_checklist.pdf (not included in attachments list above; internal checklist).
+
+I'll run the dry-run on Nov 3 at 09:00 PT and will share logs to the Drive folder. Marissa
+Marissa Cole
+Implementation Manager, Redwood Inference
+
+From: Hannah Schmitt <hannah.schmitt@redwood.com>
+To: Asha Menon <asha.menon@ellorahealth.com>, Tom Delgado <tom.delgado@ellorahealth.com>
+Cc: monica.patel@redwood.com, marissa.cole@redwood.com
+Date: Tue, 03 Nov 2026 15:20:00 -07:00
+Subject: Re: Implementation: SSO/SCIM cutover & service-account mapping for ElloraHealth
+
+Asha / Tom —
+
+Great work getting these over. Confirming:
+- We ran the staging dry-run this morning; preview confirmed group membership and admin flags, no destructive writes. Logs uploaded to Drive.
+- We have your CIDRs and the CSV (Monica flagged legacy-provision entry). Monica will send recommended scope changes by EOD.
+- Cutover window Nov 5 0200–0400 PT stands. We'll monitor auth error rate and execute rollback if we hit the >1% threshold in the first 15 minutes.
+
+Please acknowledge you have the execution checklist and the Drive folder link. I'll open a short Slack channel for the cutover window for live coordination.
+
+Hannah
+Hannah Schmitt
+Senior Customer Success Manager | Redwood Inference

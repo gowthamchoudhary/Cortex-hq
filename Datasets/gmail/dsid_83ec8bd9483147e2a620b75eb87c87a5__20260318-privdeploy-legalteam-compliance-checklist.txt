@@ -1,0 +1,137 @@
+Recap & next steps — Private deployment needs for EnterpriseLaw
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Elena Torres <elena@enterpriselaw.com>
+Cc: Mark Dobson <mark.dobson@enterpriselaw.com>
+Date: Wed, 18 Mar 2026 15:20:00 -0700
+Subject: Recap & next steps — Private deployment needs for EnterpriseLaw
+
+Hi Elena / Mark,
+
+Thanks again for the time earlier today — appreciated the candid discussion about the regulatory constraints you operate under. Below is a concise recap of what I heard and the proposed next steps so we can move the procurement and technical review forward quickly. Please flag anything I mis-captured.
+
+High-level pain points & context
+- Client data often includes PII and privileged legal docs; strict custody/retention rules and legal hold requirements.
+- Current preference: customer-managed keys and HSM-backed KMS; no plaintext egress to third-party storage.
+- For highly sensitive matters, you need an air-gapped option or VPC with strict outbound blocks.
+- Auditability is critical: immutable audit logs, per-request metadata, and long-term retention for compliance.
+
+Current stack (from today)
+- Primary infra: AWS (us-east-1) with dedicated VPCs for client workloads.
+- IAM + SSO via Okta; network team controls egress via centralized FW/NAT.
+- Existing redaction pipeline but looking to replace for scale and accuracy.
+
+Success criteria for pilot
+- Data never leaves your VPC unencrypted; KMS/HSM managed by EnterpriseLaw.
+- Demonstrable audit trail + log shipping to your SIEM.
+- Latency target: 200ms median (for 512-token requests) within private link.
+- Throughput: sustain 20 concurrent sessions during peak.
+- Compliance: SOC2/HIPAA posture and support for legal-hold retention.
+
+Immediate asks / next steps
+1) Please confirm the contact(s) on your infra/network side (who can share a network diagram and peering details).
+2) We attached a short network_requirements_template.pdf — if you can fill and return, it speeds the SE review.
+3) Proposed timeline: technical deep-dive with our SE + your infra team next week; 6-week pilot after sign-off on SOW.
+4) We'll prepare a draft pilot_scope_draft.docx and a security questionnaire response for procurement.
+
+Attachments: network_requirements_template.pdf, redwood_private_faq.pdf
+
+If that all looks right, I’ll loop in Rafael (our SE) and Rishi (security lead) to schedule the session. Available next Tue/Wed 10–1 PT.
+
+Best,
+Marissa Cole
+Account Executive | Redwood Inference
+marissa_cole@redwood.ai | +1 (415) 555-0123
+
+On Wed, Mar 18, 2026 at 13:40 Elena Torres <elena@enterpriselaw.com> wrote:
+> Thanks for the quick call. Mark and I will prep the network diagram.
+> 
+> — Elena
+
+From: Elena Torres <elena@enterpriselaw.com>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: Mark Dobson <mark.dobson@enterpriselaw.com>
+Date: Wed, 18 Mar 2026 17:02:00 -0700
+Subject: Re: Recap & next steps — Private deployment needs for EnterpriseLaw
+
+Hi Marissa,
+
+Thanks for the summary — that aligns with our conversation. A few clarifications/additions from Mark and me:
+
+Clarifications
+- Our main VPC is in us-east-1, but we also run isolated customer VPCs in a dedicated account. We must ensure cross-account peering is avoidable; prefer private link/managed peering.
+- KMS: must be HSM-backed (CloudHSM or equivalent). Keys are customer-managed; we cannot export key material.
+- No outbound internet egress for files that contain client PII; routing must be explicit.
+- Retention: legal-hold requirements can be up to 7 years for some matters; we’ll need guidance on how Redwood can surface and manage legal-hold metadata.
+
+Questions
+- Can Redwood run inside a VPC endpoint with your runtime pinned to our subnets?
+- For the air-gap option, would you support an on-prem bundle that we can run isolated?
+
+I’m looping Mark (cc’d) — he’s our infra lead and will be the technical contact. We should aim for the deep-dive next week; Tues/Wed mornings work for Mark.
+
+Attachments: (we’ll attach a preliminary network diagram after internal review)
+
+Best,
+Elena Torres
+Director of Technology Operations | EnterpriseLaw LLP
+elena@enterpriselaw.com | +1 (202) 555-0199
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Rafael Mendes <rafael_mendes@redwood.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Elena Torres <elena@enterpriselaw.com>, Mark Dobson <mark.dobson@enterpriselaw.com>
+Date: Thu, 19 Mar 2026 09:10:00 -0700
+Subject: Fwd: Recap & next steps — Private deployment needs for EnterpriseLaw
+
+Rafael / Rishi — forwarding the thread from EnterpriseLaw. TL;DR of asks for the SE/security review:
+- Confirm feasibility of VPC-only runtime with no egress and support for customer-managed HSM-backed KMS.
+- Air-gap / on-prem option feasibility and what our packaging would require (network, infra, support).
+- Pilot scope: 6 weeks, objective = validated PII handling, audit logs into their SIEM, and meet latency/throughput targets.
+
+Attached: pilot_scope_draft.docx (draft) — I’m hoping you can review and we’ll send a cleaned version to Legal/Procurement.
+
+Immediate internal next steps
+1) Rafael: can you propose a checklist of required network/firewall rules and a short list of non-negotiable infra constraints?
+2) Rishi: please prepare a high-level note on security posture (KMS/HSM, key controls, audit support) we can share with their security team.
+3) I’ll schedule the deep-dive once Rafael proposes times.
+
+Thanks — aiming to move quickly; they want to evaluate options for an April pilot.
+
+Marissa
+Account Executive | Redwood Inference
+marissa_cole@redwood.ai | +1 (415) 555-0123
+
+From: Rafael Mendes <rafael_mendes@redwood.ai>
+To: Elena Torres <elena@enterpriselaw.com>, Marissa Cole <marissa_cole@redwood.ai>, Mark Dobson <mark.dobson@enterpriselaw.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Fri, 20 Mar 2026 09:45:00 -0700
+Subject: Re: Recap & next steps — Private deployment needs for EnterpriseLaw
+
+Hi Elena / Mark / Marissa,
+
+Great to be looped in — appreciate the clear summary. A few quick technical notes and requests so the deep-dive is productive:
+
+1) Network & connectivity - Please provide a VPC diagram that includes subnets (private/public), NAT gateways, route tables, and any existing VPC endpoints.
+- Do you use centralized NAT/egress or per-VPC NAT? For strict no-egress workloads we need to validate how dkim/cron jobs/backups are handled.
+- Preferred connectivity for pilot: AWS PrivateLink or VPC peering into a dedicated account with strict IAM roles. We can run our runtime in your subnets with an endpoint to our control plane if desired.
+
+2) KMS/HSM - Confirm whether you prefer CloudHSM or an on-prem HSM: we support both, but integration details differ. We cannot import customer private key material that violates HSM vendor policies; we can operate with customer-managed keys with remote signing where applicable.
+
+3) Data flow & storage - For the pilot, we recommend no persistent third-party storage for PII — ephemeral KV cache only unless otherwise authorized. If you need longer-term storage, specify encryption-at-rest targets and approved S3 buckets (if any).
+
+4) Auditability & legal-hold - We can ship detailed per-request metadata to your SIEM (syslog/HTTPS). Need list of fields you require (user-id, request-id, resource-id, timestamp, tokens-used).
+
+5) Pilot logistics - Proposed 90-minute deep-dive: Tue Mar 24 or Wed Mar 25, 10–11:30 PT. Agenda: network walkthrough, KMS/HSM auth flow, sample request trace, pilot SOW.
+
+6) Action items before meeting
+- EnterpriseLaw: network diagram + list of egress rules, example KMS policy, and a sample document that must be kept under legal hold.
+- Redwood: we'll prepare a short tech brief outlining VPC deployment options and an SOW draft.
+
+I attached a short CSV of technical questions (questions_for_private_deploy.csv) to help you gather the items ahead of the meeting.
+
+If the proposed time works, I’ll send a calendar invite and a simple attendee list for the deep-dive.
+
+Thanks, Rafael
+Rafael Mendes
+Solutions Engineer | Redwood Inference
+rafael_mendes@redwood.ai | +1 (650) 555-0187

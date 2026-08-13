@@ -1,0 +1,135 @@
+Implementation ownership & provisioning matrix — Dedicated GPU pool onboarding
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Alex Sullivan <alex.sullivan@astranova.ai>, Priya Shah <priya.shah@astranova.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Mon, 19 Jul 2027 16:02:00 +0000
+Subject: Implementation ownership & provisioning matrix — Dedicated GPU pool onboarding
+
+Hi Alex / Priya —
+
+Thanks again for the call today. Per our discussion, I’m consolidating the implementation ownership and a proposed provisioning plan so we can lock the go-live window. Attached is a first-draft ownership matrix and a suggested autoscale/burst policy (see attachments). Summary and asks below: 
+
+- Target go-live window: Aug 2 - Aug 6 (customer acceptance testing Aug 4) — need confirmation of preferred maintenance window.
+- Recommended region: primary us-west-2 (closest to your prod), fallback us-east-1 for burst overflow. Please confirm any regional constraints.
+- Pool sizing proposal: 4x A100 (8x if expected sustained peak >1200 concurrent requests) — ops to confirm.
+- Autoscale/burst policy options (attached):
+  * Conservative: maintain baseline pool + 25% burst for short spikes (recommended for early load)
+  * Aggressive: allow 2x burst with higher preemption risk (for unpredictable workloads)
+
+Action items for AstraNova:
+1) Confirm preferred maintenance window (date/time range) and whether us-west-2 is acceptable.
+2) Provide an approximate peak concurrent request estimate and 95th percentile latency target.
+
+Internal actions (owners in parentheses):
+- Finalize provisioning schedule and MOP (Ben).
+- Confirm pool SKU and quota requests to Cloud (Karthik).
+- Prepare onboarding checklist and customer-facing runbook (Monica).
+
+Attachments: implementation_ownership_matrix.xlsx, autoscale_policy_v1.pdf, provisioning-window-timeslots.pdf
+
+If you can confirm the region and maintenance window by EOD tomorrow, we’ll put the provisioning request in this week and lock the Aug 2 window.
+
+Thanks —
+Marissa Cole
+Sr. Customer Success Manager | Redwood Inference
+marissa_cole@redwood.ai
++1 (415) 555-0192
+
+[attachment: implementation_ownership_matrix.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+[attachment: autoscale_policy_v1.pdf (application/pdf)]
+
+From: Alex Sullivan <alex.sullivan@astranova.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: Priya Shah <priya.shah@astranova.ai>, Ben Carter <ben_carter@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Mon, 19 Jul 2027 18:14:00 +0000
+Subject: Re: Implementation ownership & provisioning matrix — Dedicated GPU pool onboarding
+
+Thanks Marissa — this looks great and aligned with our expectations. A few quick notes from our side: 
+
+- Region: us-west-2 is preferred. We want failover to us-east-1 only for brief bursts, not as a sustained secondary region.
+- Maintenance window: Aug 3, 01:00–05:00 PT works best for our engineers.
+- Load: expect ~350 concurrent typical, peak ~1,100 for short periods during daily batch. Our 95th latency target is 250ms for generation calls.
+
+Question: for the conservative autoscale option, how long before a burst is capacity pre-warmed? If provisioning takes >5 minutes that may impact user-visible latency — can your ops schedule a short pre-warm before our daily peak?
+
+We can sign the DocuSign today once the final SOW is updated with exact SKUs.
+
+—Alex
+Alex Sullivan
+Head of Platform Engineering | AstraNova Labs
+alex.sullivan@astranova.ai
+
+On Mon, 19 Jul 2027 at 16:02, Marissa Cole <marissa_cole@redwood.ai> wrote:
+> [original message]
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Tue, 20 Jul 2027 08:07:00 +0000
+Subject: Re: Implementation ownership & provisioning matrix — Dedicated GPU pool onboarding
+
+Karthik —
+
+Looping you in to confirm provisioning specifics for AstraNova (per Alex’s load numbers). Please see the ownership matrix (Marissa attached). Concrete asks: 
+
+- Can we provision a 4x A100 pool in us-west-2 with a policy that allows +50% burst for up to 20 minutes (pre-warm 2/4 instances 3 minutes prior to expected peak)?
+- If quota requests to cloud are required, give me the list of exact SKUs/quotas and ETA so I can push the request to Cloud Infra today.
+- Any constraints around cross-region burst (us-west-2 -> us-east-1)? Are there egress/cost concerns to flag to the customer?
+
+Proposed timeline: submit provisioning request by EOD Tue (20th), provisioning Wed (21st) night, smoke tests Thu (22nd).
+
+Thanks —
+Ben
+Customer Reliability Ops | Redwood Inference
+[attachment: provisioning-window-timeslots.pdf (application/pdf)]
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Wed, 21 Jul 2027 06:22:00 +0000
+Subject: Re: Implementation ownership & provisioning matrix — Dedicated GPU pool onboarding
+
+Ben / Team —
+
+Confirmed — ops can provision the 4x A100 pool in us-west-2. Notes: 
+
+- Pool: 4x A100 (40GB) reserved, with autoscale gating to allow +50% burst (i.e., up to 6 nodes) for 20 minutes.
+- Pre-warm behavior: we can pre-warm 2 nodes on a crontab-trigger (3 min lead) if you provide expected daily peak times. Pre-warm uses local cache priming to reduce cold-start latency to <150ms on average.
+- Cross-region: us-east-1 fallback will be configured only as a short-lived overflow path. There will be egress costs; estimate ~$0.08/token-equivalent for cross-region traffic — we should include a cost note in the SOW.
+- Quota: we need approval for the A100 quota increase in us-west-2 (request submitted to Cloud Infra, ETA 48 hours once approved).
+
+I’ll start the quota request now and update the provisioning ticket when it’s complete.
+
+—Karthik
+Lead Infra Engineer | Redwood Inference
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Alex Sullivan <alex.sullivan@astranova.ai>, Priya Shah <priya.shah@astranova.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Wed, 21 Jul 2027 09:37:00 +0000
+Subject: Re: Implementation ownership & provisioning matrix — Dedicated GPU pool onboarding
+
+Alex / Priya —
+
+Thanks for the quick responses and confirmations. Recap & next steps: 
+
+- Region: us-west-2 confirmed as primary, us-east-1 configured only for short bursts.
+- Maintenance window: Aug 3, 01:00–05:00 PT confirmed.
+- Pool: ops to provision 4x A100 with +50% burst (6 nodes). Karthik has kicked off quota request.
+- Pre-warm: we’ll schedule the 3-minute pre-warm before your daily peak; please share the expected peak window (local time) so Ops can add the crontab entries.
+- DocuSign: Marissa will send updated SOW link via DocuSign once the SKU and burst notes are inserted.
+
+Action items: 
+- Alex: share expected daily peak time by EOD Wed so Karthik can schedule pre-warm.
+- Ben / Karthik: push quota ticket and confirm provisioning ETA.
+- Monica: finalize customer runbook and share readout ahead of the Aug 2 acceptance test.
+
+I’m attaching the ownership matrix and provisional autoscale policy for your legal/SRE review. We’ll follow up with a short 30-minute ops handoff next Tue to walk through the runbook.
+
+Best,
+Marissa Cole
+Sr. Customer Success Manager | Redwood Inference
+marissa_cole@redwood.ai
+
+[attachment: implementation_ownership_matrix.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+[attachment: autoscale_policy_v1.pdf (application/pdf)]

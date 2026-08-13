@@ -1,0 +1,103 @@
+SLA routing & burst-model qualification — action items from discovery
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Elaine Park <elaine@meadowhealth.com>, Tom Rivera <tom.r@meadowhealth.com>
+Cc: Sean Gallagher <sean_gallagher@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: Thu, 12 Jul 2028 09:12:00 -0700
+Subject: RE: Discovery recap — latency/throughput highlights
+
+Hi Elaine / Tom — thanks again for the call this morning. Quick recap and a couple of clarifying asks so we can size a recommended Dedicated pool and draft the SLA matrix: 
+
+- Target P95 latency: 350ms for synchronous chat generation (single-turn) — note this is your stated fast-path target.
+- Burst expectations: 150 QPS sustained for up to 2 minutes during nightly ingest spikes; baseline expected steady QPS 8–12 during business hours.
+- Token characteristics: median request ~420 tokens (prompt+response) with occasional long-form batches (~2–4k tokens) for report generation (~5% of traffic).
+- Streaming: ~25% of chat flows use streaming responses; those require sub-150ms first-byte where feasible.
+- Persistence: KV prefix caching is acceptable for repeated prompts; however, data retention must be <30 days.
+
+Clarifying asks for sizing: can you confirm exact peak concurrent sessions (not just QPS) during the 150 QPS burst window, and do those bursts correlate with your scheduled ETL job at 01:00 AM PT? Also, please attach the telemetry snapshot you mentioned in the call (sample of requests by token length / timestamp).
+
+Action owners: 
+- Marissa: assemble initial Dedicated config & cost estimate (ETA EOD tomorrow).
+- Sean: engineering follow-up on streaming SLOs and routing/fallbacks.
+- Elaine/Tom: send telemetry snapshot + confirm concurrency during peak.
+
+Thanks — Marissa
+--
+Marissa Cole
+Solutions Engineer, Redwood Inference
+marissa_cole@redwood.ai
+(415) 555-0192
+
+From: Elaine Park <elaine@meadowhealth.com>
+To: Marissa Cole <marissa_cole@redwood.ai>
+Cc: Tom Rivera <tom.r@meadowhealth.com>, Sean Gallagher <sean_gallagher@redwood.ai>
+Date: Thu, 12 Jul 2028 10:04:00 -0700
+Subject: RE: Discovery recap — latency/throughput highlights
+
+Thanks Marissa — attaching a small snapshot (meadow_telemetry_snapshot.csv) that has a 24-hour sample. A few notes inline: 
+
+- Confirmed: the ETL at 01:00 AM PT does trigger a spike; historically that has produced ~140–160 QPS for ~90–150 seconds.
+- Peak concurrent sessions during spike: roughly 65–80 active WebSocket clients.
+- Typical steady-state: 8–10 QPS daytime; weekend nights ~3 QPS.
+- Token distribution: median 420 tokens, 75th pct around 1,100, and top 1% >3k (these are monthly summary reports).
+- Streaming: about 22–28% of chat traffic is streaming; business logic expects first-byte <200ms for a good UX.
+
+We flagged data retention; 30 days retention is workable. We attached a short Mutual Action Plan v1 (see attachment) with target procurement timeline.
+
+Elaine
+
+Attachments: meadow_telemetry_snapshot.csv (text/csv, 12KB); mutual_action_plan_v1.md (text/markdown, 3KB)
+
+From: Sean Gallagher <sean_gallagher@redwood.ai>
+To: Elaine Park <elaine@meadowhealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Neha Kapoor <neha_kapoor@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: Thu, 12 Jul 2028 13:21:00 -0700
+Subject: RE: Discovery recap — latency/throughput highlights
+
+Hi Elaine — thanks for the snapshot, this is great. A few engineering clarifications so we size the cluster correctly and define routing fallbacks: 
+
+1) Burst model and concurrency: you mentioned 65–80 WebSocket clients during the ETL spike. Does each client typically maintain a single open streaming response at a time, or are there many parallel requests per client (e.g., multiple tabs or background jobs)? If one-per-client, we can map that to a steady per-connection KV state and plan KV cache warmups.
+
+2) Long-form jobs: the ~2–4k token report jobs — are those queued/async or do users expect near-real-time completion within the same request? If queued, we can route them to a lower-cost batch model with higher token throughput but higher latency. If synchronous, they'd drive memory/kv capacity planning.
+
+3) Latency SLOs: you gave P95 350ms target and first-byte streaming ~200ms. Do you need a hard P99 SLO or is P95 + operational alerting sufficient? We typically recommend a P99 target only for financial/real-time workflows.
+
+4) Fallback tolerance: if the primary low-latency model is saturated during a burst, would you accept a secondary fallback to a slightly higher-latency variant (e.g., P95 ~600ms) for non-critical sessions, or must all sessions keep the fast-path?
+
+Quick note on recommended sizing (tentative): to hit P95 350ms at 150 QPS with 420 median tokens and ~25% streaming, we'd propose a Dedicated pool of 6 x A16-equivalent nodes with autoscale headroom + 2 warm standby nodes for burst absorption and KV cache priming. This is high-level; I want to confirm the concurrency and long-form behavior before locking configs.
+
+Can you reply inline to the 4 points so we can finalize a costed plan?
+
+Thanks,
+Sean
+--
+Sean Gallagher
+SRE / Performance Lead, Redwood Inference
+sean_gallagher@redwood.ai
+
+From: Tom Rivera <tom.r@meadowhealth.com>
+To: Sean Gallagher <sean_gallagher@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Elaine Park <elaine@meadowhealth.com>, Neha Kapoor <neha_kapoor@redwood.ai>
+Date: Thu, 12 Jul 2028 15:43:00 -0700
+Subject: RE: Discovery recap — latency/throughput highlights
+
+Sean/Marissa — quick responses inline to help you finalize sizing: 
+
+> 1) Burst model and concurrency
+We run one active response per WebSocket client when the user is in a session. Background jobs exist but are separate workers and will be funneled to async endpoints. So assume 1 active streaming per client during the spike.
+
+> 2) Long-form jobs
+Those report-generation jobs (2–4k tokens) are kicked off synchronously from the UI but the UX tolerates a 5–10s window — not strict real-time. We can re-architect them to async if needed during procurement but prefer a single endpoint for now.
+
+> 3) Latency SLOs
+P95 350ms is the business target. P99 is nice-to-have; operational alerts at ~500ms are sufficient for our current release. We'll prioritize P95 for the upcoming pilot.
+
+> 4) Fallback tolerance
+We can accept a fallback to a higher-latency variant for non-authenticated or low-priority sessions during extreme overload. Authenticated/premium sessions should be routed to the fast-path or queued.
+
+Next steps we need from Redwood: final cost estimate for the Dedicated pool you suggested, a clear fallback routing policy template (how we define & tag premium sessions), and a short doc describing streaming-first-byte behavior and how Redwood measures it. We'll review with procurement next week.
+
+Tom
+Principal Product Manager — Meadow Health
+
+----- End of thread -----

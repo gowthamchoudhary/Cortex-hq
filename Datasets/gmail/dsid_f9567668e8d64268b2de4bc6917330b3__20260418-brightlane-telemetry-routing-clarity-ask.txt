@@ -1,0 +1,99 @@
+Brightlane: intermittent routing errors + missing SDK telemetry (prod)
+
+From: Logan Wright <logan_wright@redwood.com>
+To: karthik_iyer@redwood.com, soojin_lee@redwood.com, marissa_cole@redwood.com
+Date: 2026-04-16T10:12:00-07:00
+Subject: Brightlane: intermittent routing errors + missing SDK telemetry (prod)
+
+Hi team,
+
+Brightlane's SRE (Alex) hit intermittent 500/502 routing errors in production since last evening. Their traces show calls that never reached the runtime routing table — no route decision logged in our telemetry. They see the client SDK retries and then a fallback to the generic variant which returns lower quality responses.
+
+Quick summary:
+- First occurrence: 2026-04-15 22:43 PDT
+- Error pattern: request id present in client logs, no corresponding routing event in runtime traces
+- Impact: ~2% of requests for their QPS window, including high-priority inference paths
+
+They've attached a ZIP of traces and a small snippet (sre-error-snippet.txt) with the client-side call ids. Ask:
+1) Can Platform confirm whether an upstream telemetry filter could drop routing events under bursty KV cache pressure?
+2) Short-term mitigation we can recommend to Brightlane (sdk config / runtime flag) while we triage?
+
+Attaching: brightlane_traces.zip (logs)
+
+I'll front-run customer comms once we have an action and timeline. Thanks — this is on an active POC and may impact renewal timing.
+
+— Logan
+Logan Wright
+Senior Sales Engineer
+Redwood Inference
+
+[attachment: brightlane_traces.zip (logs)]
+[attachment: sre-error-snippet.txt (text)]
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: logan_wright@redwood.com, soojin_lee@redwood.com
+Cc: marissa_cole@redwood.com
+Date: 2026-04-16T13:05:00-07:00
+Subject: Re: Brightlane: intermittent routing errors + missing SDK telemetry (prod)
+
+Thanks Logan — digging in.
+
+Short answer: we have a known corner where the routing emission is gated behind a non-critical path; under heavy KV cache evictions we can miss emitting the routing decision when the request is short-circuited by a cache miss + fast-fail. Not widespread but plausible for Brightlane's traffic profile.
+
+Immediate asks for triage:
+- Can you share a couple of request ids (from sre-error-snippet.txt) so we can match across layers? (prefer 3-5 ids)
+- Please enable SDK verbose telemetry for Brightlane (sdk.log_level=debug) and toggle 'client.routing.retry_window_ms' to 150 (their default is 50) — this will reduce retry storms and give us more stable routing.
+
+Short-term mitigation we can ship as a 1-line runtime hotfix: set runtime.fallback.force_emit=true which moves routing emission earlier in the pipeline. It should be safe; I can prepare a patch and smoke test on staging if you approve.
+
+Attaching: runtime-config-proposal.patch
+
+— Karthik
+Karthik Iyer
+Principal Engineer, Runtime
+Redwood Inference
+
+[attachment: runtime-config-proposal.patch (patch)]
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Alex Mercer <alex.mercer@brightlane.com>
+Cc: logan_wright@redwood.com, karthik_iyer@redwood.com, soojin_lee@redwood.com
+Date: 2026-04-17T09:08:00-07:00
+Subject: Re: Brightlane: intermittent routing errors + missing SDK telemetry (prod)
+
+Alex —
+
+Thanks for the traces. We recommend two immediate steps while we triage with Platform:
+1) Enable SDK debug logs and increase client.routing.retry_window_ms to 150ms (no downtime) — instructions attached.
+2) If you can tolerate a single restart window this week, Platform will push a staged runtime config change (force_emit) to your staging cluster for validation.
+
+I'll coordinate timing — can you confirm a 30-minute maintenance window tomorrow? We'll keep this low-risk and monitor.
+
+Thanks,
+Marissa Cole
+Sales Engineering
+Redwood Inference
+
+[attachment: brightlane_sdk_instructions.pdf (doc)]
+From: Logan Wright <logan_wright@redwood.com>
+To: karthik_iyer@redwood.com, marissa_cole@redwood.com, soojin_lee@redwood.com
+Cc: Alex Mercer <alex.mercer@brightlane.com>
+Date: 2026-04-18T16:45:00-07:00
+Subject: Re: Brightlane: intermittent routing errors + missing SDK telemetry (prod)
+
+Quick update:
+- Alex confirmed maintenance window: 2026-04-19 09:30 PDT
+- I've asked Brightlane to enable sdk debug and change retry_window_ms; Alex attached the logs to Drive link.
+- Karthik: please proceed with a staged runtime change to force_emit on their staging cluster. Please post the staging smoke test results to JIRA INF-9421.
+
+Action owners / timeline:
+- Brightlane SRE (Alex) — enable SDK debug / confirm by 2026-04-18 18:00 PDT
+- Karthik — prepare patch and deploy to staging 2026-04-18 evening; smoke tests by 04-19 08:30
+- Marissa/Logan — customer comms and rollback plan
+
+Thanks team — this thread is pinned for the renewal check-in.
+
+— Logan
+
+On Sat, Apr 16, 2026 at 10:12 AM Logan Wright <logan_wright@redwood.com> wrote:
+> [original message included above]
+
+[link: https://drive.redwood.com/drive/folders/brightlane-prod-traces]

@@ -1,0 +1,112 @@
+Dedicated GPU pool readiness — AtlasMed kickoff and requirements
+
+From: Katie Huang <katie.huang@atlasmed.com>
+To: Mina Haddad <mina_haddad@redwood.com>
+Cc: AtlasMed Procurement <procurement@atlasmed.com>
+Date: Tue, 18 Apr 2028 09:02:00 -0700
+Subject: Dedicated GPU pool — initial sizing and kickoff
+
+Hi Mina,
+
+Thanks again for the walkthrough last week — the exec team is keen to move forward with a Dedicated pool for our inference workloads. Attached is a rough export of our current throughput patterns (AtlasMed_required_capacity.csv). We'd like Redwood to own the provisioning and autoscale policy recommendations so we can finalize the SOW.
+
+High-level asks:
+- Recommended pool topology (single-region vs multi-region) for a primary US east customer base with 99.9% availability target
+- Baseline throughput target: 1200 reqs/min average, 6–8 token generations typical, spiky events ~5x daily for ~10–15 minutes
+- Guidance on burst capacity pricing and warm-up times
+- List of what your NetOps team will need from us (IPs, ASN, firewall rules)
+
+Can we lock a 30–45 minute kickoff for Thursday to go over the plan and handoff to CS/Provisioning?
+
+Thanks —
+Katie
+Director, Platform Engineering
+AtlasMed
+(attachment: AtlasMed_required_capacity.csv (CSV, 78KB))
+
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Katie Huang <katie.huang@atlasmed.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Marcus Lin <marcus_lin@redwood.com>
+Date: Tue, 18 Apr 2028 11:18:00 -07:00
+Subject: Re: Dedicated GPU pool — initial sizing and kickoff
+
+Katie —
+
+Appreciate the data dump, that's perfect. I've attached our Dedicated-Capacity-Request-Form.xlsx to capture the remaining operational inputs (SLA targets, expected steady-state qps, peak multipliers, region preferences, and KMS details). I've looped in Monica (CS lead) and Marcus (capacity engineering) to start the provisioning conversation.
+
+Proposed immediate next steps:
+1) You and I run a 30-min kickoff on Thursday 2028-04-20 at 10:00am PT to confirm region constraints and SLOs.
+2) AtlasMed completes the Request Form before the call — we'll use it to produce a pool topology diagram and cost estimates.
+3) Marcus will produce two topology options (single-region east vs active-passive multi-region) with estimated tail latencies and burst costs.
+4) Monica will capture onboarding checkpoints and customer-side NetOps firewall items.
+
+Quick answers to your bullets:
+- For 99.9% availability with heavy east-US traffic, our default recommendation is a primary us-east pool with a cold-standby us-west region for failover; if you require sub-100ms p95 we should discuss geo-anchoring.
+- Warm-up: typical warm-up for burst nodes is 60–120 seconds depending on model weight and KV cache state; we can use warm standby to reduce impact.
+- NetOps needs: public egress IP ranges, peering ASN (if doing private link), and certificate thumbprints for mTLS. I'll add a short checklist to the Drive folder.
+
+I'll send the kickoff invite and a Drive link with the form and a blank topology diagram.
+
+Best,
+Mina Haddad
+Senior Customer Success Manager | Redwood Inference
+(attachment: Dedicated-Capacity-Request-Form.xlsx (XLSX, 64KB))
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Mina Haddad <mina_haddad@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Wed, 19 Apr 2028 09:34:00 -07:00
+Subject: Re: Dedicated GPU pool — initial sizing and kickoff
+
+Mina / Monica —
+
+I reviewed the AtlasMed export. Quick technical notes to prepare options for Thursday:
+
+1) Topology options I'll pack into the deck:
+   - Option A (Cost-optimized): Single-region us-east pool, autoscale to baseline + 3x burst with soft-preemption (best for predictable averages).
+   - Option B (Latency/high-availability): us-east primary + us-west warm-standby with active-passive routing; warm-standby keeps KV cache snapshots for ~20 mins. Better p95 but ~18% higher monthly cost.
+
+2) Autoscale/burst policy defaults and tuning knobs:
+   - Continuous batching window: 20–60ms (workload dependent)
+   - Burst policy: pre-warmed slots + ephemeral burst VMs. We recommend: pre-warm 10% of peak, ephemeral for remaining.
+   - Fallback behavior: automatically route to smaller/quantized variant if tail latency > SLO for >2min.
+
+3) Warm-up times: model-dependent. For a ~6–8 token average request, warm-up to 90% throughput typically ~90s. If AtlasMed wants <30s warm-up, we'll need sustained pre-warm capacity.
+
+4) NetOps checklist (to hand to Monica):
+   - CIDR ranges for Redwood edge (will provide list)
+   - [Optional] Private link details if AtlasMed wants VPC peering
+   - TLS cert requirements for mTLS
+
+I'll attach a simple topology diagram and cost delta table for the kickoff notes.
+
+-marcus
+Senior Capacity Engineer | Redwood Inference
+(attachment: proposed-pool-topology-diagram.png (PNG, 280KB))
+
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Katie Huang <katie.huang@atlasmed.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, AtlasMed Procurement <procurement@atlasmed.com>
+Date: Fri, 22 Apr 2028 16:03:00 -07:00
+Subject: Re: Dedicated GPU pool — initial sizing and kickoff
+
+Katie —
+
+Thanks for confirming Thursday — calendar invite is out for 2028-04-20 10:00am PT (I included the Zoom link and a short agenda). To keep the kickoff efficient I've summarized what we want AtlasMed to upload to the Drive ahead of time:
+- Completed Dedicated-Capacity-Request-Form.xlsx (SLA, steady-state qps, peak windows, KMS)
+- Any compliance constraints (data residency, logging retention)
+- Preferred regions and IP allowlists
+
+On the call we'll:
+- Review Marcus's two topology options and estimated cost deltas
+- Pick autoscale/burst defaults to bake into the SOW (pre-warm %; ephemeral burst caps; fallback model variants)
+- Agree on NetOps handoff artifacts and a target date for provisioning (we can do a T-minus schedule in the follow-up).
+
+If AtlasMed completes the spreadsheet by EOD Wednesday (2028-04-19) Marcus can produce a short estimate before the kickoff and we'll be able to land on a recommended topology by the end of the call.
+
+Notes: Monica will be your primary onboarding owner — she will run the activation checklist and coordinate the NetOps exchange.
+
+See you Thursday,
+Mina Haddad
+Senior Customer Success Manager | Redwood Inference
+Redwood Inference — Customer Success
+(Zoom: https://redwood.zoom.us/j/123456789)

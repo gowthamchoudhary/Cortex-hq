@@ -1,0 +1,110 @@
+Access trace TTL & offsite export playbook — S3 transfer options
+
+From: Tom Reynolds <tom.reynolds@acmehealth.com>
+To: Naomi Feldman <naomi.feldman@redwood.ai>
+Cc: Sandeep Rao <sandeep.rao@acmehealth.com>
+Date: 2027-06-18T09:12:00-07:00
+Subject: Access logs: offsite export & TTL questions
+
+Hi Naomi,
+
+Thanks again for the demo yesterday. A couple of follow-ups from our security and compliance teams:
+
+- We need a documented playbook for exporting access logs (access traces) to an offsite S3 bucket for 6 months. Can Redwood push to our S3, or do we pull?
+- What retention/TTL options exist for access logs vs. audit logs? We have a regulatory requirement to retain access traces for 180 days and then be able to prove deletion afterwards.
+- What export formats do you support (ndjson/parquet)? Are exports checksum-signed for tamper evidence?
+
+Can you put together recommended steps and any templates? Ideally we need something we can hand to our infra team this week.
+
+Thanks,
+Tom
+Tom Reynolds
+Head of Security Operations | Acme Health
+[Attachment: acme_requirements_0617.pdf (PDF, 92 KB)]
+From: Naomi Feldman <naomi.feldman@redwood.ai>
+To: Tom Reynolds <tom.reynolds@acmehealth.com>
+Cc: Sandeep Rao <sandeep.rao@acmehealth.com>, Michael Grant <michael.grant@redwood.ai>
+Date: 2027-06-18T11:05:00-07:00
+Subject: Re: Access logs: offsite export & TTL questions
+
+Tom —
+
+Thanks for the clear list. High level answers up front:
+
+- Export mode: Redwood supports both \"push\" (we can deliver encrypted bundles to a customer-owned S3 via an IAM role and server-side encryption) and \"pull\" (you can initiate an export job and we place files in a short-lived staging bucket for transfer). For regulated customers we recommend push using a customer role so you maintain bucket ownership.
+- Formats: ndjson (line-delimited JSON) and Parquet are both supported; Parquet is recommended for large-volume analytics.
+- TTL / retention: Access traces and audit logs are configurable independently. We currently expose retention windows in the console and via API (30/90/180/365 days) and support a custom TTL up to 7 years via enterprise policy.
+- Proof of deletion: Each export job is logged and we can include a signed SHA256 manifest for every export. For retained logs, we provide a deletion certificate (timestamped, signed internal audit token) that you can store as proof.
+
+I attached a short playbook and an S3 presigned template to get you started. Michael has a couple of operational notes below.
+
+Next step: would you like a canary export to your staging bucket this week? If so, please share the target bucket name and an IAM role ARN with s3:PutObject permissions.
+
+Best,
+Naomi Feldman
+Director, Solutions — Redwood Inference
+naomi.feldman@redwood.ai | +1 415-555-0192
+[Attachment: access-export-playbook_v1.pdf (PDF, 248 KB)]
+From: Michael Grant <michael.grant@redwood.ai>
+To: Tom Reynolds <tom.reynolds@acmehealth.com>, Naomi Feldman <naomi.feldman@redwood.ai>
+Cc: Priyom Das <priyom.das@redwood.ai>
+Date: 2027-06-18T13:22:00-07:00
+Subject: Re: Access logs: offsite export & TTL questions
+
+Tom — quick operational pointers from infra: 
+
+1) Export cadence: we support ad-hoc, hourly, and daily exports. Hourly is preferred if you need near-real-time ingestion into your analytics; daily reduces object count/cost.
+2) File partitioning: exports include partition keys (year/month/day/hour) for parquet; ndjson uses rolling files (<200MB recommended).
+3) Encryption: exports are encrypted in transit (TLS) and at rest using your KMS CMK when using push delivery.
+4) Integrity: every export includes a SHA256 manifest. We can optionally sign manifests with our key; if you need a third-party attestation we can timestamp manifests with an audit log event id.
+4) Deletion evidence: when TTL expires, we mark objects for deletion, run a bucket lifecycle, and emit an export-deletion record (signed). We can also provide a one-off evidence ZIP containing manifests + deletion receipts.
+
+Naomi: two practical asks for the canary export — bucket ARN and prefered format (ndjson/parquet) + desired cadence.
+
+—Michael
+Michael Grant
+Senior Systems Engineer | Redwood Inference
+[Attachment: s3-presigned-template.json (JSON, 2 KB)]
+From: Tom Reynolds <tom.reynolds@acmehealth.com>
+To: Naomi Feldman <naomi.feldman@redwood.ai>, Michael Grant <michael.grant@redwood.ai>
+Cc: Sandeep Rao <sandeep.rao@acmehealth.com>
+Date: 2027-06-18T15:03:00-07:00
+Subject: Re: Access logs: offsite export & TTL questions
+
+Thanks Naomi/Michael — this looks good. A couple clarifications: 
+
+- We'll provide an ARN: arn:aws:s3:::acme-prod-logs-exports
+- Prefer Parquet daily exports for the first phase to keep ingest and verification simpler.
+- For the deletion certificate, can you show an example output we can attach to our evidence package? Our auditors ask for a redacted example.
+
+If you can run a canary to arn:aws:s3:::acme-prod-logs-exports/staging/2027-06-18/ tomorrow morning that would be ideal.
+
+Tom
+
+On Fri, Jun 18, 2027 at 11:05 Naomi Feldman <naomi.feldman@redwood.ai> wrote:
+> Tom —
+> 
+> Thanks for the clear list. High level answers up front: ...
+> 
+> Best,
+> Naomi
+
+From: Priyom Das <priyom.das@redwood.ai>
+To: Tom Reynolds <tom.reynolds@acmehealth.com>, Naomi Feldman <naomi.feldman@redwood.ai>, Michael Grant <michael.grant@redwood.ai>
+Date: 2027-06-19T16:48:00-07:00
+Subject: Re: Access logs: offsite export & TTL questions
+
+Folks — attaching the example deletion certificate and a sample evidence bundle. The deletion certificate is a small JSON that includes the export job id, the manifest checksums, the TTL applied, and a timestamp plus our internal signature token. We've redacted internal ids for sharing. Also attached an XLS checklist you can hand to auditors.
+
+Summary of what's attached:
+- access-export-playbook_v1.pdf (playbook with steps and preferred defaults)
+- s3-presigned-template.json (example presigned PUT flow if you choose pull)
+- acme_evidence_checklist.xlsx (auditor-facing checklist)
+- deletion_certificate_example.json (example of the evidence you can store)
+
+Naomi — let me know when you want me to run the staged canary (I can coordinate the job and hand off logs).
+
+Thanks,
+Priyom Das
+Platform Operations | Redwood Inference
+[Attachment: deletion_certificate_example.json (JSON, 6 KB)]

@@ -1,0 +1,108 @@
+Escalation: DataShield connector failures — SLA & on-call coordination
+
+From: Rajiv Singh <rajiv.singh@consultco.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Cc: Carlos Mendez <c.mendez@datasolutions.io>
+Date: Mon, 2 Mar 2026 08:12:00 -0800
+Subject: DataShield connector errors impacting Redwood Private customers
+
+Hi Vanessa / Marcus,
+
+Quick note — over the last 45 minutes we've noticed repeated 502/timeout errors from the DataShield connector when proxying requests to Redwood Private deployments in us-west-2. Two enterprise customers (Acme Analytics and Meridian Health) reported timeouts in their ingestion pipelines. We see correlation with a recent change on our side to the batching gate (deploy 2026-03-02T07:40Z).
+
+Attached is a small sample of error traces (connector_error_logs_20260302.zip). Can you put us in touch with the on-call engineer for the Redwood connector layer? Our customer success leads are asking for an SLA to acknowledge and resolve P1s for integrations — they expect a 1-hour acknowledgement window and a 6-hour mitigation window.
+
+We understand this may be affecting multiple tenants; given the commercial impact, we'd like to propose a short-term MAP (mutual action plan) while we triage.
+
+Thanks,
+Rajiv
+Partner Success | DataShield Integrations
+partners@datashield.com
+
+--- 
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Rajiv Singh <rajiv.singh@consultco.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Mon, 2 Mar 2026 09:05:00 -08:00
+Subject: Re: DataShield connector errors impacting Redwood Private customers
+
+Rajiv — thanks for the heads up and for the logs. We're escalating this to our partner ops channel and will stand up a MAP. Short answers for now:
+
+- Acknowledgement SLA: we can commit to a 1-hour ack for P1s during business hours; need to align on 24/7 coverage for production customers.
+- Mitigation SLA: our on-call team can target a 6-hour mitigation window for critical integrations, but we'll need DataShield to maintain a parallel on-call path for their connector changes.
+
+Marcus, can you take first look and confirm whether the errors match gating behavior from our side? Marissa, please draft the MAP and include required steps for a coordinated rollback and emergency contacts.
+
+Rajiv — can you confirm the primary on-call contact and PagerDuty escalation policy for DataShield? If you can share that link, we'll add it to the MAP and to the DocuSign SLA proposal.
+
+I'll host a quick 30-minute sync at 10:00 PT if that works — otherwise we can do 1:00 PT.
+
+Best,
+Vanessa Ortiz
+Head of Partnerships, Redwood Inference
+vanessa.ortiz@redwood.ai | +1 415-555-0162
+
+On Mon, Mar 2, 2026 at 08:12 AM Rajiv Singh <rajiv.singh@consultco.com> wrote:
+> Hi Vanessa / Marcus,
+> 
+> Quick note — over the last 45 minutes we've noticed repeated 502/timeout errors from the DataShield connector...
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>
+Cc: Elliot Price <elliot.price@redwood.ai>, Rajiv Singh <rajiv.singh@consultco.com>, Carlos Mendez <c.mendez@datasolutions.io>
+Date: Tue, 3 Mar 2026 10:20:00 -08:00
+Subject: Re: DataShield connector errors impacting Redwood Private customers (MAP + runbook)
+
+All — following up from Vanessa's note. Attached: DataShield_integration_runbook_v1.pdf and a proposed_partner_sla_draft.docx. Key points from engineering triage:
+
+- What we saw: the gateway dropped KV-cache warmup requests at ~07:39Z causing the connector batching to retry; retries exceeded socket timeouts and surfaced as 502s. Initial fix: bump socket timeout on the connector proxy and disable the new batching gate rule (roll back change).
+- Immediate next steps (MAP):
+  1) DataShield rolls back batching gate to v2026-03-01 by 10:45 PT (owner: DataShield release lead).
+  2) Redwood on-call increases proxy socket timeout from 30s -> 90s for the next 24h as a stopgap (owner: Marcus Lin).
+  3) Both sides run synthetic end-to-end checks against Acme Analytics and Meridian Health test tenants (owners: CS + DataShield SRE).
+  4) Joint post-mortem within 72h and decision whether to keep batching gate changes behind a feature flag.
+
+- On-call / SLAs proposed (in draft doc):
+  * Acknowledgement: 1 hour (24/7) — requires both sides to have PD escalation policies linked.
+  * Mitigation target: 6 hours for P1; if cross-tenant impact, 4-hour target with mandatory exec notification.
+  * Any change to connector batching requires a 48-hour notice and a canary on 1% traffic for 24h.
+
+Attachments: integration runbook (operational steps, rollback commands), SLA draft (legal + escalation contacts).
+
+Marcus — please attach any logs you pulled and confirm exact command to flip the timeout. Rajiv / Carlos — confirm DataShield's rollback ETA and share the PagerDuty policy link.
+
+Thanks,
+Marissa Cole
+Senior Customer Success Manager, Redwood Inference
+marissa.cole@redwood.ai
+
+> On Mon, Mar 2, 2026 at 09:05 AM Vanessa Ortiz <vanessa.ortiz@redwood.ai> wrote:
+> > Rajiv — thanks for the heads up and for the logs...
+
+From: Rajiv Singh <rajiv.singh@consultco.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Marcus Lin <marcus.lin@redwood.ai>, Carlos Mendez <c.mendez@datasolutions.io>
+Date: Wed, 4 Mar 2026 11:47:00 -07:00
+Subject: Re: DataShield connector errors impacting Redwood Private customers (MAP + runbook)
+
+Thanks everyone — update from the DataShield ops side: we completed the rollback at 10:12 PT and verified synthetic checks for both tenants; initial error volume has dropped to baseline.
+
+We agree to the MAP and the SLA draft with one change: DataShield requests that the mitigation window for cross-tenant P1s be 6 hours (instead of 4) provided both sides have immediate on-call escalation — this is to ensure we have time for a controlled rollback without cascading customer-side retries.
+
+Links:
+- PagerDuty policy: https://pagerduty.com/policies/PD-DataShield-Redwood
+- DocuSign SLA: https://app.docusign.com/DocuSign/12345-DataShield-SLA
+
+We'll sign the proposal by EOD once the doc reflects the mitigation window tweak. For on-call contacts:
+- DataShield primary: Carlos Mendez (c.mendez@datasolutions.io) — PD escalation active 24/7.
+- Redwood primary: Marcus Lin (marcus.lin@redwood.ai) — PD escalation active 06:00-22:00 PT; backup is Elliot Price nights.
+
+If all good, let's convert this MAP into a formal SLA and route to legal for a short SOW/DocuSign.
+
+Rajiv
+Partner Success | DataShield Integrations
+partners@datashield.com
+
+> On Tue, Mar 3, 2026 at 10:20 AM Marissa Cole <marissa.cole@redwood.ai> wrote:
+> > All — following up from Vanessa's note...

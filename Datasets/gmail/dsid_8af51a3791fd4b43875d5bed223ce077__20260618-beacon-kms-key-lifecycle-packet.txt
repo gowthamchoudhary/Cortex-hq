@@ -1,0 +1,95 @@
+Beacon Health SIG: KMS / key lifecycle & transport details
+
+Hi Marissa,
+
+Thanks for taking this on. As part of Beacon Health's SIG submission we need a concise artifact packet describing Redwood's key management controls for the hosted offering we are evaluating. Specifically we are looking for the following items (where applicable):
+
+- Where customer data encryption keys are stored (KMS vendor and whether HSM-backed)
+- Envelope encryption architecture and key hierarchy
+- Rotation policy (default cadence, who/what triggers rotation, automated vs manual)
+- Key destruction/election workflows (how a key is retired and proof of destruction)
+- In-transit protections (TLS versions, mutual TLS between components)
+- Audit evidence: CloudTrail or equivalent entries showing KMS API calls (redacted ok)
+- Proof that keys cannot be exported by Redwood (if applicable) or procedures for BYOK
+- Retention period for key audit logs and rotation provenance
+
+I've attached Beacon's SIG template to the thread to help map items. Ideally we need a single ZIP with a short narrative + redacted logs by EOD Friday 6/19 so our compliance team can include it in the package. Can you confirm scope and ETA?
+
+Thanks,
+Lena
+Security Manager — Beacon Health
+
+Hi Lena —
+
+Appreciate the clear checklist and the template. We can provide a focused packet that covers the hosted offering (Redwood Hosted API) and describe how our Dedicated/Private options differ. I'm looping in Vivek (our platform security lead) for the technical artifacts and Rishi/Mina for any legal wording or attestation.
+
+Plan / next steps: 
+1) Vivek to provide a short narrative + redacted CloudTrail/KMS entries and a copy of our KMS policy (we will redact any customer-specific identifiers).
+2) We'll include an HSM configuration snippet showing FIPS-backed storage where applicable.
+3) Rishi/Mina will draft a brief signed statement suitable for external auditors confirming key export/non-export behavior.
+4) Deliverables bundled to you by EOD 6/19 as a single ZIP; if you need an earlier call, propose 9am ET tomorrow.
+
+Is that timeline acceptable?
+
+Best,
+Marissa
+Account Executive, Redwood Inference
+
+Hi Lena,
+
+Below is a concise technical summary and the artifacts we're attaching. I'll keep it high level with pointers to the attached redacted logs/snippets.
+
+1) Key storage and HSM backing
+- Hosted (Redwood API): Data-encryption keys are encrypted with a Root CMK stored in AWS KMS. For the hosted control plane the CMK is managed by Redwood but is AWS KMS-managed (not exportable).
+- Dedicated/Private: We offer CloudHSM-backed CMKs (customer or Redwood-owned clusters depending on contract). CloudHSM clusters we use are FIPS 140-2 validated appliances and are configured with role-based access controls; HSM configuration snippet attached.
+
+2) Envelope encryption architecture
+- We use envelope encryption: service-level data keys (DEKs) are generated per-tenant/session and encrypted with a Customer Master Key (CMK). DEKs are AES-256-GCM. The CMK performs Encrypt/Decrypt and GenerateDataKey API calls only in KMS.
+
+3) Rotation policy
+- Default: CMKs rotate on a 365-day cadence by policy unless customer selects a more frequent cadence.
+- DEKs: short-lived (default TTL 30 days for cached keys; rotated on re-issue) depending on workload.
+- Rotation workflow: automated rotation is handled by the KMS policy + orchestration service; rotation events are logged and we keep a rotation provenance record (see rotation_log_2026Q2.csv).
+
+4) Key destruction/decommissioning
+- CMK retirement: We mark keys retired in KMS and retain encrypted snapshots for safe rollback for a configurable quarantine period (default 30 days) before scheduled scheduled deletion; permanent deletion requires a documented approved request and is logged. For Private deployments, customers retain control of root HSM key material.
+
+5) In-transit protections
+- All RPCs and client-server communication use TLS 1.2+ with strong cipher suites; internal service-to-service traffic defaults to mTLS with mutual authentication using short-lived mTLS certs. For hosted traffic we terminate TLS at load balancers which are hardened and audited regularly.
+
+6) Auditability and non-exportability
+- KMS API calls (Encrypt, Decrypt, GenerateDataKey, ReEncrypt, CreateKey, ScheduleKeyDeletion) are logged to CloudTrail with request IDs and timestamps. We can provide redacted CloudTrail entries (attached) showing a sample Encrypt/GenerateDataKey/Rotate sequence.
+- For hosted keys we do not export plaintext CMKs. For Dedicated/Private, customers with BYOK can bring keys and maintain export controls.
+
+Attachments included: kms_policy_v2.1.pdf (policy excerpt), rotation_log_2026Q2.csv (redacted rotation events), hsm_config_snippet.txt (configuration extract).
+
+If you need specific CloudTrail request IDs for auditors we can provide them with additional redaction and an NDA amendment if required.
+
+Regards,
+Vivek Kulkarni
+Platform Security Lead — Redwood Inference
+
+Marissa / Vivek —
+
+Thanks, that is helpful and mostly exactly what we need. Two quick follow-ups before we close this out for the SIG: 
+
+1) Can you provide a signed attestation stating that hosted CMKs are not exportable by Redwood and that rotation provenance is retained for at least 12 months?
+2) For the rotation_log CSV, can you confirm the timezone on the timestamps and provide a short mapping doc for the column names (we want to map to our audit fields)?
+
+If you can send the attestation and a small README for the CSV, we can finalize the SIG intake.
+
+Thanks,
+Lena
+Security Manager — Beacon Health
+
+Lena —
+
+Per the plan: attached is a short signed attestation from our Legal/Compliance team confirming that hosted CMKs are not exportable by Redwood and that rotation provenance is retained for at least 12 months. We've also attached a one-page README that maps rotation_log_2026Q2.csv column names to audit fields (timestamps are UTC).
+
+Deliverables attached: signed_key_handling_statement.pdf, rotation_log_readme.txt (included in ZIP). We'll upload the full packet to the shared Drive link and share access to Beacon's compliance mailbox.
+
+If you need any follow-up language for auditors, Mina is available to sign a tailored statement.
+
+Best,
+Marissa
+Account Executive — Redwood Inference

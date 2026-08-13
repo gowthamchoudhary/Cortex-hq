@@ -1,0 +1,156 @@
+SIG: Clarifications on DR / BCP (RTO/RPO, backups, regional failover) — ClearHealth
+
+From: Claire Nguyen <claire.nguyen@clearhealth.com>
+To: vanessa_ortiz <vanessa_ortiz@redwood.ai>
+Date: Tue, 15 Dec 2026 09:17:00 -0800
+Subject: SIG follow-up — BCP/DR clarifications request
+
+Hi Vanessa,
+
+Thanks for the SIG responses your team submitted last week. Our security review flagged a few follow-ups specifically around business continuity and disaster recovery items where we need slightly more detail before we close out the control:
+
+- Specific RTO/RPO targets (by component): control plane, model serving (inference), analytics/telemetry, and customer backups.
+- Backup frequency, retention, and encryption details (including KMS/HSM usage).
+- Regional failover approach: automated failover, planned failover, and how DNS/clients are handled.
+- Evidence of recent restore/DR tests and the cadence of those tests.
+
+Could you please provide a consolidated response and any supporting artifacts (architecture diagram, runbook excerpt, backup logs or attestations)? We prefer a single consolidated reply we can attach to the SIG control.
+
+Sincerely,
+Claire Nguyen
+Senior InfoSec Analyst | ClearHealth
+Attachments: none
+
+From: vanessa_ortiz <vanessa_ortiz@redwood.ai>
+To: sergio_alvarez <sergio_alvarez@redwood.ai>, kimberly_park <kimberly_park@redwood.ai>
+Cc: 
+Date: Tue, 15 Dec 2026 11:02:00 -0800
+Subject: Fwd: SIG follow-up — BCP/DR clarifications request
+
+Team — forwarding ClearHealth's follow-ups. They want consolidated answers + artifacts. Can we split up who owns which bullet and come back with a single PDF?
+
+Proposed split:
+- Sergio: RTO/RPO by component, failover behavior for model serving and client-facing endpoints, and a short description of DNS/traffic cutover.
+- Kim: backup frequency/retention/encryption, KMS/HSM details, audit log retention, and evidence of restore tests (or schedule).
+
+Timeline: please send drafts by EOD Friday (2026-12-18) so I can review and combine. If either of you needs artifacts from Infra, loop them in.
+
+Thanks,
+Vanessa Ortiz
+Account Executive | Redwood Inference
+Redwood Inference — Security & Compliance requests inbox: compliance@redwood.ai
+
+On Tue, 15 Dec 2026 at 09:17 Claire Nguyen <claire.nguyen@clearhealth.com> wrote:
+> Hi Vanessa,
+>
+> Thanks for the SIG responses your team submitted last week. Our security review flagged a few follow-ups specifically around business continuity and disaster recovery items where we need slightly more detail before we close out the control:
+>
+> - Specific RTO/RPO targets (by component): control plane, model serving (inference), analytics/telemetry, and customer backups.
+> - Backup frequency, retention, and encryption details (including KMS/HSM usage).
+> - Regional failover approach: automated failover, planned failover, and how DNS/clients are handled.
+> - Evidence of recent restore/DR tests and the cadence of those tests.
+>
+> Could you please provide a consolidated response and any supporting artifacts (architecture diagram, runbook excerpt, backup logs or attestations)? We prefer a single consolidated reply we can attach to the SIG control.
+>
+> Sincerely,
+> Claire Nguyen
+> Senior InfoSec Analyst | ClearHealth
+> Attachments: none
+
+From: sergio_alvarez <sergio_alvarez@redwood.ai>
+To: vanessa_ortiz <vanessa_ortiz@redwood.ai>, kimberly_park <kimberly_park@redwood.ai>
+Date: Wed, 16 Dec 2026 10:45:00 -0800
+Subject: Re: Fwd: SIG follow-up — BCP/DR clarifications request
+
+Vanessa / Kim — draft answers for the RTO/RPO + failover sections below. These are the operational targets we publish and the engineering guarantees we run to. Put these in the consolidated doc unless you want different wording.
+
+RTO / RPO (by component) — Redwood Inference (published targets):
+- Control plane (management API, deployment control): RTO target = 4 hours (full management functionality restored in failover region); RPO = 1 hour (snapshot of config/state replicated).
+- Model serving / inference path (stateless request handling): RTO target = 5 minutes (automated traffic cutover to a warm replica region for production-critical endpoints); RPO = near-zero for in-flight tokens (we attempt seamless redirection but in-flight generation may be lost; clients receive a 503 with retry guidance in that window).
+- KV/prefix cache and ephemeral GPU state: RTO target = best-effort within 10 minutes to warm cache; RPO = loss accepted (we rehydrate from model weights and cached prefixes as available).
+- Telemetry / analytics pipeline: RTO target = 8 hours; RPO = up to 1 hour for buffered telemetry (we use durable buffering to minimize loss).
+- Customer-controlled backups (S3 snapshots of persisted customer artifacts): RTO target = 4 hours for restore into a new tenant workspace; RPO = 1 hour (hourly incremental snapshots).
+
+Failover approach (summary):
+- We operate cross-region active-passive model serving for most customers: warm replica clusters are kept with pre-loaded models and warmed KV caches depending on tier.
+- Automated monitoring triggers region failover for SLO-impacting incidents (based on latency/error thresholds). For other outages, we perform manual planned failover following the DR runbook.
+- DNS / traffic cutover: we use weighted DNS + global load balancer; automated failover reduces weight on failed region and shifts to warm region. TTLs are kept low (60s) for critical endpoints. Additionally, clients are encouraged to implement exponential retry; our SDKs include retry guidance and status codes for transparent reconnection.
+
+Evidence / artifacts I can attach:
+- prod-architecture-repl-diagram.png (cross-region replication + warm cluster callouts)
+- summary of recent failover test (2026-09-21) and outcome (passed, mean cutover 3.8 min) — attached in the consolidated PDF.
+
+Notes / caveats: RTO for inference is best-effort and varies by plan (dedicated pools have lower expected recovery times due to reserved capacity).
+
+Sergio
+Solutions Engineer | Redwood Inference
+Attachments referenced: prod-architecture-repl-diagram.png (image)
+
+From: kimberly_park <kimberly_park@redwood.ai>
+To: vanessa_ortiz <vanessa_ortiz@redwood.ai>, sergio_alvarez <sergio_alvarez@redwood.ai>
+Date: Mon, 20 Dec 2026 14:30:00 -0800
+Subject: Re: Fwd: SIG follow-up — BCP/DR clarifications request
+
+Adding the security specifics around backups, encryption, and restore testing so we can include this verbatim in the SIG artifact. Happy to redact low-level ops logs and provide attestations.
+
+Backup & retention
+- Primary backups: incremental snapshots of customer data taken hourly and stored in encrypted object storage across multiple availability zones. Full snapshots taken daily.
+- Retention policy: default 30 days for incremental + 1 year for weekly full snapshots (configurable by enterprise contracts).
+- Encryption: at-rest encryption using AES-256; customer keys are supported via KMS (we integrate with customer-managed KMS or Redwood-managed KMS). For enterprise on-prem deployments, HSM-backed key management is available.
+
+Access & auditing
+- Backup access limited to designated SRE and Security roles via role-based access controls (RBAC). All backup/restore actions are logged and retained in audit logs for 12 months. Audit logs are immutable and include operator identity and justification.
+
+Restore and test cadence
+- Restore tests: quarterly restore drills for critical customer data in production-similar environments; documented post-mortems are archived.
+- Last successful restore test: 2026-09-21, test type: cross-region restore into warm cluster, time-to-restore (to accept traffic): 3.8 minutes median across test replicas.
+
+Compliance notes
+- SOC 2 controls cover backup integrity and change control; snapshots and restore procedures are part of our control set.
+- We can provide redacted runbook excerpts and a signed attestation of the last DR test for SIG evidence.
+
+Kimberly Park
+Product Security Manager | Redwood Inference
+Attachments: dr-runbook-quicklinks.txt (list of internal runbook IDs and DR playbook links), SIG_BCP_evidence_v2.pdf (prepared consolidated artifact)
+From: vanessa_ortiz <vanessa_ortiz@redwood.ai>
+To: Claire Nguyen <claire.nguyen@clearhealth.com>
+Cc: sergio_alvarez <sergio_alvarez@redwood.ai>, kimberly_park <kimberly_park@redwood.ai>
+Date: Tue, 28 Dec 2026 15:42:00 -0800
+Subject: Re: SIG: Clarifications on DR / BCP (RTO/RPO, backups, regional failover) — ClearHealth
+
+Hi Claire — thanks for the patience. Per your request, please see consolidated responses and attachments below. We redacted operator-specific logs but included attestations and runbook excerpts for SIG purposes.
+
+Summary (high level):
+- RTO targets: control plane 4h, model serving (inference) automated failover target 5m (plan-dependent), telemetry 8h, customer backup restore 4h.
+- RPO targets: near-zero for stateless inference traffic, 1h for persisted customer backups and control-plane snapshots.
+- Backups: hourly incremental + daily full snapshots; default retention 30 days incremental + 1 year weekly fulls; AES-256 at rest and KMS support (customer-managed or Redwood-managed); HSM available for on-prem.
+- Failover: warm replica clusters, monitoring-driven automated failover for SLO-impacting incidents, weighted DNS with 60s TTL, SDK retry guidance.
+- Testing: quarterly restore drills; last full cross-region restore test 2026-09-21 (median cutover 3.8m). Post-test report and attestation included.
+
+Attached artifacts (for SIG control):
+- SIG_BCP_evidence_v2.pdf (consolidated answers, redacted test reports, attestation)
+- prod-architecture-repl-diagram.png (cross-region replication and warm cluster diagram)
+- dr-runbook-quicklinks.txt (runbook IDs and internal playbook links — we can provide full runbook under NDA if required)
+
+If you need any of the following we can supply them under the appropriate NDA or redaction: full DR runbook, operator logs from the last drill, or a signed SOC 2 addendum referencing backup controls.
+
+Please confirm whether the attached PDF and diagrams satisfy the SIG control or if you need additional artifacts. Happy to schedule a 30-minute walkthrough if that helps.
+
+Thanks,
+Vanessa Ortiz
+Account Executive | Redwood Inference
+Redwood Inference — Sales: +1 415-555-0102
+
+On Mon, 20 Dec 2026 at 14:30 Kimberly Park <kimberly_park@redwood.ai> wrote:
+> Adding the security specifics around backups, encryption, and restore testing so we can include this verbatim in the SIG artifact. Happy to redact low-level ops logs and provide attestations.
+>
+> Backup & retention
+> - Primary backups: incremental snapshots of customer data taken hourly and stored in encrypted object storage across multiple availability zones. Full snapshots taken daily.
+> - Retention policy: default 30 days for incremental + 1 year for weekly full snapshots (configurable by enterprise contracts).
+> - Encryption: at-rest encryption using AES-256; customer keys are supported via KMS (we integrate with customer-managed KMS or Redwood-managed KMS). For enterprise on-prem deployments, HSM-backed key management is available.
+>
+> Kimberly Park
+> Product Security Manager | Redwood Inference
+> Attachments: dr-runbook-quicklinks.txt, SIG_BCP_evidence_v2.pdf
+
+Attachments included in this thread: SIG_BCP_evidence_v2.pdf (application/pdf, 420KB); prod-architecture-repl-diagram.png (image/png, 185KB); dr-runbook-quicklinks.txt (text/plain, 3KB)

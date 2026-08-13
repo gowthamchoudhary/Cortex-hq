@@ -1,0 +1,135 @@
+Re: Production: intermittent output silence during streamed responses (impacting throughput)
+
+From: Alex Jones <alex.jones@shopfront.com>
+To: evelyn.hart@redwood.ai
+Cc: support@shopfront.com
+Date: Wed, 12 May 2027 08:14:00 -0700
+Subject: Production: sudden silence on streaming responses during peak
+
+Hi Evelyn,
+
+We're seeing a new failure mode hitting our storefront search assistant during morning traffic. About 8-12% of streaming responses abruptly stop emitting chunks after ~18-22s even though the model continues to generate on Redwood's side (we can see partial tokens in the request logs). This results in stalled UI and retries, which drops our throughput and increases tail latency dramatically.
+
+Symptoms:
+- Requests go through (200 initially) then stream silent for 15-30s before client timeout.
+- Error spikes align with our peak window 07:30-09:30 PT.
+- Observed higher retry rate (~18%) on the streaming endpoint vs non-streaming.
+- We captured a sample request id: req_9f3a2f6c. Logs attached (shopfront_stream_sample_20270512.txt).
+
+We tried reverting to a non-streaming call and that completed successfully (higher P99 latency but no silent stalls). Can you help triage? This is already impacting our conversion funnel.
+
+Thanks,
+Alex Jones
+Director, Search & Personalization
+ShopFront
+
+[Attachment: shopfront_stream_sample_20270512.txt (12KB) type: text/plain]
+From: evelyn.hart@redwood.ai
+To: Alex Jones <alex.jones@shopfront.com>
+Cc: marissa.cole@redwood.ai, jonas.weber@redwood.ai
+Date: Wed, 12 May 2027 09:02:00 -07:00
+Subject: Re: Production: sudden silence on streaming responses during peak
+
+Alex — thanks for the quick report and the sample. Sorry you're hitting this in-production. I'm looping in Marissa (CS) and Jonas (SRE) to get immediate triage and a mitigation plan.
+
+Short-term: can you confirm the SDK version and whether you're using the browser streaming helper or a server-side proxy? Also please forward any client-side fetch logs that show the network frames around req_9f3a2f6c.
+
+We will:
+- Ask SRE to pull the full trace for req_9f3a2f6c and nearby failures.
+- Validate whether chunked-transfer frames are being closed by an intermediate proxy (platform or cloud) or by our runtime.
+- Recommend a temporary fallback (non-streaming) for the most critical routes while we investigate.
+
+I'll update you within 2 hours with an initial triage and a timeline for a deeper investigation.
+
+Regards,
+Evelyn Hart
+Head of Customer Success
+Redwood Inference
+
+---
+On Wed, May 12, 2027 at 08:14 AM Alex Jones <alex.jones@shopfront.com> wrote:
+> We're seeing a new failure mode hitting our storefront search assistant during morning traffic...
+
+From: marissa.cole@redwood.ai
+To: Alex Jones <alex.jones@shopfront.com>, evelyn.hart@redwood.ai
+Cc: jonas.weber@redwood.ai
+Date: Wed, 12 May 2027 10:11:00 -07:00
+Subject: Re: Production: sudden silence on streaming responses during peak
+
+Alex — thanks, we'll get started. Quick plan and proposed times for a realtime call:
+
+Immediate (1-2 hours)
+- Collect full request traces and client fetch frames (Alex)
+- SRE to validate runtime logs for req_9f3a2f6c and nearby traces (Jonas)
+- CS to prepare MAP and rollback/fallback steps (me)
+
+Follow-up (same day)
+- 30m triage call at 11:30 PT (can you join?)
+- If we see a platform-side regression, we'll shift to exec attention and open a priority channel.
+
+I've attached a short mutual action plan so we can track tasks and SLA impacts.
+
+Marissa Cole
+Senior Customer Success Manager
+Redwood Inference
+
+[Attachment: mutual_action_plan_shopfront_v1.pdf (46KB) type: application/pdf]
+From: jonas.weber@redwood.ai
+To: evelyn.hart@redwood.ai, marissa.cole@redwood.ai
+Date: Thu, 13 May 2027 07:28:00 -07:00
+Subject: Internal: initial SRE findings for ShopFront streaming stalls (req_9f3a2f6c)
+
+Evelyn/Marissa — quick summary of what I see after pulling runtime traces and host-level logs for the window around req_9f3a2f6c.
+
+Findings:
+- Server-side generation for the request completed (tokens produced) and our output buffer pushed chunks.
+- Downstream: TCP-level keepalive and chunked frames for that stream terminated unexpectedly at the proxy edge for some connections. We see a correlated increase in 499/504 at the CDN layer for the same minute.
+- There are signs of partial frame buffering — i.e., the client receives the last emitted chunk but then no more frames until the client times out.
+- Spike aligns with autoscaler behavior: during the peak window a subset of dedicated instances hit short-lived GC pauses when swapping quantized kernels; that correlates with a temporary increase in jitter.
+
+Hypothesis: a compound issue where transient host-level stalls (GC/kernel swaps) increase latency long enough that some intermediate proxies close idle chunked connections or the CDN's streaming time-window expires for long-running streams. The net result is the client sees a silent stall even though generation continues server-side.
+
+Immediate actions taken:
+- Increased socket keepalive aggressiveness on the serving fleet for the next 12 hours to reduce proxy idles.
+- Pinned kernel selection for the model variants serving ShopFront to avoid in-flight kernel swaps during peak for the next 24h.
+- Opened a CDN ticket referencing the timestamps and examples (HUBSPOT-68542).
+
+Requesting exec attention: if we confirm an SLA impact >5% on peak conversion, DX/GTML leadership will need to sign off on interim credits and a formal postmortem timeline. I recommend elevating if we see continued repeats in the next 24h.
+
+I'll attach the trace bundle to the record.
+
+Jonas Weber
+SRE
+Redwood Inference
+
+[Attachment: sre_trace_bundle_20270513.tar.gz (2.3MB) type: application/gzip]
+From: evelyn.hart@redwood.ai
+To: Alex Jones <alex.jones@shopfront.com>
+Cc: marissa.cole@redwood.ai, jonas.weber@redwood.ai, karthik.iyer@redwood.ai
+Date: Sat, 15 May 2027 21:04:00 -07:00
+Subject: Re: Production: intermittent output silence during peak — exec update and next steps
+
+Alex — quick update and next steps after SRE's initial triage.
+
+What we saw
+- Our runtime completed generation but intermediate proxies / CDN connections were closing long-lived chunked streams during your peak.
+- We deployed short-term mitigations (keepalive changes + pinned kernels) which reduced occurrence in our canary traffic.
+
+Customer impact and next steps
+- Marissa will coordinate an on-call window to monitor the peak tomorrow and run a controlled replay with your team.
+- Jonas will continue the CDN escalation and collect mortgage logs from the edge.
+- We are preparing a formal incident report and a proposed credit for the conversion impact if the postmortem shows SLA breach.
+
+Please confirm whether you can run the controlled replay at 08:00 PT tomorrow (Sun) or if a different time works. We'll have SRE and product (copied) on the call.
+
+Again, sorry for the disruption — we'll keep this prioritized and provide a full timeline for fixes in the incident report.
+
+Best,
+Evelyn Hart
+Head of Customer Success
+Redwood Inference
+
+---
+On Thu, May 13, 2027 at 07:28 AM jonas.weber@redwood.ai wrote:
+> Findings:
+> - Server-side generation for the request completed...

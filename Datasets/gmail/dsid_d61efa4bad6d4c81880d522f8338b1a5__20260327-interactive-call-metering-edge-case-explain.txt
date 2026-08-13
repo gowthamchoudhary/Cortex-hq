@@ -1,0 +1,113 @@
+Interactive call metering — how short calls are billed / minimums
+
+From: Emma Jones <emma.jones@lumenretail.com>
+To: Connor O'Brien <connor_obrien@redwood.com>
+Date: 2026-03-27T09:15:00-07:00
+Subject: Interactive call metering question
+
+Hi Connor —
+
+Quick question from our engineering team as we scope the pilot: we have a lot of very short interactions (200–400 tokens each) from web chat widgets that open and close quickly. Two things we need clarity on before legal and procurement sign off:
+
+1) How do you meter these micro-interactions? Do you round up to any token quantum or minimum per call?
+2) If a chat session sends 3 short turns within 30s (each ~300 tokens), are those three calls aggregated into a single billable session or treated independently?
+
+We're worried about unitization making the cost blow up relative to CPU time — happy to share sample request traces if helpful.
+
+Best,
+Emma
+Emma Jones
+Director, Conversational Platforms
+Lumen Retail
+
+P.S. Legal asked if there are any existing exceptions for low-latency interactive pilots (they asked for an example invoice or math).
+From: Connor O'Brien <connor_obrien@redwood.com>
+To: Emma Jones <emma.jones@lumenretail.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: 2026-03-27T12:40:00-07:00
+Subject: Re: Interactive call metering question
+
+Emma — thanks for the great questions. Short answers first, then a worked example and the concession we typically offer for pilots.
+
+Short answers:
+- Metering unit: Redwood charges per-token (input + output) with a configurable context-window aggregation that can group requests from the same session if the requests share a common session_id and occur within a rolling window (default 60s).
+- Minimums/quantum: We do not round up to a fixed token quantum (e.g., 128 tokens) across the entire invoice, but we do apply a per-request minimum when requests are sent as independent, non-aggregated calls. The per-request minimum is configurable at the account level; default is 1 token (so effectively no hidden quantum).
+- Aggregation behavior: If your widget attaches a persistent session_id and the calls happen within your configured aggregation window, we aggregate and bill the combined token count (no extra min per sub-call). If calls are independent (no session_id) they are billed individually.
+
+Worked example (attached spreadsheet: metering_examples.xlsx):
+- Scenario A: three independent calls, each 300 tokens -> billed tokens = 3 * 300 = 900 tokens.
+- Scenario B: three calls tied to session_id X within 30s, aggregation window = 60s -> billed tokens = 900 tokens (same total) but aggregated for KV-cache reuse and may reduce compute latency; no per-call minima applied.
+- Scenario C: streaming call that sends a 50-token prompt and receives 50-token response across a long-lived stream -> billed = 100 tokens.
+
+Important caveats:
+- Conversation history: if you include a long context (e.g., 4k) and then make short turns, the billed tokens include the context you supply with each request unless you enable prefix/KV caching; caching reduces repeated context billing when requests are aggregated.
+- Minimums: for customers on committed Dedicated plans we can set a per-session minimum or negotiate blended per-call rates (useful for high-volume microcalls). For Hosted pilots we typically leave default minima to avoid billing surprises.
+
+Pilot concession we recommend:
+- For the initial 3-month pilot we can apply a microcall smoothing credit equal to 30% of billable tokens for any invoice line where average call size < 600 tokens and session aggregation is enabled.
+- We'll also share an example invoice and a tokenization breakdown so procurement/legal can validate.
+
+I've attached the spreadsheet with exact math and a sample invoice row. If helpful, Vanessa can run a quick simulation against a trace you share.
+
+Next steps:
+1) If you can share a 24–72h trace (anonymized) we'll simulate billing and send an invoice estimate.
+2) If legal needs wording for pilot credits, I can loop in our contracts lead — but the pilot concession above is our standard approach.
+
+Thanks — talk soon.
+
+—Connor O'Brien
+Senior Sales Engineer, Redwood Inference
+connor_obrien@redwood.com | +1 (415) 555-0123
+
+Attachment: metering_examples.xlsx (xlsx)
+
+From: Connor O'Brien <connor_obrien@redwood.com>
+To: Soojin Lee <soojin_lee@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: 2026-03-27T13:10:00-07:00
+Subject: Fwd: Interactive call metering question
+
+Hi Soojin / Vanessa —
+
+Fwd'ing Emma's question and my reply. Quick context: Lumen Retail is planning a pilot for our chat widgets with expected call sizes ~250–350 tokens, high QPS but very short lived sessions. Procurement/legal will want a clear NO to rounding-to-128 or similar hidden quanta.
+
+Ask: can we formally offer the microcall smoothing credit (30% for avg call <600 tokens) for the 3-month pilot under deal LR-2026-0412? If yes, I want a one-line clause for the SOW and a simple billing example for legal. Also: Vanessa, can you run a quick simulation from the sample trace if I get it?
+
+Why this likely matters: without smoothing, their projected cost is ~2.7x higher than their current estimate because their client libs open many independent short calls. Aggregation will help but procurement is still anxious.
+
+If we need to be more conservative, propose: 20% smoothing credit + commit to a review at month 6 with usage thresholds to convert to a blended microcall rate.
+
+Thanks — Connor
+
+---- Forwarded message ----
+From: Emma Jones <emma.jones@lumenretail.com>
+To: Connor O'Brien <connor_obrien@redwood.com>
+Date: 2026-03-27T09:15:00-07:00
+Subject: Interactive call metering question
+
+[Original message above]
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Connor O'Brien <connor_obrien@redwood.com>, Emma Jones <emma.jones@lumenretail.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: 2026-03-30T15:02:00-07:00
+Subject: Re: Interactive call metering question — pilot proposal
+
+Connor / Emma —
+
+Thanks for the clear write-up, Connor, and Emma for raising this. We agree that microcalls are an important edge case and we've handled similar pilots before. Confirming the proposal we are comfortable offering for Lumen Retail's 3-month pilot:
+
+- Pilot length: 3 months, starting on activation date.
+- Smoothing credit: 25% credit on billable tokens for any invoice line where average call size < 600 tokens and session aggregation is enabled. (We reduced from 30% to 25% to balance risk.)
+- Aggregation requirement: to qualify, the integration must send a stable session_id and use the provided SDK feature flag to enable a 60s aggregation window.
+- Reporting: we'll provide a per-invoice tokenization CSV and a short sample invoice showing pre/post credit math.
+- Legal wording: "Redwood will apply a one-time usage credit to applicable pilot invoices. Credit eligibility is subject to session_id-based aggregation and the SDK flag being enabled for the pilot period."
+
+I'm attaching a short proposal PDF (pilot_pricing_proposal.pdf) that Vanessa and I will share with your procurement/legal. Once you send a 48h anonymized trace we will run a simulation and produce an example invoice.
+
+If that works for you, Connor — please send Emma the proposal PDF and I'll hand over the contract language to our contracts lead for a light SOW addendum.
+
+— Soojin Lee
+Director, Enterprise Sales — Redwood Inference
+soojin_lee@redwood.com | +1 (415) 555-0199
+
+Attachments: pilot_pricing_proposal.pdf (pdf)

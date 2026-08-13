@@ -1,0 +1,140 @@
+Throttle policy entropy — VantageIQ production latency and 429 surge
+
+From: Elena Ruiz <elena.ruiz@vantageiq.com>
+To: Markus Klein <markus_klein@redwood.com>
+Cc: support@vantageiq.com
+Date: Wed, 18 Nov 2026 09:07:00 -0500
+Subject: Sudden latency + 429s from API — production impact
+
+Markus —
+
+We started seeing a large spike in p95/p99 latency and a flood of 429s to our production integration around 08:55 ET. Customer-facing requests are timing out and retries are making it worse. We scoped it to requests that use long-context completion calls (session-id starts with VQ-).
+
+Attached a short perf dump and a Grafana screenshot. We need immediate help: can you verify whether this is a config change on your side or something on our end?
+
+Key numbers: 8:50–9:05 ET — 10x increase in 429s, p99 from ~220ms to ~3.1s, error rate up to 12%.
+
+Thanks,
+Elena Ruiz
+Head of Integrations, VantageIQ
+attachment: p99-latency-sample-logs.tar.gz (logs)
+attachment: grafana-screenshot-429s.png (image)
+From: Markus Klein <markus_klein@redwood.com>
+To: Neha Kapoor <neha_kapoor@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Wed, 18 Nov 2026 14:18:00 +0000
+Subject: Fwd: Sudden latency + 429s from API — production impact
+
+Forwarding VantageIQ — raising high.
+
+Quick context: VantageIQ is a high-throughput customer, heavy on long-context chat/completion flows. The customer reports a step-change in 429s and latency. They attached logs and a grafana snippet.
+
+Immediate asks:
+- Neha: can you triage kernel/runtime routing + quota windows (burst credits) for their account and check for recent config rollouts in the last 2 hours?
+- Laura: please prepare a concise exec note and suggested customer-facing wording if we need to ask for a short retry-window change or temporary quota adjustment.
+- Marissa: marking this for your visibility — if it’s a policy/limits misconfig that requires an override, we may need a quick approval for a temporary capacity bump.
+
+I'll loop the customer once we have a root-cause hypothesis.
+
+— Markus
+
+On Wed, 18 Nov 2026 at 09:07 Elena Ruiz <elena.ruiz@vantageiq.com> wrote:
+> Markus —
+> 
+> We started seeing a large spike in p95/p99 latency and a flood of 429s... (see original)
+> 
+> attachment: p99-latency-sample-logs.tar.gz
+> attachment: grafana-screenshot-429s.png
+From: Neha Kapoor <neha_kapoor@redwood.com>
+To: Markus Klein <markus_klein@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>
+Date: Wed, 18 Nov 2026 14:36:00 +0000
+Subject: Re: Fwd: Sudden latency + 429s from API — production impact
+
+Summary of quick triage:
+- Reproduced the traffic pattern in staging using the same session-length distribution.
+- Root cause (probable): an automated config rollout (quota-window-optimizer v2) expanded aggregation windows for tenant burst accounting. That change increased how quickly a tenant exhausts their short-term burst credits under certain interleaved long-context workloads. Effect: requests hit the tenant safety gate more aggressively and the serving runtime routed more requests to the lower-capacity fallback variants, increasing latency and 429s.
+- Evidence: quota-config-snapshot.yaml attached (shows new window: 600s -> 1800s for burst accounting), and the logs show repeated short-window replenishment failures.
+
+Mitigations applied (14:30–14:35 UTC):
+1) Rolled back the rollout for quota-window-optimizer v2 for production routing policies (stop further config propagation).
+2) Short-term policy patch: temporarily increased tenant burst headroom by +30% for VantageIQ namespace to allow in-flight requests to clear (config patch id: patch-burst-20261118).
+3) Enabled an aggressive KV cache heal for long-context sessions for the affected hosts to reduce token synth cost.
+
+Immediate impact: error rate dropped from 12% -> 3% in 10 minutes; p99 back to ~380ms but still above baseline. We need to monitor for a full return to baseline and perform a deeper postmortem to avoid recurrence.
+
+Attachments: quota-config-snapshot.yaml
+
+- Neha
+
+On Wed, 18 Nov 2026 at 14:18 Markus Klein <markus_klein@redwood.com> wrote:
+> Forwarding VantageIQ — raising high.
+> 
+> ...
+From: Markus Klein <markus_klein@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Cc: Neha Kapoor <neha_kapoor@redwood.com>
+Date: Wed, 18 Nov 2026 15:05:00 +0000
+Subject: Exec ask: temporary policy override & customer comms for VantageIQ impact
+
+Marissa / Laura —
+
+Short summary (for execs): VantageIQ production experienced a spike in 429s and latency due to an automated quota-window rollout that unintentionally lengthened burst-accounting windows. The change made certain long-context, interleaved traffic patterns consume burst credits faster and trigger tenant-level safety gating. Neha rolled back the rollout and applied a temporary headroom patch. The customer is still seeing elevated p99 (~380ms) while we finish cache heals and a controlled canary.
+
+Requested approvals / asks:
+- Approve a scoped temporary capacity bump for VantageIQ (30% headroom, 4 hours) while we finish verification and a safe re-roll of a corrected config. This is to avoid customer-visible retries and preserve SLAs.
+- Approve a goodwill credit (one invoice period pro-rated) if we do not fully meet SLA in the next 72 hours. Finance will coordinate with Sales on the exact amount.
+
+If you approve both, I will send a single customer-facing note describing the issue, remediation steps, and what we are doing to prevent recurrence.
+
+Timeline: triage started 14:18 UTC; rollback and patch in place by 14:35 UTC; customer saw visible improvement by 14:45 UTC.
+
+Link to incident ticket: https://redwood.atlassian.net/browse/INF-4389
+
+— Markus
+
+On Wed, 18 Nov 2026 at 14:36 Neha Kapoor <neha_kapoor@redwood.com> wrote:
+> Summary of quick triage: ...
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Markus Klein <markus_klein@redwood.com>
+Cc: Laura Bennett <laura_bennett@redwood.com>, Neha Kapoor <neha_kapoor@redwood.com>
+Date: Wed, 18 Nov 2026 15:21:00 +0000
+Subject: Re: Exec ask: temporary policy override & customer comms for VantageIQ impact
+
+Thanks for the concise note. Approvals:
+- Temporary capacity bump (30% headroom for 4 hours) — APPROVED.
+- Goodwill credit — APPROVED in principle; finance to finalize amount with Sales.
+
+Please proceed with the customer communication. Keep me looped on the postmortem and proposed guardrails (e.g., rollout canary gating for quota-policy changes, automated regression tests against long-context workload shapes).
+
+— Marissa
+
+On Wed, 18 Nov 2026 at 15:05 Markus Klein <markus_klein@redwood.com> wrote:
+> Marissa / Laura —
+> 
+> Short summary (for execs): ...
+From: Markus Klein <markus_klein@redwood.com>
+To: Elena Ruiz <elena.ruiz@vantageiq.com>
+Cc: support@vantageiq.com
+Date: Wed, 18 Nov 2026 18:22:00 +0000
+Subject: Re: Sudden latency + 429s from API — production impact
+
+Elena —
+
+Thank you for the alert and the artifacts. We identified a recent config rollout that extended the burst-accounting window; that change caused faster burst exhaustion for your long-context workloads and triggered tenant safety gating. Immediate actions: rollback of the rollout, temporary +30% headroom for your namespace, and KV cache healing for long-context sessions. Full rollback and patch were applied by 14:35 UTC.
+
+Impact and next steps: error rate improved from 12% -> 3% within 10 minutes; p99 improved to ~380ms and is trending toward normal. We have also opened INF-4389 for postmortem actions (canary gating, integration tests for long-context traffic shapes, and tighter alerting on burst credit depletion).
+
+We will follow up with a postmortem and a proposed remediation plan later today. If you still see elevated errors or latency in the next 30 minutes, please let us know and we can escalate a live call.
+
+Apologies for the disruption — we take this very seriously.
+
+— Markus Klein
+Director, Product Operations
+Redwood Inference
+attachment: quota-config-snapshot.yaml (config)
+
+On Wed, 18 Nov 2026 at 09:07 Elena Ruiz <elena.ruiz@vantageiq.com> wrote:
+> Markus —
+> 
+> We started seeing a large spike in p95/p99 latency...

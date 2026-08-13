@@ -1,0 +1,147 @@
+Elevate Health — access topology options: Service Endpoint vs PrivateLink vs S2S VPN
+
+From: Heidi Lang <heidi.lang@elevatehealth.com>
+To: Irene Choi <irene_choi@redwood.com>, Jordan Blake <jordan_blake@redwood.com>
+Cc: elevate-network-ops@elevatehealth.com
+Date: 2026-09-28T09:32:00-07:00
+Subject: Access topology for Redwood Private deployment
+
+Hi Irene & Jordan,
+
+Thanks again for the walkthrough earlier. We're trying to finalize the network approach for connecting our primary VPCs to a Redwood Private deployment in us-west-2. Our platform has three stricter requirements: no inbound public IP exposure to inference nodes, audit-friendly traffic flows (per-connection logging), and predictable latency for batch + interactive workloads (95th pct target < 30ms).
+
+High-level question: which model should we choose — VPC Peering, AWS PrivateLink (interface endpoints), or S2S VPN (IPsec) — given our constraints? Please include operational tradeoffs (routing complexity, IP collision risk, egress IP stability for allowlisting, and COMPLIANCE evidence needs).
+
+Attaching our current VPC topology and a short latency probe (internal). Looking for a recommendation and a short pilot plan.
+
+Thanks,
+Heidi
+Network Architecture Lead
+Elevate Health
+
+Attachments: elevate_network_diagram_v2.pdf (diagram, 2 pages), latency_probe_results.csv (sample pings)
+
+From: irene_choi@redwood.com
+To: Heidi Lang <heidi.lang@elevatehealth.com>
+Cc: Jordan Blake <jordan_blake@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2026-09-28T11:04:00-07:00
+Subject: Re: Access topology for Redwood Private deployment
+
+Hi Heidi — thanks for the diagram and probes. Quick summary up front: PrivateLink (interface endpoints) + optional active-passive S2S VPN for out-of-band admin access gives the best balance for your compliance needs and address-space isolation. VPC peering looks attractive for latency but it hits two blockers for your environment: (1) overlapping CIDR ranges across your VPCs and partners and (2) cross-account route propagation that makes audit attribution harder.
+
+I'll outline the tradeoffs below and propose a lean pilot plan.
+
+Key tradeoffs (short):
+- PrivateLink (recommended):
+  • Pros: no route-table sharing; interface endpoints present a stable ENI-based egress IP space per AZ (helpful for allowlisting), per-flow logging via VPC Flow Logs + ENI tags, supports mutual TLS between your clients and Redwood service endpoints. Avoids IP overlap issues since traffic is NAT'ed to the endpoint's ENI.
+  • Cons: slightly higher p95 (~5–12ms overhead depending on AZ) vs peering due to extra hop; per-GB data processing charges on both sides; requires NACL/security-group discipline.
+- VPC Peering:
+  • Pros: lowest network hop latency, predictable throughput (no interface endpoint throttles), simple for flat-mesh VPCs.
+  • Cons: breaks isolation (route-table changes cross accounts), requires unique non-overlapping CIDR across participants, harder to audit per-tenant flows, and longer ops blast radius for peering misconfigurations.
+- Site-to-Site VPN (IPsec):
+  • Pros: encrypted tunnel, clear ingress/egress point, useful as fallback or DR path.
+  • Cons: variable latency and jitter (depends on public internet), requires NAT/firewall configs, more operationally heavy (IKE lifecycle), not ideal as primary path for low-latency interactive inference.
+
+Compliance notes: PrivateLink + strict ENI tagging + centralized Flow Log ingestion into your SIEM gives cleaner audit trails than peering. If you need explicit per-connection client identity in logs, we can propose a short header-level mutual auth or mTLS overlay on top of PrivateLink traffic.
+
+Pilot proposal (2 weeks):
+1) Create an interface endpoint in your staging VPC (us-west-2) pointed at Redwood's staging service.
+2) Run synthetic latency/throughput tests (we'll provide a load container) and collect p50/p95/p99.
+3) Validate Flow Logs, ENI IPs for allowlisting, and the end-to-end auth flow.
+4) Stand up a second S2S VPN (minor config) as a failover; validate failover and routing.
+
+Next steps: can we schedule a 30-min runbook review Wednesday 09/30? Jordan will send a short checklist for account-level prerequisites.
+
+— Irene
+Irene Choi
+Manager, Solutions Architecture
+Redwood Inference
+
+On Tue, Sep 28, 2026 at 09:32 AM Heidi Lang <heidi.lang@elevatehealth.com> wrote:
+> (see above)
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Irene Choi <irene_choi@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2026-09-29T08:15:00-07:00
+Subject: Re: Access topology for Redwood Private deployment
+
+Irene / Ben — adding a few technical datapoints to support the recommendation and a couple of questions for Heidi (cc'd in the thread).
+
+Observations from Redwood internal tests (us-west-2):
+- Measured additional RTT for PrivateLink vs peering: median +4ms, p95 +9–14ms depending on AZ pairing. For interactive completions that target <30ms p95, PrivateLink is usually OK if compute is co-located in the same AZ and client app keeps connection reuse (keepalives, long-lived TLS).
+- MTU: PrivateLink interface endpoints may reduce path MTU (common MSS negotiation). If you have large-batch payloads (>1MB), enable TCP MSS clamping on the client side or test fragment behavior — otherwise you'll see increased retransmits.
+- Egress stability: We can provide a small set of stable ENI IPs per AZ for allowlisting. If you require single static IP per region, we can offer an egress NAT proxy in a dedicated subnet (adds a hop and cost).
+
+Questions for Elevate:
+1) Do any of your downstream partners require static IPs for egress from Redwood?
+2) Are you comfortable with per-AZ allowlisting (ENI IPs), or do you need a single region-wide egress IP?
+3) Any regulatory rule that forbids NAT or ephemeral IP translation?
+
+If they confirm per-AZ allowlist is fine, PrivateLink + optional NAT-proxy is simplest. If they need predictable sub-ms latency for synchronous use-cases, peering becomes more attractive but only if CIDR collisions are resolved.
+
+— Jordan
+Senior Solutions Architect
+Redwood Inference
+
+> On Sep 28, 2026, Irene Choi wrote:
+> > (summary and pilot)
+
+From: Heidi Lang <heidi.lang@elevatehealth.com>
+To: Irene Choi <irene_choi@redwood.com>, Jordan Blake <jordan_blake@redwood.com>
+Cc: Mark Sutter <msutter@elevatehealth.com>, elevate-network-ops@elevatehealth.com
+Date: 2026-09-29T11:42:00-07:00
+Subject: Re: Access topology for Redwood Private deployment
+
+Thanks — good detail. Quick answers to Jordan's questions:
+1) We have two external partners that still require fixed IPs for inbound allowlists (legacy reporting pipelines) — ideally a small set per region.
+2) Per-AZ allowlisting is acceptable but operationally we'd prefer as few IPs as possible to manage.
+3) No regulatory prohibition on NAT; auditability is the priority.
+
+We attached an updated peering inventory that shows several overlapping /16s with partners, so full-mesh peering is non-starter.
+
+Given that, PrivateLink + regional NAT egress proxy for the partner-facing traffic + an IPsec S2S VPN as DR sounds workable. Please include cost ballpark for the NAT proxy and a quick ops playbook for certificate rotation and Flow Log retention window (we need 2 years).
+
+Heidi
+
+Attachments: elevate_peering_inventory.xlsx
+
+From: Irene Choi <irene_choi@redwood.com>
+To: Heidi Lang <heidi.lang@elevatehealth.com>
+Cc: Jordan Blake <jordan_blake@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2026-09-30T16:05:00-07:00
+Subject: Re: Access topology for Redwood Private deployment — recommendation & pilot pack
+
+Heidi / team — thanks for the clarifications. Final recommendation and next steps below.
+
+Recommendation (concise):
+- Primary path: PrivateLink (interface endpoints) in each AZ with keepalive-enabled clients and connection pooling.
+- Egress for partner-facing traffic: regional NAT egress proxy (small set of stable elastic IPs) to satisfy partner allowlists. This proxy will be in a dedicated subnet we operate for you; cost estimate below.
+- Secondary/DR: S2S IPsec tunnel(s) as active-passive failover with automated route-preference change.
+
+Why this combination? It preserves your auditability (Flow Logs + ENI tagging), removes the need to modify route tables across accounts (no peering), and gives you the stable IPs required for legacy partners. Latency impact is modest if we co-locate in same AZ and use connection reuse; our internal estimates for your topology (based on your probe) show p95 expected ~22–28ms for mixed workloads.
+
+Ops checklist (pilot):
+- Redwood: provision staging interface endpoint + NAT egress proxy in us-west-2; provide ENI IPs and a short allowlist doc.
+- Elevate: whitelist ENI IPs and NAT proxy EIPs in partner allowlists; open 443/51234 (if using TLS+custom port) on your LB to Redwood subnets.
+- Joint: run 48h synthetic test (p50/p95/p99), exercise failover to VPN, confirm Flow Log ingestion into your SIEM, and validate certificate rotation (we'll share runbook).
+
+Cost ballpark (monthly, us-west-2 staging scale):
+- Interface endpoint data-processing: ~$0.01–0.03 per GB (depends on direction).
+- NAT egress proxy (small N for HA): EC2 NAT + EIPs + NAT gateway equivalent ~ $500–$1,200 depending on throughput. We'll refine after pilot.
+
+Deliverables we'll send by COB Friday: pilot runbook, NAT proxy AMI/terraform snippet, Flow Log retention/config guidance, and a short SLA note for PrivateLink-based access. Also linking HubSpot plan: HS-987654.
+
+Can we confirm Wed 09/30 10:00 PT for the runbook review? Jordan will send the calendar invite.
+
+— Irene
+Manager, Solutions Architecture
+Redwood Inference
+
+Forwarded message:
+From: Jordan Blake <jordan_blake@redwood.com>
+Subject: PrivateLink pilot checklist
+Date: 2026-09-30T15:58:00-07:00
+
+(See attached short checklist; will upload the terraform snippets to the Drive link.)
+
+Attachments referenced: latency_probe_results.csv, elevate_network_diagram_v2.pdf

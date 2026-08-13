@@ -1,0 +1,154 @@
+Targeted edge latency incident — customer briefing & action items
+
+-----Original Message-----
+From: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+To: tim.jenkins@acme-retail.com, acme-technical@acme-retail.com, ops@paymentco.com
+Cc: marcus_lin@redwood.com, dylan_brooks@redwood.com, vanessa_ortiz@redwood.com
+Date: Tue, 12 Sep 2028 09:05:00 +0000
+Subject: Targeted edge latency incident — initial notice
+
+Hi Tim / Acme technical team / PaymentCo ops,
+
+Quick note from Redwood ops: we observed elevated token-generation latency affecting a subset of connections originating from the US-East and EU-West edge POPs starting ~08:50 UTC. A minority of requests from APAC also experienced intermittent tail latency increases while we rerouted traffic.
+
+Immediate mitigations we applied:
+- Automated traffic steering: affected clients routed to nearest healthy POP (US-West / EU-Central / APAC-SIN) where capacity available.
+- Temporarily increased instance pool for the dedicated pools serving your tenancy.
+- Enabled aggressive KV-prefetch for recent prefixes to reduce repeated compute.
+
+Action items for customers (short checklist):
+- If you have regional affinity configured, please temporarily allow failover to the alternate region (e.g., allow us-west for us-east affinity) for the next 72 hours.
+- Reduce DNS TTLs to 60s if you have client-side DNS-based routing.
+- Confirm health-check thresholds (5xx/latency) with your CDN/edge to avoid premature client-side circuit-breaks.
+
+Attachment: initial-incident-summary.txt (short log extract).
+
+We will follow up with a full account-specific playbook and a postmortem draft in the next 48 hours. Apologies for the disruption — we know every ms matters.
+
+— Stephanie
+Stephanie Nguyen
+Customer Reliability Lead, Redwood Inference
+stephanie_nguyen@redwood.com
+
+------------------------------------------------------------
+
+On Tue, 12 Sep 2028 at 10:12 AM, Tim Jenkins <tim.jenkins@acme-retail.com> wrote:
+> Thanks Stephanie — getting a few pages of 503s in our logs and a noticeable increase in API latency.
+>
+> Quick Qs:
+> 1) ETA on when the majority of traffic will be on the fallback POPs?
+> 2) Any expected feature/function impact (embeddings vs. chat generation)?
+>
+> We can flip client-side routing to the fallback region but would rather rely on Redwood routing if the change is transient.
+>
+> -Tim
+>
+>-----
+>Tim Jenkins
+>Head of Platform, Acme Retail
+>tim.jenkins@acme-retail.com
+>
+------------------------------------------------------------
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.com>, Dylan Brooks <dylan_brooks@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Tue, 12 Sep 2028 10:29:00 +0000
+Subject: Re: Targeted edge latency incident — initial notice
+
+Stephanie —
+
+Observed that an 3rd-party peering provider (PEER-7) reported degraded throughput into us-east region at 08:45 UTC; initial telemetry suggests increased retransmits and queuing on the egress path to the affected POPs. We're already shifting a portion of traffic to longer-but-stable routes.
+
+Proposed immediate steps:
+- Open a temporary canary in us-west to absorb routed traffic and monitor KV cache hit ratio (Dylan).
+- Raise burst capacity on dedicated pools for Acme Retail for 4 hours and monitor token queues.
+- Notify upstream peering and request expedited fix — network ops on it.
+
+I'll coordinate with sales to confirm which customers should receive compensated credits if we miss SLA.
+
+— Marcus
+
+------------------------------------------------------------
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+To: tim.jenkins@acme-retail.com, acme-technical@acme-retail.com, ops@paymentco.com
+Cc: marcus_lin@redwood.com, dylan_brooks@redwood.com, vanessa_ortiz@redwood.com
+Date: Wed, 13 Sep 2028 14:05:00 +0000
+Subject: Targeted edge latency incident — recommended reroute playbook and next steps
+
+Hi all — following up with concrete steps and a short playbook we recommend for the next 72 hours. We're attaching the account playbook and a diagram.
+
+Summary of impact:
+- Scope: small subset of sessions from US-East POPs and EU-West POPs; transient APAC tail latency for specific long-running chat sessions.
+- Root cause (prelim): external peering congestion (PEER-7) + suboptimal egress path selection causing packet retransmits and higher RTTs for certain routes.
+
+Recommended customer actions (per-region):
+- US customers (Acme): allow failover to US-West; set DNS TTL to 60s; configure client retry with exponential backoff (start 200ms, max 2s); prefer short-lived streaming sessions when possible.
+- EU customers: pin to EU-Central as fallback; increase client-side read timeout to 5s for retry tolerant requests; avoid large batch embeddings while we validate KV cache stability.
+- APAC customers: no forced region switch required unless you see > 2% 5xx; if so, prefer SIN over SYD.
+
+Operational steps we've completed:
+- Opened canary pools in fallback POPs and validated within 30m.
+- Increased instance pool and sustained worker threads for the affected tenant pools for 4 hours.
+- Deployed an updated routing policy to prefer paths with lower retransmit counts.
+
+Attachments: reroute-playbook.pdf, edge-reroute-diagram.png
+
+Temporary remediation window: 72 hours. We'll re-evaluate and revert affinity settings when all telemetry is stable for 3 rolling hours.
+
+If you want a short 15–20m call to walk these steps with your SRE team, I'm available today and tomorrow.
+
+— Stephanie
+
+------------------------------------------------------------
+
+From: ops@paymentco.com <ops@paymentco.com>
+To: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Date: Thu, 14 Sep 2028 08:44:00 +0000
+Subject: Re: Targeted edge latency incident — recommended reroute playbook and next steps
+
+Stephanie —
+
+Thanks for the guidance. We'll proceed to allow the failover and reduce DNS TTLs. Can you also provide the request logs and audit trail for 12 Sep 08:45–10:15 UTC for our compliance team? We need the full request IDs and redaction guidance (PII).
+
+Also please confirm data residency guarantees if we briefly route to US-West for a EU workload (this one is stateless inference only).
+
+— PaymentCo Ops
+
+------------------------------------------------------------
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+To: tim.jenkins@acme-retail.com, acme-technical@acme-retail.com, ops@paymentco.com
+Cc: marcus_lin@redwood.com, dylan_brooks@redwood.com, vanessa_ortiz@redwood.com
+Date: Fri, 15 Sep 2028 16:20:00 +0000
+Subject: Targeted edge latency incident — postmortem & closure items
+
+Hi all —
+
+Postmortem summary (brief):
+- Incident start: 2028-09-12 08:45 UTC.
+- Root cause: transient peering congestion at PEER-7 which surface as elevated retransmits on egress to affected POPs.
+- Impact: elevated latency for ~2.1% of requests across affected regions; ~0.4% increase in 5xx for the 1.5 hour window.
+
+What we did for customers:
+- Automated traffic steering to fallback POPs and opened canaries.
+- Increased pool capacity and adjusted routing heuristics.
+- Issued this reroute playbook and provided short-term configuration recommendations.
+
+Follow-ups and deliverables (we'll share by end of day Mon):
+- Account-specific log bundle with request IDs and redaction instructions ("postmortem-draft.docx" includes template).
+- Finalized postmortem doc and long-term mitigation plan (linked).
+- SLA review for any impacted invoices — we'll reach out separately if credits are owed.
+
+Links: https://drive.redwood.com/drive/postmortems/INC-2028-0912, Jira INC-2028-0912
+
+If there's anything urgent, reply-all and we'll prioritize. We'll coordinate a short retro with your SRE in the next week if useful.
+
+Thanks for your partnership and patience.
+
+— Stephanie
+Stephanie Nguyen
+Customer Reliability Lead, Redwood Inference
+stephanie_nguyen@redwood.com
+
+Attachments referenced: postmortem-draft.docx

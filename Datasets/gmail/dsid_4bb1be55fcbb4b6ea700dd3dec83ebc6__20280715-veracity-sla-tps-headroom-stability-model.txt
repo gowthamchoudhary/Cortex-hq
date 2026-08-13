@@ -1,0 +1,109 @@
+Veracity throughput/SLO stability model — draft numbers and headroom
+
+From: olga_petrov <olga.petrov@redwood.ai>
+To: Samira Khan <samira@veracity.ai>
+Cc: ben_carter <ben.carter@redwood.ai>, karthik_iyer <karthik.iyer@redwood.ai>
+Date: Mon, 15 Jul 2028 09:12:00 -0700
+Subject: Veracity throughput/SLO stability model — draft numbers and headroom
+
+Samira,
+
+Thanks for the call yesterday — attaching a concise draft of the throughput/SLO model we discussed. High level assumptions baked into the sheet:
+- Model: RedOpt-13B (8-bit quantized) — measured baseline ~120 tokens/sec per A100-equivalent under our continuous-batch driver.
+- Typical request: 320 tokens output on average (prompt + completion considered), 1.25kB payload.
+- Peak 10-minute window: customer expects ~350 concurrent requests at peak.
+
+Quick math (draft):
+- Peak tokens/sec required = 350 concurrent * 320 tokens / avg 1s = 112,000 tokens/sec.
+- GPUs required (baseline) = 112,000 / 120 ≈ 933 A100-equivalent GPUs.
+- Operational slab sizing: recommend grouping into 64-GPU slabs (8x8 with locality) with 20% headroom for traffic variability and warm cache needs → add ~187 GPUs, total ≈ 1,120 GPUs (14 slabs).
+
+SLO fit notes:
+- Target p95 latency <= 250ms (client requirement) is achievable with continuous batching at low queue depth but requires per-request prioritization and KV-cache warmup strategies for steady-state.
+- Cold-starts and burst microspikes are the main risk; suggested mitigation: short-lived burst pool + pre-warmed KV cache for the top 100K prefixes.
+
+Ask: can you confirm the expected sustained qps outside the 10-min peak (e.g., hourly baseline), and whether the 320 token average is conservative? Also please confirm procurement timeline — rough commitment window will change how many slabs we reserve up-front.
+
+Attachments: veracity_draft_slo_numbers.xlsx (spreadsheet — baseline calc), runbook-stability-checklist.pdf (high-level runbook)
+
+Thanks,
+Olga Petrov
+Principal Solutions Engineer | Redwood Inference
+olga.petrov@redwood.ai
+
+
+From: Samira Khan <samira@veracity.ai>
+To: olga_petrov <olga.petrov@redwood.ai>
+Cc: Veracity Procurement <procurement@veracity.ai>, Veracity Engineering <eng-leads@veracity.ai>
+Date: Mon, 15 Jul 2028 11:03:00 -0700
+Subject: Re: Veracity throughput/SLO stability model — draft numbers and headroom
+
+Olga —
+
+Appreciate the fast turnaround. A few clarifications from our side:
+- 320 tokens average is our current estimate based on chat transcripts; it's conservative but realistic. If anything I'd say 280–320 is the band.
+- Baseline (off-peak hourly average) is closer to 40–60 qps, with predictable diurnal shape. The 350 concurrent number is our worst 10-minute peak (we've observed similar spikes during marketing pushes).
+- Hard SLO: p95 <= 250ms, and availability target 99.95%.
+- Procurement timeline: we'd like to land terms & commitment within Q3 FY28. We may need to stage the commit (initial 6-month slab + option to expand).
+
+Before procurement, our infra team wants a short validation: can Redwood run a 24h canary (staging) that reproduces our diurnal + a 10-minute synthetic spike so we can validate p95 and tail behavior?
+
+If you can respond with a suggested slab phasing and cost/latency tradeoffs (short/medium/long commit), that will help us internal buy-in.
+
+—Samira
+Head of Platform, Veracity AI
+
+From: ben_carter <ben.carter@redwood.ai>
+To: olga_petrov <olga.petrov@redwood.ai>, Samira Khan <samira@veracity.ai>
+Cc: karthik_iyer <karthik.iyer@redwood.ai>
+Date: Tue, 16 Jul 2028 08:37:00 -0700
+Subject: Re: Veracity throughput/SLO stability model — draft numbers and headroom
+
+Samira/Olga —
+
+I dug into the numbers and added a couple of practical adjustments from an ops perspective. Key points below (I attached a quick calc excerpt into the sheet):
+
+1) Tokens/sec baseline per GPU: 120 t/s is our measured steady-state for RedOpt-13B on A100-80GB equiv with continuous batching and a mix of sequence lengths. However:
+   - For p95 <= 250ms at 320 tokens: we need to bound batch sizes and introduce QoS (priority queues). Effective t/s drops to ~95 t/s to keep tails short under multi-tenant load and background maintenance windows.
+
+2) Revised GPU count (conservative):
+   - Peak tokens/sec required = 350 * 320 = 112,000 t/s.
+   - Safety-adjusted per-GPU = 95 t/s → GPUs = 112,000 / 95 ≈ 1,179.
+   - Add 18% operational reserve (for canary/cold-cache, scheduling jitter, rolling upgrades) → total ≈ 1,394 GPUs.
+
+3) Slab proposal & phasing (practical):
+   - Phase 1 (initial commit, 6 mo): reserve 6 slabs (6 * 64 = 384 GPUs) — covers base and short-term peaks with burst capacity from shared pools.
+   - Phase 2 (expand, +6–12 mo): add 8 slabs (512 GPUs) after validated canary and first 90d usage patterns — brings committed total to 896 GPUs.
+   - On full steady-state (post-12 mo) convert burst to committed / add +7 slabs to reach conservative target ~1,392 GPUs.
+
+4) Canary plan (24h): we can run in staging with the same model/config: two runs — a) diurnal replay (24h) b) focused 10-min spike at 400 qps. We'll instrument KV cache hit rates, p50/p95/p99 latencies, and packet-level timing. Requires a short IP/CIDR allowlist and a staging API key.
+
+5) Cost/latency tradeoffs:
+   - If Veracity can accept a p95 SLA of 300ms (instead of 250ms) we can operate at ~110 t/s per GPU, reducing eventual committed capacity by ~10–12% (savings on committed GPU count).
+   - Quant changes (to int4) could double t/s but need repro/QA on hallucination/quality — not recommended for initial commit.
+
+I'll update the spreadsheet with the conservative runway numbers and a short ops checklist for the canary.
+
+-Ben
+Ben Carter
+Head of Capacity Planning | Redwood Inference
+
+From: olga_petrov <olga.petrov@redwood.ai>
+To: Samira Khan <samira@veracity.ai>
+Cc: ben_carter <ben.carter@redwood.ai>, karthik_iyer <karthik.iyer@redwood.ai>
+Date: Tue, 17 Jul 2028 14:05:00 -0700
+Subject: Re: Veracity throughput/SLO stability model — draft numbers and headroom
+
+Samira —
+
+Thanks — that revised runway from Ben is helpful and conservative (good for procurement). Proposed next steps:
+- Olga/Ben to share an updated sheet by EOD with phase-by-phase slab counts and a cost delta for the 250ms vs 300ms p95 option.
+- Veracity to confirm the 24h canary window and provide staging allowlist + a staging API key. We will schedule the canary the week after next.
+- Procurement: we'll prepare a two-stage contract template (6mo initial commit + expansion option).
+
+If that aligns, I'll convert the spreadsheet into the contract-facing numbers and loop legal.
+
+Olga
+Principal Solutions Engineer | Redwood Inference
+
+

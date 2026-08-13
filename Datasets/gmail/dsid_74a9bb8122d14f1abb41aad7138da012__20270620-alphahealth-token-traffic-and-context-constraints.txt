@@ -1,0 +1,127 @@
+Re: AlphaHealth onboarding — token traffic and context constraints
+
+From: Laura Chen <laura@alphahealth.ai>
+To: neha_kapoor@redwood.com
+Cc: Samir Rao <samir@alphahealth.ai>
+Date: 2027-06-20T09:12:00-07:00
+Subject: AlphaHealth onboarding — initial requirements and sizing request
+
+Hi Neha,
+
+Thanks again for the productive demo last week. Attached is the v2 requirements workbook that our PMs put together (features + sample prompts + data retention notes). High level summary: we want to use Redwood for three primary flows — document summarization (medical notes), conversational triage (patient intake assistant), and policy/rule-based extraction for billing tags.
+
+Quick facts from our side:
+- Active users: pilot = 120 clinicians, target Q3 = 1,200 active monthly users
+- Expected concurrent sessions at pilot peak: ~8–12 QPS, target production peak bursts ~60 QPS
+- Typical prompt sizes:
+  - Summarization: average input 3.5k chars (~700 tokens), expected output ~200–400 tokens
+  - Triage: variable; typical context includes last 3 notes + form fields — ~5–7k chars (~1k–1.3k tokens) + reply ~150–300 tokens
+  - Extraction: small prompts 200–400 tokens roundtrip
+
+Ask: can your team recommend an initial model shortlist (with context-window guidance) and provide a token-traffic estimate for pilot and for the Q3 target? We need this for procurement and to scope Dedicated capacity versus Hosted.
+
+Attached: AlphaHealth_requirements_v2.xlsx (worksheet: traffic_assumptions)
+
+Can we get a short mutual action plan and a follow-up call with CS/Eng next week?
+
+Thanks,
+
+Laura Chen
+Head of Product
+AlphaHealth
+[Attachment: AlphaHealth_requirements_v2.xlsx (xlsx)]
+From: neha_kapoor@redwood.com
+To: Laura Chen <laura@alphahealth.ai>
+Cc: monica_patel@redwood.com, ben_carter@redwood.com, kimberly_park@redwood.com
+Date: 2027-06-20T11:08:00-07:00
+Subject: Re: AlphaHealth onboarding — initial requirements and sizing request
+
+Laura — thanks for the workbook, looks clear. Looping in Monica (CS lead) and Ben (runtime/modeling) for sizing. Attaching a first-pass shortlist and a draft mutual action plan so procurement can see rough timelines.
+
+Initial read / asks:
+- Based on the prompt samples, triage and summarization will benefit from larger context (>=8k tokens) to avoid truncating prior notes. Can you confirm worst-case length for a single patient history doc (chars or pages)?
+- For pilot, is burstiness predictable by time-of-day (clinic hours) or more event-driven (ad-hoc spikes)?
+- SLA: do you need p95 latency under 500ms for triage replies? That affects whether we recommend Hosted (multi-tenant) or Dedicated with reserved GPU pool.
+
+Our proposed shortlist (first pass):
+- open-chat-13b-8k (good latency/cost balance for triage with 8k context)
+- open-chat-33b-16k (higher quality and room for longer histories; consider quantized variant for cost)
+- open-retrieval-7b-8k (extraction tasks where throughput matters)
+
+Pilot token-traffic sketch (very rough):
+- Pilot active clinicians: 120
+- Avg daily sessions per clinician: 4
+- Avg tokens per session (summarization + triage + extraction): 2,200 tokens
+- Pilot daily tokens: 120 * 4 * 2,200 = ~1,056,000 tokens/day (~31.7M tokens/month)
+- Production (1,200 clinicians): ~317M tokens/month
+
+See attached: initial_model_shortlist.pdf and mutual_action_plan_draft.md — these are rough and intended to kick off procurement and infra planning.
+
+Next steps: can Ben propose a more detailed token breakdown and a preferred Dedicated capacity sizing? Also, Laura — a 30-min alignment call Wednesday works for our team.
+
+Best,
+Neha Kapoor
+Enterprise CS Manager
+Redwood Inference
+[Attachments: initial_model_shortlist.pdf, mutual_action_plan_draft.md]
+From: ben_carter@redwood.com
+To: neha_kapoor@redwood.com
+Cc: monica_patel@redwood.com, kimberly_park@redwood.com
+Date: 2027-06-20T14:40:00-07:00
+Subject: Re: AlphaHealth onboarding — initial requirements and sizing request
+
+Adding technical sizing notes and a slightly different shortlist based on latency and caching behaviour. Quoted below are clarifying assumptions and a per-feature token cadence estimate.
+
+Assumptions:
+- We’ll plan for 99th percentile peak bursts of 60 QPS for production; pilot we can cap bursts to ~12 QPS with throttling.
+- Prefix caching will help for templated prompts (extraction); triage and summarization less cache-friendly because of freeform notes.
+
+Model shortlist (recommendation with tradeoffs):
+- open-chat-13b-8k: default for triage in pilot — 8k context, modest memory, good cost/latency.
+- open-chat-70b-16k (quantized): reserve for long-form summarization where you need 16k context to avoid multi-pass chunking. Higher cost but simplifies correctness.
+- open-embed-2.5b (embedding service) + retrieval: avoid sending full long-text to the LM when only extraction/lookup required — reduces token counts significantly.
+
+Token cadence per interaction (example):
+- Summarization (one note): input 700 tokens + output 300 tokens = 1k tokens
+- Triage (history of 3 notes + form): input 1,200 tokens + output 200 tokens = 1.4k tokens
+- Extraction call (structured): input 250 + output 50 = 300 tokens
+
+Traffic scenarios:
+- Pilot peak day (12 QPS sustained for 2 hours):
+  - If 50% of QPS are triage, 30% summarization, 20% extraction -> estimated pilot peak-hour token throughput: ~ (12 * 3600) * avg_token_per_call (assume 1.2k) = ~51.8M tokens for that 2-hour window (this is a stress estimate; real daily will be lower).
+- Capacity recommendation: pilot on Hosted fine if you accept throttling; for production at 1,200 users with 60 QPS target, recommend dedicated pool sized for ~120 concurrent generation streams with autoscale headroom. That maps to monthly reserved commit in the ballpark of 300–400M tokens/month to keep unit economics predictable.
+
+Operational notes:
+- Enable KV/prefix caching for repeated extraction prompts; configure batching window to 10–20ms for triage path to preserve latency while improving throughput.
+- If AlphaHealth requires <100ms p50 and <400ms p95, plan for Dedicated with GPU-class that favors latency (smaller batch windows, more replicas).
+
+I’ll prepare a short appendix with expected GPU counts and cost bands once Laura confirms SLA and true burst profile.
+
+—Ben
+Ben Carter
+Inference Platform — Performance Modeling
+Redwood Inference
+From: Laura Chen <laura@alphahealth.ai>
+To: neha_kapoor@redwood.com
+Cc: Samir Rao <samir@alphahealth.ai>, procurement@alphahealth.ai
+Date: 2027-06-21T15:03:00-07:00
+Subject: Re: AlphaHealth onboarding — initial requirements and sizing request
+
+Thanks Neha/Ben — this is super helpful and in the right direction. A few quick clarifications:
+
+- Worst-case single-patient history: up to ~12 pages of notes (~9–11k chars) — so 8k tokens is probably tight in some cases; we should plan for 16k where possible for summarization.
+- Burstiness: primarily clinic hours (9am–5pm local), predictable spikes at shift changes and end-of-day batch uploads.
+- SLA: production target p95 < 600ms for triage is acceptable; p50 < 250ms would be great but not required initially.
+
+Action items I can take this week:
+1) Confirm procurement window & whether we need an NDA redline before a Dedicated pricing proposal (procurement copied).
+2) Review the mutual_action_plan_draft.md and return comments by Friday.
+3) Book the Wed 30-min alignment call — prefer 11:00am PT.
+
+If you can send the GPU sizing appendix and a recommended pilot config (models, rate-limits, throttling policy) before the call, we’ll be in good shape for procurement.
+
+Laura
+Laura Chen
+Head of Product
+AlphaHealth
+[Attachment: signed_requirements_ack.txt (stub)]

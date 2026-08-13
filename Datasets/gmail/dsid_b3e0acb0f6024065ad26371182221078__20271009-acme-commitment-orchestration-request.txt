@@ -1,0 +1,99 @@
+Weekly GPU orchestration: pre-close sizing request for Acme Robotics
+
+From: Aditya Rao <aditya.rao@redwood.ai>
+To: Laura Bennett <laura.bennett@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Julie Hart <julie.hart@acme-robotics.com>
+Date: Fri, 09 Oct 2027 09:12:00 -0700
+Subject: Weekly GPU orchestration: pre-close sizing request for Acme Robotics
+
+Team —
+
+Bringing the weekly fleet planning item over for the Acme pipeline that Julie flagged. They’ve moved their pilot to a POC costing call and finance asked for a committed slot proposal backed by a sizing note; procurement wants an indicative monthly reserve commitment range so they can budget for Q4.
+
+Quick summary of asks from Acme (see attached forecast sheet):
+- Sept–Nov pilot burn: mostly p99 short jobs, peak concurrency 22 inference workers; model base is a 13B quantized variant.
+- Expected Q4 initial commit window: 4–8 dedicated slots (A100-equivalent) for steady throughput + burst for spikes.
+- SOC2 evidence + audit log cadence requested by procurement.
+
+What I need from you for tomorrow’s sales-finops-ops sync (Mon 10/11):
+1) An ops-ready committed slot proposal: recommended slot size (vGPU/A100-equivalent), conservative headroom factor, and fallback (burst) plan.
+2) Finance-facing unit economics: expected $/slot-hour and projected monthly token spend for the commit ranges in the sheet.
+3) Any blockers for private-reserved deployment (networking/KMS) that would push them to Dedicated rather than Private.
+
+I attached Acme_pipeline_forecast_v2.xlsx with their weekly concurrency numbers and SOC2 checklist stub. Please add notes inline; I’ll consolidate into the pre-close packet.
+
+Thanks —
+Aditya
+Aditya Rao
+Head of Strategic Accounts, Redwood Inference
+aditya.rao@redwood.ai | +1 415-555-0172
+
+Attachments: Acme_pipeline_forecast_v2.xlsx (spreadsheet), soc2_evidence_request.pdf (doc)
+
+From: Julie Hart <julie.hart@acme-robotics.com>
+To: Aditya Rao <aditya.rao@redwood.ai>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Acme Robotics Procurement <procure@acme-robotics.com>
+Date: Fri, 09 Oct 2027 14:05:00 -0700
+Subject: Re: Weekly GPU orchestration: pre-close sizing request for Acme Robotics
+
+Aditya / team —
+
+Thanks for the quick turnaround. A few clarifications from our side while you size:
+- The 22 concurrent workers are a peak engineering-run figure; expected steady concurrency is 10–12 for most weekdays.
+- We plan to roll the 13B model across ~6 internal services (web inference, batch inference, rerank) — latency SLOs vary: web inference needs <150ms p95; batch rerank is tolerant.
+- Procurement asks: provide two commitment tiers (Conservative: 4 slots; Growth: 8 slots) and the monthly cancellation window and burst billing approach.
+
+We can be flexible on a two-quarter upfront commit if you provide a predictable pricing band and clear burst policy. Also, we’ll need SOC2 evidence by the contract signature date (we can accept a statement of intent + timeline if final PDF isn’t ready).
+
+Julie
+Julie Hart
+Director, ML Ops — Acme Robotics
+julie.hart@acme-robotics.com
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Julie Hart <julie.hart@acme-robotics.com>
+Date: Sat, 10 Oct 2027 08:30:00 -0700
+Subject: Re: Weekly GPU orchestration: pre-close sizing request for Acme Robotics
+
+Folks —
+
+I pulled the attached forecast and ran a conservative sizing pass. High-level recommendation:
+- Committed slot baseline: 4 A100-equivalent slots (each slot ~1x A100 40GB throughput profile). This covers steady concurrency (10–12) with a 1.5x headroom to absorb config variability.
+- Growth tier: 8 slots if they commit to the two-quarter upfront; reduces $/slot-hour by ~18% in our model.
+- Burst strategy: enable burst credits up to +50% (short-term) with per-token overage billing. Ops can implement automated scaling to move >90s requests to batch pool when web p95 spikes are detected.
+- SLA/Fallback: recommend a soft canary for the first two weeks (pin model versions, enable KV prefix caching) and an automatic fallback to quantized-8bit variant if latency regressions >15% are observed.
+
+Finance note for Ben: I estimated monthly compute spend at current pilot qps for the 4-slot baseline at ~ $72k/month (compute only) with the Growth tier at ~$118k/month before discounts. I left room for token-cost variance in the sheet.
+
+Operational blockers: the customer asked for KMS integration for customer-managed keys — infra may need a short checklist on network peering and KMS proof-of-concept steps. Marissa, can you confirm network lead time for a VPC peering + KMS onboarding?
+
+Laura
+Laura Bennett
+Head of Customer Success, Redwood Inference
+laura.bennett@redwood.ai
+
+> On Fri, Oct 9, 2027 at 09:12 AM Aditya Rao <aditya.rao@redwood.ai> wrote:
+> > Team —
+> > Bringing the weekly fleet planning item over for the Acme pipeline that Julie flagged...
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Aditya Rao <aditya.rao@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Julie Hart <julie.hart@acme-robotics.com>
+Date: Mon, 11 Oct 2027 17:55:00 -0700
+Subject: Re: Weekly GPU orchestration: pre-close sizing request for Acme Robotics
+
+Thanks — solid notes. A few additions from FinOps:
+- Pricing bands: conservative 4-slot commit = $68k/month compute estimate after standard commercial discount (I trimmed Laura’s buffer slightly), growth 8-slot = $102k/month. Final numbers will depend on token volume reconciliation but these are what I’ll present to procurement.
+- Cancellation: standard 30-day notice for monthly reserved slots; for the two-quarter prepaid we can offer prorated credits if they convert to a different commitment on >=60 days notice.
+- Burst billing: overage billed at on-demand per-token rate with a cap defined in the SLA (we typically cap at 2x on-demand for emergency bursts).
+
+Marissa — if ops can confirm VPC peering + KMS onboarding in <=10 business days we can put the two-tier proposal in the pre-close packet and route to procurement Tuesday. Julie — can you confirm whether Acme prefers prepaid-2Q or monthly reserved to guide discount band?
+
+I’ll assemble the deck for procurement with the two commitment tiers, breakouts, and an ops checklist.
+
+Ben Carter
+Director, Finance — Redwood Inference
+ben.carter@redwood.ai
+
+Attachments referenced: Acme_pipeline_forecast_v2.xlsx (updated with cost bands)

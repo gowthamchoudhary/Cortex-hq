@@ -1,0 +1,81 @@
+Week 4 - Throughput & Latency Pivot with Polaris HealthSpan
+
+Weekly POC sync to review week 4 benchmark results vs customer's incumbent provider, triage regressions at p95, discuss batching/kv caching and cost tradeoffs, agree next steps for 24h synthetic and security docs.
+Throughput delta vs baseline
+p95 / p50 latency tuning
+Batching strategies and KV caching
+Quantization impact and quality checks
+Security readiness for private deployment
+Alex Morgan: Share updated 24h synthetic test plan + traffic script (due: 2026-01-18)
+Priya Shah: Run focused p95 profiling with KV caching off/on and share trace snippets (due: 2026-01-16)
+Laura Chen: Provide sample request distribution and token histogram for production traffic (due: 2026-01-17)
+Nadia Ortiz: Send list of compliance docs required for evaluation (due: 2026-01-20)
+Redwood to run 24h synthetic load against Dedicated pool with customer's token distribution
+Customer to provide long tail request logs and confirm success criteria for p95 <= 300ms
+Schedule on-prem readiness workshop if 24h test meets throughput targets
+AE to send updated pricing matrix including reserved capacity delta
+Meeting header:
+Date/Time: 2026-01-14 14:30 PST
+Duration: ~52 minutes
+Attendees: Alex Morgan, Priya Shah, Tomás Rivera (Redwood) — Samir Patel, Laura Chen, Marcus Reed, Nadia Ortiz (Polaris)
+
+Summary (auto): quick recap of last week, focus this week on p95 regressions and throughput peak behavior, a couple of anomalies in the evening run.
+
+[00:00] Alex Morgan: alright everyone, thanks for joining, we got about 50 minutes today so we'll go through the week 4 numbers, dig into p95 anomalies and then triage a couple of tuning knobs.
+[00:18] Samir Patel: yep thanks Alex, Laura and I will jump in — Marcus is on for infra stuff. we ran the smoke this morning too.
+[00:27] Priya Shah: quick note, I'll share the dashboard link in the chat after the call — includes p50/p95 and per-shard throughput.
+[00:35] Marcus Reed: perfect, we compared Redwood to our incumbent — um, the baseline provider had p95 ~410-450ms on our test, we saw Redwood at 220-260ms in the daytime but spiked to ~520ms overnight on one run.
+[00:50] Tomás Rivera: okay that's helpful. do you remember whether the overnight run used the same batching profile? sometimes nightly retrains or log drains create skew.
+[00:58] Marcus Reed: should have been same script but there was a higher fraction of long context requests. i.e., token distribution tail heavier.
+[01:06] Alex Morgan: that aligns — our profiler flagged a KV cache miss storm during that window, KV 'cash' in the trace, so you likely saw more cold starts on the KV layer.
+[01:15] Laura Chen: KV cash — yeah i saw some weird entry in the trace. is that the key value cache? could be miss rates.
+[01:21] Priya Shah: yes it's KV cache — occasionally the client routing created micro-shards that lose local cache affinity, leads to more model cold steps and higher p95. we can simulate that easily.
+[01:34] Samir Patel: baseline provider says their p95 is steady because they pin instances; cost is higher. we need to show both latency and cost delta at production traffic.
+[01:44] Alex Morgan: totally — we put together a cost/perf slide that compares raw $/1M tokens, plus the reserved capacity monthly delta. Redwood's profile there was about 28% lower unit cost in our synthetic vs incumbent for similar QoS.
+[01:57] Marcus Reed: can you remind us of the exact numbers? we need line items for infra team.
+[02:03] Tomás Rivera: sure — rough numbers from the test: baseline provider 1M token cost $1,420; Redwood hosted path showed $1,020; dedicated reserved profile with autoscale came to about $1,150 once amortized. these are synthetic numbers and vary by batch size.
+[02:18] Laura Chen: so dedicated still cheaper than baseline but a little higher than pure hosted, ok.
+[02:24] Priya Shah: and throughput — on our peak 2h window Redwood sustained ~210 req/s with median tokens ~180, baseline was ~120 req/s under same hardware allocation. that gave Redwood higher overall throughput because of better batching + kernel selection for the model variant you picked.
+[02:40] Samir Patel: that's promising. main worry is the p95 spike overnight. what are the hypotheses?
+[02:46] Alex Morgan: one — KV cache misses due to shard affinity; two — larger context lengths hitting an unfavorable execution path causing extra kernel swaps; three — background maintenance tasks on your side (log ingestion) spiking I/O.
+[02:58] Laura Chen: we did a large export at 01:12 UTC on that day — could have affected network I/O.
+[03:03] Priya Shah: ok let's try to isolate. our plan: toggle KV caching off/on for a controlled run, run one with smaller max batch size to reduce latency tail, and run a run with pinned model variant (no fallback).
+[03:15] Marcus Reed: what do you mean by pinned model variant?
+[03:18] Tomás Rivera: we have lightweight fallback rules — sometimes if the preferred quantized variant is busy we fallback to a FP16 variant — that can change latency characteristics. pinning forces one path so we can measure.
+[03:27] Samir Patel: got it. how much overhead to run those tests?
+[03:30] Alex Morgan: low — we can spin controlled synthetic tests from our side using your token histogram; won't affect production. we'll need Laura's histogram.
+[03:36] Laura Chen: i'll export and share it by EOD.
+[03:39] Priya Shah: great. also one more note — we saw some tokenization differences between your preprocessing and ours; occasionally it increases effective token count by ~5-7% for clinical notes. that amplifies the p95.
+[03:50] Nadia Ortiz: on the security front, we had a question about key management — if we go private, will KMS/HSM integration be supported?
+[03:57] Tomás Rivera: yes we support KMS integrations and can run with customer-managed keys in the private plane. there was a small typo in the doc previously where we called it 'private plane' instead of 'private plane' — apologies, doc generation glitch. (laughs)
+[04:12] Nadia Ortiz: ha, ok, just verifying that audit logs are going to the customer's SIEM and that retention options exist.
+[04:18] Alex Morgan: yes audit logs + S3 export to your account is supported, and we can increase retention as part of the enterprise package. we'll attach the compliance matrix after this call.
+[04:26] Samir Patel: great. i also want to drill into the p95 numbers you reported — what's the distribution? are we seeing a bi-modal tail?
+[04:33] Priya Shah: looks like bi-modal-ish — a main cluster around 180-240ms and a smaller cluster 400-600ms. after we turn on KV caching simulation the smaller cluster shrinks.
+[04:43] Marcus Reed: can you explain the caching impact briefly for the engineering team?
+[04:47] Priya Shah: sure — continuous batching + KV caching stores prefix key-value states and avoids recomputation for repeated prefixes; if affinity is lost then you have to re-warm the cache which costs tokens and time, so p95 increases.
+[04:59] Laura Chen: would a single-shard routing guarantee help?
+[05:02] Alex Morgan: yes, pinned routing or setting affinity TTLs longer helps but increases memory footprint; it's a tradeoff. if you pin too long, you might not utilize GPU capacity well.
+[05:11] Samir Patel: so what's the recommended starting config to hit p95 <= 300ms while keeping cost reasonable?
+[05:16] Tomás Rivera: start with KV caching enabled, aff TTL at 10 minutes, batch max 16, prefer quantized variant with conservative fallback disabled for the test window. if p95 still >300ms, reduce batch max to 8 or increase affinity TTL.
+[05:29] Marcus Reed: and what about quantization quality? we have clinical notes and can't afford hallucinations.
+[05:34] Priya Shah: we used Q4_0 for the test and ran a quick eval on your 500-example prompt set — perplexity delta was small and we saw no hallucination uptick in sampled outputs. we'll share the eval artifacts.
+[05:45] Laura Chen: please do share. those evals are critical for our clinical compliance team.
+[05:50] Alex Morgan: action item — we'll push the eval summary and source prompts to the secure share.
+[05:55] Samir Patel: excellent. another datapoint — cost sensitivity: if we go dedicated, network egress and reserved commit numbers will change our TCO. can you model a 6-month commit vs on-demand?
+[06:06] Tomás Rivera: yes, we'll provide a 6- and 12-month commit model and include autoscale burst costs. that will be in the pricing sheet Alex will share.
+[06:15] Marcus Reed: in terms of next steps for this week — what are the concrete runs we expect?
+[06:19] Alex Morgan: Redwood runs: 1) 2 controlled runs with KV cache off/on, 2) pinned variant run, 3) reduced batch size run, all for 2 hours each and then a 24h synthetic with your token histogram. we'll start those Friday night PST to capture the overnight pattern.
+[06:34] Laura Chen: Friday night works for us. we'll block a window and provide logs if anything spikes.
+[06:38] Nadia Ortiz: for compliance, please include the network diagram for private deployments — we need to assess the traffic flows.
+[06:43] Alex Morgan: noted, will attach network diagram and compliance matrix.
+[06:47] Priya Shah: quick callout — we saw one rare error 'model mutex timeout' during the spike — logs included. we suspect lock contention when many long contexts force KV re-warms concurrently.
+[06:57] Marcus Reed: okay, we can correlate with our job runs at that time.
+[07:00] Samir Patel: anything else on benchmarks?
+[07:02] Tomás Rivera: one more thing — we noticed the baseline provider used a slightly older CUDA stack that had a slower attention kernel on long contexts; small kernel changes drove a 10-15% difference in tail latency. our runtime picks best kernel based on sequence distribution which helps on those long tails.
+[07:17] Laura Chen: interesting — might explain some of the observed differences.
+[07:21] Alex Morgan: wrapping up — repeat next steps: Laura send token histogram and logs; Redwood runs the isolated experiments and the 24h synthetic; security docs and pricing to go out. we'll meet next Tuesday to review 24h results.
+[07:36] Samir Patel: thanks team, appreciate the quick triage.
+[07:39] Alex Morgan: thanks, we'll follow up with artifacts.
+
+End of transcript.

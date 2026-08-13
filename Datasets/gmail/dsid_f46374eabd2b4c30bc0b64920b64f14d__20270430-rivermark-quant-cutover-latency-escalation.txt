@@ -1,0 +1,106 @@
+Urgent: RiverMark latency & error spike after v3.2/int8 cutover
+
+From: Alicia Barnes <alicia.barnes@rivermark.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Tom Chen <tom.chen@rivermark.com>
+Date: Thu, 29 Apr 2027 08:45:12 -0700
+Subject: URGENT - production p99 spike + errors after v3.2/int8 cutover
+
+Hi Neha / Marissa,
+
+We just observed a sharp regression in RiverMark production starting ~08:05 PDT after you flipped the model to v3.2 with the new int8-fast quantization profile. Symptoms: p99 latency up from ~180ms to ~680ms, throughput degraded ~28% for high-concurrency hot routes, and a 5xx error rate spike (~1.9% -> 6.8%). This is impacting fraud-check flows and causing backpressure in our API tier.
+
+Attached: rm_prod_qprofile_metrics_0429.csv and a snippet of p99 traces. Can you confirm whether any kernel or batching changes were included in the v3.2 rollout? We need an immediate mitigation plan — our ops and product teams are watching and this is now a priority for our CTO.
+
+We are also in contract renewal talks (Q3) so timely remediation is important. Please advise next steps and ETA for rollback or hotfix.
+
+Thanks,
+Alicia Barnes
+Senior Engineering Manager, RiverMark Financial
+A: +1 415-555-0192
+
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Alicia Barnes <alicia.barnes@rivermark.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Jonas Weber <jonas.weber@redwood.com>
+Date: Thu, 29 Apr 2027 09:05:38 -07:00
+Subject: Re: URGENT - production p99 spike + errors after v3.2/int8 cutover
+
+Alicia — thanks for the quick heads up and for the attachments. I'm sorry you're seeing this. We're investigating now. Quick notes from infra: v3.2 included a newer attention kernel and a default batch sizing tweak tied to the int8-fast profile; nothing else was changed in the routing layer.
+
+Immediate plan suggestions:
+- Pause the int8-fast rollout for RiverMark and pin traffic to the last-known-good quant profile (v3.1 / int8-stable).
+- Open a high-priority incident with a cross-functional war room (I'll loop Rishi and Jonas).
+- If rollback won't restore throughput, we will route hot traffic to a non-quantized v3.2 variant (higher cost but safe).
+
+Can you confirm whether you can accept a short controlled rollback window (we can schedule immediately) or if you'd prefer a routing workaround first? Also sending a short readout in 30 min with initial telemetry.
+
+—Neha
+Neha Kapoor
+Director, Customer Reliability, Redwood Inference
+
+From: Alicia Barnes <alicia.barnes@rivermark.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>
+Cc: Tom Chen <tom.chen@rivermark.com>, procurement@rivermark.com
+Date: Thu, 29 Apr 2027 09:22:10 -07:00
+Subject: Re: URGENT - production p99 spike + errors after v3.2/int8 cutover
+
+Neha — please do the rollback ASAP. Our ops team is seeing client calls time out; we need latency and error rates reduced immediately.
+
+We prefer a rollback to v3.1/int8-stable for all production traffic; if that is risky, routing 30% of requests to the non-quantized fallback while you stabilize is acceptable. Our CTO (cc'd internally) wants hourly status until resolved.
+
+Alicia
+
+[On Thu, Apr 29, 2027 at 09:05 AM PDT Neha Kapoor <neha.kapoor@redwood.com> wrote:]
+> Alicia — thanks for the quick heads up and for the attachments. I'm sorry you're seeing this. We're investigating now...
+
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Jonas Weber <jonas.weber@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Thu, 29 Apr 2027 10:03:02 -07:00
+Subject: INTERNAL: RiverMark exec escalation — immediate rollback + exec comms
+
+Team — RiverMark is asking for an immediate rollback to v3.1/int8-stable across production. They are escalating to their CTO; procurement flagged renewal sensitivity. Summary: p99 up ~+500ms, throughput -28%, 5xx jump to ~6.8%.
+
+Proposed action (start within 20 minutes):
+1) Pause int8-fast rollout for RiverMark (feature flag).
+2) Execute rollback playbook to pin model to v3.1/int8-stable -> see attached rollback_playbook_v2.pdf. Estimate 12–18 min for traffic to stabilize (depends on in-flight batches).
+3) If rollback fails to recover, shift hot route traffic to unquantized v3.2 nodes (capacity request: 8 dedicated slots for 2 hours).
+4) Prep a C-level status note: root-cause timeline, customer impact, mitigation steps, and proposed goodwill credit (we should be prepared to offer 2 weeks of platform credits).
+
+Risks & asks:
+- Routing to unquantized variant increases per-token cost ~2.4x. Need approval for emergency capacity and credits.
+- Validation: we will run a staged canary and monitor p99 + 5xx for 30m before releasing fully.
+
+I'll take point on the customer comms; Rishi, can you greenlight emergency capacity and draft the executive note? Jonas, please coordinate ops runbook execution. Grace, I need a short blameless postmortem skeleton for the follow-up.
+
+—Neha
+
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Alicia Barnes <alicia.barnes@rivermark.com>, Neha Kapoor <neha.kapoor@redwood.com>, Jonas Weber <jonas.weber@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Tom Chen <tom.chen@rivermark.com>
+Date: Fri, 30 Apr 2027 18:22:07 -07:00
+Subject: Re: URGENT - production p99 spike + errors after v3.2/int8 cutover — Redwood response
+
+Alicia / Tom — thank you for your patience. Quick status and commitments: 
+
+1) We executed the rollback to v3.1 / int8-stable at 10:18 PDT on 29-Apr; routing reverted to the previous quant profile and p99 began trending down. We kept 20% of hot traffic routed to an unquantized v3.2 fallback for validation for 45 minutes.
+2) By 10:45 PDT p99 had returned to baseline (~200ms) and 5xx dropped below 0.6%. Throughput normalized within 30 minutes. We continued monitoring for the last 24 hours.
+3) Root-cause preliminary: the new int8-fast kernel selection triggers a suboptimal micro-batching behavior for high-concurrency short-context routes (hot-path). We're treating this as a regression in the kernel/batching heuristic; R&D will push a targeted patch to the kernel selector next week.
+
+What we will do next (action items):
+- R&D will share a technical writeup and repro test by EOD Mon (May 3).
+- We will offer RiverMark two weeks of platform credits applied to your next invoice and a technical working session to validate the fixed profile before re-enabling int8-fast.
+- We'll schedule a 30-minute CTO-to-CTO call tomorrow to walk the timeline and remediation plan.
+
+I've attached the post-incident telemetry export and the rollback playbook for your reference. Apologies again — we know this is disruptive and we appreciate the team's responsiveness in the war room.
+
+Regards,
+Rishi Malhotra
+VP, Customer Success & Reliability, Redwood Inference
+(attachments: p99_traces_0429.txt, rollback_playbook_v2.pdf)
+
+[On Thu, Apr 29, 2027 at 10:03 AM PDT Neha Kapoor <neha.kapoor@redwood.com> wrote:]
+> Team — RiverMark is asking for an immediate rollback to v3.1/int8-stable across production...
+

@@ -1,0 +1,114 @@
+Private endpoints — IP allowlist & firewall rule requirements for procurement security review
+
+From: Sam Jenkins <sam.jenkins@acmepay.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: Marta Lopez <marta.lopez@acmepay.com>
+Date: Sun, 15 Mar 2026 09:12:00 -0700
+Subject: Request: IP allowlist + firewall requirements for Private Endpoint procurement
+
+Hi Hannah,
+
+Thanks for taking this — our procurement and infosec teams are finalizing controls for a Private deployment of Redwood inside our AWS VPC. They asked for a concise list we can give to our network team and firewall vendor. Specifically they want: a complete list of outbound destinations (IPs/FQDNs), ports, recommended allowlist CIDRs, and any special notes for NAT/GW setups, TLS inspection, and certificate validation.
+
+We also need to know whether Redwood supports zero-egress (air-gapped) installs vs required control-plane egress, and what artifacts (images/model weights) need to be fetched at install time versus periodically.
+
+Can you send a short technical spec and any sample firewall rules? We're on a procurement timeline and would like this by EOD Pacific.
+
+Thanks,
+Sam Jenkins
+Head of Platform Security, Acme Payments
+sam.jenkins@acmepay.com
++1 (415) 555-0123
+From: Hannah Schmitt <hannah_schmitt@redwood.com>
+To: Sam Jenkins <sam.jenkins@acmepay.com>
+Cc: Marta Lopez <marta.lopez@acmepay.com>, Dev Patel <dev_patel@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: Sun, 15 Mar 2026 10:03:00 -07:00
+Subject: Re: Request: IP allowlist + firewall requirements for Private Endpoint procurement
+
+Sam — thanks, we can absolutely provide this. High level: Redwood Private supports two deployment footprints: (1) Private control plane with outbound egress for telemetry, updates, and license checks; (2) Air-gapped on-prem installs for regulated environments (some features like hosted model updates are disabled).
+
+I'm looping in Dev for the precise list of FQDNs, ports and sample fw rules. I'll attach our config snippets and a diagram. Quick ask: do you prefer CIDR allowlists or FQDN-based egress rules? Many firewall vendors manage FQDNs differently.
+
+I'll follow up with a technical note shortly.
+
+— Hannah
+Hannah Schmitt
+Director, Solutions — Redwood Inference
+hannah_schmitt@redwood.com
+
+From: Dev Patel <dev_patel@redwood.com>
+To: Sam Jenkins <sam.jenkins@acmepay.com>, Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>
+Date: Sun, 15 Mar 2026 11:08:00 -07:00
+Subject: Re: Request: IP allowlist + firewall requirements for Private Endpoint procurement
+
+Hi Sam / team — attaching the short technical spec and some example firewall rules. Summary below; full details in attachments.
+
+1) Modes and high-level implications- Private (VPC) with outbound egress: minimal outbound to Redwood control plane and optional external services (metrics, container registries). Suitable when outbound is allowed and you want managed updates.
+- Air-gapped on‑prem: fully self-contained; no external egress required after initial bootstrap if you ship model artifacts and images via secure transfer. This requires our on‑prem bundle + offline license activation and costs additional support.
+
+2) Required outbound endpoints (recommended ordering for allowlist)- Control plane API: control.redwood-inference.com (HTTPS, 443) — used for registration, license checks, config sync. Behaves as server-initiated TLS connections to a small set of IPs (we publish a weekly CIDR set; see attachments).
+- Artifacts & model downloads: artifacts.redwood-inference.com (HTTPS, 443) — large downloads at install/upgrade. Optionally pulled from S3-backed endpoints: s3.amazonaws.com (443) or regional S3 endpoints.
+- Container registry (if using Redwood-managed images): registry.redwood-inference.com (443) or ghcr.io / docker.pkg.github.com (443).
+- Telemetry/metrics: otlp.redwood-inference.com (443) — optional; can be disabled.
+- Time & NTP: time.redwood-inference.com (123/UDP) or allow NTP to public stratum servers.
+- CRL/OCSP for TLS: ocsp.globalsign.com / crl endpoints — allow outbound 443 for OCSP stapling and certificate validation if firewall performs TLS interception.
+
+Ports: primarily 443/TCP for HTTPS. Where needed: 123/UDP for NTP, 443/TCP for registry and OCSP. Avoid opening wide ephemeral ranges; Redwood uses client-initiated TCP connections to destination ports above.
+
+3) CIDR recommendations and maintenance- We publish a small set of stable CIDR blocks for control and artifacts (see attachments: redwood-ip-allowlist-sample-clauses.pdf). Customers should allow those CIDRs + the DNS names above.
+- If your firewall vendor prefers FQDN rules, allow the FQDNs with strict TLS validation. If they require IPs, pin the published CIDR list and automate weekly updates via an API endpoint we provide.
+
+4) NAT / Gateway guidance- Use a NAT Gateway or egress proxy for nodes that do not have direct internet routes. For PrivateLink/PrivateEndpoint options, Redwood supports VPC peering and PrivateLink for control-plane traffic — eliminates public egress for control plane (requires configuration in the private deployment order).
+
+5) TLS inspection and certificate validation- We recommend not doing full MITM TLS interception on Redwood control-plane endpoints. If you must perform TLS inspection, ensure OCSP/CRL access is allowed and that CT logs/OCSP responses are not blocked. Certificate pinning is unsupported for customer-managed roots, so maintain visibility into CA infrastructure.
+
+6) Example firewall rules (simplified)
+- Allow tcp dst=443 to control.redwood-inference.com (or CIDR 203.0.113.0/26) from subnets: 10.100.0.0/24
+- Allow tcp dst=443 to artifacts.redwood-inference.com (or CIDR 198.51.100.0/24) from 10.100.0.0/24
+- Allow udp dst=123 to NTP pool from 10.100.0.0/24
+- Deny all outbound except above + your internal management systems
+
+7) On-prem / air-gapped considerations- For fully air-gapped installs we provide an offline bundle (images, model weights, install scripts) and an offline license activation flow. Customers must import container images into their private registry. Note: automatic model updates and hosted telemetry will be disabled. See attachment fw-rule-examples.txt for checklist.
+
+8) Operational notes and rollback- If your firewall vendor performs DNS caching aggressively, prefer CIDR rules with weekly updates. For upgrades that require large downloads, schedule maintenance windows and allow temporary higher throughput.
+
+9) Contact/automation- We can supply: (a) a signed current CIDR list via HTTPS to poll; (b) a single-dotfile manifest listing all FQDNs and ports; (c) a DocuSign packet for air-gap license activation.
+
+I'll attach a diagram and a sample iptables/ASA rule set. Happy to hop on a call with your network team this week — I have availability Wed/Thu.
+
+— Dev Patel
+Senior Infra Engineer, Redwood Inference
+dev_patel@redwood.com
+
+From: Marta Lopez <marta.lopez@acmepay.com>
+To: Dev Patel <dev_patel@redwood.com>, Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: Sam Jenkins <sam.jenkins@acmepay.com>
+Date: Sun, 15 Mar 2026 14:03:00 -07:00
+Subject: Re: Request: IP allowlist + firewall requirements for Private Endpoint procurement
+
+Thanks Dev — this is very helpful. A couple quick clarifications:
+1) We plan to run in an environment where automated egress is tightly controlled; if we opt for PrivateLink for control-plane traffic does that remove the need to open 443 to control.redwood-inference.com?
+2) For the air-gapped option, can our security team get the official checklist and the offline license activation SLA?
+
+If you can send confirmation on the PrivateLink behavior and the offline SLA, we can finalize procurement. Also, can you confirm whether OCSP/CRL lookups can be performed via our egress proxy (we prefer not to allow direct OCSP to external hosts)?
+
+Best,
+Marta Lopez
+Sr. Network Engineer, Acme Payments
+
+From: Dev Patel <dev_patel@redwood.com>
+To: Marta Lopez <marta.lopez@acmepay.com>, Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: Sam Jenkins <sam.jenkins@acmepay.com>
+Date: Sun, 15 Mar 2026 14:35:00 -07:00
+Subject: Re: Request: IP allowlist + firewall requirements for Private Endpoint procurement
+
+Marta — quick answers inline:
+1) PrivateLink: yes, when configured for control-plane traffic and peered correctly, PrivateLink removes the need for public egress to control.redwood-inference.com. You will still need outbound for artifacts unless you mirror artifacts into your internal registry or S3.
+2) Air-gapped checklist & SLA: attached in the PDF (redwood-ip-allowlist-sample-clauses.pdf) — includes offline license activation steps and support SLAs for air-gapped installs.
+3) OCSP/CRL via egress proxy: supported — as long as the proxy preserves TLS server identity for OCSP stapling and allows outbound 443 to OCSP endpoints on behalf of hosts. If your proxy performs full TLS MITM, make sure the proxy can validate remote OCSP/CRL entries and not block CT/OCSP.
+
+If helpful, we can produce a vendor-facing one-page firewall rule set formatted for Palo Alto, Check Point, and Fortinet. Happy to set up a technical call with your network team.
+
+— Dev
+

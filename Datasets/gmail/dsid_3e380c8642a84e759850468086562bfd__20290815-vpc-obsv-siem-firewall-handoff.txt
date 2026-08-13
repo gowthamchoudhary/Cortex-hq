@@ -1,0 +1,120 @@
+Observability handoff & SIEM firewall requirements for private VPC deployment
+
+From: Asha Raman <asha.raman@fjordhealth.com>
+To: marissa_cole@redwoodinference.com
+Cc: security@fjordhealth.com
+Date: Mon, 12 Aug 2029 09:12:00 -07:00
+Subject: Observability integration for private VPC deployment at Fjord Health
+
+Hi Marissa,
+
+Thanks for the quick onboarding — Fjord is moving forward with a private VPC deployment of Redwood for our clinical NLP pipelines. Before we finalize procurement we need a concrete pattern for observability exports that meets our compliance controls. High-level constraints: 
+
+- No direct internet egress from the VPC to third-party endpoints. Any logs/metrics must be pushed to our customer-managed forwarder inside the VPC (Splunk HEC / syslog collector) or delivered to a customer-controlled NATed egress that our security team manages.
+- TLS mTLS mandatory for any hops.
+- We need a SOC2-ready evidence bundle: sample logs (with redaction guidance), retention controls, and a list of ports/protocols your runtime requires.
+- Tracing hooks should include request ids and not include PII; sampling policy needs to be configurable.
+
+Can you provide: (1) a runbook describing the two supported export patterns (forwarder vs. pull), (2) a minimal port+protocol matrix we can give to our firewall team, and (3) an evidence checklist for our compliance team?
+
+I've attached our baseline requirements doc for context. Also loop in whoever owns SIEM integration on your side — our firewall owner is Ben Cole (cc'd on security@fjordhealth.com).
+
+Appreciate any runbook draft by EOD Thursday (PDT).
+
+Regards,
+Asha Raman
+Director, Cloud Security
+Fjord Health Systems
+
+Attachment: Fjord-SIEM-Reqs.pdf (PDF, 420KB)
+From: Marissa Cole <marissa_cole@redwoodinference.com>
+To: Asha Raman <asha.raman@fjordhealth.com>
+Cc: kimberly_park@redwoodinference.com, jonas_weber@redwoodinference.com, tessa_morgan@redwoodinference.com
+Date: Tue, 13 Aug 2029 11:05:00 -07:00
+Subject: Re: Observability integration for private VPC deployment at Fjord Health
+
+Hi Asha — thanks for the clear constraints and the requirements doc. Looping our private-deploy and compliance leads (Kimberly, Jonas, Tessa) to own the technical handoff. Below is a concise plan and the artifacts we'll deliver as a starting point.
+
+Executive plan (short):
+- Pattern A (recommended): Customer-forwarder model
+  - Redwood runtime pushes logs/metrics/traces over mTLS to a customer-managed forwarder (Splunk HEC / syslog). No external egress from customer VPC except to the forwarder endpoint inside the VPC.
+  - Benefits: minimal network changes, encapsulated customer control, easier evidence collection.
+- Pattern B (alternative): Collector pull via customer-managed pull-proxy (rare)
+  - Customer exposes an authenticated, ephemeral HTTPS endpoint inside the VPC that our agent polls. This is used only when a forwarder cannot be installed.
+
+Deliverables (we will attach as files and links):
+- private-obsv-runbook-v1.md — runbook with step-by-step: DNS, certs/mTLS, port matrix, syslog/HEC example payloads, and rollout checklist.
+- evidence-checklist.xlsx — SOC2-aligned checklist with sample logs to provide, retention statements, and masking guidance.
+- port-and-protocol-matrix (inline below).
+
+Minimal port+protocol summary (customer-managed collector inside VPC):
+- Outbound from runtime pods/instances to collector IP/hostname: TCP 443 (HTTPS, mTLS) — REQUIRED
+- Optional metrics aggregation (Prometheus remote_write): TCP 9091 (TLS) — CONFIGURABLE
+- Syslog over TLS: TCP 6514 (if using syslog-ng endpoint) — OPTIONAL
+
+Tracing guidance:
+- Include request_id, route_id, model_version; strip any patient identifiers before sending.
+- Sampling: default 1% for heavy inference workloads, configurable per route with local override.
+- We will include a trace-hook test harness you can run in staging to validate headers and sampling behavior.
+
+Next steps / asks from Fjord:
+1) Confirm the forwarder endpoint (DNS/IP) and the contact for firewall exceptions (Ben is fine).
+2) Confirm desired retention for log samples in the evidence pack (e.g., 30d sample window).
+3) Provide a staging VPC CIDR to validate routing and simulate the connector.
+
+I'll send the runbook + checklist as attachments in a follow-up. If this looks good, let's schedule a 30-min technical sync with Ben and your compliance lead.
+
+Best,
+Marissa Cole
+SVP, Strategic Accounts
+Redwood Inference
+
+Attachments: private-obsv-runbook-v1.md (text), evidence-checklist.xlsx (Excel)
+From: Marissa Cole <marissa_cole@redwoodinference.com>
+To: kimberly_park@redwoodinference.com, jonas_weber@redwoodinference.com
+Cc: tessa_morgan@redwoodinference.com
+Date: Tue, 13 Aug 2029 14:22:00 -07:00
+Subject: Fwd: Observability integration for private VPC deployment at Fjord Health — runbook + ownership
+
+Kim / Jonas — forwarding Fjord's note and our proposed plan. Action items: 
+
+Kimberly (you) — can you own the SIEM acceptance criteria and confirm the evidence checklist items we need to produce for SOC2? Please add any must-have log field mappings (e.g., user_id pseudonymization) and sign-off thresholds.
+
+Jonas — please take point on the tracing hook test harness and the sampling configuration. We need a short validation script we can run in their staging VPC that verifies headers, request_id propagation, and sampling rates.
+
+Tessa — coordinate with Sales Engineering to schedule a 30-min call with Fjord and Ben (their firewall owner). Propose tomorrow 10–10:30am PDT and Friday 2–2:30pm PDT.
+
+I attached the runbook draft we will send them — fill inline comments before I push the Drive link. Also add the minimal port matrix to the runbook top.
+
+Forwarded message: 
+> From: Asha Raman <asha.raman@fjordhealth.com>
+> Date: Mon, 12 Aug 2029 09:12:00 -07:00
+> Subject: Observability integration for private VPC deployment at Fjord Health
+> To: marissa_cole@redwoodinference.com
+>
+> [original request clipped]
+
+Marissa
+
+---
+Attachment: private-obsv-runbook-v1.md (draft)
+From: Asha Raman <asha.raman@fjordhealth.com>
+To: Marissa Cole <marissa_cole@redwoodinference.com>
+Cc: Ben Cole <ben.cole@fjordhealth.com>, security@fjordhealth.com
+Date: Thu, 15 Aug 2029 09:40:00 -07:00
+Subject: Re: Observability integration for private VPC deployment at Fjord Health
+
+Marissa / team — thanks for the thorough plan and the draft runbook. Fjord agrees to the forwarder model (Pattern A). A few clarifications from our side: 
+
+- Firewall owner is Ben Cole (ben.cole@fjordhealth.com) — he will coordinate port openings; Ben, please expect an outreach from Kimberly.
+- For the evidence pack, we want a 30-day sample window with daily aggregates for retention logs; please ensure logs in the sample have PII redacted (we will validate).
+- Tracing sampling of 1% is acceptable for production; we'll want a higher (10%) sampling window in staging for validation.
+
+Ben — I'll set up a brief call for Monday to walk through the port matrix and to share the collector's internal IP. Also attaching a short checklist that our audit team uses.
+
+Looking forward to the sync.
+
+Thanks,
+Asha
+
+Attachment: Fjord-Audit-Checklist.docx (DOCX, 120KB)

@@ -1,0 +1,126 @@
+Post-call: SLO sizing, context limits, and latency tradeoffs
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Raj Patel <raj.patel@finlytics.com>, api-eng@finlytics.com
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Mon, 30 Nov 2026 15:23:00 +0000
+Subject: Post-call: SLO sizing, context limits, and latency tradeoffs
+
+Hi Raj / Finlytics API team — thanks again for the chat today. Quick recap and proposed next steps so we’re aligned: 
+
+Summary of requirements from the call:
+- Workload profile: mixed inference. ~60% short prompts (~300–1,000 input tokens) with concise outputs (<=128 tokens), 40% long-document synthesis where inputs can approach ~50–60k tokens and outputs are 500–2,000 tokens.
+- Latency SLOs: you stated p95 perceived latency target <= 800ms for the short prompts, and for long-document workflows you care about time-to-first-token (TTFT) for streaming <= 200ms, with full-run p95 tolerable up to ~8–12s depending on output length.
+- Throughput / concurrency: baseline steady-state ~30 requests/s, peak bursts up to ~150 requests/s; expected 40–70 concurrent sessions during peaks.
+- Streaming: required for long outputs so the UX can render partial results; you’d like the first chunk to arrive quickly and then continuous streaming.
+- Quality constraints: you prefer to avoid heavy quantization that risks subtle hallucinations — quality can't degrade more than a small % on eval prompts.
+
+Key technical constraints we discussed and our read on tradeoffs:
+- Context length vs latency: very long contexts (40k–60k tokens) will increase memory pressure and kernel selection complexity resulting in higher per-request latency. For isolated long requests we expect higher p95s (multi-second range) unless using a long-context optimized model and larger GPU memory configurations.
+- Streaming mitigations: streaming the output immediately (start-as-soon-as-first-token) significantly improves perceived latency even when total completion time is long. Continuous KV caching and prefix caching can reduce repeated-cost for similar prefixes.
+- Batching and concurrency: batching increases throughput but can add queuing latency. For strict p95 latency targets on short prompts, prefer low-latency single-request paths (smaller batch windows) and autoscale dedicated capacity to absorb bursts.
+
+Proposed next steps (we can action these this week):
+1) You upload 48–72 hours of representative sample payloads (we attached sample-payloads.jsonl for schema).
+2) Redwood will run a controlled performance run in a Dedicated test pool (mirror of expected config) and produce p50/p95/p99 for short+long categories, plus stream-first-byte timing.
+3) We’ll produce a proposed config: model variant recommendation (standard 32k vs long-context 128k), GPU sizing guidance, and a cost/throughput projection.
+4) Optional pilot offer: 2-week dedicated dev pool + 10% credit on the first month if we sign within 30 days.
+
+Attachments: finlytics-slo-matrix.xlsx (SLO template), sample-payloads.jsonl (payload schema), network-diagram.png (high-level topology notes).
+
+Do these steps look right? If so I’ll queue the perf run and loop in infra to schedule the Dedicated pool test. Also tell us which model family you prefer (best-quality vs cost-optimized) so we can pick the right kernel/quantization baseline for tests.
+
+Best,
+Soojin Lee
+Account Executive | Redwood Inference
+soojin_lee@redwood.ai
++1 (415) 555‑0123
+
+---
+Attachment: finlytics-slo-matrix.xlsx (spreadsheet, 85KB)
+Attachment: sample-payloads.jsonl (text, 220KB)
+Attachment: network-diagram.png (image, 420KB)
+From: Raj Patel <raj.patel@finlytics.com>
+To: Soojin Lee <soojin_lee@redwood.ai>
+Cc: api-eng@finlytics.com
+Date: Mon, 30 Nov 2026 16:08:00 +0000
+Subject: Re: Post-call: SLO sizing, context limits, and latency tradeoffs
+
+Thanks Soojin — this is super helpful. A few clarifications from our side: 
+
+1) Context sizes: the 50–60k numbers are realistic for our legal-doc ingestion flow (we currently chunk but are testing single-context summarization). If Redwood recommends a staged approach (chunk+retrieval), we’re open but want to understand accuracy tradeoffs.
+2) Cost sensitivity: we’re sensitive to per-token cost at scale. If a long-context optimized instance is 2–3x cost per token but removes retrieval complexity, that might still be simpler for us operationally.
+3) Streaming requirement: yes — front-end UX is blocked until first token arrives for long runs; TTFT <= 200ms is a hard ask for perceived performance.
+
+We’ll attach a redacted sample batch by EOD tomorrow and confirm which model variants we care about (we want both a highest-quality and a cost-optimized baseline to compare).
+
+One more ask: is there a quick reference you can point to that shows typical p95/p99 for 2k input / 256 output vs 40k input / 1k output for your long-context model? Ballpark numbers will help our internal stakeholders prior to the perf run.
+
+—Raj
+Lead API Engineer, Finlytics
+raj.patel@finlytics.com
+
+> On Mon, 30 Nov 2026 at 15:23, Soojin Lee <soojin_lee@redwood.ai> wrote:
+> (call recap)
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Tue, 01 Dec 2026 09:12:00 +0000
+Subject: Fwd: Post-call: SLO sizing, context limits, and latency tradeoffs — internal notes
+
+Looping internal recommendations. Quoting Raj’s ask about ballpark numbers — here’s what I suggest we feed into the perf run and what we can present as expectations: 
+
+- Baseline test matrix:
+  * Short: 2k input / 256 output — target p95 <= 800ms (single-request, no batching), p99 <= 1.5s
+  * Long: 40k input / 1k output — streaming TTFT target <= 200ms, full-run p95 target <= 10s (depends on model and GPU profile)
+
+- Model/infra guidance:
+  * Recommend running two variants in the perf test: (A) cost-optimized quantized variant on 8‑GPU T4-style nodes (good throughput, lower cost, slightly higher latency for long runs) and (B) long-context optimized FP16 variant on A100-style 4‑GPU nodes (better single-request latency for big contexts).
+  * Use prefix/KV cache for repeated legal prefixes. If they’ll do single-context summarization, recommend trying the long-context FP16 variant first to measure accuracy impact vs chunk+retrieval.
+
+- Operational knobs to present to Finlytics:
+  * Streaming enabled by default for >256 token outputs.
+  * Adaptive batching window: 0–15ms for low-latency short prompts, expand to 50–100ms for throughput windows to favor throughput.
+  * Fallback policy: if dedicated pool saturates, route to compatible cost-optimized variant with degraded SLO and a 503-based client signal (we’ll document).
+
+- Commercial/eng asks:
+  * I’m ok to offer a one-time 10% credit on the first month of the pilot for the Dedicated dev pool. Marcus — please confirm if that requires legal signoff.
+  * Ask product infra to reserve the dev pool for the perf run on Thu/Fri this week.
+
+Soojin — if you’re good with the above I’ll prepare the test plan doc and the two config templates for the Finlytics trial.
+
+—Marcus
+Senior Sales Engineer | Redwood Inference
+marcus_lin@redwood.ai
+
+> Fwded from Soojin's thread for context.
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Raj Patel <raj.patel@finlytics.com>
+Cc: api-eng@finlytics.com, Marcus Lin <marcus_lin@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Tue, 01 Dec 2026 18:02:00 +0000
+Subject: Re: Post-call: SLO sizing, context limits, and latency tradeoffs
+
+Raj — thanks for the quick turnaround. That all makes sense and matches what we discussed. Finalizing next steps and timeline below: 
+
+Action items / timeline:
+- You: upload the redacted sample payloads to the shared Drive link (we’ll use sample-payloads.jsonl schema). Target: Wed EOD (2026-12-02).
+- Redwood: run two 24–48 hour perf passes (cost-optimized vs long-context optimized). Deliverable: p50/p95/p99 for short+long categories, TTFT breakdown for streaming, and a short write-up on accuracy delta we observe on your eval prompts. ETA: end of next week (2026-12-08).
+- Commercial: I’ll send a pilot agreement (DocuSign link below) that covers the Dedicated dev pool, the 10% credit on month one, and a simple SLA for the trial. Please review and sign if that matches expectations.
+
+DocuSign pilot link: https://www.docusign.net/Finlytics-Proposal
+HubSpot deal: https://app.hubspot.com/deal/1234567
+Shared perf folder: https://shared-drive.redwood.ai/finlytics/slo-matrix
+
+If you want an earlier smoke test we can run a 1000-request synthetic pass tonight to sanity-check kernels — say the word and I’ll kick it off. Otherwise I’ll queue the Dedicated runs once we get the sample payloads.
+
+Thanks — looking forward to the perf numbers and then we can size the Dedicated commitment.
+
+Best,
+Soojin Lee
+Account Executive | Redwood Inference
+soojin_lee@redwood.ai
++1 (415) 555‑0123
+
+---
+Attachment: finlytics-slo-matrix.xlsx (spreadsheet, 85KB)

@@ -1,0 +1,142 @@
+Hosted API: latency measurement methodology and evidence package
+
+From: Sam Torres <s.torres@evergreenhealth.com>
+To: Ben Carter <ben_carter@redwood.com>
+Cc: Procurement <procurement@evergreenhealth.com>
+Date: Wed, 7 Apr 2027 09:12:00 -0700
+Subject: Clarification on Hosted API latency measurement for SLA
+
+Hi Ben —
+
+Thanks again for the Hosted API SLA draft. Before our procurement review next Wednesday we need a concise description of how Redwood measures the p50/p95 values you commit to. Specifically:
+
+- Which endpoint(s) are measured (edge vs origin)?
+- Is p95 computed on successful requests only or across all responses?
+- How are retries and client-side timeouts handled?
+- What warmup/carveout windows do you apply (deployments, canaries, regional maintenance)?
+- What sampling frequency do you use for high-volume customers?
+
+We also need an evidence package you can share for audit: sample raw traces, a small CSV of sampled request latencies, and a short doc describing the aggregation windows and any exclusion logic.
+
+Could you send a one-page method summary + the requested artifacts? Preferably PDFs / CSVs we can drop into our vendor risk folder.
+
+Appreciate it — we want to avoid ambiguous wording in the contract.
+
+—Sam
+Sam Torres
+SRE Manager, Evergreen Health
+Attach: latency_sample_queries.csv (requested)
+From: Ben Carter <ben_carter@redwood.com>
+To: Sam Torres <s.torres@evergreenhealth.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Wed, 7 Apr 2027 13:04:00 -0700
+Subject: Re: Clarification on Hosted API latency measurement for SLA
+
+Sam —
+
+Thanks for the clear list. Attached is our draft methodology (redwood_latency_methodology_v1.pdf) and a small CSV extract of sampled requests (latency_sample_queries.csv). Summary below; I kept it intentionally concrete so it can be pasted into the SLA.
+
+Summary (to be included in contract):
+- Measurement target: latency for text generation endpoints at api.redwood.com/v1/respond (production edge). We distinguish edge-observed latency (client-to-edge) vs origin processing; SLA offers edge-observed p50/p95.
+- Successful-only calculation: p50 and p95 are computed over successful responses (HTTP 200-series). Failed requests (5xx) are excluded from percentile math but counted in availability metrics.
+- Retries/timeouts: Client-side retries are de-duped by request ID where available. Server-generated retries (internally retried by gateway) have final-response latency recorded. Timeouts that elicit no response are excluded from percentile calculation; they are reflected in availability/uptime SLOs.
+- Windowing & aggregation: We use rolling 1-hour windows sampled every 5 minutes for operational monitoring; contractual measurement for monthly SLO evaluation is based on daily aggregation into calendar-day buckets, and percentiles are computed on the union of daily buckets for the billing month.
+- Warmups/carveouts: Automatic 10-minute warmup carveout after canary cutover; scheduled maintenance windows >5 minutes are excluded when customers are notified with a maintenance ticket. For unscheduled incidents, audit evidence will include incident timelines and affected buckets.
+- Sampling: For customers >10k reqs/min we maintain systematic sampling at 1% across all request paths, stratified by region. For lower-volume customers we use full-sample measurements. Sampling parameters and sample seed are provided in the evidence package for verification.
+
+Attached items:
+- redwood_latency_methodology_v1.pdf (method and definitions)
+- latency_sample_queries.csv (sanitized sample of 1,000 rows)
+- evidence_snapshot_20270407.tar.gz (contains anonymized traces and sampling seed)
+
+If you want explicit contract language I can propose a short clause that replaces the generic p50/p95 line. Happy to hop on a 20-min call if you want us to walk through the evidence data.
+
+Thanks,
+Ben Carter
+Director, Solutions — Redwood Inference
+Attach: redwood_latency_methodology_v1.pdf, latency_sample_queries.csv, evidence_snapshot_20270407.tar.gz
+
+On Wed, Apr 7, 2027 at 09:12 AM Sam Torres <s.torres@evergreenhealth.com> wrote:
+> Hi Ben —
+>
+> Thanks again for the Hosted API SLA draft. Before our procurement review next Wednesday we need a concise description of how Redwood measures the p50/p95 values you commit to. Specifically:
+>
+> - Which endpoint(s) are measured (edge vs origin)?
+> - Is p95 computed on successful requests only or across all responses?
+> - How are retries and client-side timeouts handled?
+> - What warmup/carveout windows do you apply (deployments, canaries, regional maintenance)?
+> - What sampling frequency do you use for high-volume customers?
+>
+> We also need an evidence package you can share for audit: sample raw traces, a small CSV of sampled request latencies, and a short doc describing the aggregation windows and any exclusion logic.
+>
+> Could you send a one-page method summary + the requested artifacts? Preferably PDFs / CSVs we can drop into our vendor risk folder.
+>
+> Appreciate it — we want to avoid ambiguous wording in the contract.
+>
+> —Sam
+> Sam Torres
+> SRE Manager, Evergreen Health
+> Attach: latency_sample_queries.csv (requested)
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: Ben Carter <ben_carter@redwood.com>, Connor O'Brien <connor_obrien@redwood.com>
+Date: Wed, 7 Apr 2027 15:22:00 -0700
+Subject: Internal: wording tweaks for Evergreen method doc
+
+Ben / Connor —
+
+Quick read of Ben's draft. A few suggested edits we should incorporate before sending to procurement:
+
+- Replace 'successful responses' with 'successful, non-provisioning responses (HTTP 200-299, excluding 202 polling semantics)' to avoid ambiguity with async endpoints.
+- Add explicit statement that p95 excludes synthetic health-check traffic and internal observability probes.
+- Call out that sampling seed + extraction script will be provided for reproducibility (this helps their audit team).
+- For warmup carveouts, list the canary ID and GC cutoff thresholds we use for auto-carveout (10 minutes as you noted).
+
+Also suggest we include a one-paragraph fallback statement: if a regional edge is unavailable, we will route to the nearest region and the latency commitment will be measured against the actual edge that served the request (we should note regional fallbacks in the SLA).
+
+I'll mark up the PDF and push a v1.1. Connor, can you confirm the sampling seed is exportable and that the evidence tar contains the minimal PII?
+
+—Lauren
+Lauren Bishop
+Head of Customer Reliability, Redwood Inference
+
+> On Wed, Apr 7, 2027 at 1:04 PM Ben Carter <ben_carter@redwood.com> wrote:
+> > Sam —
+> >
+> > Thanks for the clear list. Attached is our draft methodology (redwood_latency_methodology_v1.pdf) and a small CSV extract of sampled requests (latency_sample_queries.csv). Summary below; I kept it intentionally concrete so it can be pasted into the SLA.
+> >
+> > [snip summary]
+> >
+> > —Ben
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Sam Torres <s.torres@evergreenhealth.com>, Procurement <procurement@evergreenhealth.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Wed, 7 Apr 2027 17:36:00 -0700
+Subject: Final: Hosted API latency measurement & evidence (Evergreen Health)
+
+Sam / Procurement team —
+
+Per our thread and internal review, please find the final measurement summary and evidence bundle attached. Key clarifications incorporated from your ask and our internal review:
+
+1) Scope & endpoints: SLA p50/p95 refer to edge-observed latency for production text-generation endpoints (api.redwood.com/v1/respond). If Evergreen routes to a regional fallback, the latency measurement is for the edge that ultimately served the request.
+
+2) Percentile computation: p50/p95 are calculated over successful, non-provisioning responses (HTTP 200-299). Failed requests are not included in percentile math (they are counted against availability).
+
+3) Retries & timeouts: Any client-side retry with a new request ID is treated as a separate request; server-internal retries are collapsed and the final-response timestamp is used. Timeouts without responses are recorded under availability.
+
+4) Aggregation policy: Operational monitoring uses rolling 1-hour windows sampled every 5 minutes. Contractual monthly evaluation aggregates daily buckets for the billing month; percentiles are computed on the union of those daily buckets.
+
+5) Warmup / carveouts: 10-minute automatic warmup carveout after canary cutover; scheduled maintenance >5 minutes is excluded if pre-notified. Unscheduled incidents will include an evidence timeline.
+
+6) Sampling & reproducibility: For high-volume customers (>10k reqs/min) we provide a 1% stratified sample and a reproducibility package (seed + extraction script) in the evidence tarball. For lower-volume customers we provide full-sample data.
+
+Attachments in this message: redwood_latency_methodology_v1.pdf (final, marked v1.1), latency_sample_queries.csv (sanitized sample), evidence_snapshot_20270407.tar.gz (anonymized traces + sampling seed + extraction script).
+
+If this looks good I can prepare a short contract clause for insertion. If procurement wants an auditor-run validation, we can schedule a controlled sample export session next week.
+
+Thanks,
+Ben Carter
+Director, Solutions — Redwood Inference
+Phone: +1 415 555 0117
+ben_carter@redwood.com
+Attach: redwood_latency_methodology_v1.pdf, latency_sample_queries.csv, evidence_snapshot_20270407.tar.gz

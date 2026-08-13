@@ -1,0 +1,130 @@
+Coordination: backup purge cadence, rollback path & log-exception evidence
+
+From: Anita Shah <anita.shah@cedarpointcloud.com>
+To: Laura Bennett <laura.bennett@redwood.com>, procurement@cedarpointcloud.com
+Cc: Elias Gomez <egomez@tartarus-audit.com>
+Date: Mon, 16 Jul 2028 08:12:00 -0700
+Subject: Clarify purge window, rollback path and evidence for audit
+
+Hi Laura,
+
+Thanks for the walkthrough last week. Before we sign the SOW we need to lock a few operational items for CedarPoint's auditors:
+
+1) Exact purge cadence and what is removed (snapshots vs incremental backups vs raw KV logs).
+2) The rollback path and maximum realistic restore time if a purge removes data accidentally.
+3) Evidence artifacts you can provide to show deletion occurred and that no residual copies remain (manifests, S3 lifecycle logs, signed receipts).
+4) Whether you can accommodate a temporary log-retention exception for a pending regulatory review (we may need +30 days beyond your standard).
+
+Also, our legal team wants to confirm the subprocessors list referenced in the DPA and any carveouts for backups/archives. Can you point us to the DPA amendment language that covers emergency rollbacks and audit evidence?
+
+Cc'd procurement and Elias (external auditor) so we can get a single list of items.
+
+Appreciate a short reply with proposed cadence and what artifacts you can deliver.
+
+Regards,
+Anita
+Anita Shah
+Head of Cloud Ops, CedarPoint Cloud
+[Attachment: PO_6789.pdf (application/pdf)]
+From: Laura Bennett <laura.bennett@redwood.com>
+To: Anita Shah <anita.shah@cedarpointcloud.com>
+Cc: Kimberly Park <kimberly.park@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Rachel Kim <rachel.kim@redwood.com>
+Date: Mon, 16 Jul 2028 09:25:00 -07:00
+Subject: Re: Clarify purge window, rollback path and evidence for audit
+
+Hi Anita — thanks for the clear list. Below is a concise proposal that should map to CedarPoint's audit needs; happy to iterate.
+
+Proposed purge cadence (default):
+- Incremental workspace logs: retained 30 days, automatic prune daily.
+- Full snapshots (point-in-time data exports): retained 90 days, then tombstoned and purged at 90 days.
+- Backups stored in cold-tier: lifecycle transition at 7 days, permanent delete after 365 days (unless escrowed).
+
+Emergency rollback window and recovery SLA (operational):
+- Standard rollback window: 14 days from purge execution (we keep tombstones + KV cache for 14d to enable efficient restores).
+- RTO for a single-customer full-snapshot restore: typically 6–12 hours depending on dataset size; RPO depends on incremental schedule (max 1hr for high-throughput workloads).
+- For restores beyond 14d we can provide an escrow retrieval process (longer lead times & costs apply).
+
+Evidence we can provide:
+- Deletion manifest (CSV listing object keys + purge timestamps) — sample attached (deletion_manifest_sample.csv).
+- S3 lifecycle and access logs showing object transition + deletion events.
+- Operational runbook excerpt showing purge job id and confirmations (see purge_runbook_v1.pdf).
+- DocuSign confirmation of acceptance if CedarPoint signs a temporary exception or DPA amendment.
+
+Log-retention exception: we can grant a +30 day exception for logs on a temporary basis; this requires a DPA amendment and procurement sign-off (there is a small incremental storage cost).
+
+Subprocessors & DPA clause:
+- Kimberly will follow up with the latest subprocessor list PDF and a short amendment draft covering emergency rollback evidence and temporary retention carveouts.
+
+Next steps / asks from CedarPoint:
+- Confirm you accept the 14-day rollback window and the sample evidence types.
+- If you need a +30d log exception, confirm procurement will sign the DPA amendment (we will attach cost estimate).
+- Share any specific artifact format required by Elias for the audit.
+
+I attached the sample manifest and the runbook excerpt. Marcus, Rachel — please confirm the RTO/RPO numbers are OK and add anything I missed.
+
+Thanks,
+Laura
+Laura Bennett
+Head of Trust & Compliance, Redwood Inference
+[Attachments: deletion_manifest_sample.csv (text/csv), purge_runbook_v1.pdf (application/pdf)]
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Anita Shah <anita.shah@cedarpointcloud.com>, Laura Bennett <laura.bennett@redwood.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>
+Date: Mon, 16 Jul 2028 10:05:00 -07:00
+Subject: Re: Clarify purge window, rollback path and evidence for audit
+
+Quick clarifications from legal/compliance side:
+
+- Artifacts: we can provide the deletion_manifest CSV and the S3 delete event logs (redacted where required). For higher assurance we can also provide a signed statement of destruction (PDF) — we'll draft language once procurement confirms the exception.
+- Subprocessors: current list attached (subprocessor_list_2028-07.pdf). Any subprocessor storing backups cross-border will be flagged; cross-border retention exceptions require our security sign-off and a DPA carveout clause.
+- DPA amendment: I have a short draft (dpa_amendment_draft.docx) that adds a temporary log-retention carveout and an evidence acceptance paragraph. Procurement: please review and let us know if this meets CedarPoint's needs.
+
+Laura — we should be explicit about what constitutes acceptable evidence for Elias (hashes + timestamps + signed DocuSign).
+
+Kimberly
+Kimberly Park
+Sr. Counsel, Privacy & Compliance, Redwood Inference
+[Attachment: subprocessor_list_2028-07.pdf (application/pdf); dpa_amendment_draft.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)]
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Laura Bennett <laura.bennett@redwood.com>, Kimberly Park <kimberly.park@redwood.com>
+Date: Tue, 17 Jul 2028 11:22:00 -07:00
+Subject: Re: Clarify purge window, rollback path and evidence for audit
+
+Adding ops detail (runbook excerpt below) — this is the operational rollback we would execute if an accidental purge is reported within the 14-day window.
+
+---- runbook excerpt ----
+1) Identify purge job id and affected object keys (from purge job output).
+2) Mark affected tenant as high-priority in restore queue.
+3) Pull tombstoned snapshots from cold-tier index (tombstone TTL is 14d).
+4) Rehydrate snapshot to staging cluster; integrity check (SHA256) against manifest.
+5) Promote to primary, QoS checks, run smoke tests.
+6) Notify stakeholder and close incident.
+
+Estimated timing: 6–12 hours for typical 2TB tenant. For very large datasets (>=20TB) plan 24–48h.
+
+We can run a one-off restore test if CedarPoint would like to validate RTO; we will need a signed test authorization (DocuSign) and coordination for a maintenance window.
+
+Attachment: purge_runbook_v1.pdf (full runbook).
+
+Marcus
+Marcus Lin
+Principal Engineer, Platform Operations, Redwood Inference
+[Attachment: purge_runbook_v1.pdf (application/pdf)]
+From: Anita Shah <anita.shah@cedarpointcloud.com>
+To: Laura Bennett <laura.bennett@redwood.com>, Kimberly Park <kimberly.park@redwood.com>
+Cc: procurement@cedarpointcloud.com, Elias Gomez <egomez@tartarus-audit.com>
+Date: Wed, 18 Jul 2028 15:47:00 -07:00
+Subject: Re: Clarify purge window, rollback path and evidence for audit
+
+Laura / Kimberly / Marcus — this looks good and addresses most of our audit concerns. A few follow-ups:
+
+- We confirm acceptance of the 14-day rollback window and the evidence types listed (manifest + lifecycle logs + DocuSign). Elias: can you confirm these formats work for the audit?
+- Procurement will sign the DPA amendment for the temporary +30d log-retention exception; please send final doc and cost estimate.
+- Please share the HubSpot SOW link and DocuSign powerform for the amendment so procurement can route it internally.
+- We want to schedule a test restore for August 8, 2028 — can Redwood run a non-production rehydrate on that date? If yes, we'll share a signed test authorization.
+
+Appreciate the speed. Attaching our PO and a short note from the audit team.
+
+Regards,
+Anita
+[Attachments: CP_PO_6789_signed.pdf (application/pdf), audit_note_requirements.txt (text/plain)]

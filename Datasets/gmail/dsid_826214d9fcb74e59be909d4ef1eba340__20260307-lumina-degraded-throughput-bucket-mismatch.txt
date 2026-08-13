@@ -1,0 +1,105 @@
+Degraded throughput + 429s during morning peak — immediate help needed
+
+From: Maria Ortega <maria.ortega@luminahealth.com>
+To: Priya Natarajan <priya_natarajan@redwood.com>
+Date: Fri, 6 Mar 2026 16:18:00 -0800
+Subject: Re: Production errors this morning (429s + latency)
+
+Hi Priya —
+
+We started seeing a sharp spike in 429s and elevated tail latency starting ~08:30 PT this morning and it lasted about 90 minutes. Our ingest pipeline experienced backpressure and several downstream jobs retried repeatedly. We attached a short log excerpt (lumina_429_log_excerpt.txt) showing the 429 responses and the timestamps.
+
+This is blocking an important customer demo next week; please escalate. We scoped it to calls routed to the redwood.us-east-1 region and it looks correlated with the policy change you mentioned in your release notes on Mar 6 (token-bucket adjustments). Any chance this is related? We need: (1) immediate mitigation so our production traffic is stable, (2) a short explanation, and (3) confirmation about credits for SLA impact.
+
+Tim is copied; he has the integration dashboard.
+
+Thanks,
+Maria Ortega
+Director of Platform Engineering
+Lumina Health
+Attachment: lumina_429_log_excerpt.txt (text)
+
+From: Priya Natarajan <priya_natarajan@redwood.com>
+To: Maria Ortega <maria.ortega@luminahealth.com>
+Cc: Tim Cho <tim.cho@luminahealth.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>, Marcus Lin <marcus_lin@redwood.com>
+Date: Fri, 6 Mar 2026 16:27:00 -0800
+Subject: Re: Production errors this morning (429s + latency)
+
+Hi Maria — thanks for the heads up and for the log snippet. I’m escalating to engineering and Ops now; Vanessa (CS) and I will own the customer comms.
+
+Immediate plan:
+- I’ve asked eng to triage and apply a hotfix/rollback if the rate policy change is the culprit.
+- Vanessa and I will pause any non-critical syncs and prepare a short status note you can share.
+- If we confirm an SLA impact we will discuss a credit proactively — I’ll coordinate with finance.
+
+I’ll update within 30 minutes with next steps.
+
+— Priya Natarajan
+Account Executive, Strategic
+Redwood Inference
+
+From: Priya Natarajan <priya_natarajan@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Cc: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Date: Fri, 6 Mar 2026 16:33:00 -0800
+Subject: URGENT: Lumina Health — 429s and latency, suspected rate-window misconfig
+
+Team — Lumina Health is seeing a 429/latency spike during this morning’s peak (see attached log extract). They point at the rate policy change we rolled Mar 6 that adjusted token-bucket windows.
+
+Can engineering triage immediately and either: (A) apply a hotfix to revert the policy for Lumina’s routing rule, or (B) bump them to a dedicated pool / temporary higher bucket until we can stabilize?
+
+Customer impact: demo next Tue; potential SLA credit ask. This needs exec visibility if we can’t remediate quickly.
+
+Requested actions:
+- Marcus/Karthik: triage + ETA (please include exact rollback command or mitigation steps).
+- Vanessa: prepare a one-paragraph customer status + proposed credit range.
+- Stephanie: FYI for potential credit & exec note.
+
+Thanks — Priya
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Priya Natarajan <priya_natarajan@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Stephanie Nguyen <stephanie_nguyen@redwood.com>
+Date: Fri, 6 Mar 2026 16:49:00 -0800
+Subject: Re: URGENT: Lumina Health — 429s and latency, suspected rate-window misconfig
+
+Priya / team — quick summary and mitigation. Root cause (preliminary): during the Mar 6 rollout we updated a per-customer policy that governs token-bucket refill windows for the Lumina routing key. The window value was accidentally set to 1s (intended for microburst handling on other workloads) instead of 10s. That caused the bucket to be drained rapidly under their heavy short-lived spikes and the policy’s pacing logic to trigger aggressive suppression, producing sustained 429s and elevated tail latency under the morning QPS pattern.
+
+What I’m doing now (in-flight):
+- Reverted their routing policy to the previous stable policy (policy-id: rwp-lumina-03). Command run at 16:37 PT:
+  `redwoodctl policy apply --id rwp-lumina-03 --env prod --confirm`
+- Disabled dynamic pacing for the Lumina route while we monitor:
+  `redwoodctl route update --route lumina-prod --disable-dynamic-pacing`
+- Created a hotfix patch (rate_policy_diff.patch) and pushed KPI snapshot to the shared drive (KPI-snapshot-morning-peak.csv).
+- Opened JIRA INF-4821 to track postmortem and configuration tests.
+
+Immediate observable impact: 429 rate dropped from ~7.3% to ~0.2% within 8 minutes of the revert; p95 latency returned to baseline after ~12 minutes. I’m leaving the revert in place and will run a controlled A/B test tomorrow morning with the corrected window=10s value in a canary.
+
+Next steps & ETA:
+- Monitoring for full business-hour stability: 30–45 minutes.
+- Canary for corrected window + automated test coverage: by EOD tomorrow.
+- Postmortem draft for execs with root cause, timeline, and mitigations: T+48h.
+
+Attachments: rate_policy_diff.patch (text), KPI-snapshot-morning-peak.csv (CSV)
+
+— Marcus Lin
+Engineering Manager, Serving Runtime
+Redwood Inference
+
+From: Stephanie Nguyen <stephanie_nguyen@redwood.com>
+To: Priya Natarajan <priya_natarajan@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Sat, 7 Mar 2026 09:45:00 -0800
+Subject: Re: URGENT: Lumina Health — 429s and latency, suspected rate-window misconfig
+
+Thanks team — and thanks Marcus for the fast remediation. Priya / Vanessa: please send Lumina a clear status note this morning confirming: what happened, what we did to fix it, and an ETA for the postmortem. Offer a goodwill credit — authorize up to $20,000 in service credit for verified SLA impact; Vanessa, coordinate with finance to finalize numbers.
+
+Action items for leadership review:
+- Postmortem (T+48h) with timeline and exact config diff (attach rate_policy_diff.patch).
+- A short exec brief for Sales & CS summarizing customer impact and remediation steps.
+- Engineering: add a pre-deploy config validation that flags per-customer token-bucket windows that are outside expected ranges for that route profile. Karthik / Marcus to own.
+
+Keep me updated on customer comms.
+
+— Stephanie Nguyen
+VP, Customer Operations
+Redwood Inference

@@ -1,0 +1,122 @@
+Dedicated commit & GPU pool sizing for SignalBurst pilot
+
+From: Emma Clarke <emma@signalburst.ai>
+To: Rachel Kim <rachel.kim@redwood.ai>
+Date: Mon, 2 Mar 2026 09:12:00 -0700
+Subject: Pilot sizing & pricing — 10k/day tentative
+
+Hi Rachel,
+
+Thanks again for the demo last week — team was impressed with latency and failover. We are trying to scope a short pilot (6 weeks) to validate user flows before committing to a larger reserved pool. High-level workload:~
+- Expected volume: ~10,000 inference requests/day (~7 days/week)
+- Average request: 1,500 tokens (prompt + response)
+- Peak concurrency: ~80 simultaneous users during product spike windows (estimated 5–10 minute bursts)
+- Latency SLO: p95 < 350ms for interactive flows
+- Model: want to use redwood-13b-v1 (or a close equivalent)
+
+Can you recommend a Dedicated (reserved GPU pool) configuration we should reserve to meet the pilot SLA, and what short-term pricing / discount flexibility looks like for a 3-month paid pilot that can convert to a 12-month commit? Also attaching our basic usage spreadsheet.
+
+Cheers,
+Emma
+Product Ops — SignalBurst
+Attachment: signalburst_throughput_estimates.xlsx (xlsx)
+
+---
+From: Rachel Kim <rachel.kim@redwood.ai>
+To: Emma Clarke <emma@signalburst.ai>
+Cc: laura.bennett@redwood.ai
+Date: Tue, 3 Mar 2026 10:03:00 -0700
+Subject: Re: Pilot sizing & pricing — 10k/day tentative
+
+Hi Emma — great to connect. Quick read of your numbers below and a first-pass recommendation:
+
+Summary recommendation (pilot, 6 weeks):
+- GPU pool: 3 x A100-80GB equiv GPUs configured with model-parallel packing for redwood-13b-v1.
+- Expected baseline throughput: ~200 inference requests / min sustained, burst up to 420 req/min with aggressive batching and short-lived concurrency spikes.
+- Concurrency headroom: 80–120 active user sessions with adaptive batching + prefix KV caching.
+- p95 latency estimate: 250–350ms for 1,500-token avg under pilot traffic profile (depends on exact prompt distribution).
+- Storage & logs: standard retention; we can enable short-term KV caching to reduce tokens billed for repeated context.
+
+Commit / pricing pathway:
+- 3-month pilot (monthly billed): standard Dedicated hourly rate with a 10% pilot discount, capped throughput SLAs for pilot period.
+- Convert to 12-month reserved commit: recommend a 15–25% discount off list depending on GPU count and minimum committed GPUs.
+
+I'll loop in Laura on contractual packaging and Ben on throughput guarantees. I'll attach a quick MPA draft and the throughput worksheet with assumptions.
+
+Best,
+Rachel
+Senior Account Executive, Redwood Inference
+Attachment: SignalBurst_MPA_Draft_20260303.pdf (pdf)
+
+---
+From: Ben Carter <ben.carter@redwood.ai>
+To: Rachel Kim <rachel.kim@redwood.ai>, laura.bennett@redwood.ai
+Date: Wed, 3 Mar 2026 13:20:00 -07:00
+Subject: Re: Pilot sizing & pricing — quick note on ops costs
+
+Rachel — quick internal note:
+- 3 x A100-80GB seems reasonable for the pilot but we should prepare a "scale to 6" plan in the MPA if SignalBurst converts (they've signaled enterprise appetite).
+- Suggest we price the 12-month commit with two tiers: (A) base commit = 3 GPUs equivalent with 20% discount; (B) step-up option to 6 GPUs at a locked-in blended discount (25%) with a 90-day conversion window.
+- Include a throughput SLA at the commit level: 99.5% uptime and availability of baseline throughput (200 req/min sustained). Overages billed at standard on-demand prices.
+
+Ben
+Solutions Architect, Redwood Inference
+
+---
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Rachel Kim <rachel.kim@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, laura.bennett@redwood.ai
+Date: Thu, 4 Mar 2026 09:45:00 -07:00
+Subject: Re: Pilot sizing & pricing — deployment notes
+
+Adding performance ops notes:
+- For 1,500-token median requests we should enable:
+  * continuous batching window = 30ms (trades latency for throughput)
+  * prefix KV cache for repeated system prompts (can save ~15–25% tokens during spikes)
+  * mixed-precision quant path for redwood-13b-v1 to increase per-GPU throughput by ~1.6x across peak windows.
+- With these settings 3 GPUs give estimated: 180–220 sustained req/min baseline, burst up to ~420 as Rachel called out. If they increase prompt length or target p95<200ms we recommend adding a 4th GPU to compress p95.
+- Recommend a canary: week 1 run with 2 GPUs (smaller config) to validate latencies with realistic prompts, then scale to 3 for week 2–6 pilot. That reduces cost risk for customer.
+
+Vivek
+Director, Performance Engineering
+
+---
+From: Rachel Kim <rachel.kim@redwood.ai>
+To: Emma Clarke <emma@signalburst.ai>, Raj Patel <raj@signalburst.ai>, contracts@signalburst.ai
+Cc: ben.carter@redwood.ai, vivek.kulkarni@redwood.ai, laura.bennett@redwood.ai
+Date: Mon, 8 Mar 2026 11:02:00 -0700
+Subject: Re: Pilot sizing & pricing — Dedicated commit & next steps
+
+Emma / Raj — following up with a concrete path and attachments. Key points: 
+- Pilot path we recommend: 2-week canary on 2 GPUs to validate prompt distribution + latency. If that meets p95 < 350ms, we scale to 3 GPUs for the remainder of the 6-week pilot.
+- Pilot pricing: month-to-month billing; 10% pilot discount applied to Dedicated hourly rate. Estimated pilot cost (for 6 weeks at expected utilization): $34,800 (broken out in attached spreadsheet).
+- Conversion to a 12-month commit: we propose a baseline commit = 3 GPUs with a 22% discount off list and an optional step-up to 6 GPUs at a 25% discount if exercised within 90 days. Contract includes: baseline throughput SLA (200 req/min sustained), scheduled maintenance windows, and an overage billing rate for additional consumed GPU-hours.
+- Attachments: MPA draft, throughput worksheet, and a sample SLA addendum. Please review the MPA and indicate if SignalBurst legal wants edits — we can fast-track.
+
+Action items:
+- SignalBurst: confirm you want the 2-week canary -> scale to 3 GPUs approach and whether the 12-month step-up option is acceptable.
+- Redwood: we will prepare a DocuSign-ready MPA if SignalBurst confirms structure.
+
+Thanks — happy to hop on a call this week to walk through numbers.
+
+Best,
+Rachel
+
+Attachments: SignalBurst_MPA_Draft_20260309.pdf, signalburst_throughput_estimates.xlsx
+
+---
+From: Emma Clarke <emma@signalburst.ai>
+To: Rachel Kim <rachel.kim@redwood.ai>, laura.bennett@redwood.ai
+Cc: Raj Patel <raj@signalburst.ai>, contracts@signalburst.ai
+Date: Tue, 10 Mar 2026 15:04:00 -0700
+Subject: Re: Pilot sizing & pricing — Dedicated commit & next steps
+
+Rachel / Laura — thanks for the clear path. We are good to proceed with the canary plan (2 weeks on 2 GPUs) then scale to 3 GPUs for the remaining pilot. The proposed pricing looks in-line with our internal expectations — please send the DocuSign MPA and we will run it through procurement. A couple of quick asks before signature: 
+- Can we get an explicit SLA line for p95 latency measurements (how we measure tokens + windowing)?
+- Can Redwood include one-time credits (equivalent to 2 weeks at 2 GPU rate) applied if onboarding takes longer than 5 business days?
+
+If the above are OK, we will sign and target pilot start 2026-03-22.
+
+Emma
+Product Ops — SignalBurst
+
+[End of thread]

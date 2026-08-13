@@ -1,0 +1,92 @@
+Failover ownership matrix and RTO/RPO carveout proposal
+
+From: Sanjay Patel <sanjay.patel@finserve.com>
+To: diego.fernandez@redwood.ai
+Cc: contracts@finserve.com
+Date: Sat, 29 Jul 2028 09:12:00 -0700
+Subject: Re: RTO/RPO for multi-region failover - carveout request
+
+Diego,
+
+Thanks for the call yesterday. FinServe legal and platform teams reviewed the draft SLA and have one last ask before we proceed to procurement: given cost sensitivity and regulatory constraints in our banking clusters, we need an explicit mapping that says which party (Redwood vs FinServe) is responsible for warm-standby activation, cross-region failover routing, and snapshot-based recovery for each failure class.
+
+Specifically:
+- For zone-level failures, we expect automated failover inside the primary region (your responsibility).
+- For regional outages, we need to understand whether Redwood will perform cold-to-warm activation in a standby region or whether FinServe must pre-provision and pay for standby capacity.
+- We also need a clear RTO/RPO per failure class (e.g., zone, region, catastrophic) and a carveout for planned maintenance windows.
+
+Can you provide a concrete ownership matrix and indicate where Redwood can agree to a 4-hour RTO for regional failover vs where you need an exception or a costed reserved capacity commitment?
+
+Sanjay Patel
+Director, Platform Ops
+FinServe
+
+Attachments: none
+
+From: diego.fernandez@redwood.ai
+To: Sanjay Patel <sanjay.patel@finserve.com>
+Cc: kimberly.park@redwood.ai, jonas.weber@redwood.ai, naomi.feldman@redwood.ai
+Date: Mon, 31 Jul 2028 10:07:00 -07:00
+Subject: Re: RTO/RPO for multi-region failover - carveout request
+
+Hi Sanjay — appreciate the clear list.
+
+Summary answer up front: we can provide a prescriptive ownership matrix that splits responsibilities across three failure classes (zone, region, catastrophic). For zone-level failures Redwood will continue to accept full responsibility (automated intra-region failover + <30 min RTO for service continuity). For regional outages we can offer two options:
+
+Option A (no standby cost to FinServe): Redwood accepts activation responsibility with a negotiated reserved capacity commitment (monthly minimum) to guarantee a 4-hour RTO. This requires a dedicated warm-standby pool for your account in the standby region.
+
+Option B (lower monthly commitment): FinServe provisions and pays for baseline standby capacity; Redwood will orchestrate activation and routing during failover but RTO target moves to 8–12 hours depending on provisioned capacity.
+
+Planned-maintenance carveouts: we can agree to exclude scheduled maintenance windows provided we give 72 hours notice for non-emergency maintenance; emergency maintenance will be handled per the SLA escalation flow.
+
+I'll attach a proposed ownership matrix and a marked-up SLA excerpt to show the redlines. Can the contracts team confirm which option they prefer so we can draft committed language and impacts to pricing?
+
+Diego Fernandez
+Sr. Solutions Engineer, Redwood Inference
+
+Attachments: proposed-ownership-matrix.xlsx; redline-draft-SLA-20280730.pdf
+
+From: kimberly.park@redwood.ai
+To: diego.fernandez@redwood.ai
+Cc: jonas.weber@redwood.ai, naomi.feldman@redwood.ai
+Date: Mon, 31 Jul 2028 13:45:00 -07:00
+Subject: Re: internal alignment - FinServe RTO/RPO options
+
+Diego — quick internal notes before we reply to Contracts:
+
+- Legal (Jonas) will need explicit language on liability caps tied to each option. If we accept Option A (Redwood guaranteed 4-hour RTO), we should require a minimum 6-month reserved capacity commitment with a 90-day termination notice to avoid churn. Pricing team is okay with map-based uplift for reserved pools.
+- Security/compliance (Naomi): confirm that cross-region data replication for standby is configured with customer-managed KMS for FinServe; otherwise we must exclude region-level failover for encrypted snapshots because of key-access constraints. That would force Option B in those scenarios.
+- Technical: ensure that the metric we commit to is service-level availability for endpoint routing (<100ms additional latency on average after switchover) — not just instance boot completion. We need to define validation tests and an acceptance checklist to avoid ambiguous claims.
+
+I recommend we send FinServe a single-page ownership matrix (who does what for zone/region/cat) and two annotated options (A/B) with explicit pricing delta and legal caveats. Diego — I can draft the pricing caveat and put the redline in the PDF. Jonas — can you prepare the liability language?
+
+Kimberly Park
+Head of Dedicated Accounts, Redwood Inference
+
+From: diego.fernandez@redwood.ai
+To: Sanjay Patel <sanjay.patel@finserve.com>, Contracts Team <contracts@finserve.com>
+Cc: kimberly.park@redwood.ai, jonas.weber@redwood.ai, naomi.feldman@redwood.ai
+Date: Tue, 30 Jul 2028 16:02:00 -07:00
+Subject: Re: RTO/RPO for multi-region failover - carveout request
+
+Sanjay — thanks again for the detailed ask and for looping in contracts. Per our internal alignment (attached matrix + redline), here's the proposed path to close: 
+
+1) Ownership matrix: attached spreadsheet shows the responsibilities we commit to across three failure classes: Zone (automated intra-region recovery), Region (warm-standby activation + routing), Catastrophic (DR playbook and manual restore). The matrix marks which party executes which step and the observable checkpoints (KV cache restore, routing table cutover, TLS cert propagation).
+
+2) Options (pricing/legal impacts):
+- Option A: Redwood-guaranteed 4-hour RTO for regional failover. Requires FinServe to sign a 6-month reserved-capacity commitment (billing schedule in attachment). Liability cap for this option will be 3x monthly committed fees; Jonas has provided markup.
+- Option B: Lower commitment from FinServe with smaller baseline standby (you pay for standby capacity). Redwood will orchestrate activation but RTO target is 8–12 hours and the liability cap is limited to service credits only.
+
+3) Security caveat: if FinServe requires customer-managed KMS in standby region and restricts cross-region replication of encrypted snapshots, we cannot accept Option A for those datasets — Option B will be the fallback. Naomi has called this out in the attached SLA excerpt.
+
+4) Next steps: please confirm preferred option by EOD next Wed (2028-08-06). If you pick Option A, we'll exchange pricing addendum and updated SLA for signatures. If Option B, we'll show the revised pricing schedule and a runbook for activation/testing.
+
+If helpful, we can also schedule a short 30-minute technical workshop to walk through the acceptance checklist and failover validation steps.
+
+Best,
+
+Diego Fernandez
+Sr. Solutions Engineer, Redwood Inference
+Phone: +1-415-555-0199
+
+Attachments referenced: proposed-ownership-matrix.xlsx (tabbed by failure class), redline-draft-SLA-20280730.pdf

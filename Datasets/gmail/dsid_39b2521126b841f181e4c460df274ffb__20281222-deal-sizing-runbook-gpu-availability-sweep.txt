@@ -1,0 +1,131 @@
+Deal sizing runbook: NovaAI POC capacity sweep
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Ben Carter <ben_carter@redwood.com>, Priyom Das <priyom_das@redwood.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>
+Date: Mon, 18 Dec 2028 09:12:00 -0800
+Subject: Deal sizing runbook: NovaAI POC capacity sweep
+
+Team —
+
+Quick ask: NovaAI (deal NL-4721) is in late-stage POC and has indicated a potential initial commitment that would require roughly 18-24 A100-80GB equivalent GPUs over a 3-month POC (peak concurrency windows during inference tests). The footprint request from the customer is:
+
+- Baseline: 12 GPUs for steady-state inference (us-west suffixed region)
+- Peak: additional 12 GPUs for 4–6 hour test windows (ramping over 2 weeks)
+- SLOs: 95th pctile token latency < 120ms; throughput target ~300 qps during peak tests
+
+Can ops/Capacity please run an availability sweep across our US pools (us-west-2, us-east-1) and confirm:
+1) Current free A100-equivalent inventory (per-region)
+2) Any pre-existing holds or reservations that would conflict
+3) How quickly we could convert available nodes into Dedicated pool for a customer soft-hold (estimated lead time)
+4) Suggest an allocation plan that reduces risk (e.g., mix of A100 + A10 fallbacks, or regional split)
+
+Attached: NL-4721_sizing_table.xlsx (customer-provided ramp and expected usage).
+
+We'd like to put a soft hold for the customer to enable the procurement conversation — do not commit beyond a soft hold until PO received. Please CC me and Lauren on the results.
+
+Thanks,
+Marcus
+Marcus Lin
+Senior Solutions Engineer, Redwood Inference
+marcus_lin@redwood.com
+
+---
+
+Note: internal — do not share sizing spreadsheet externally without redaction.
+From: Ben Carter <ben_carter@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>
+Cc: Priyom Das <priyom_das@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: Tue, 19 Dec 2028 11:04:00 -0800
+Subject: Re: Deal sizing runbook: NovaAI POC capacity sweep
+
+Marcus —
+
+Quick inventory snapshot after checking the serving pools and scheduled maintenance windows:
+
+- us-west-2: 28 A100-equivalent slots free (after accounting for autoscale buffer)
+- us-east-1: 10 A100-equivalent slots free
+- Reserved (soft/hold): 6 slots already flagged for internal beta work (can be reclaimed with 72h notice)
+
+Notes and caveats:
+- The serving autoscaler keeps a 10% safety buffer by default; we can reduce to 5% for the POC but it will increase latency risk during bursts.
+- Some hardware in us-east is on a firmware upgrade window Jan 3–5 that could affect immediate conversion to Dedicated pools; us-west is clear.
+
+Recommendation: We can provide a conservative soft hold of 24 A100-equivalent GPUs in us-west-2 today with the following constraints:
+- Soft hold expires in 21 days unless escalated to a formal Dedicated commitment
+- For hard hold/commit we need a 14-day lead and a signed purchase order or reserved capacity contract
+
+Attached: inventory_snapshot_20281218.csv (internal counts).
+
+If you want the soft hold, confirm and I'll create HOLD-NL4721-001 and loop in Platform Ops to pin the nodes.
+
+Ben
+Ben Carter
+Capacity Operations, Redwood Inference
+ben_carter@redwood.com
+
+> On Mon, Dec 18, 2028 at 09:12 Marcus Lin <marcus_lin@redwood.com> wrote:
+> > Team —
+> >
+> > Quick ask: NovaAI (deal NL-4721) is in late-stage POC and has indicated a potential initial commitment that would require roughly 18-24 A100-80GB equivalent GPUs over a 3-month POC (peak concurrency windows during inference tests).
+> >
+> > Attached: NL-4721_sizing_table.xlsx (customer-provided ramp and expected usage).
+
+From: Priyom Das <priyom_das@redwood.com>
+To: Ben Carter <ben_carter@redwood.com>, Marcus Lin <marcus_lin@redwood.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>
+Date: Wed, 20 Dec 2028 14:22:00 -0800
+Subject: Re: Deal sizing runbook: NovaAI POC capacity sweep
+
+Thanks for the snapshot — couple of operational notes from Capacity Planning: 
+
+- We should present two allocation profiles to the customer: (A) Pure A100 dedicated allocation for strict latency SLOs; (B) Hybrid A100 + A10 fallback where we place 8 A100s and configure an additional 12 A10-style instances for non-critical batch inference during peak test windows. Hybrid reduces cost and lowers the blocking risk if A100 inventory dips.
+- Suggestion: soft hold of 24 GPUs (HOLD-NL4721-001) in us-west-2. Concurrently, log a two-week escalation to convert 12 of those to an enforceable reserved capacity if the PO is received.
+- Risk items: firmware windows in us-east and upcoming internal stress tests on Dec 29 that may temporarily reduce available burst capacity. Flagged.
+
+Action items for ops:
+1) Create internal ticket HOLD-NL4721-001 and tag Platform Ops and Dedicated team.
+2) Place soft hold in us-west-2 for 24 A100-equivalent slots, expire in 21 days.
+3) Prepare fallback plan spreadsheet with node mapping and estimated token-cost delta (A100 vs A10).
+
+I can draft the fallback memo and node mapping — Ben, Marcus, want me to proceed and then we'll send an allocation proposal to NovaAI?
+
+— Priyom
+Priyom Das
+Capacity Planner, Redwood Inference
+priyom_das@redwood.com
+
+> On Tue, Dec 19, 2028 at 11:04 Ben Carter <ben_carter@redwood.com> wrote:
+> > Marcus —
+> >
+> > Quick inventory snapshot after checking the serving pools and scheduled maintenance windows:
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Talia Patel <talia@novaai.com>
+Cc: Procurement <procurement@novaai.com>, Ben Carter <ben_carter@redwood.com>, Priyom Das <priyom_das@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: Fri, 22 Dec 2028 16:45:00 -0800
+Subject: Re: Deal sizing runbook: NovaAI POC capacity sweep
+
+Talia —
+
+Thanks for the call earlier this week. Internal update: we ran an availability sweep and can place a soft hold for the NovaAI POC (HOLD-NL4721-001) for up to 24 A100-equivalent GPUs in us-west-2. The soft hold will remain in effect for 21 days to give Procurement time to complete the PO process.
+
+What that means for NovaAI:
+- We will reserve the capacity (soft hold) and hold the physical slots from general allocation during the hold window. This is not a billing or committed contract — final allocation is contingent on a signed PO or conversion to Reserved/Dedicated capacity.
+- If you want a two-week guaranteed conversion window (to lock 12 nodes on a reserved commit), please confirm and we'll issue a reserved capacity quote and timeline.
+
+Next steps (recommended):
+1) Procurement: please send an intent-to-purchase email or draft PO to procurement@novaai.com and CC me so we can gate the formal hold-to-commit path.
+2) Redwood: Ben and Priyom will share an allocation proposal (node-by-node mapping and fallback plan) by EOD Dec 22.
+
+Attachments referenced: NL-4721_sizing_table.xlsx (from NovaAI), inventory_snapshot_20281218.csv (internal).
+
+We'll follow up with the allocation proposal and a proposed reserved quote if you want to convert any portion of the hold to a firm commit.
+
+Regards,
+Marcus Lin
+Senior Solutions Engineer, Redwood Inference
+marcus_lin@redwood.com
+
+> On Wed, Dec 20, 2028 at 14:22 Priyom Das <priyom_das@redwood.com> wrote:
+> > Thanks for the snapshot — couple of operational notes from Capacity Planning:

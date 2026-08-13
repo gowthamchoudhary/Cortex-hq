@@ -1,0 +1,117 @@
+Dedicated capacity packaging and guaranteed throughput — Aurora Health
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Procurement Team <procurement@aurorahealth.org>
+Cc: Tessa Morgan <tessa_morgan@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Fri, 25 Sep 2026 09:12:00 -0700
+Subject: Dedicated capacity packaging & throughput request for Aurora
+
+Hi Aurora procurement team —
+
+Thanks again for the bandwidth today. Per the product/infra notes, here’s an initial sizing + packaging hypothesis so your procurement and engineering teams have something concrete to react to. I’m looping in Tessa (AM) and Marissa (Solutions) for pricing and technical follow-ups.
+
+Workload snapshot (from Aurora telemetry we received):
+- Peak request rate: ~650 req/s during business hours (15:00–20:00 ET).
+- Sustained average: ~210 req/s outside peaks.
+- Concurrency (simultaneous active sessions): ~110 sessions.
+- Typical prompt+response context length: 1,800 — 2,200 tokens (median ~1,950).
+- Streaming: ~58% of requests use streaming (progressive chunking).
+- Model mix: primary workload on an 70B-class LLM quantized to 4-bit + a smaller 30B for low-latency reranks.
+
+SLO ask from Aurora: p95 generation latency <= 300ms for short-turn messages (<= 512 tokens); responsive streaming for longer context.
+
+Redwood recommended starting configuration (high-level):
+- Dedicated pool: 8x A100-80GB-equivalent GPUs (guaranteed baseline) with autoscale burst up to 12 GPUs for predictable peaks.
+- Capacity footprint rationale: the 8-GPU baseline covers sustained throughput (~210 req/s) with caching and batching; burst to 12 covers the 650 req/s peak headroom with continuous batching and short-tail model variants.
+- Reserved commit: equivalent of 8 GPUs full-time (approx. 576 GPU-hours/week -> 2304 GPU-hours/month).
+- Throughput guarantee: baseline guaranteed throughput equal to 80% of capacity (we set conservative buffer for maintenance/failover) — we’ll specify numeric tokens/sec target in the MSA.
+
+Pricing ballpark (illustrative):
+- Baseline reserved (8 GPU-eq): $59,000 / month
+- Burst credits (autoscale usage beyond reserved): metered at a reduced overage rate; estimated $12,000 / month at expected peak profile
+- Combined starting estimate: $71k / month (before any term discount)
+
+Discount/packaging options we can discuss: 12-month commit with 15–22% volume discount; 24-month with 22–30% (we’ll price exact tiers once we lock target monthly GPU-hours).
+
+Attachments: aurora_workload_snapshot_v3.xlsx (I dropped the workload CSV and session traces there).
+
+Next steps I propose:
+1) Confirm whether Aurora wants a short pilot (2 weeks) with 2–4 GPUs to validate p95 and streaming behavior on live traffic.
+2) If so, we’ll run a short, instrumented pilot and produce an ops runbook.
+3) Post-pilot we’ll produce a firm RightSize recommendation and a committed pricing term sheet.
+
+Karthik
+Enterprise Solutions — Redwood Inference
+
+From: Procurement Team <procurement@aurorahealth.org>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Tessa Morgan <tessa_morgan@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Mon, 28 Sep 2026 11:03:00 -04:00
+Subject: Re: Dedicated capacity packaging & throughput request for Aurora
+
+Karthik —
+
+Thanks for the detailed breakdown. A few clarifying items before we share internally (CFO + Cloud Ops):
+1) Can you convert the baseline guarantee into an explicit tokens/sec or requests/sec p95 metric (we need a measurable SLA for the procurement doc)?
+2) For the burst capacity: what’s the expected warm-up time when autoscaling from 8 -> 12 GPUs (and from 12 -> 16 if needed)? Any cold-start latency for KV cache warming?
+3) We’d like a lower entry point: Aurora’s legal prefers starting with a 6‑month commercial pilot with an option to convert to a 12‑month commit. Can you price a 6‑month pilot with 6 reserved GPUs (and provide a path to scale without penalty)?
+4) Pricing transparency: can you provide a line-item breakout (base GPU commit, model licensing if any, storage for KV cache, bandwidth, and engineering support hours)?
+
+Also, our security team will want to confirm data residency and audit-log retention settings for the dedicated pool; please include the standard SOC2 evidence pointer.
+
+Regards,
+Procurement — Aurora Health
+
+From: Tessa Morgan <tessa_morgan@redwood.com>
+To: Procurement Team <procurement@aurorahealth.org>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Andrew Blake <andrew@bespin.ai>
+Date: Tue, 29 Sep 2026 09:18:00 -07:00
+Subject: Re: Dedicated capacity packaging & throughput request for Aurora — proposal and next steps
+
+Thanks — great questions. I summarized answers and a pragmatic commercial path below. I attached a short pricing sheet and a mutual action plan for the pilot.
+
+1) Explicit SLA conversion: baseline guarantee we propose (post-pilot, to be codified in MSA) is 180k tokens/min sustained capacity at baseline (this maps to ~3,000 tokens/sec sustained aggregate), with a p95 generation latency target of <= 300ms for requests <= 512 tokens and p95 <= 800ms for longer streaming sessions. We’ll include token-based credits in the SLA so the guarantee is measurable per billing window.
+
+2) Autoscale warm-up: typical warm-up to bring a new GPU up and restore KV caches is ~90–180s for a cold start; in practice with continuous burst credits and pre-warmed spare capacity we plan for 30–60s for incremental scaling. We’ll provide a cache-warming hook to pre-populate hot prefixes for scheduled ramp windows.
+
+3) 6‑month pilot option (your ask): we can do a 6‑month commercial pilot starting with 6 reserved GPUs priced at $39,500/month for the reserved baseline. Pilot terms:
+- Pilot baseline: 6 GPUs reserved, autoscale burst to 10 GPUs
+- Pilot observability: full Console access (token-level cost, latency dashboards, traces) + 8 hours/month of Solutions eng support included
+- No conversion penalty: if you convert to a 12‑month commit within the pilot, we’ll credit pilot payments toward the committed fee (pro-rated).
+
+4) Line-item breakout (high level):
+- Reserved GPU commit (6 GPUs): $39,500 / month
+- Burst credits and overage: metered, estimated $6,500 / month at expected peaks
+- KV cache storage & snapshot retention: $900 / month
+- Network/bandwidth: estimated $800 / month
+- Solutions engineering (beyond included support): $250 / hour
+- SOC2 + security evidence package: included; FedRAMP/enterprise packages are add-ons if required.
+
+Discount path: for a follow-on 12‑month commit we can offer a 15% credit against monthly list; for 24‑month we can extend to 24% depending on committed GPU-hours. Exact tiers depend on the committed monthly GPU-hour baseline.
+
+Mutual Action Plan (attached):
+- Week 0: Pilot kickoff, access & onboarding, test plan (SLOs to validate)
+- Weeks 1–2: Baseline traffic validation, latency and throughput tuning (real traffic shadowed)
+- Weeks 3–4: Peak day simulation and stress test, adjust batching/cache knobs
+- Week 5: Runbook & run-rate recommendation delivered
+- Week 6+: Ongoing telemetry and optional conversion discussion
+
+Attachments: redwood_pricing_sheet_q3.pdf, aurora_mutual_action_plan_v1.docx (pricing sheet contains the full line-item spreadsheet).
+
+If this aligns, can Procurement send a PO for the pilot (6 GPUs, month-to-month for 6 months) and we’ll provision a dedicated cluster in your region (us-east). Happy to jump on a 30-min call to walk through the MAP and the pricing sheet — available 10–12 PT tomorrow.
+
+Best,
+Tessa Morgan
+Account Executive — Redwood Inference
+
+From: Procurement Team <procurement@aurorahealth.org>
+To: Tessa Morgan <tessa_morgan@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Wed, 29 Sep 2026 16:30:00 -04:00
+Subject: Re: Dedicated capacity packaging & throughput request for Aurora — proposal and next steps
+
+Tessa —
+
+That works for us. We’ll issue a PO to cover the 6‑month pilot (6 reserved GPUs) and include the option language to convert to a 12‑month commit. Legal has a couple of small redlines but nothing blocker — I’ll loop them in after PO. Please proceed with provisioning; we want us-east for data residency.
+
+Procurement — Aurora Health

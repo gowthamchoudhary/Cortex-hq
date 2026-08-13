@@ -1,0 +1,138 @@
+Customer performance incident — logs & data handling for executive briefing
+
+From: Rajiv Menon <rajiv@finservco.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: 2026-11-10T09:14:00-08:00
+Subject: Spike in latency and 500s this morning — urgent
+
+Evelyn / Monica,
+
+We saw a significant latency spike and elevated 500 errors across our production traffic between 09:05–09:52 PST this morning. Error rate peaked ~7% for a 20-minute window; median latency increased ~4x. Our Ops team is asking for:
+
+- Immediate export of request/response logs for 09:00–10:00 PST (all regions handling finservco.com traffic)
+- Proof of preservation (who pulled logs, hash manifest, storage location)
+- Confirmation whether any PII or account tokens were present in logs and how that data is handled/retained
+
+This incident is currently elevated to our CTO/CSO; they want an exec-level brief and any SOC2/audit evidence we can provide. Please advise on the fastest path to get raw artifacts and a short timeline.
+
+Thanks,
+Rajiv
+Rajiv Menon
+Head of Platform Ops, FinServCo
+ops@finservco.com
+
+---
+Attachment: sample-error-snippet.txt (text)
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Rajiv Menon <rajiv@finservco.com>
+Cc: Monica Patel <monica.patel@redwood.com>, David Kim <david.kim@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Date: 2026-11-10T09:28:00-08:00
+Subject: Re: Spike in latency and 500s this morning — urgent
+
+Rajiv — thank you for the heads up and apologies for the disruption. We are treating this as highest priority. Quick answers up front:
+
+- We will preserve the full request/response logs and KV cache state for the 09:00–10:00 PST window immediately.
+- SRE will generate a SHA256 manifest for exported archives and upload to a restricted Drive folder (read-only to your ops contacts + our incident response).
+- We will do a PII scan on the exported logs and redact any low-level tokens before wider distribution; raw artifacts can be made available under an evidence transfer agreement.
+
+Internal: Monica / David / Rishi — please follow the preservation checklist in the internal runbook, export the logs, produce manifest, and confirm where the artifacts land. Monica, please coordinate the exec slides I will draft for the briefing with Rajiv.
+
+Rajiv — timeline: initial export + manifest within 2 hours; PII scan + preliminary analysis within 6 hours. I’ll keep you posted every hour.
+
+Evelyn
+Evelyn Hart
+Head of Customer Reliability, Redwood Inference
+---
+Attachment: incident-preservation-checklist.pdf (pdf)
+From: Monica Patel <monica.patel@redwood.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>, David Kim <david.kim@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: Sean Gallagher <sean.gallagher@redwood.com>
+Date: 2026-11-10T09:46:00-08:00
+Subject: Preserve: export job + manifest (INF-11872)
+
+Team — taking point on the export. Actions underway:
+
+1) Kicking an S3 export job for the production ingestion layer for FinServCo (09:00–10:00 PST).
+   - Buckets: logs-prod-1 (region us-west-2) and logs-shared-edge
+2) Will produce compressed archive: request-log-export-20261110.tar.gz
+3) Will generate s3_log_manifest_20261111.txt containing object keys and SHA256 hashes; will submit manifest to Drive folder and to JIRA INF-11872.
+4) Running automated PII detector on the raw logs; Qs: Legal — do we provide raw files to customer CSOs or only redacted derivative?
+
+Checklist (short):
+- [x] Export job started (09:40 PST)
+- [x] Temporary export bucket created with access restricted to incident SRE group
+- [ ] Manifest generation (ETA 10:05 PST)
+- [ ] Upload to Drive (ETA 10:15 PST)
+
+Notes: For the exec briefing, David please prepare a short one-slide summary of the root-cause timeline and Rishi to provide the security controls/retention bullets.
+
+Monica
+Monica Patel
+Sr. Customer Solutions Manager, Redwood Inference
+---
+Attachment: s3_export_request.json (json)
+
+From: David Kim <david.kim@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: Monica Patel <monica.patel@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: 2026-11-10T10:12:00-08:00
+Subject: Fwd: Preserve: export job + manifest — I/O and retention notes
+
+Forwarding internal notes. I pulled the first archive and started verification. Short status:
+
+- request-log-export-20261110.tar.gz created and available in internal incident bucket (s3://incident-exports/fs-3241/).
+- Manifest file s3_log_manifest_20261111.txt includes 124k object keys; verifying hashes now.
+- Preliminary scan: ~0.8% of entries contain potential account-identifying tokens (session_id, user_id). No full credit-card PANs detected in this window.
+
+Immediate ask for legal/security: confirm whether we can provide raw archive to FinServCo under an evidence transfer (SLA) or if we need to pre-redact. My recommendation: deliver manifest + redacted derivative to FinServCo and make raw artifacts available to their security team via secure transfer with audit logging.
+
+I'll upload verification artifacts (sha256 sums, export job logs) to Drive once hash check completes. ETA for full verification: 2 hours.
+
+-David
+David Kim
+Principal SRE, Redwood Inference
+---
+Attachment: s3_log_manifest_20261111.txt (text)
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Rajiv Menon <rajiv@finservco.com>
+Cc: Evelyn Hart <evelyn.hart@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: 2026-11-10T12:20:00-08:00
+Subject: Re: Spike in latency and 500s this morning — evidence & security handling
+
+Rajiv — quick update and security notes for your execs:
+
+- Artifacts: we have generated the export archive (request-log-export-20261110.tar.gz) and a manifest (s3_log_manifest_20261111.txt) with SHA256 checksums. Both are uploaded to a restricted Drive folder: https://drive.google.com/drive/folders/1a2b3cExecBrief-FS3241
+- PII handling: automated scan found a small fraction of entries with session_id/user_id markers; we will provide a redacted derivative for broad distribution. Raw artifacts can be shared with your security team via an audited S3 transfer (we will require an evidence transfer agreement; I’ll circulate draft).
+- Retention: per Redwood policy, production request logs are retained for 90 days by default; for incident evidence we can preserve an immutable copy for 1 year under customer request (note: extended retention can have cost and compliance implications).
+- Audit evidence we can provide: export manifest (sha256), S3 access logs showing who downloaded artifacts, and the incident export job logs.
+
+Next steps: I’ll send the evidence transfer agreement and upload the verified sha256 bundle in the next hour. Evelyn is preparing an exec slide deck that summarizes the timeline and mitigation.
+
+Regards,
+Rishi Malhotra
+Security & Compliance Lead, Redwood Inference
+---
+Attachment: evidence-transfer-draft.pdf (pdf)
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Rajiv Menon <rajiv@finservco.com>, Elena Torres <elena.torres@bankcorp.com>
+Cc: Monica Patel <monica.patel@redwood.com>, David Kim <david.kim@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: 2026-11-12T17:42:00-08:00
+Subject: Exec briefing & evidence package for FinServCo incident (FS-3241)
+
+Rajiv / Elena — following up with the executive briefing and evidence package. Attached: exec-briefing-slides-20261112.pptx (3 slides) summarizing timeline, impact, mitigation, and next steps. Key bullets:
+
+- Timeline: transient latency spike and elevated 500s observed 09:05–09:52 PST on 2026-11-10; root cause under RCA (I/O stall on a third-party dependency — preliminary).
+- Artifacts provided: request-log-export-20261110.tar.gz (raw archive, available under secure transfer), s3_log_manifest_20261111.txt (sha256 hashes), export job logs, and access audit entries (who pulled artifacts and when).
+- Data handling: automated PII scan performed; redacted derivative produced for distribution. Raw artifacts will be shared only under signed evidence transfer with audit logging; retention can be extended to 1 year on request.
+
+Action items for FinServCo: please confirm the list of people we should grant access to for the raw S3 transfer (security contacts preferred). Once we have the names, Rishi and David will provision the transfer and provide audit links.
+
+I am available for a 30-min exec sync tomorrow at 10:00 PST if that helps.
+
+Evelyn Hart
+Head of Customer Reliability, Redwood Inference
+Phone: +1 (415) 555-0199
+---
+Attachments: exec-briefing-slides-20261112.pptx, request-log-export-20261110.tar.gz, s3_log_manifest_20261111.txt

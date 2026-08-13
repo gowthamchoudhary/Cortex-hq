@@ -1,0 +1,129 @@
+Dedicated reserve options and activation windows for Skywell
+
+From: Alex Moreno <alex.moreno@skywelltech.com>
+To: Irene Choi <irene.choi@redwood.inference.com>, Marissa Cole <marissa.cole@redwood.inference.com>
+Date: 2026-06-15T09:12:00Z
+Subject: Skywell: Dedicated capacity — sizing guidance request
+
+Hi Irene / Marissa,
+
+Thanks for taking the time on the call yesterday. We want to start locking down what a Dedicated reservation would look like for Skywell so procurement can budget. High-level context: we expect peak inference demand for our realtime chat endpoint at ~8k requests/minute, 95th percentile latency target 300ms, avg sequence length ~220 tokens, and we will need embeddings for search at lower QPS.
+
+Could you send a short set of reservation options that show: cluster size, minimum guaranteed GPUs, typical ramp schedule (pilot -> production), and any warm-standby/burst allowances? Procurement also asked for an activation timeline and any SLA caveats for burst traffic.
+
+Thanks — cc'ing procurement for visibility.
+
+Alex
+Alex Moreno
+Head of Platform, Skywell Tech
+alex.moreno@skywelltech.com
+
+From: Irene Choi <irene.choi@redwood.inference.com>
+To: Alex Moreno <alex.moreno@skywelltech.com>
+Cc: Marissa Cole <marissa.cole@redwood.inference.com>, Karthik Iyer <karthik.iyer@redwood.inference.com>
+Date: 2026-06-15T11:05:00Z
+Subject: Re: Skywell: Dedicated capacity — sizing guidance request
+
+Alex —
+
+Appreciate the details. Quick clarifying Qs before we draft options:
+- Is the 8k rps an average across a day or a sustained 95th-percentile spike window?
+- Any constraints on model variants (e.g., large generation vs smaller chat-only) or strict single-model routing?
+- Do you expect predictable daily rhythm (business hours) or unpredictable bursty traffic?
+
+We can put together three tiers (Pilot / Scale / Production) with explicit min-GPU guarantees, warm standby buffers, and a phased activation schedule. If you're OK, Marissa will pull together the proposals and I’ll loop in Ben for the ramp-runway details.
+
+Irene
+Irene Choi
+Senior Sales, Redwood Inference
+
+From: Marissa Cole <marissa.cole@redwood.inference.com>
+To: Alex Moreno <alex.moreno@skywelltech.com>
+Cc: Irene Choi <irene.choi@redwood.inference.com>, Karthik Iyer <karthik.iyer@redwood.inference.com>
+Date: 2026-06-16T08:45:00Z
+Subject: Dedicated reserve options — initial draft
+
+Alex — attaching a concise options deck (Skywell_Dedicated_Options_v2.pdf) and a topline SLA doc. Below is the short summary; full cost and activation windows are in the PDF.
+
+Option A — Pilot / Warm Start
+- Cluster: 8x A100-equivalent GPUs (single zone)
+- Minimum guaranteed: 6 GPUs (warm pool)
+- Use case: compatibility testing, internal beta, low-volume embedding workloads
+- Ramp: activate within 2 weeks of PO; production scale requires re-eval
+- Burst policy: +50% transient burst for short windows (subject to availability)
+
+Option B — Growth / Predictable Throughput
+- Cluster: 32x A100-equivalent GPUs (regional, mixed‑zone)
+- Minimum guaranteed: 24 GPUs
+- Use case: sustained 95th p throughput up to ~9k rps with mixed batching and KV cache
+- Ramp: 4–6 week activation runway (warming, model pinning, perf tuning)
+- Burst: +30% burst SLA for scheduled windows; autoscale policies to manage headroom
+
+Option C — Production / High Availability
+- Cluster: 128x A100-equivalent GPUs (multi-AZ footprint)
+- Minimum guaranteed: 96 GPUs
+- Use case: enterprise SLAs, multi-region failover, steady high QPS
+- Ramp: phased over 8–12 weeks (can be compressed with upfront commitment)
+- Burst: guaranteed hot spare pool + predefined surge credits for incidents
+
+Activation notes:
+- Warm-starting reduces token burn and cold-cache latency; we recommend a 2–3 week warmup before peak traffic.
+- We include a one-time tuning window for batching and kernel selection after model pin.
+
+Next steps: if this direction looks reasonable I’ll produce a version with explicit hourly throughput mapping, cost buckets, and a recommended default (we usually see deals go with Option B + scheduled bursts and a 3-month expansion clause).
+
+Attachments: Skywell_Dedicated_Options_v2.pdf (summary + cost), SLA_Topline_Skywell_2026.docx (SLA caveats)
+
+—Marissa
+Solutions Lead, Redwood Inference
+
+From: Alex Moreno <alex.moreno@skywelltech.com>
+To: Marissa Cole <marissa.cole@redwood.inference.com>
+Cc: Irene Choi <irene.choi@redwood.inference.com>, procurement@skywelltech.com
+Date: 2026-06-17T14:20:00Z
+Subject: Re: Dedicated reserve options — initial draft
+
+Thanks Marissa — helpful summary. A couple quick clarifications from procurement and engineering:
+- The 8k rps number is a sustained 95th percentile during US business hours (we see a ramp 09:00–17:00 PT). Nighttime is ~15% of peak.
+- We will be running two model variants concurrently (chat-large for summaries + chat-medium for routing). We need KV cache alignment across both models.
+- Procurement timeline: we need a signed order by end of July to hit an October activation. Can we compress Option B ramp to 3–4 weeks if we agree on upfront commitment?
+
+Procurement contact: Maria Santos <maria.santos@skywelltech.com>
+
+Appreciate the quick turnaround — please include the compressed ramp scenario and any minimum GPU guarantees for multi-model routing.
+
+Alex
+
+From: Ben Carter <ben.carter@redwood.inference.com>
+To: Alex Moreno <alex.moreno@skywelltech.com>
+Cc: Marissa Cole <marissa.cole@redwood.inference.com>, Irene Choi <irene.choi@redwood.inference.com>, Karthik Iyer <karthik.iyer@redwood.inference.com>
+Date: 2026-06-18T16:40:00Z
+Subject: Re: Dedicated reserve options — initial draft
+
+Alex — quick follow up with actionable routing and ramp numbers (compressible with commitment):
+
+Compressed Option B (Growth — accelerated onboarding)
+- Cluster: 32x A100-equivalent GPUs in us-west-2, mixed AZ
+- Minimum guaranteed: 26 GPUs allocated for steady-state (reserve + warm pool)
+- Multi-model routing: we recommend reserving a 6 GPU hot pool for chat-large KV cache residency; 20 GPUs handle mixed-generation throughput with dynamic batching.
+- Ramp schedule (3–4 week):
+  * Week 0–1: Provision infra, model pinning, KV cache pre-warm for chat-large (6 GPU hot pool), smoke tests
+  * Week 2: Progressive traffic shift to reserved cluster (30% -> 60%), perf tuning (batch/kv thresholds)
+  * Week 3–4: Full production cutover to 95th p targets; SLA handoff and runbook delivery
+- Warmup token guidance: schedule a 48–72 hour controlled replay to populate KV caches ahead of go-live.
+- Burst handling: allow +20% autoscale headroom within the cluster budget; additional surge credits available under commercial terms.
+
+Operational caveats:
+- Compressing to 3 weeks requires an agreed PoC dataset and early model artifact delivery (container or HF repo).
+- If multi-AZ failover is required from day one, add +10% GPU baseline for cross-az redundancy.
+
+If this fits procurement's timeline I can update the PDF with the accelerated onboarding timeline and a revised price table showing the uplift for compressed ramp/guaranteed hot pool. Happy to jump on a 30m call with Maria to confirm PO timeline.
+
+On Wed, Jun 17, 2026 at 2:20 PM Alex Moreno <alex.moreno@skywelltech.com> wrote:
+> Thanks Marissa — helpful summary. A couple quick clarifications from procurement and engineering:
+> - The 8k rps number is a sustained 95th percentile during US business hours (we see a ramp 09:00–17:00 PT). Nighttime is ~15% of peak.
+> - We will be running two model variants concurrently (chat-large for summaries + chat-medium for routing). We need KV cache alignment across both models.
+> - Procurement timeline: we need a signed order by end of July to hit an October activation. Can we compress Option B ramp to 3–4 weeks if we agree on upfront commitment?
+
+—Ben
+Principal Solutions Engineer, Redwood Inference

@@ -1,0 +1,119 @@
+Dedicated renewal: post-renewal expansion QA & acceptance sign-off
+
+From: Alice Yamada <alice.yamada@acme-corp.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Cc: procurement@acme-corp.com
+Date: Thu, 28 May 2026 10:12:00 -0700
+Subject: Re: Renewal completed — request to schedule post-renewal expansion QA
+
+Hi Vanessa,
+
+Thanks again — contract is fully executed and billing is set for the renewed term. We confirmed the additional 8x A100 GPUs reserved in Pool-rdw-ACME-1. Before we flip traffic to that pool, our infra team wants a short QA/acceptance run:
+
+- Validate throughput at sustained 220 tokens/sec per GPU for p95 latency <= 220ms
+- Run a 2-hour soak with mixed traffic profile (50% chat, 30% backfill embeddings, 20% long-context generation)
+- Verify KV cache warmup within 10 minutes and no progressive memory growth
+
+Can Redwood run the tests on your side (preferred) or provide the test harness and a PRD for us to run? Would like sign-off by end of day Tuesday (2026-06-01) if possible.
+
+Also attaching the internal procurement checklist required for audit.
+
+Best,
+Alice
+Alice Yamada
+Head of Platform Engineering | Acme Cloud
+acme-corp.com
+
+Attachment: acme_procurement_checklist.pdf (stub)
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Alice Yamada <alice.yamada@acme-corp.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Thu, 28 May 2026 13:05:00 -0700
+Subject: Re: Renewal completed — request to schedule post-renewal expansion QA
+
+Alice — great to hear the contract cleared. We can run the tests on our side and provide results + artifacts. Proposed plan (high level):
+
+1) Test window: Mon 06/31 09:00–11:30 PT (2.5h total: 30m ramp, 2h steady) — but note 06/31 is a typo: actual date Mon 06/01 09:00–11:30 PT.
+2) Load profile: your specified distribution (we'll share exact request traces)
+3) Acceptance criteria: p95 latency <= 220ms for chat, sustained aggregate throughput >= 1,760 tokens/sec across the pool (8 GPUs * 220), KV warmup <=10m, and no OOMs or elevated GC trends
+4) Deliverables: aggregated latency/throughput CSVs, per-GPU utilization plots, KV-hit heatmap, and a signed acceptance doc for you to countersign
+
+We can run pre-checks Friday for config sanity. Marissa — can you confirm ops slot availability and whether we need escalation capacity reserved? Karthik — can you own the harness and the artifacts?
+
+Alice — if Tuesday EOD sign-off is the target, we'll prioritize. If you prefer to run the harness, we can share the exact JMeter + request payload sets.
+
+Thanks,
+Vanessa Ortiz
+Account Executive, Enterprise | Redwood Inference
+vanessa_ortiz@redwood.ai | +1 (415) 555-0192
+
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Date: Fri, 29 May 2026 09:18:00 -0700
+Subject: Re: Renewal completed — request to schedule post-renewal expansion QA
+
+All — Ops confirmed. We can run the scheduled window on Mon 2026-06-01 09:00–11:30 PT. Notes:
+
+- I've reserved burst capacity of two reserve instances in the same region in case we need headroom for warmup.
+- Will provision isolated test tenants on Pool-rdw-ACME-1 to avoid cross-tenant cache pollution.
+- We'll collect per-GPU perf counters, kernel-level stats, and the application's KV cache metrics every minute.
+- Marcus will stream logs to the temporary folder on Drive for Alice to access (read-only).
+
+Karthik — please drop the harness repo link and the exact run command so I can coordinate the infra runbook.
+
+-Marissa
+Marissa Cole
+Senior Ops Manager | Redwood Inference
+marissa_cole@redwood.ai
+
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Date: Fri, 29 May 2026 11:02:00 -0700
+Subject: Re: Renewal completed — request to schedule post-renewal expansion QA
+
+Thanks — harness repo: https://git.redwood.ai/harnesses/acme-post-renewal-load (read-only token attached separately via Secrets). Run command (example):
+
+./run_load.sh --profile mixed-chat-emb-long --duration 7200 --ramp 1800 --target-tokens-per-sec 1760 --out artifacts/acme_20260601
+
+Key implementation notes:
+- We will seed KV cache with a 30m priming step before ramp to ensure warmup behavior is measured correctly.
+- Telemetry exports to Prometheus and a per-test CSV will be generated under artifacts/.
+- If any GPU reports sustained CUDA memory > 92% for more than 5 minutes we'll auto-scale down traffic to prevent OOMs and record the incident.
+
+Attach: runbook_stub.md (ops checklist)
+
+-Karthik
+Karthik Iyer
+Principal SRE | Redwood Inference
+karthik_iyer@redwood.ai
+
+
+From: Alice Yamada <alice.yamada@acme-corp.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: procurement@acme-corp.com
+Date: Tue, 01 Jun 2026 15:30:00 -0700
+Subject: Re: Renewal completed — request to schedule post-renewal expansion QA — Acceptance
+
+Vanessa / Team — thank you. We reviewed the artifacts from today's run. Summary (short):
+
+- Steady-state throughput: 1,780 tokens/sec aggregate (meets target)
+- p95 chat latency: 205ms (under 220ms)
+- KV warmup: 7m 20s to reach 85% hit rate (within 10m requirement)
+- No OOMs or sustained memory growth observed; max CUDA mem peaked at 88%
+
+Attached: acme_post-renewal_loadtest_summary.pdf (includes per-GPU charts) and acme_acceptance_signoff.docx (signed by Acme Platform lead).
+
+This is good to go from our side — countersigning the acceptance doc now so you can flip production traffic to Pool-rdw-ACME-1. We'll keep a close watch in week-1 and will reopen if anything unexpected appears.
+
+Appreciate the fast coordination.
+
+Regards,
+Alice
+Alice Yamada
+Head of Platform Engineering | Acme Cloud
+
+Attachment: acme_post-renewal_loadtest_summary.pdf (stub)
+Attachment: acme_acceptance_signoff.docx (stub)

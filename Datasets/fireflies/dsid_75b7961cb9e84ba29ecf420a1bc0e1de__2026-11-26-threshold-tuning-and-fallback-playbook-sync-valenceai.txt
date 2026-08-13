@@ -1,0 +1,81 @@
+Threshold tuning and fallback playbook sync - ValenceAI POC Week 3
+
+Date: 2026-11-26 | Start: 15:00 UTC | Duration: ~48m | Location: Zoom | Recording: yes
+Redwood: Maya (AE), Jonas (SE) | ValenceAI: Samir (Head ML), Elena (Platform), Marco (CTO)
+Week 3 POC sync focused on tuning latency thresholds and finalizing a fallback playbook vs incumbent. Redwood presented tuned configs showing p50/p95 improvements vs baseline but persistent p99 tail at peak. Agreed next steps: share artifacts, run p99 tail with burst credits + prefix caching, customer to share traces, schedule canary rollout and security review.
+Benchmark diff: Redwood tuned vs IncumbentVendorX baseline
+Tail latency (p99) behavior during 95-100% load
+KV/prefix caching and impact on live traffic
+Burst credits / QoS slots and dedicated reservations
+Fallback playbook: model variant swap, regional reroute, degrade-to-embeddings
+Security/VPC implications for private connector
+[00:00] Maya (AE): ok hi everyone, thanks for joining, this is Maya from Redwood, jonas is with me, we wanted to walk through the week 3 tuning and the fallback playbook, um we'll start with the numbers we ran overnight.
+[00:22] Jonas (SE): yeah hey, quick note, the bench harness we used is the same request shape you shared but we enabled prefix cache and slightly higher batch timeout, so you'll see lower p50/p95 but tail still shows jitter.
+[00:45] Samir (ValenceAI): hey thanks, I saw the summary you sent in the deck, the p95 look great but p99 is concerning, are we seeing spikes only at sustained 90% load or at short bursts?
+[01:10] Jonas (SE): mostly short bursts combined with KV cache cold-starts, when the KV cache miss rate rises above ~18% we see tail degrade, and that aligns with your traffic traces where you have spikey bursts at 11:00 and 14:00.
+[01:35] Elena (ValenceAI): yeah those are our peak periods, also we have a lot of >2k token requests that lock up the GPU longer.
+[01:50] Maya (AE): ok back to the baseline comparison: IncumbentVendorX was at p50 38ms, p95 210ms, p99 490ms in your demo harness; our tuned runtime hit p50 32ms, p95 160ms, p99 420ms — so improvement but not yet the margin you need at tail.
+[02:20] Marco (CTO): those numbers look promising, will the tuned profile require dedicated slots or is it achievable on shared?
+[02:33] Jonas (SE): good question, the tuned profile in the spreadsheet used dedicated QoS slots with a small reserved pool (2 slots) plus burst credits. On shared, you'd see similar p50/p95 with more variance at p99. We can replicate on shared but we recommend reserved for production SLOs.
+[03:00] Samir: their incumbent had a placeholder for reserved throughput; they promised consistency but we saw those p99 spikes during deployment windows. How do you handle graceful degradation?
+[03:20] Maya: that's the fallback playbook we wanted to lock down today — high level: 1) auto-fallback to a quantized model variant (lower mem/compute), 2) regional reroute to secondary pool, 3) degrade to cached embeddings for non-critical requests. We have a doc draft and a runbook.
+[03:45] Elena: can you walk through quantized variant latency tradeoffs? I worry about hallucination/regression risk.
+[04:05] Jonas: sure — quantized variant we used is 4-bit with per-channel scales; in the tests we saw 15-20% token latency reduction, sometimes 30% cost savings. Quality regressions were minimal on your eval set but we'll need your acceptance tests in CI to guard. There is a tiny increase on rare edge prompts.
+[04:40] Samir: ok acceptable if we gate by QA. What about KV/prefix cache warmup? Is there a way to avoid cold-start misses during sudden bursts?
+[04:58] Jonas: yes, two levers: proactive warmup (pre-warm common prefixes at expected peak times) and adaptive prefetching based on request telemetry. We demonstrated both in the lab; prefetch reduced cold miss by ~60% in our run.
+[05:25] Maya: we added the prewarm hook in the runtime config we shared, see the link in the notes (links: /redwood/benchmarks/valence-2026-11-24.csv and /redwood/configs/valence-prewarm.yaml).
+[05:45] Marco: network-wise, will VPC private connector add latency? our infra team is sensitive to any extra hops.
+[06:05] Elena: we measured on our side a few ms overhead with the private connector, but if it buys security we can accept it as long as p99 meets SLO.
+[06:25] Jonas: private connector adds minimal ms on average, but can add jitter if egress path is saturated; Elena we'll need confirmation on egress bandwidth and NAT pooling.
+[06:40] Elena: noted, will validate and send config.
+[07:00] [brief silence, rustling papers]
+[07:12] Samir: earlier you mentioned burst credits — explain how that works operationally.
+[07:20] Jonas: burst credits are reserved transient capacity we can allocate to a customer for short periods; operationally they come from a capped pool and are applied automatically when queue depth spikes. They reduce queueing and lower p99 for short windows. For guaranteed behavior we suggest reserved dedicated slots.
+[07:45] Maya: and if dedicated isn't possible, we can throttle non-critical routes, e.g., background enrichment can be deprioritized or routed to embeddings fallback.
+[08:05] Samir: ok good. about the benchmark harness, you said there was a small change to batch timeouts that helped p95, what did you change?
+[08:20] Jonas: we increased batch wait from 8ms to 12ms under low-latency workloads to allow slightly better packing without hurting p50. That helps throughput and p95 but can worsen tail if queue bursts are large; tradeoff must be tuned to your max inflight.
+[08:45] Marco: are those knobs accessible to our SEs? we'd like to run a couple of permutations ourselves.
+[08:55] Maya: yes we'll supply the harness and a runnable RBAC token for the bench scripts, plus a short how-to. Action: Maya will send artifacts.
+[09:10] Samir: one more question — how do you ensure deterministic fallback so we don't flip-flop during a spike?
+[09:25] Jonas: we use circuit-breaker thresholds with time windows, and a hysteresis period before reverting back. Also the playbook has a staged rollout (canary) with metrics monitoring and rollback rules. We'll share the playbook draft.
+[09:50] Elena: that addresses my ops concern. For legal/security, if we failover to a different region, are there data residency issues?
+[10:05] Maya: good flag — the playbook includes residency constraints; if a request touches personal data flagged by your policy we will not reroute cross-region unless permitted. We'll need your data classification to enforce this.
+[10:25] Samir: ok we'll provide that.
+[10:40] [fast forward conversation covering small config points and a brief silence]
+[18:10] Jonas: returning to p99 numbers — in the tuned run (sheet v3) under a synthetic ramp to 95% sustained, p99 plateaued at ~420ms with prefix prewarm, without prewarm it hit 540ms. With dedicated 2-slot reserve and burst credits we saw p99 drop to ~380ms.
+[18:40] Samir: so dedicated really buys you tail consistency. Do you have cost delta estimates vs incumbent?
+[18:55] Maya: yes we added per-request cost delta in the sheet; rough ballpark is 12-18% higher for reserved capacity but you get 30-40% less user-visible errors and better p99. We can optimize further with quantization and route-level caching.
+[19:20] Marco: acceptable if we can prove SLO; what's a reasonable pilot scope to validate?
+[19:30] Jonas: single region, canary traffic at 5-10% for 48-72h with real traces and monitoring hooks. If p99 holds, expand to 25% and then full.
+[19:45] Samir: done, we'll run canary after we receive the tuned artifacts.
+[20:00] Elena: small ops ask — we need the exact runtime images and config hashes to feed into our IaC pipeline.
+[20:10] Maya: yes we'll provide container digest, config hash, and deploy scripts.
+[20:25] [several quick clarifications about logs and observability]
+[25:00] Jonas: regarding observability, the console exposes per-route token-level latency, KV hit rates, and can emit traces to your tracing backend. We can correlate p99 spikes with KV miss rate and GPU stalls.
+[25:40] Samir: good, can you also push alerts for p99 > 450ms for 5m?
+[25:55] Maya: yes will configure.
+[26:10] Marco: last big one — fallback to embeddings for non-critical requests, how do you detect these?
+[26:25] Jonas: either by route tag or by request header; your app can mark low-confidence/low-importance calls and those can be routed automatically to an embeddings-only path which is far cheaper and faster.
+[26:40] Samir: ok we'll annotate a few routes for the pilot.
+[26:50] [longer block of cross talk as folks review notes]
+[35:00] Maya: recap quick — action items we listed, we'll share tuned CSV, bench harness, config, run the p99 tail test, and you will send traces and validate VPC. We proposed security review the week of 2026-12-08 and a canary rollout target 2026-12-10 pending results.
+[35:30] Elena: fine by us; small ask, please also include a failure-mode doc for legal so we can forward to compliance.
+[35:45] Maya: sure, we'll add a one-page failure-mode summary.
+[36:00] Samir: any other blockers?
+[36:05] Jonas: none from our side; just need the traces and you'll need to decide on reserved slots vs shared.
+[36:20] Marco: decision timeline — we should aim to decide by 2026-12-03 to hit the canary date.
+[36:34] Maya: noted.
+[36:45] [wrap up pleasantries]
+[37:00] Maya: thanks all, we'll follow up in email with the files and next steps.
+[37:10] Samir: thanks, appreciate the thoroughness.
+[37:20] [call ends]
+Maya Patel - send tuned benchmark CSV and patched runtime config - Due: 2026-11-30
+Jonas Schmidt - run head-to-head p99 tail test with burst credits enabled and send results - Due: 2026-12-01
+Samir Rao - provide 48h request trace and peak hour SLO definition - Due: 2026-11-29
+Elena Park - validate VPC egress rules and confirm network path to Redwood private connector - Due: 2026-12-04
+Maya Patel - schedule canary rollout meeting and share fallback playbook draft - Due: 2026-12-07
+Redwood to share tuned benchmark CSV and diff against baseline (links in convo)
+SE to run p99 tail test with burst credits and prefix cache enabled week of 2026-12-01
+Customer to send 48h real traffic traces and SLO window for peak hours
+Schedule security/SSO review if POC hits performance targets (propose 2026-12-08)
+Agree canary/fallback playbook and rollout date for model variant (target 2026-12-10)

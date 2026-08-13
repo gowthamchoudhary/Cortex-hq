@@ -1,0 +1,109 @@
+US-Central token queue pressure — customer bulletin and next steps
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: support@novacorp.com
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: Thu, 14 Jun 2028 09:12:00 -0700
+Subject: US-Central token queue pressure — customer bulletin and next steps
+
+Hi Alex / Novacorp team,
+
+We wanted to let you know we observed increased p95 response times for the hosted text-generation API in the US-Central region starting ~08:50 PDT this morning. Scope and impact:
+- Affected scope: a subset of short-lived requests routed to the US-Central pool (approx. 4% of your traffic during the window).
+- Symptom: elevated p95 (300–900ms above baseline) and occasional 503s for very short windows (~10–30s).
+
+What we did immediately:
+- Activated a routing fallback to an adjacent pool (US-West) for affected traffic.
+- Brought autoscaling forward for the US-Central reserved pool to absorb queue pressure.
+- Enabled a targeted cache warm-up for common prefixes to reduce KV cache misses.
+
+Current status: mitigated (traffic has normalized), and we've posted a short incident note on the status page: https://status.redwood.ai/incidents/US-CENTRAL-2028-06-14
+
+Next steps / ask:
+- We're compiling traces and a short root-cause note (will share within 4 hours).
+- Can you confirm whether you saw any functional errors or retries on your side during 08:50–09:05 PDT? If possible, attach a representative request-id or trace.
+
+Attachments: ops-runbook-us-central.pdf (internal runbook excerpt), request-trace-sample.txt (example trace).
+
+Apologies for the disruption — we know latency variability is impactful. We'll follow up with a brief post-incident summary and any recommended client-side mitigations.
+
+Best,
+Kimberly Park
+Account Executive, Redwood Inference
+kimberly_park@redwood.ai
+Redwood Inference
+
+
+From: Alex Turner <alex.turner@novacorp.com>
+To: Kimberly Park <kimberly_park@redwood.ai>
+Date: Thu, 14 Jun 2028 09:29:00 -0700
+Subject: Re: US-Central token queue pressure — customer bulletin and next steps
+
+Hi Kimberly,
+
+Thanks for the heads up. We saw a noticeable slowdown in a few of our end-to-end API checks around 08:53 PDT — clients reported longer page-load times and 1% increased error rate on that interval. We don’t have request-ids for every failure but attached one trace we captured (see attached).
+
+Two quick clarifying questions:
+1) Did the fallback to US-West result in any session affinity changes we should be aware of? Could that affect cached context on our side?
+2) Any estimate on what guardrails you’ll recommend if this recurs (client-side backoff or alternative endpoint)?
+
+If helpful, we can hop on a 30-min call later today to go over traces.
+
+Thanks,
+Alex Turner
+Sr. Platform Engineer, Novacorp
+alex.turner@novacorp.com
+
+---
+Attachment: novacorp-sample-trace-08-53.txt
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Cc: Alex Turner <alex.turner@novacorp.com>
+Date: Thu, 14 Jun 2028 11:08:00 -0700
+Subject: Re: US-Central token queue pressure — customer bulletin and next steps
+
+Kim / team — posting a short technical follow-up here so we have a single thread for Novacorp.
+
+Summary (TL;DR): temporary token-queue pressure in the US-Central serving lane caused elevated p95. Root cause appears to be a small spike of short, high-concurrency requests that bypassed prefix cache hits (edge pattern), resulting in sustained KV cache misses and transient backlog. The serving layer then routed a fraction of traffic to US-West as our failover policy triggered.
+
+Why it happened:
+- A burst of short (<200ms) requests with high parallel fanout hit a common prefix set, causing the KV cache to experience higher miss rates; this amplified token decoding cost per request.
+- Autoscale reacted but with a short lag; during that lag p95 rose and a small number of requests were rate-limited returning 503s.
+
+Mitigations applied (already):
+- Immediate fallback routing to US-West reduced the user-visible tail.
+- Warmed hot prefixes and adjusted the prefetch window for the affected shard.
+- Tuned the local request-queue admission threshold to prioritize shorter requests for a short period.
+
+Planned follow-ups (we will share these in the post-incident note):
+1) Permanent prefetch window increase for US-Central hot shards to reduce miss amplification.
+2) Batching policy tweak to avoid admission storms for very short requests.
+3) Updated runbook step to proactively route low-latency traffic during sustained miss spikes.
+
+Relevant links: runbook excerpt (attached), internal runbook: https://redwood-internal.atlassian.net/l/cp/US-CENTRAL-QUEUE-RUNBOOK
+
+Response to Alex: the fallback preserves request semantics — there is no change to session tokens or model variant assignment. You should not see client-visible context loss. If you use any strict geo-affinity assumptions we can discuss a pin/exception. On guardrails: short-term we recommend conservative client retry/backoff (exponential jitter starting at 200ms) and a short client-side circuit-breaker if error rate >2% sustained for >1 minute. We’ll include these in the advisory.
+
+I’ll publish a concise post-incident note to status and share the link once ready (target: within 4 hours).
+
+Marissa Cole
+Head of Customer Reliability, Redwood Inference
+marissa_cole@redwood.ai
+
+---
+On Thu, Jun 14, 2028 at 09:12 AM Kimberly Park <kimberly_park@redwood.ai> wrote:
+> (original customer bulletin)
+
+From: Alex Turner <alex.turner@novacorp.com>
+To: Marissa Cole <marissa_cole@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Date: Thu, 14 Jun 2028 15:43:00 -0700
+Subject: Re: US-Central token queue pressure — customer bulletin and next steps
+
+Thanks Marissa — that explanation helps a lot. We’ll implement recommended client backoff and add a temporary circuit-breaker for the next 48 hours. Can you add a short note to the status page indicating recommended client mitigations so our SREs can follow it?
+
+Also, please schedule a 30-min post-incident debrief for today if you have availability (we’re free 17:30–18:30 PDT).
+
+Appreciate the quick response.
+
+—Alex

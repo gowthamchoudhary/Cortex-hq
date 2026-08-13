@@ -1,0 +1,112 @@
+Usage accounting reconciliation — unexpected session attribution for May
+
+From: Liam O'Connor <liam.oconnor@netline.com>
+To: priyom.das@redwood.ai, billing@netline.com
+Date: 2027-05-30T09:14:00-07:00
+Subject: May usage — unexpected spike in session attribution
+
+Hi Priyom,
+
+We've been reconciling our May bill and noticed an unusual spike in session-level token attribution that doesn't line up with our internal logs. The Redwood invoice shows ~2.1M tokens attributed to the `search-api` route on May 18, but our gateway logs only record ~450k tokens for that route on that date.
+
+Two quick asks: can you (1) confirm what timestamps/redaction windows you use when attributing tokens to a route, and (2) export the raw session attribution rows that led to the May 18 aggregation so we can match transaction IDs?
+
+We're trying to avoid a full invoice hold — if you can provide the session export and a short explanation of the attribution window, we should be able to reconcile quickly. I've CC'd our billing alias in case we need to loop in AP.
+
+Thanks,
+Liam
+Liam O'Connor
+Finance Manager, Netline Systems
+liam.oconnor@netline.com
++1 415 555 0132
+
+From: priyom.das@redwood.ai <priyom.das@redwood.ai>
+To: Liam O'Connor <liam.oconnor@netline.com>
+Cc: monica.patel@redwood.ai
+Date: 2027-05-30T11:02:00-07:00
+Subject: Re: May usage — unexpected spike in session attribution
+
+Hi Liam — thanks for the heads up.
+
+Short answer: we use a rolling attribution window aligned to the request arrival time and an internal session-join heuristic that aggregates short-lived sessions under a parent session when we detect rapid client reconnects. That can cause apparent spikes on the route if many reconnects map to the same parent session.
+
+I'll pull the raw session attribution export (CSV) for May 18 and include the transaction_id, route, request_ts, attributed_tokens, and sample_kv for the rows that rolled up to `search-api`. Would you prefer a GDrive link or a compressed CSV in email?
+
+I'll also loop in Monica from Billing to help evaluate whether a provisional credit is appropriate while we investigate.
+
+— Priyom
+Priyom Das
+Account Lead, Enterprise Sales — Redwood Inference
+priyom.das@redwood.ai
+
+From: Liam O'Connor <liam.oconnor@netline.com>
+To: priyom.das@redwood.ai
+Cc: billing@netline.com
+Date: 2027-05-31T08:15:00-07:00
+Subject: Re: May usage — unexpected spike in session attribution
+
+Thanks, Priyom — GDrive link is easiest. Attached also is a CSV export from our gateway (Netline_gateway_export_May18.csv) and a small set of request traces.
+
+Attachment stubs: Netline_usage_export_May2027.csv (3.2MB), netline_session_samples_May2027.zip (120KB)
+
+A few notes from our side:
+- All Netline requests are fronted by a short-lived client pool that reconnects every ~10s; we didn't expect those to be consolidated into a single parent session for billing.
+- The transaction_ids are included in column `tx_id` of our CSV.
+
+If you can map your attribution rows to tx_id, that will help us close this quickly.
+
+Liam
+
+From: priyom.das@redwood.ai <priyom.das@redwood.ai>
+To: Liam O'Connor <liam.oconnor@netline.com>
+Cc: monica.patel@redwood.ai, aditya.rao@redwood.ai
+Date: 2027-06-01T10:22:00-07:00
+Subject: Re: May usage — unexpected spike in session attribution
+
+Liam — attaching our export and a short explanation of how the join works. See the attached `redwood_sample_session_logs.gz` (contains the columns you requested plus the join_key we used).
+
+Key summary (short):
+- Attribution window: we assign tokens to the route for the parent session whose first seen ts is within a 30s build window. Rapid reconnects from the same client IP + user-agent are merged under a single parent session to avoid double-counting short-lived handshakes.
+- What happened on May 18: a client-side upgrade caused a flurry of reconnects from the same client pool. Our merge heuristic considered them the same parent session and rolled the tokens to the `search-api` route where the parent session's first request landed.
+
+What we included: `redwood_session_export_May18.csv` (rows that contributed to the invoice), mapping to your `tx_id` where present.
+
+Next steps proposed:
+1) We will correlate our mapping to your `tx_id` in the attached CSV.
+2) If there is a mismatch attributable to our merge heuristic, we can propose a one-time pro-rated credit for the over-attributed tokens on May 18.
+3) We'll propose a config toggle for Netline accounts to reduce the merge window from 30s to 5s for environments with aggressive reconnect behavior.
+
+Attachment stub: redwood_sample_session_logs.gz (contains redwood_session_export_May18.csv)
+
+— Priyom
+
+From: aditya.rao@redwood.ai <aditya.rao@redwood.ai>
+To: Liam O'Connor <liam.oconnor@netline.com>
+Cc: priyom.das@redwood.ai, monica.patel@redwood.ai
+Date: 2027-06-03T16:40:00-07:00
+Subject: Re: May usage — unexpected spike in session attribution
+
+Hi Liam — thanks for the patience and for the export. Monica and I reviewed the mapping Priyom provided and we see ~1.65M tokens that were rolled to `search-api` due to the merge heuristic; matching `tx_id` shows these were generated by frequent reconnects and were legitimately consolidated on our side.
+
+Resolution proposal: we will issue a one-time credit of 60% of the over-attributed tokens (equivalent to a $1,860 USD credit) to the June invoice while we ship a configuration toggle to lower the merge window for Netline accounts. The toggle will be available as a per-account setting in the Console; Monica will follow up with the exact SKUs and the updated invoice line.
+
+If that is acceptable, please reply with authorization to apply the credit and we'll take care of the invoice adjustment and config rollout.
+
+— Aditya
+Aditya Rao
+Sr. Finance Ops, Redwood Inference
+aditya.rao@redwood.ai
+
+
+On Wed, May 31, 2027 at 08:15 AM Liam O'Connor <liam.oconnor@netline.com> wrote:
+> Thanks, Priyom — GDrive link is easiest. Attached also is a CSV export from our gateway (Netline_gateway_export_May18.csv) and a small set of request traces.
+>
+> Attachment stubs: Netline_usage_export_May2027.csv (3.2MB), netline_session_samples_May2027.zip (120KB)
+>
+> A few notes from our side:
+> - All Netline requests are fronted by a short-lived client pool that reconnects every ~10s; we didn't expect those to be consolidated into a single parent session for billing.
+> - The transaction_ids are included in column `tx_id` of our CSV.
+>
+> If you can map your attribution rows to tx_id, that will help us close this quickly.
+>
+> Liam

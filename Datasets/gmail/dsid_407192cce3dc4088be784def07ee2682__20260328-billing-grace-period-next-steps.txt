@@ -1,0 +1,124 @@
+Billing grace period & exceed-policy — next steps
+
+From: Olivia Chen <olivia@atlasanalytics.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: Atlas Analytics Billing <billing@atlasanalytics.com>
+Date: Fri, 20 Mar 2026 09:12:00 -0700
+Subject: Question: what happens if we exceed our monthly budget?
+
+Hi Jordan,
+
+Quick question as we finalize our internal budget guardrails: Atlas has a hard monthly allocation of $15,000 for hosted API spend. If we exceed that during the month, what exactly happens on Redwood's side?
+
+Specifically we care about:
+- Are there automated notifications and how far in advance?
+- Is there a grace period where calls continue to succeed?
+- Do you throttle / degrade throughput or return errors once the budget is exceeded?
+- How does billing behave for the overage (immediate invoice, next month true-up, proration)?
+
+Also, can we enforce a per-API-key cap (so our public-facing endpoint stops but batch jobs continue)? We want the ability to protect our portal traffic while allowing internal analysts to run occasional scripts.
+
+Could you send the baseline hosted-rate card and any guidance so we can decide whether to add a spend-safety clause to our contract?
+
+Thanks — happy to hop on a quick call if it's easier.
+
+Best,
+Olivia
+Olivia Chen
+Head of Platform, Atlas Analytics
+---
+Attachment: usage-screenshot.png (image/png, 82KB, referenced)
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Olivia Chen <olivia@atlasanalytics.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Fri, 20 Mar 2026 10:05:00 -07:00
+Subject: Re: Question: what happens if we exceed our monthly budget?
+
+Hi Olivia — thanks for the clear questions. TL;DR: we offer configurable behaviors (notify-only, soft-throttle, or hard-block) plus a 72-hour grace window by default for new overages; billing is handled via a true-up invoice at the end of the billing cycle unless you opt into immediate invoicing. Details below and next steps at the bottom.
+
+What we do by default (hosted API):
+- Notifications: email + webhook after 80% and 95% of your committed/expected spend. Real-time usage is available in the Console.
+- Grace window: a 72-hour soft-grace period where requests continue but rate-limited to protect latency SLOs. This gives customers a short runway to remediate before stricter enforcement.
+- Enforcement modes (configurable per-account or per-API-key):
+  * notify-only (no immediate enforcement)
+  * soft-throttle (requests still succeed but throughput reduced to a configurable percentage; we typically recommend 30–50% for portal-protection use cases)
+  * hard-block (new requests return 402 Payment Required / 429 Too Many Requests until billing cleared or cap increased)
+- Billing: overages are included on the next monthly invoice as a true-up by default. If you need immediate billing, we can enable immediate invoicing for overage events (generates an invoice when threshold breached). All overage tokens are billed at the active rate for the model used; discounts that apply to committed usage do NOT automatically apply to unpaid overages unless covered in the contract amendment.
+
+Per-API-key caps: yes — we can scope enforcement to API keys or routes. Typical setup for customers that want portal protection: set a hard-block at the public key level and a higher soft-cap for internal keys. We can include a runbook and sample configuration in the SOW.
+
+Other practical notes:
+- Auto-fallback: we can optionally configure automatic routing to a lower-cost model variant when a threshold is hit (risk-based; can be enabled per-route).
+- Webhooks: we push events for threshold-crossings so your ops can take automated action.
+- Audit logs: all enforcement events are logged and available for export (useful for finance and compliance).
+
+Attachments: I attached our current exceed-policy summary and the latest AMA rate card for hosted API so you have the numbers to run internally.
+
+Next steps / options for Atlas:
+1) If you want a simple safety net: we can enable notify-only + webhook + 72-hour grace.
+2) If you want portal protection: we recommend per-key hard-block for public keys + soft-throttle for internal keys.
+3) If you prefer billing behavior changes: add a contract amendment to define immediate invoicing for overages or to apply committed-discount rates to overage up to an agreed limit.
+
+If you'd like, I can roll this into an amendment and route to our Commercial Ops for sign-off — happy to coordinate.
+
+Cheers,
+Jordan Blake
+Enterprise Account Executive | Redwood Inference
+Mobile: +1 (415) 555-0183
+---
+Attachments: Redwood-Exceed-Policy-v1.pdf, AMA-rate-card.xlsx
+From: Olivia Chen <olivia@atlasanalytics.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: Atlas Analytics Billing <billing@atlasanalytics.com>, Monica Patel <monica.patel@redwood.com>
+Date: Sun, 22 Mar 2026 08:30:00 -07:00
+Subject: Re: Billing grace period & exceed-policy — next steps
+
+Thanks Jordan — this is super helpful. A couple of follow-ups before we present to finance:
+
+1) Proration / invoicing timing: if we exceed mid-cycle and you do the default next-month true-up, will the next invoice show the full overage amount or a pro-rated delta? We need clarity for our forecasting.
+
+2) Discounts: we currently have a 15% committed-discount on our baseline spend; if an overage happens, are those extra tokens billed at the standard public rate or do they inherit the 15%?
+
+3) Can you show an example of the soft-throttle behavior (error codes, sample response headers) so our eng team can plan graceful degradation?
+
+4) If we want portal protection only, does Redwood support automated routing that blocks the public key while allowing internal keys without manual intervention? We want this to be as automated as possible.
+
+We'll review the attachments and next week decide whether to (a) accept notify-only, (b) set per-key hard-block + soft-throttle, or (c) request an amendment for immediate invoicing.
+
+Best,
+Olivia
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Olivia Chen <olivia@atlasanalytics.com>, Jordan Blake <jordan.blake@redwood.com>
+Cc: Monica Patel <monica.patel@redwood.com>
+Date: Wed, 25 Mar 2026 15:04:00 -07:00
+Subject: Re: Billing grace period & exceed-policy — next steps
+
+Hi Olivia — jumping in with the technical implementation details Jordan mentioned and example snippets you can hand to your eng team.
+
+Soft-throttle example behavior (recommended):
+- When threshold reached, we start returning 429 Too Many Requests for requests above the configured throughput. We include two headers you can use:
+  * X-Redwood-Quota-Remaining: tokens remaining in the current window
+  * X-Redwood-Throttle-Rate: current enforced percentage (e.g., 40 for 40%)
+- We also optionally inject an informative JSON body: {\n  \"error\": \"quota_exceeded\",\n  \"recommended_action\": \"reduce_batch_size or fallback to cheaper-model\"\n}
+(we'll provide exact sample payloads in the runbook).
+
+Per-key enforcement: fully supported. Suggested setup for Atlas:
+- Public key: hard-block at 100% of the portal allocation (returns 402/429).
+- Internal keys: soft-throttle at 40% with webhook notifications to your ops channel.
+- Routing: automatic — we can bind enforcement policy to API key metadata; no manual intervention needed once the policy is in place.
+
+Billing specifics:
+- Default true-up: the next invoice will show the full overage amount for the billing period (not a delta). If you prefer a delta-only line item, we can produce a custom invoice template; ask Commercial Ops.
+- Discounts: overages are billed at the active model rate. Applying committed-discounts to overage requires explicit contract language — we can include a capped overage allowance in an amendment (e.g., first $2k overage at committed discount).
+
+Operational options to reduce friction:
+- We can enable an automated fallback to a lower-cost model variant for certain endpoints (helps avoid hard outages).
+- Webhook + PagerDuty integration for immediate ops response.
+
+If you'd like, Jordan and I can draft the amendment text that documents: enforcement mode, per-key caps, invoicing timing, and discount treatment for overages. I'll attach a short JSON runbook and sample headers in a separate email for your engs.
+
+Regards,
+Marcus Lin
+Solutions Engineer — Redwood Inference
+---
+Attachment: runbook-soft-throttle-samples.json

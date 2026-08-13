@@ -1,0 +1,83 @@
+Peninsula Health Console Telemetry Sherpa Walkthrough
+
+Intro + console walkthrough focused on per-route usage, billing breakdown and telemetry. Customer has hybrid architecture, strong compliance needs (data residency, KMS), worried about latency spikes during patient-facing flows. Agreed to trial Dedicated pool and run bench to validate latency vs cost tradeoffs.
+Meeting header: 2028-06-07 15:00 UTC | Duration 52 min | Attendees listed above
+
+[00:00] Jamie: Hey everyone, thanks for joining — Jamie Ortega from Redwood, with Priya and Marco from our eng team. How's everybody?
+[00:08] Mark: Morning — Mark here, CTO at Peninsula. Sorry for the background noise, we had a pager.
+[00:12] Aisha: Aisha, hi. We're mostly here to see the console telemetry and how we can map route costs back to product teams.
+[00:18] Jamie: Great, that's exactly what Priya will walk through — per-route dashboards, chargeback, and how optimize suggestions drive down token cost.
+[00:27] Priya: Quick agenda: show the usage lens, per-route cost breakdown, demo chargeback export, then a short section on Dedicated and private options — and security. We'll leave 10 mins for Q&A.
+[00:38] Liam: One ask up front — any demo data can you make sure it masks PHI, we can't upload patient info.
+[00:43] Marco: Absolutely, we'll use synthetic traces. Note about transcription: sorry if some names get munged.
+
+[02:10] Priya: (screen share) Starting at the Usage Overview — token volumes over time, top 10 routes. You can see we automatically attribute tokens by route id, user-id hashing optional. For Peninsula, the interesting bit is the two patient-facing routes show high latency variance.
+[02:28] Mark: Can you slice by api-key / team tag? We tag requests at our gateway.
+[02:33] Priya: Yes, we map headers (x-team, x-route) — the console shows hierarchy: tenant -> route -> model variant. Exports are CSV or parquet.
+[03:05] (crosstalk)
+
+[05:15] Priya: Now per-route dashboard: call volumes, p50/p95 latency, token mix (prompt vs completion), and cost per route. Cost is a raw compute + model premium estimate — we include batching and cache savings as separate columns.
+[05:32] Aisha: How are you calculating the cache savings? Our app has lots of repeated prompts for EHR lookups.
+[05:38] Priya: We estimate prefix-KV cache hit rates from the request fingerprints and your configured cache policy. You can toggle assumed cache hit rate to simulate savings. It's an estimate, we also provide sample playback for validation.
+
+[07:02] Jamie: Quick qualification — what's your current model hosting? On-prem for PHI or cloud?
+[07:09] Mark: Hybrid. Most dev traffic in cloud, but anything with identifiable patient data lives in our private VPC on-prem.
+[07:17] Jamie: Good to know — we can support Private deployment with customer-managed KMS.
+
+[08:40] Marco: Demo: chargeback export — you can map cost slices to GL codes or service owners. We support per-route tagging and a rules engine for automatic allocation.
+[08:57] Liam: Do tags survive cross-region routing if you fallback? We route to standby region sometimes.
+[09:03] Priya: Tags are preserved; fallback routes are annotated with the original route id. Fallbacks show up as separate color in the route timeline.
+
+[11:30] Aisha: Security — SOC2? We need audit logs and proof of data segregation for our compliance team.
+[11:38] Jamie: Redwood is SOC2 Type II; we also provide detailed audit trails per-request (who requested, route id, model version) and can integrate with your SIEM over S3 or syslog. I'll send SOC2 docs.
+[11:50] Sofia: For KMS, can you use our HSM? We require customer-managed keys for encryption at rest.
+[11:56] Marco: Yes, Private deployment integrates with customer KMS/HSM. For Hosted we use BYOK for stored artifacts and can provide key-rotation schedules.
+
+[13:20] Priya: Back to cost — here's the per-token breakdown: model compute, GPU time, and orchestration overhead. The optimize tab suggests quantized variants or batching config changes that estimatedly reduce per-token cost by up to 35% for some routes.
+[13:45] Mark: That 35% — is that from quantization alone or batching? We can't degrade quality on patient summaries.
+[13:55] Priya: It's a mix. You can pin quality thresholds — e.g., allow int8 for non-diagnostic summarization routes, keep fp16 for critical flows. Console shows expected quality delta and sample diffs.
+
+[16:00] Liam: Latency concerns: patient triage route must be <= 120ms p95. How do we guarantee?
+[16:07] Marco: For SLOs like that, we recommend Dedicated pools pinned to the model variant with reserved slots and local KV cache. Also, we can set routing policies to prefer low-latency region and automatic fallback to a lighter model only if latency would be violated.
+[16:25] Aisha: What's the real-world p95 with dedicated vs hosted? Any benchmarks?
+[16:30] Priya: Typical p95 on Dedicated with optimized kernels and 1s sequence length can be sub-100ms for small instructed models. We'll run a bench with your payloads — that's part of next steps.
+
+[18:10] Mark: How much operational burden to run Private? Our infra team already has a few infra projects.
+[18:18] Marco: Private has a control plane option where Redwood manages orchestration but the inference plane is in your VPC. We provide playbooks and an ops runbook; initial onboarding is heavier but day-to-day is light.
+
+[20:05] Priya: Walkthrough of the alerting: thresholds on p95, error-rate per route, token surge alerts. Alerts can create JIRA tickets automatically or hit PagerDuty.
+[20:20] Liam: Can we set a budget cap per route? We want auto-protect so experimental routes don't blow the budget.
+[20:25] Priya: Yes — you can set hard caps or soft caps with throttling or automatic fallbacks to cheaper model variants.
+
+[23:00] (demo continues with sample export)
+
+[27:10] Priya: Now the telemetry detail: sample payload playback allows you to replay a request against different model variants to see diff in tokens and output. Useful for quality gating before rollouts.
+[27:30] Aisha: If we replay patient data, again must be masked — is masking built-in?
+[27:36] Marco: We provide a redaction helper for playback. It removes names and identifiers and supports custom regex rules.
+
+[29:50] Mark: Pricing questions — if we go Dedicated with reserved capacity, what's the commit vs burst model?
+[29:58] Jamie: Dedicated is a monthly commitment for reserved slots; we support burst capacity at a premium. Pricing sheet I'll attach, but rough rule: reserved capacity gets discount and predictable unit economics.
+
+[32:12] Aisha: Competitors: we've looked at Bedrock + Anthropic for some use cases. What differentiates Redwood here?
+[32:20] Jamie: We emphasize consistent serving primitives across hosted/dedicated/private, observable per-route economics, and traction on high-throughput production use cases. Also better tooling for prefix/KV cache and automatic batching suggestions.
+
+[34:45] Liam: On telemetry retention — what retention windows? We need 2 years for audits but don't want to pay cloud egress costs.
+[34:52] Marco: Retention is configurable per-tenant and per-data-class. We can keep high-fidelity request traces for 90 days and aggregated metrics for multi-year, and exports for long-term retention into your S3.
+
+[38:00] Priya: Demo close: show how to create a rollout with canary traffic split and automatic rollback if quality drops. The console links to your evals and prompt sets.
+[38:20] Sofia: Who signs the DPA? We need a DPA and assurance that data doesn't leave EU for certain flows.
+[38:28] Jamie: We have EU-region private deployments and DPA templates. I'll attach legal contacts.
+
+[41:15] Mark: Ok, let's make this actionable — we'll start with a pilot on two routes: patient-triage and medication-check. We'll expect the trial Dedicated pool to be provisioned for 2 weeks.
+[41:28] Jamie: Great. Priya, can you confirm sandbox plan?
+[41:32] Priya: Yes — we'll provision a dedicated sandbox cluster with synthetic data and invite Liam + Aisha. Expect invite by 2028-06-12.
+
+[44:10] (Q&A: small bits about model version pinning, canary size 5-10%)
+
+[48:05] Liam: One last ask: can you provide a sample route-level cost forecast based on our current monthly tokens? We'll share the sheet.
+[48:12] Jamie: Yes, send the CSV and we'll return a modeled forecast with recommendations.
+
+[50:00] Jamie: Recap — Redwood to share SOC2 + DPA, provision telemetry sandbox, provision Dedicated trial, Peninsula to share route CSV, schedule bench for latency/cost.
+[50:20] Mark: Sounds good. Thanks everyone.
+[50:25] Aisha: Thanks.
+[50:30] (call ends)

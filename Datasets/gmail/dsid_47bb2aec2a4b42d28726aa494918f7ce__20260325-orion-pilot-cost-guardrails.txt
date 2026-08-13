@@ -1,0 +1,126 @@
+MAP draft + eval plan — token/unit-cost guardrails for Orion Health pilot
+
+From: Liz Green <liz.green@orionhealth.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>
+Cc: orion-pilot@orionhealth.com
+Date: Mon, 22 Mar 2026 14:12:00 -0700
+Subject: Pilot MAP & evaluation — quick ask on cost assumptions
+
+Hi Hannah —
+
+Thanks again for the demo last week. Procurement and our engineering lead want a concise MAP (mutual action plan) that explicitly calls out: token cost sensitivity (tokens/$), expected throughput for our use case, and any caching/batching assumptions so we can validate SLAs and finalize budget.
+
+High level: we plan to run a 3-week evaluation against ~15k nightly requests (mix of short queries and multi-turn workflows). Key asks from our side:
+- A worst-case and expected tokens-per-call estimate (avg + 95th)
+- How prefix/KV caching would reduce cost for repeated flows
+- Any batching guidance if we decide to consolidate calls server-side
+- Proposed MAP milestones and preferred close timeline (procurement needs an internal sign-off by Apr 16)
+
+Can you send a short MAP + a small token-econ model we can hand to procurement?
+
+Appreciate it —
+Liz
+Liz Green
+Head of Strategic Programs — Orion Health
+[attachment: pilot_requirements.pdf (pdf)]
+From: Hannah Schmitt <hannah.schmitt@redwood.com>
+To: Liz Green <liz.green@orionhealth.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Tue, 23 Mar 2026 09:08:00 -0700
+Subject: Re: Pilot MAP & evaluation — quick ask on cost assumptions
+
+Liz — thanks for the clear list. Looping in Ben + Karthik for the token-econ and caching details; Monica will track MAP milestones & procurement touchpoints.
+
+Quick summary of what we’ll deliver by EOD Wed:
+- Draft MAP (milestones, owners, dates) for your internal review (XLSX + Drive link)
+- Lightweight token-econ model (tokens/$) with conservative/worst-case/expected rows and toggles for prefix caching + batching
+- Evaluation plan: sample prompt sets, holdout metric definitions, and pass/fail criteria for quality vs cost tradeoffs
+
+Proposed timelines (subject to your feedback):
+- 03/24: MAP + token model (v0) to you
+- 03/25–04/08: 3-week evaluation (nightly ingestion, 15k requests total)
+- 04/09: results review + recommendation
+- 04/13–04/16: procurement sign-off window
+
+If Apr 16 is the hard sign-off, this schedule gives two business days to reconcile procurement questions after our results review.
+
+Attaching a short checklist for the MAP items we’ll include.
+
+Best,
+Hannah
+Hannah Schmitt
+Senior Sales Lead, Redwood Inference
+[attachment: map_checklist.txt]
+From: Ben Carter <ben.carter@redwood.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>, Liz Green <liz.green@orionhealth.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Wed, 24 Mar 2026 10:16:00 -0700
+Subject: Re: Pilot MAP & evaluation — token econ (v0) attached
+
+Hi all — attaching the token econ CSV (orion_token_econ_model.csv) and a short readme. High-level notes:
+
+1) Baseline model assumptions (v0):
+- Model: open-llm-alpha-16k (quantized variant) — tokens priced at $0.0009 per 1k tokens equivalent on hosted tier (example).
+- Average prompt length: 180 tokens; average completion: 120 tokens => avg call ~300 tokens.
+- Expected tokens/call (expected): 300; worst-case (long multi-turn): 1,200 tokens.
+
+2) Caching assumptions:
+- Prefix/KV cache is most effective when the first N tokens are repeated (we’ve seen 20–40% token savings for templated flows and up to 65% when long static context is reused).
+- For your workflows (mix of repeated forms + dynamic content) we modeled two cache tiers: prefix cache (fast hit, 30% saving) and session KV reuse (moderate hit, 15% saving). The attached model includes toggles for both.
+
+3) Batching guidance:
+- Server-side batching helps when you can accept slight added latency (~50–150ms) and have many short calls. For your nightly ingestion, batching groups of ~8–12 reduces GPU overhead and can improve tokens/$ by ~12–18% on throughput limited runs.
+- Note: batching has diminishing returns on long multi-turn flows; we included a scenario that disables batching for >=800-token calls.
+
+4) Unit economics outputs included in CSV:
+- tokens_per_call (expected/worst), calls_per_day, tokens_per_day, tokens_per_dollar, monthly_cost_estimate at different SLOs.
+
+Actionable items for MAP v0: Ben to finalize CSV; Karthik to add latency/SLA rows (p50/p95) and quantization notes; Hannah/Monica to produce MAP milestones sheet.
+
+Ben
+Ben Carter
+Solutions Engineer, Redwood Inference
+[attachment: orion_token_econ_model.csv (csv)]
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Ben Carter <ben.carter@redwood.com>, Hannah Schmitt <hannah.schmitt@redwood.com>, Liz Green <liz.green@orionhealth.com>
+Date: Thu, 25 Mar 2026 08:24:00 -0700
+Subject: Re: Pilot MAP & evaluation — latency & quantization notes
+
+Liz / team — small addendum to the econ model with runtime details that affect tokens/$ and feasibility for your SLA: 
+
+- Quantization: the recommended 4-bit quantized variant reduces GPU memory and cost by ~20–30% for inference while keeping accuracy loss <1.5% for most prompts (we include a column in the CSV showing tokens per GPU-second).
+- KV cache hit model: assume a distribution where 40% sessions get a >60% prefix hit, 35% get a 20–40% hit, rest <10%. The model outputs expected token savings across that distribution.
+- Batching latency impact: p50 latency increases ~30ms for batches of 10 on our test infra; p95 sees ~80ms uplift under high concurrency. We included both p50/p95 lines so procurement can see tradeoffs between cost and SLO.
+
+Small operational ask for evaluation: please provide a sample of 200 representative requests we can use to seed the holdout set (any PII should be redacted). We’ll run the eval against that set and a production-like traffic generator for the nightly 15k run.
+
+I’ll push an updated CSV and a short latency appendix to the Drive by 09:00 PT.
+
+—Karthik
+Karthik Iyer
+Senior Applied ML Engineer, Redwood Inference
+[attachment: eval_latency_appendix.pdf (pdf)]
+From: Liz Green <liz.green@orionhealth.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.com>, Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Thu, 25 Mar 2026 09:45:00 -0700
+Subject: Re: Pilot MAP & evaluation — token econ (v0) attached
+
+Thanks — this is exactly what procurement asked for. Two quick confirmations before we lock the MAP: 
+1) If we enable prefix caching + batching per your recommended knobs, can you provide an expected tokens/$ for our expected profile (15k nightly; avg 300 tokens/call)? We need a single number procurement can plug into the budget.
+2) We’ll share 200 redacted sample requests by EOD today.
+
+If you can include a conservative tokens-per-dollar line (we’d prefer to see worst-case and expected) and a short sentence we can paste into the procurement packet about fallback policies (e.g., if Dedicated capacity is hit we fall back to a cheaper quantized hosted variant), procurement will be comfortable moving to legal review.
+
+If we stay on this schedule we’ll be able to sign by Apr 15 (procurement wants the 16th as buffer). Can the MAP call out Apr 15 as target close?
+
+Liz
+Liz Green
+Head of Strategic Programs — Orion Health
+
+On Wed, Mar 24, 2026 at 10:16 AM Ben Carter <ben.carter@redwood.com> wrote:
+> Hi all — attaching the token econ CSV (orion_token_econ_model.csv) and a short readme. High-level notes:
+> 
+> [snip — see attachment]
+> 
+> Ben
+> [attachment: orion_token_econ_model.csv (csv)]

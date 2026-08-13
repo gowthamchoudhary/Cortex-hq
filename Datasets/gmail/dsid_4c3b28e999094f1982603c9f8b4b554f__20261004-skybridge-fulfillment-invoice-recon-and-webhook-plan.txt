@@ -1,0 +1,126 @@
+AWS Marketplace fulfillment & invoice reconciliation: webhook payload + PO flow
+
+From: Rafael Mendes <rafael.mendes@redwood.ai>
+To: Laura Kim <laura.k@skybridge.ai>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Sun, 4 Oct 2026 09:12:00 -0700
+Subject: AWS Marketplace fulfillment & invoice reconciliation: webhook payload + PO flow
+
+Hi Laura,
+
+Thanks again for the call last week — following up with a concrete proposal for the Marketplace metering + fulfillment integration and the invoice reconciliation path so procurement and finance have something to review. Summary of what we need to align on: 
+
+1) Fulfillment / entitlement mapping
+   - We will map your SaaS SKUs (product-seat, pro-api-call, enterprise-seat) to AWS Marketplace SKUs.
+   - Entitlements are issued as marketplace tokens (AWS entitlement records). Redwood will accept entitlement checks during runtime and will also expose a fulfillment webhook for confirmation events.
+
+2) Metering events and deduping
+   - Metering events will POST to our webhook endpoint: /marketplace/metering/event.
+   - Payload will include: customer_id, marketplace_sku, timestamp_iso, usage_quantity, event_id (UUID). Redwood will dedupe on event_id + marketplace_sku to prevent double-billing.
+
+3) Invoice reconciliation and PO process
+   - Monthly invoice generation on your side (SkyBridge) should include the Marketplace SKU and the AWS Marketplace chargeback reference ID.
+   - For customers using POs, we need a sample PO + invoice format to validate mapping. Can you share your procurement template?
+
+4) Security & test harness
+   - Webhook signing (HMAC-SHA256) and IP allowlist; TLS 1.2+.
+   - We can provide a sandbox fulfillment account and test dataset to exercise reconciliation.
+
+Please see the attached integration_spec_v1.pdf for the full payload schema and sample events. Action items for SkyBridge: 1) confirm PO/invoice sample 2) indicate whether you will use seat-based or API-usage-based SKUs for the initial launch 3) confirm a procurement contact for DocuSign amendment to the SaaS contract.
+
+Happy to hop on a call next week to walk procurement/legal through the flow. Proposed times: Tue 10/6 10:00-11:00 PT or Wed 10/7 14:00-15:00 PT.
+
+Best,
+Rafael
+Director, Cloud Marketplace Integrations
+Redwood Inference
+[Attachment: integration_spec_v1.pdf (application/pdf)]
+From: Laura Kim <laura.k@skybridge.ai>
+To: Rafael Mendes <rafael.mendes@redwood.ai>
+Date: Mon, 5 Oct 2026 11:03:00 -0700
+Subject: Re: AWS Marketplace fulfillment & invoice reconciliation: webhook payload + PO flow
+
+Thanks Rafael — this is very helpful. A few clarifying questions from procurement/finance: 
+
+- We have a hybrid model: enterprise customers are seat-licensed (annual PO) while some mid-market customers are per-invocation (monthly metered). For the first listing we expect to support both. Do you recommend separate Marketplace SKUs per billing model or a single SKU with plan attributes?
+
+- Free-tier / trial accounts: how should trial entitlements be represented so they do not generate metering charges?
+
+- Procurement asked for a sample invoice and the PO flow: attaching our procurement template (skybridge_procurement_terms.docx). For DocuSign/contract amendments, loop in legal: sarah.legal@skybridge.ai (cc'd on our side).
+
+We can do Wed 10/7 14:00 PT. I’ve penciled it in. Please send a calendar invite.
+
+Laura
+Head of Partnerships
+SkyBridge AI
+[Attachment: skybridge_procurement_terms.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)]
+From: Rafael Mendes <rafael.mendes@redwood.ai>
+To: Laura Kim <laura.k@skybridge.ai>
+Cc: Kimberly Park <kimberly_park@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Tue, 6 Oct 2026 08:47:00 -0700
+Subject: Re: AWS Marketplace fulfillment & invoice reconciliation: webhook payload + PO flow
+
+Hi Laura — great questions. Short answers up front, details below.
+
+- Separate SKUs: we recommend separate Marketplace SKUs per pricing model (seat vs metered). It makes reporting and chargeback simpler for AWS and for downstream invoicing.
+- Trials: represent trials as entitlement records with a "trial" flag set true; our metering pipeline will ignore events for entitlements with trial=true.
+
+Details and next steps:
+- SKU strategy: create distinct SKUs (e.g., SB-ENTERPRISE-SEAT, SB-METERED-API) and use plan attributes for tiers. This lets you run promotions/discounts without changing fulfillment mapping.
+- Webhook sample: see page 3 of the attached spec for a signed webhook example. Minimal payload example: {"customer_id":"sb-cust-123","marketplace_sku":"SB-METERED-API","timestamp":"2026-09-30T23:59:59Z","usage_quantity":100,"event_id":"550e8400-e29b-41d4-a716-446655440000"}.
+- Test plan: Redwood provides a sandbox fulfillment tenant + sample metering CSV for you to ingest and validate invoice mapping.
+
+Action items we’ll do before Wed call:
+- Redwood: send calendar invite for Wed 10/7 14:00 PT; prepare sandbox credentials and a one-page invoice sample.
+- SkyBridge: confirm which SKU names you prefer and provide procurement PO format (thanks for the doc).
+
+Thanks — invite coming shortly.
+
+Rafael
+Director, Cloud Marketplace Integrations
+Redwood Inference
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Laura Kim <laura.k@skybridge.ai>, Rafael Mendes <rafael.mendes@redwood.ai>
+Cc: Monica Patel <monica_patel@redwood.ai>
+Date: Thu, 8 Oct 2026 10:22:00 -0700
+Subject: Re: AWS Marketplace fulfillment & invoice reconciliation: webhook payload + PO flow
+
+Hi Laura — quick technical checklist from our fulfillment/ops side to make the Wed call efficient: 
+
+1) Webhook security
+   - Provide the HMAC secret rotation window you require. Redwood supports rotating secrets with overlapping validity windows.
+   - We will sign events with X-Redwood-Signature and validate at your end.
+2) Payload fields we require for reconciliation
+   - marketplace_sku, event_id, customer_id, aws_chargeback_ref (when available), usage_quantity, invoice_period_start/end.
+3) Failure & retry semantics
+   - We will retry on 5xx with exponential backoff up to 5 attempts; we provide a dead-letter feed for events that fail permanently.
+4) Compliance evidence
+   - Procurement asked about SOC 2 evidence — Rafael, can we confirm the link to our SOC2 report and whether SkyBridge needs an on-demand upload to their vendor portal?
+
+If you prefer, we can include a short JSON schema in the call notes and lock down required/optional fields.
+
+Thanks,
+Kimberly Park
+Head, Marketplace Operations
+Redwood Inference
+From: Laura Kim <laura.k@skybridge.ai>
+To: Rafael Mendes <rafael.mendes@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Cc: SkyBridge Procurement <procurement@skybridge.ai>, Sarah Legal <sarah.legal@skybridge.ai>
+Date: Mon, 12 Oct 2026 16:38:00 -0700
+Subject: Re: AWS Marketplace fulfillment & invoice reconciliation: webhook payload + PO flow
+
+Thanks everyone — good call today. A couple follow-ups we captured: 
+
+- Procurement confirmed they need a sample invoice (line items must map to Marketplace SKU + AWS chargeback ref). Rafael, can you share the one-page invoice sample you mentioned?
+- Legal will review the DocuSign amendment; Sarah (cc) will coordinate on clauses for data handling and termination.
+- For trials, SkyBridge will send us a list of trial customer IDs so we can verify the "trial" entitlement behavior in sandbox.
+
+Next steps:
+- SkyBridge to send preferred SKU names + completed procurement template by EOD 10/14.
+- Redwood to share sandbox credentials, the HMAC secret rotation doc, and the one-page invoice sample by EOD 10/13.
+
+Appreciate the quick turnaround — we want to finalize the marketplace listing by end of Oct to align with our Oct marketing window.
+
+Laura
+Head of Partnerships
+SkyBridge AI

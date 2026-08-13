@@ -1,0 +1,143 @@
+Realtime throughput surge causing socket/chunked-transfer timeouts — SLA impact
+
+From: Jamie Lin <jamie@slateai.com>
+To: neha_kapoor@redwood.ai
+Date: 2027-05-01T08:14:00-07:00
+Subject: Realtime feed — large gaps and 502 spikes since 07:50 PDT
+
+Hi Neha,
+
+We started seeing repeated long pauses in the realtime assistant responses from ~07:50 this morning. The client-side shows token emission stalls of 5–20s, and our dashboard reports a spike in 502/504 during the same window. Throughput also briefly doubled due to a promotional campaign, but the system should tolerate that under our committed capacity.
+
+Attached: slate_logs_0501.zip (sample request traces + proxy logs).
+
+Can you confirm if this is an infra-side degradation or something on our integration? We need an ETA — this is impacting active users and a live demo in 2 hours.
+
+Thanks,
+Jamie Lin
+SRE Lead, Slate AI
+
+
+From: neha_kapoor@redwood.ai
+To: Jamie Lin <jamie@slateai.com>
+Cc: vivek_kulkarni@redwood.ai, dylan_brooks@redwood.ai, grace_oconnor@redwood.ai
+Date: 2027-05-01T08:22:00-07:00
+Subject: Re: Realtime feed — large gaps and 502 spikes since 07:50 PDT
+
+Jamie — thanks for the quick heads up and for the logs. I’ve opened an internal incident and looped engineering and CS. Initial ask: can you confirm whether the spike in client sessions correlates with a single tenant or is multi-region? Your logs say origin-region us-west.
+
+Immediate plan (short):
+- Engineering triage live traces and kernel selection / routing rules (Vivek)
+- Triage network/proxy timeouts and chunked-transfer errors (Dylan)
+- CS will offer a short maintenance window if we need to roll a canary rollback (Grace)
+
+We’ll aim for a 30–45m update. I’ll escalate to the on-call execs if we hit SLA impact.
+
+Neha
+Account Lead, Redwood Inference
+Phone: +1-415-555-0192
+
+
+From: vivek_kulkarni@redwood.ai
+To: neha_kapoor@redwood.ai, dylan_brooks@redwood.ai
+Cc: grace_oconnor@redwood.ai
+Date: 2027-05-01T08:37:00-07:00
+Subject: Re: Realtime feed — large gaps and 502 spikes since 07:50 PDT
+
+On 05/01 08:14 Jamie reported token emission stalls and 502s. Quick findings from initial traces:
+- Token emit latency skyrockets at ~3–4s per token for affected shards; normal is <50ms.
+- Proxy (edge) shows repeated chunked-transfer timeouts: client kept the connection open, but our edge stopped flushing chunks for long pauses.
+- There is a correlated surge in in-flight requests ~x2.1 at 07:48 that aligns with the promo spike they mentioned.
+
+Hypothesis: a routing rule change we pushed yesterday adjusted the batching window aggressively for medium-length sessions. Under sudden throughput increase, the batch coalescer is holding chunks longer which exposes upstream keepalive/chunked timeouts and increases memory pressure. Kernel selection logs show fallback to a slower attention kernel for some model variants under those sequence lengths.
+
+Immediate mitigations I recommend (ordered):
+1) Reduce the batch coalescing window to the previous setting (rollback last night’s routing policy) — safe, quick.
+2) Temporarily lower max-inflight per connection for Slate to throttle burst at edge.
+3) Enable immediate emit flush on heartbeat miss (duck-tape but reduces user-visible silence).
+4) If needed, rollback the kernel selection tweak for the affected model variant (higher risk, needs canary).
+
+I’m collecting full traces and will upload to Datadog shortly. Sharing link when ready.
+
+— Vivek
+Sr. SRE, Serving Runtime
+
+
+From: dylan_brooks@redwood.ai
+To: neha_kapoor@redwood.ai, vivek_kulkarni@redwood.ai
+Cc: grace_oconnor@redwood.ai
+Date: 2027-05-01T09:05:00-07:00
+Subject: Re: Realtime feed — large gaps and 502 spikes since 07:50 PDT
+
+Adding infra specifics (from edge + gateway traces):
+- Nginx proxy logs show repeated 'upstream prematurely closed connection' across a ~7m window. Chunked responses are not being re-streamed once the coalescer releases a large batch.
+- I see an uptick in kernel queue saturation for model-variant rwd-2a-quant; latency tail jumps when sequence length > 800 tokens (we typically see 200–400).
+- There was a config push (INF-7932) at 23:10 UTC yesterday that adjusted session-combining thresholds.
+
+Action I started:
+- Reverted session-combining threshold via hot-config (INF-7932 revert), staged to 10% canary at 09:00 PDT across us-west. Rolling to 100% now.
+- Dropping max-inflight to 8 for Slate customer on the edge (effective immediately).
+
+If the revert does not improve tail latency within 10–15m, we should do a quick canary rollback of the kernel selection change — that will need a 15–20m coordination with runtime on-call.
+
+Dylan
+Platform Reliability Engineer
+
+
+From: Tom Erickson <terickson@slateai.com>
+To: neha_kapoor@redwood.ai
+Cc: Jamie Lin <jamie@slateai.com>, procurement@slateai.com
+Date: 2027-05-01T09:27:00-07:00
+Subject: Re: Realtime feed — large gaps and 502 spikes since 07:50 PDT
+
+Thanks Neha/Dylan/Vivek — appreciate the fast response. We can accept a 30m maintenance window, but two asks from us:
+1) If SLA is breached, we will expect remediation credits per our agreement (please confirm the process).
+2) We need a public-facing status blurb we can share with our stakeholders for the demo — can you provide an explanation we can use?
+
+Context: our internal telemetry shows a user spike starting 07:46 PDT; concurrent sessions peaked at ~2.3x usual. We are prepared to throttle on our side if you recommend, but prefer Redwood mitigations so the integration does not have to change mid-demo.
+
+Tom Erickson
+Head of Product, Slate AI
+
+
+From: neha_kapoor@redwood.ai
+To: vivek_kulkarni@redwood.ai, dylan_brooks@redwood.ai, grace_oconnor@redwood.ai
+Cc: Tom Erickson <terickson@slateai.com>, Jamie Lin <jamie@slateai.com>, procurement@slateai.com
+Date: 2027-05-01T12:02:00-07:00
+Subject: Re: Realtime feed — large gaps and 502 spikes since 07:50 PDT
+
+Summary and ask for exec attention / approvals:
+
+What happened:
+- A recent config change to session-combining thresholds interacted poorly with a customer-driven throughput surge, leading to extended batch coalescing and chunked-transfer timeouts at the edge. That caused token emission pauses and a temporary rise in 5xx rates.
+
+What we did (completed):
+- Hot-config revert of session-combining thresholds (INF-7932) rolled to 100% in us-west.
+- Edge throttle (max-inflight=8) applied to Slate to avoid immediate re-flooding.
+- Canary rollback of kernel-selection pending only if we see no improvement in 10–15m.
+
+Current customer impact:
+- Customer reports degraded UX during a ~7m window; Slate had a live demo scheduled but can accept a short maintenance window.
+- We have sample traces and SLO-impact snapshot attached (slo_impact_snapshot.png).
+
+Recommended exec approvals needed now:
+1) Approve proactive credit offer: recommend 10% of last month’s monthly invoice as a good-faith credit while we run a full postmortem.
+2) Approve external status blurb (draft below) to share with Slate stakeholders.
+3) Priority postmortem: assign 2 engineering engineers + runtime lead; target interim postmortem in 48h, full RCA in 7d.
+
+Draft status blurb (suggested):
+"At 07:50 PDT, a configuration update interacted with a customer traffic surge which temporarily increased latency and 5xx rates for streaming sessions. We reverted the config and applied throttles; user impact was limited to a short window and we are issuing a formal postmortem."
+
+Please reply with approvals for item 1 and 2 and any alternative remediation guidance. I’ll prepare the customer-facing note once you confirm.
+
+Neha
+Account Lead, Redwood Inference
+
+On 2027-05-01T09:05:00-07:00 Dylan Brooks wrote:
+> Adding infra specifics (from edge + gateway traces):
+> - Nginx proxy logs show repeated 'upstream prematurely closed connection' across a ~7m window. Chunked responses are not being re-streamed once the coalescer releases a large batch.
+> - I see an uptick in kernel queue saturation for model-variant rwd-2a-quant; latency tail jumps when sequence length > 800 tokens (we typically see 200–400).
+> - There was a config push (INF-7932) at 23:10 UTC yesterday that adjusted session-combining thresholds.
+
+Attachments: slate_logs_0501.zip, slo_impact_snapshot.png, postmortem-draft.md
+

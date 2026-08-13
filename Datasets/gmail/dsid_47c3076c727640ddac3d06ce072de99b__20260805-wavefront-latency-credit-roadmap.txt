@@ -1,0 +1,148 @@
+Wavefront latency storm — credit reconciliation & remediation roadmap
+
+From: Alex Park <alex@wavefront.ai>
+To: Stephanie Nguyen <stephanie@redwood.ai>
+Cc: Priya Shah <priya.shah@wavefront.ai>
+Date: Wed, 5 Aug 2026 09:15:00 -0700
+Subject: Production latency & error storm impacting Wavefront — immediate remediation + credits
+
+Hi Stephanie,
+
+We saw a sustained degradation starting late on Aug 3 and continuing into today. Symptoms:
+- 95th/99th percentile tail latency increased from ~120ms to sustained 500–800ms for text-generation endpoints.
+- A spike in 5xx errors (internal metric: request failures up ~6% vs baseline) causing retries and backpressure.
+- Observed throughput reduction ~40% on our primary ingest workload between 03:00–10:00 PT on Aug 4 and intermittent thereafter.
+
+This has materially affected several customer flows — we had to flip to a degraded path for critical flows. Our finance and product teams are asking for the remediation plan and how Redwood will reconcile this under our SLA (we're looking at service credits or refund for the impacted billing period).
+
+Can you confirm triage status, a timeline to restore normal latency/throughput, and an initial credit estimate? We'd like an exec-level call today if possible (Alex, Priya, and our CTO will attend).
+
+I've attached a small sample of traces and a CSV excerpt (wavefront_error_logs.csv) for your debug team.
+
+Thanks,
+Alex Park
+Head of Platform Operations
+Wavefront Systems
+
+Attachments: wavefront_error_logs.csv (csv)
+
+From: Stephanie Nguyen <stephanie@redwood.ai>
+To: Alex Park <alex@wavefront.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Wed, 5 Aug 2026 10:02:00 -07:00
+Subject: Re: Production latency & error storm impacting Wavefront — immediate remediation + credits
+
+Alex — thanks for the signal and the sample logs. Sorry for the impact here; we take this seriously. Quick notes and next steps from Redwood's side: 
+
+1) Triage status: Rishi's on the lead for RCA — he's assembling correlated runtime traces and kernel metrics now.
+2) Immediate mitigation: we've pushed a temporary request-routing rule to route high-priority traffic to a lower-latency model variant and increased per-tenant concurrency ceilings to reduce throttling risk. You should see reduced error rates within 20–30 minutes of this message.
+3) Credit & remediation: Ben and I will own the commercial proposal; Laura will own the ops remediation and timeline. We'll put an initial credit framework on the table in this thread by EOD.
+4) Exec call: are you available today at 16:00 PT? If not, propose two alternate times.
+
+Can you upload the full error slice (the CSV is helpful) and any replay tokens you can share to the Drive link I just created: https://drive.google.com/drive/fake-slo-analysis — we need the full window to run our batch analysis.
+
+I'll keep the thread tight — cc'ing the smallest set of folks to act.
+
+—Stephanie
+Director, Strategic Accounts
+Redwood Inference
+
+On Wed, Aug 5, 2026 at 09:15 AM Alex Park <alex@wavefront.ai> wrote:
+> (original message quoted)
+
+From: Alex Park <alex@wavefront.ai>
+To: Stephanie Nguyen <stephanie@redwood.ai>
+Cc: Priya Shah <priya.shah@wavefront.ai>
+Date: Wed, 5 Aug 2026 12:20:00 -07:00
+Subject: Re: Production latency & error storm impacting Wavefront — immediate remediation + credits
+
+Thanks, Stephanie — posting the fuller slice to the Drive link now. Attaching a cleaned CSV extract as well (wavefront_error_logs.csv).
+
+For transparency: our legal & procurement teams are asking for a provisional credit number so they can begin internal approvals. Our current monthly spend with Redwood is ~$125k; impacted window spans Aug 3 22:45 PT -> Aug 5 07:00 PT (primary hit overnight UTC). We don't yet have a cause but can share spans and retry counts.
+
+We can do the exec call at 16:00 PT. Please send calendar invite.
+
+—Alex
+
+Attachments: wavefront_error_logs.csv (csv)
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Alex Park <alex@wavefront.ai>, Stephanie Nguyen <stephanie@redwood.ai>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Wed, 5 Aug 2026 14:00:00 -07:00
+Subject: Preliminary commercial remediation proposal for Wavefront — please review
+
+Alex / Team — following an internal quick calc based on the window and your reported impact:
+
+Preliminary proposed remediation (subject to RCA and legal sign-off):
+- Credit: 15% credit on the August invoice for the impacted period (equivalent to roughly $18,750 based on your stated $125k run rate).
+- Billing method: apply as a one-time invoice credit; alternatively we can issue an immediate refund if procurement prefers.
+- Additional: 40 hours of white-glove support credited to your account to validate fixes and run post-mortem sharing.
+- Contract amendment: propose a targeted SLA addendum for production-gen endpoints that increases credit multipliers for repeat outages (1.5x after a second breach in a 12-month window).
+
+Operational asks for us to finalize numbers: confirmed list of impacted endpoints, exact invoice period you want the credit applied to, and any cost-offsets you received elsewhere. I've attached a quick workbook (proposed-credit-calculation.xlsx) showing how the 15% was derived from usage slices.
+
+If that looks reasonable from your side we can prepare a DocuSign amendment and route to procurement. If you'd like a higher immediate credit to expedite the legal approval, we can table a counter number pending RCA — say 20% as a provisional offer.
+
+We want to be pragmatic and get you whole. Tell us what expedites your internal approvals.
+
+—Ben Carter
+Enterprise Accounts
+Redwood Inference
+
+Attachments: proposed-credit-calculation.xlsx (xlsx)
+
+On Wed, Aug 5, 2026 at 10:02 AM Stephanie Nguyen <stephanie@redwood.ai> wrote:
+> (ack and mitigation items)
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Alex Park <alex@wavefront.ai>, Ben Carter <ben_carter@redwood.ai>, Stephanie Nguyen <stephanie@redwood.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Wed, 5 Aug 2026 15:30:00 -07:00
+Subject: Ops remediation plan & timeline — Wavefront production impact
+
+Alex — quick ops update and proposed remediation timeline: 
+
+Root-cause hypothesis (interim): a combination of an unexpected kernel selection path under specific sequence-length skew + an aggressive autoscaling cooldown that allowed queue growth and increased tail latency. Rishi's team will finalize RCA after the trace correlation this evening.
+
+Remediation steps (next 72 hours):
+1) Immediate (now): route high-priority traffic to the low-latency model variant (already applied).
+2) Short-term (4–12 hours): adjust autoscaler cooldowns for your tenant and deploy a kernel fallback that was validated in staging (low risk).
+3) Mid-term (24–72 hours): full rollout of an improved kernel selection heuristic, plus a KV-cache warm-up in the serving pool to avoid cold-cache penalties during heavy bursts.
+
+We expect error rates to return to baseline in the short-term window and latency p95/p99 to normalize after the mid-term rollout. Post-mortem will include repro steps and a set of guardrails we recommend adding to your healthchecks.
+
+I've attached an SLO analysis we've prepared (slo-analysis.pdf) and included a timeline for the fix. If you want, we can provision a short Dedicated pool for a week to stabilize critical flows while we roll fixes — Ben can run pricing and a discount on that.
+
+—Laura Bennett
+Principal Customer Reliability Engineer
+Redwood Inference
+
+Attachments: slo-analysis.pdf (pdf)
+
+On Wed, Aug 5, 2026 at 12:20 PM Alex Park <alex@wavefront.ai> wrote:
+> (uploaded logs — confirmed exec call 16:00 PT)
+
+From: Alex Park <alex@wavefront.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Stephanie Nguyen <stephanie@redwood.ai>
+Cc: Priya Shah <priya.shah@wavefront.ai>, Wavefront Procurement <procurement@wavefront.ai>
+Date: Thu, 6 Aug 2026 16:40:00 -07:00
+Subject: Re: Wavefront latency storm — credit reconciliation & remediation roadmap
+
+Thanks for the rapid responses and the remediation timeline. We ran a short validation this morning against the temporary routing and we see meaningful improvement; thank you to the ops team.
+
+Procurement & legal have asked that we accept the preliminary commercial proposal (15% credit + 40 support hours) as the starting point contingent on:
+1) Formal DocuSign amendment with the agreed credit and the wording for the recurrence multiplier (Ben/Stephanie to own).
+2) A final RCA and evidence that the mid-term rollout removes the regression (Laura/Rishi to own).
+3) A one-week Dedicated pool option to test critical flows (Ben to propose pricing/discount).
+
+Please send the DocuSign when ready and route the amendment to procurement@wavefront.ai. We'll sign as soon as legal clears. Also, please include the post-mortem in the Drive link for our internal review.
+
+I'll join the exec call notes and we'll confirm a time for the formal briefing.
+
+—Alex Park
+Head of Platform Operations
+Wavefront Systems
+
+On Thu, Aug 6, 2026 at 08:00 AM Ben Carter <ben_carter@redwood.ai> wrote:
+> (internal thread: preparing DocuSign draft and pricing for Dedicated pool)

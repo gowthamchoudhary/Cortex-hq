@@ -1,0 +1,140 @@
+Order Form SLA: priority routing, maintenance blackout & response ladder
+
+From: Jane Miller <jane.miller@acmepayments.com>
+To: jonas_weber <jonas.weber@redwood.ai>, laura_bennett <laura.bennett@redwood.ai>
+Cc: procurement@acmepayments.com
+Date: Mon, 16 Aug 2026 09:03:00 -0700
+Subject: RE: Order Form SLA — redlines attached
+
+Hi Jonas / Laura,
+
+Thanks for sending the draft. Attached are the procurement/redline pack from our side (Acme_OrderForm_SLA_Redlines_v1.pdf). High level asks:
+- Uptime: Acme is asking to move to a 99.95% monthly uptime guarantee (we currently have 99.9 in the draft).
+- Credits: prefer a linear credit schedule tied to minutes of downtime rather than % buckets.
+- Response times: for P1 incidents we need acknowledgment within 15 minutes and a time-to-restore SLA (we proposed 4 hours).
+- Maintenance: we need a 4-hour maximum rolling maintenance window and a list of blackout days for our retail cutovers in Nov/Dec.
+- Priority routing: we are requesting explicit failover routing to a regional fallback with automated traffic shifting for P1 events.
+
+Can you confirm whether Redwood can accept the uptime/credit formula and the 15‑min P1 ack? If not, please propose alternatives — we are finalizing procurement this month.
+
+Thanks,
+Jane Miller
+Senior Procurement Manager, Acme Payments
+jane.miller@acmepayments.com
+
+[Attachment: Acme_OrderForm_SLA_Redlines_v1.pdf]
+From: jonas_weber <jonas.weber@redwood.ai>
+To: Jane Miller <jane.miller@acmepayments.com>
+Cc: laura_bennett <laura.bennett@redwood.ai>, karthik_iyer <karthik_iyer@redwood.ai>
+Date: Mon, 16 Aug 2026 11:20:00 -07:00
+Subject: Re: Order Form SLA — redlines attached
+
+Hi Jane — thanks for the clear list and the PDF. Quick initial responses below; engineering/legal are cc'ed to confirm technical feasibility and any contract constraints.
+
+- Uptime: We typically publish 99.9% as the baseline for hosted customers. 99.95% is achievable in many Dedicated deployments but is tied to reserved capacity/committed pool sizing. We can offer 99.95% for a Dedicated plan with a modest commit uplift; if Acme prefers to stay on Hosted the credit model would differ.
+
+- Credits: We prefer the bucketed credit model used in our order forms (e.g., 99.9–99.95 -> X%; 99.5–99.9 -> Y%). That said, we can model a minutes-based linear schedule if required — engineering needs to validate telemetry granularity for per-minute calculations.
+
+- Response times: 15‑min ack for P1 is aggressive but reasonable for enterprise customers on a premium support tier; the key is defining P1 precisely (impact to production traffic vs degraded performance). Time-to-restore (4 hours) is scope-dependent — for multi-region failover it could be faster; for data-plane fixes that require rollforward/rollback it may vary.
+
+- Maintenance: We can commit to a max 4‑hour typical maintenance window but need to retain the right to extend during emergency security patches with notification. For Nov/Dec blackout days we can add a calendar carveout (please send the specific dates).
+
+- Priority routing / failover: We support traffic routing policies (regional fallback) and can add an explicit clause that Redwood will enable automated traffic shift to the next-best region on P1 events for an agreed subset of services. That may require a dedicated capacity reservation to guarantee capacity in fallback region.
+
+I've attached an annotated response ladder doc with proposed language (Redwood_SLA_ResponseLadder_annotated.docx). Next steps: Laura, can you confirm legal's baseline on credits and whether we need to involve sales ops for Dedicated pricing? Karthik, quick sanity-check on telemetry and per-minute credit calc?
+
+Thanks,
+Jonas Weber
+Head of Customer Success (SaaS)
+Redwood Inference
+jonas.weber@redwood.ai
+
+[Attachment: Redwood_SLA_ResponseLadder_annotated.docx]
+From: laura_bennett <laura.bennett@redwood.ai>
+To: jonas_weber <jonas.weber@redwood.ai>, karthik_iyer <karthik_iyer@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Mon, 16 Aug 2026 12:05:00 -07:00
+Subject: Fwd: Order Form SLA — redlines attached
+
+Jonas — forwarding our legal take. High-level legal positions below; please keep language tight.
+
+----- Forwarded message -----
+From: Marissa Cole <marissa_cole@redwood.ai>
+Date: Mon, 16 Aug 2026 12:02:00 -07:00
+Subject: Re: Order Form SLA — redlines attached
+
+Jonas / Laura — legal view:
+- Credits: we cannot accept an uncapped, per-minute linear credit schedule; propose a graduated cap (max credits per month equal to X% of monthly fees).
+- Uptime: 99.95% is acceptable for Dedicated but we need to attach a table mapping credits to %-ranges and a cap to protect against indemnity/risk.
+- Response ladder: 15-min ack OK for enterprise premium; all P1 definitions must include specific customer-visible impact criteria.
+- Maintenance extensions: Redwood needs the ability to extend for critical security patches; limit extensions to 'reasonable' and require post-event engineering notes.
+- Priority routing: commit to enabling routing but note it is an operational feature — require an implementation plan and capacity reservation clause.
+
+I drafted alternative wording: capped-credit schedule, a reference to Dedicated reserve for 99.95, and an explicit annex with blackout dates and a maintenance notification cadence. I put suggestions inline in the doc Jonas attached.
+
+Marissa
+General Counsel, Redwood Inference
+marissa_cole@redwood.ai
+
+Laura
+Pls confirm whether we will need to escalate to Sales for a Dedicated price uplift if we accept 99.95. Also confirm whether we can agree to a max 4‑hour maintenance window in language while preserving emergency extension rights.
+
+Laura Bennett
+VP, Customer Ops
+laura.bennett@redwood.ai
+From: karthik_iyer <karthik_iyer@redwood.ai>
+To: laura_bennett <laura.bennett@redwood.ai>, jonas_weber <jonas.weber@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Mon, 16 Aug 2026 14:10:00 -07:00
+Subject: Re: Order Form SLA — redlines attached
+
+Quick tech validation from infra:
+- Per-minute credits: we produce telemetry at sub-minute resolution (10s windows) in our tracing pipeline, but the billing pipeline aggregates hourly by default. Engineering can produce a per-minute downtime calculation for the SLA but it will add a small processing job and an audit trail (we should budget a one-time implementation task).
+- 99.95%: with redundant regional pools and reserved capacity (Dedicated) we can hit 99.95 monthly. On Hosted non-reserved we cannot guarantee that without increased risk of noisy neighbors.
+- 15‑min P1 ack: we have on-call routing for premium customers; 15-min ack is operationally feasible if Acme purchases the premium support add-on.
+- Automated traffic shift: supported but requires pre-warming of fallback pools or a guaranteed burst capacity clause.
+
+Recommendation: Offer Acme two options in the order form:
+1) Dedicated option: 99.95% uptime, 15-min P1 ack, linear-ish credits mapped into capped buckets, automatic regional failover with reserved standby capacity (price uplift).
+2) Hosted option: 99.9% uptime, standard bucketed credits, 30-min P1 ack, scheduled maintenance notice 72 hours and blackout day carveouts.
+
+If Acme wants the 99.95 SLA without a Dedicated commit we need a very clear price/credit imbalance clause.
+
+– Karthik
+Principal Infra Eng
+karthik_iyer@redwood.ai
+From: jonas_weber <jonas.weber@redwood.ai>
+To: Jane Miller <jane.miller@acmepayments.com>
+Cc: Rob Patel <rob.patel@acmepayments.com>, laura_bennett <laura.bennett@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>, karthik_iyer <karthik_iyer@redwood.ai>
+Date: Tue, 17 Aug 2026 08:30:00 -07:00
+Subject: Re: Order Form SLA — redlines attached
+
+Hi Jane — apologies for the quick back-and-forth, and thanks for the clarity. We've reviewed internally and can propose the following compromise for the order form:
+
+Option A — Dedicated (recommended by Redwood):
+- Uptime: 99.95% monthly
+- Credits: graduated bucket schedule (we include a linearized annex for clarity) with a monthly cap equal to 50% of monthly recurring fees (to align risk)
+- P1: 15-min ack, Target restore (best-effort) 4 hours; guaranteed time-to-ack defined in SLA; restore window will have operating notes and a playbook annex
+- Maintenance: typical maintenance windows up to 4 hours; emergency security patches may extend with notification and post-mortem
+- Priority routing: automated regional failover enabled; requires reservation of X standby vCPU/GPU capacity (detailed in annex)
+- Pricing: Dedicated uplift to be provided by Sales Ops — we will follow up with a price sheet and commit term options.
+
+Option B — Hosted (if Acme prefers no committed capacity):
+- Uptime: 99.9% monthly
+- Credits: standard bucket model with capped credits tied to ranges
+- P1: 30-min ack
+- Maintenance: standard 72-hour notice and agreed blackout day carveouts
+- Priority routing: supported but best-effort without guaranteed reserved capacity
+
+Next steps:
+1) Jane — confirm which option Acme prefers (Dedicated v Hosted) and provide the blackout calendar for Nov/Dec.
+2) If Dedicated, we'll route to Sales Ops for pricing and produce a tight SLA annex (we'll include a capped-credit table to address legal's concern).
+3) We'll deliver a redline of the order form with inline wording by EOD Wednesday.
+
+If that aligns, I'll put a one-page summary + annex in Drive and send a DocuSign link once pricing is confirmed.
+
+Cheers,
+Jonas
+Head of Customer Success (SaaS)
+Redwood Inference
+jonas.weber@redwood.ai
+
+[Links: https://drive.redwood.com/drive/Acme/OrderForm_SLA_v2 | HubSpot ACM-4721]

@@ -1,0 +1,101 @@
+Per-route token budget / routing behavior — field triage & product ask
+
+From: Raj Patel <raj@zenda.com>
+To: avery_johnson@redwood.ai
+Date: 2026-10-29T16:15:00-07:00
+Subject: Increasing p99s during peak — can per-route budgets help?
+
+Hi Avery,
+
+We're seeing periodic spikes in tail latency for our inference calls when we hit our daily traffic peaks. p95 is fine but p99s jump up to ~1.6s for some routes. We've attached a short p99 trace and a small HAR of a representative session.
+
+Context:
+- Using model: gpt-redwood-2-7b (hosted)
+- Calls are batched by your runtime; many small requests get coalesced into larger batches across customers
+- The spikes correlate with an internal scheduled job that emits a short burst of 20k small requests to a /summarize route
+
+Ask: can Redwood provide a per-route or per-customer token budget or a soft-quota hook so we can avoid other critical routes getting delayed during those bursts? Short of that, a recommended mitigation (header, flag, or config) would help.
+
+Appreciate if you can loop in runtime/product — this is blocking our demo next week.
+
+Thanks,
+Raj
+Senior Engineering Manager, Zenda Health
+[Attachment: p99_latency_trace.txt (text/plain, 24KB)]
+[Attachment: capture.har.zip (application/zip, 150KB)]
+From: Avery Johnson <avery_johnson@redwood.ai>
+To: Raj Patel <raj@zenda.com>
+Cc: karthik_iyer@redwood.ai, soojin_lee@redwood.ai
+Date: 2026-10-29T17:02:00-07:00
+Subject: Re: Increasing p99s during peak — can per-route budgets help?
+
+Raj — thanks for the quick note and the traces. Looping in Karthik (PM) and Soojin (runtime) to triage and propose options.
+
+Immediate plan (proposed):
+1) Soojin — can you review the attached p99 trace and confirm whether the tail is caused by cross-tenant batching behavior or model-side scheduling?
+2) Karthik — if runtime cannot provide a quick isolation knob, we need a short-term product ask: a per-route "soft budget" header or route flag that opts a route into lower batching priority.
+3) Raj — can you confirm which routes are highest priority for Zenda during your demo window and if you can apply a short TTL for the scheduled job?
+
+I'll coordinate a 30-min triage call if needed tomorrow.
+
+—Avery
+Solutions Engineer, Redwood Inference
+Redwood Inference | https://redwood.ai
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Avery Johnson <avery_johnson@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>
+Date: 2026-10-29T18:10:00-07:00
+Subject: Re: Increasing p99s during peak — can per-route budgets help?
+
+Thanks for the context. A few clarifying Qs from product side before we propose changes:
+
+1) Desired semantics: are you asking for (A) a hard per-route token cap that rejects/queues excess requests, (B) a soft priority hint so runtime batches but deprioritizes those requests, or (C) an isolation toggle that pins routes to their own batching lane (higher cost)?
+2) Time horizon: do you need this as a short-term workaround for the demo (we can implement feature flag + header in a few days for soft priority), or a permanent control in the console/config?
+3) Backwards compatibility: would Zenda be OK with a header (e.g., X-Redwood-Route-Priority: high|low|isolate) or do you need this surfaced as a per-route setting in Console?
+
+From a product POV: (B) soft-priority header + a telemetry switch is the fastest; (C) full isolation will need infra work and cost discussion.
+
+If we go soft-priority header, we should also add an SLA note for customers on Dedicated / Private.
+
+Karthik
+Product Manager — Serving Runtime, Redwood Inference
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Avery Johnson <avery_johnson@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Raj Patel <raj@zenda.com>
+Date: 2026-10-30T09:40:00-07:00
+Subject: Re: Increasing p99s during peak — can per-route budgets help?
+
+I've pulled the trace — thanks Raj. Quick notes from runtime triage:
+
+- The p99 spikes look like two things combined: (1) large cross-tenant coalesced batches where a long prefix from one request extends kernel execution for others, and (2) occasional preemption when GPU utilization is saturated and weights are swapped for quantized kernels.
+- The current runtime uses a dynamic batching window and groups requests by model and sequence length; we don't currently support per-route token budgets.
+
+Short-term options (hours-days):
+1) Soft priority header (fast): implement v1 where requests with X-Redwood-Priority: low are placed at the back of the batching queue. No hard guarantees; this requires a small routing change (~1 day dev + 1 day canary).
+2) Per-route isolation toggle (medium): pin a specific route to a dedicated batching lane to avoid coalescing with noisy neighbors. This gives stronger isolation but consumes more capacity and needs infra changes (~2-3 sprints).
+3) Client-side mitigation (immediate): add a small jitter or split the scheduled job into micro-bursts to reduce instantaneous concurrency.
+
+I've opened a Jira to track the work: SUP-3142 — "Per-route priority/isolation for batching". I've attached the p99 trace and included a short snippet of the kernel timing that shows the long tail (see attachment). For the demo, option 1 (soft header) seems fastest and least disruptive.
+
+Request for Raj: can you share the rate profile for the scheduled job (peak qps, typical request token sizes)? That will help size the lane if we go for isolation.
+
+—Soojin
+Senior Runtime Engineer, Redwood Inference
+[Attachment: p99_latency_trace.txt (text/plain, 24KB)]
+From: Avery Johnson <avery_johnson@redwood.ai>
+To: Raj Patel <raj@zenda.com>, Karthik Iyer <karthik_iyer@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>
+Date: 2026-10-31T17:40:00-07:00
+Subject: Re: Increasing p99s during peak — can per-route budgets help?
+
+Thanks everyone — plan and next steps:
+
+- Soojin: Proceed with a scoped v1 for a soft-priority header (X-Redwood-Priority: low) and a small canary rollout to Raj's account. Please add a short telemetry flag so we can measure p99 before/after. Jira: SUP-3142 (assigned to Soojin).
+- Karthik: I'll work with you to scope the Console UX for a per-route toggle (longer term) and include cost/SL implications.
+- Raj: please send the scheduled job rate profile (qps and token-size distribution). If you can postpone or throttle the non-critical job for the demo window, we'll prioritize the canary this week.
+- I'll schedule a 30-min call Wednesday 10/11 PT to align engineering + product + Zenda. HubSpot link to the deal and notes: https://app.hubspot.com/contacts/123456/company/98765
+
+Thanks — will follow up with a calendar invite and the SUP-3142 link.
+
+—Avery
+Solutions Engineer, Redwood Inference
+[Related: https://redwood.atlassian.net/browse/SUP-3142]

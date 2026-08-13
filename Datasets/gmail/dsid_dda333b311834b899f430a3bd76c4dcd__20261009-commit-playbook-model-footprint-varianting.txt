@@ -1,0 +1,132 @@
+Commit sizing playbook for Genomix.ai — model footprint & varianting
+
+From: Claire Reynolds <claire@genomix.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Date: 2026-10-09T08:12:00-07:00
+Subject: Committed capacity question — 70k context model variants
+
+Hi Jordan,
+
+Thanks again for the walkthrough yesterday. We run a multi-tenant inference flow for variant calling that needs a 70k token context window for a subset of requests and a 8k fast path for the rest. We want a committed pool (reserved monthly) and need a clear sizing recommendation tied to:
+- model variants (full 70k vs 8k)
+- KV cache assumptions (per-request vs shared prefix caching)
+- quantization options (bf16/FP16 vs 8-bit/4-bit)
+
+Primary asks:
+1) Example GPU counts for a 1M monthly token budget (est. 10k qps short requests / 400 long requests per day).
+2) Memory footprint per variant + recommended quantization to hit price targets.
+3) A short playbook for commit sizing we can include in procurement.
+
+Can you send a simple committed sizing playbook and any tables you have? Procurement is looped (procure@genomix.ai).
+
+Best,
+Claire
+Claire Reynolds
+Head of Platform
+Genomix.ai
+
+Attachments: none
+
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Karthik Iyer <karthik.iyer@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Cc: Claire Reynolds <claire@genomix.ai>
+Date: 2026-10-09T09:14:00-07:00
+Subject: Fwd: Committed capacity question — 70k context model variants
+
+Team — forwarding Genomix's ask. High level asks: GPU counts for a committed pool sized to their traffic profile, per-variant memory footprints and quantization recommendations, and a one-page playbook suitable for procurement.
+
+Notes from the call: Claire prefers a single reserved pool with automatic routing to quantized variants for non-critical low-latency calls. They are price sensitive but need the 70k path for heavy retrospection jobs.
+
+Please reply inline with numbers and any assumptions. Marcus/Laura if you have existing CSV numbers, attach. I will consolidate and send back to Claire.
+
+—Jordan
+jordan.blake@redwood.ai | Account Exec, Redwood Inference
+
+On Fri, Oct 9, 2026 at 08:12 AM Claire Reynolds <claire@genomix.ai> wrote:
+> (original message included)
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: 2026-10-09T11:02:00-07:00
+Subject: Re: Fwd: Committed capacity question — 70k context model variants
+
+Jordan / team — I ran a quick footprint calc with conservative KV cache assumptions. Key assumptions up front:
+- Model: gen-70k-v1 (architecture similar to LLaMA derivative), baseline FP16 weights ~60GB.
+- KV cache: 2 bytes per token (compressed) for quantized KV-friendly runtimes; full uncompressed ~8 bytes/token for older paths. We should assume 4 bytes/token midline.
+- Active context: 70k tokens for long path; 8k tokens for fast path.
+- Concurrency mix: peak concurrency for long jobs ~8 concurrent long sessions; short path concurrency up to 120 qps burst, average 30 qps.
+
+Memory per replica (rough):
+- Full FP16 weights: 60GB weights + 70k * 4 bytes KV ~0.28GB + activation overhead and CUDA workspace => plan 68–72GB total -> fits on 80GB GPU (A100/H100 class) but leaves minimal headroom.
+- BF16/FP16 with 8-bit quantized weights (per-layer 8-bit): effective weights ~15–18GB + KV 0.28GB + workspace => ~18.5–22GB. This maps well to 40GB GPUs when combined with memory partitioning.
+- 4-bit/QLoRA-like packing (aggressive): weights ~9–11GB + KV 0.28GB + extra CPU-side decode => ~12–14GB. Good fit for 24–32GB GPUs for the fast path but long path may need careful KV offload/prefix-caching.
+
+Throughput & GPU counts (very approximate for committed pool sized to 1M tokens/month):
+- Traffic breakdown assumptions: 10k short QPS-month equivalents vs 400 long-job-days (each long job ~80k tokens).
+- Token-month calculation: short path dominates QPS but tokens are small; long path accounts for ~32M tokens/month under naive calc — that exceeds 1M target. To match their 1M token budget we should work with their estimate: assume long jobs are sampled (400 long requests/day * 80k tokens = 32M/month). If they only want 1M committed tokens, we size for baseline throughput and provide burst capacity for long runs (metered).
+
+Concrete commit recommendation to align with 1M token reserved:
+- Reserve 4x 40GB GPUs (quantized 8-bit variant) as the committed pool. Rationale: 40GB cards hold quantized weights + KV for medium-length contexts, support autoscaling to burst nodes. This gives nominal sustained throughput for short path and a cost-efficient base.
+- Long 70k context jobs should be routed to on-demand high-memory hosts (80GB+) and billed as overage or moved to a separate dedicated long-job pool.
+- If Genomix wants long-run inclusion in commit, propose an add-on: 1–2x 80GB reserved GPUs (H100) for long path.
+
+Numbers:
+- 4x 40GB (committed): handles baseline short-path qps and limited batching for medium contexts; estimated steady-state token throughput ~10–20M tokens/month depending on batching (this overshoots their 1M target but allows headroom for QPS).
+- 1x 80GB on-demand (recommended for long jobs) or 1x 80GB reserved for an add-on if they want fixed SLA.
+
+I'll attach a CSV with per-variant memory rows (weights, KV per token, workspace). Marcus: please review latency/throughput tradeoffs for 4-bit vs 8-bit and call out recommended default.
+
+—Karthik
+Karthik Iyer | Applied ML / Capacity Planning
+
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: 2026-10-09T14:30:00-07:00
+Subject: Re: Fwd: Committed capacity question — 70k context model variants
+
+Adding performance & tradeoffs:
+- 8-bit (symmetric/asymmetric) is our sweet spot for cost vs latency for most customers. For Genomix, 8-bit yields ~60–70% weight memory reduction and minimal latency regression on our optimized kernels. We recommend 8-bit as default for the committed 40GB pool.
+- 4-bit gets you another ~40% reduction but comes with variable kernel support and ~20–40% CPU-side overhead on batching/formatting. For long 70k contexts, 4-bit + KV offload to CPU might still be required and will increase tail latency. Good as a non-critical background path.
+- KV caching strategy: recommend a shared prefix cache for common reference segments (saves ~50–70% of KV memory for repeated runs). If Genomix can identify stable prefixes, we can reduce KV footprint on the long path significantly.
+
+Latency notes for committed pool (estimated p95):
+- Short path (8k context) on 40GB quantized 8-bit replica: p95 ~120–180ms with batching.
+- Long path (70k) on 80GB FP16 replica: p95 depends on batching, expect 1.2–2.5s p95 with appropriate KV caching.
+
+Operational recommendation:
+- Ship commit with 4x 40GB reserved nodes (8-bit default) + SLA on-burst to 80GB family. Add an opt-in reserved 80GB node if procurement wants predictable latency for long jobs.
+- Include an appendix (one-pager) in the procurement pack with: model table, memory assumptions, routing policy, and overage billing rates.
+
+I attached a quick CSV export: model_memory_table.csv (columns: model, variant, weights_gb, kv_per_token_bytes, estimated_replica_gb). Laura — feel free to polish the one-pager for procurement.
+
+—Marcus
+Marcus Lin | Inference Performance Engineering
+Attachment: model_memory_table.csv
+
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Claire Reynolds <claire@genomix.ai>, procure@genomix.ai
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Marcus Lin <marcus.lin@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: 2026-10-09T16:05:00-07:00
+Subject: Re: Committed capacity question — 70k context model variants
+
+Hi Claire — thanks for the patience. Pulling together our recommended commit playbook below and attaching the CSV and a short PDF you can share with procurement.
+
+Summary recommendation (to fit your 1M token reserved target while preserving the 70k capability):
+1) Base commit: 4 x 40GB reserved GPUs (quantized 8-bit variant as default). This is cost-efficient and covers the short-path traffic with headroom for typical bursts.
+2) Long-run handling: route 70k-context jobs to on-demand 80GB replicas. If you require predictable latency for long runs, add 1–2x 80GB reserved nodes as an add-on to the committed contract.
+3) KV cache strategy: enable shared prefix caching for stable prefixes; this materially reduces KV memory for the long path. We can help identify candidate prefixes in a short pilot.
+4) Billing & overage: commit covers baseline throughput; any sustained long-run usage beyond the reserved token SKU will be billed as overage. We included an appendix with sample overage unit rates.
+
+Attached: commit_playbook_v1.pdf (one-page procurement pack), model_memory_table.csv (per-variant footprint).
+
+Next steps:
+- Claire: confirm whether procurement wants a single PO for the 4x40GB base commit or if they prefer stacked commits (base + optional 80GB add-on).
+- Laura: please send the one-page PDF to Claire and procurement.
+- Karthik/Marcus: I'll schedule a 30-min pilot scoping call to validate prefix cache impact.
+
+Thanks — happy to jump on a call if useful.
+
+Best,
+Jordan Blake
+Account Exec | Redwood Inference
+Attachments: commit_playbook_v1.pdf, model_memory_table.csv

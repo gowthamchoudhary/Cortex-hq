@@ -1,0 +1,143 @@
+KEK/BYO keying and EU data residency: post-demo clarification and next steps
+
+From: Ava Chen <ava.chen@redwood.com>
+To: Sarah Jenkins <sarah.jenkins@clearbank.com>
+Cc: Monica Patel <monica.patel@redwood.com>
+Date: Thu, Jan 14, 2027 at 16:12 PST
+Subject: KEK/BYO keying and EU data residency: post-demo clarification and next steps
+
+Hi Sarah — thanks again for taking the demo earlier today. Quick write-up from our side with the concrete options we discussed and the immediate asks so your security and legal teams have something to work from.
+
+High-level agreed points from call:
+- Priority: ClearBank requires EU data residency for customer content and PII.
+- Encryption: Must support TLS in transit and AES-256 at rest.
+- Customer-managed keys (BYOK/KEK) is a gating requirement for production.
+
+Redwood options (recap / technical summary):
+1) Envelope encryption model (default): Redwood generates a data encryption key (DEK) per model/session; the DEK is encrypted (wrapped) with a key-encryption-key (KEK/CMK). For Hosted customers who integrate a cloud KMS, the CMK lives in the customer’s cloud KMS (recommended). For Private deployments we can allow an HSM-backed CMK that never leaves the customer environment.
+2) BYOK via cloud KMS cross-account integration: Customer provisions an HSM-backed CMK in their AWS/GCP/Azure KMS and grants Redwood a limited encrypt/decrypt role for envelope wrapping. Redwood never has access to the CMK plaintext.
+3) Importable key material / dedicated HSM: For customers that require FIPS/HSM guarantees we support two paths — (a) Private deployment where the CMK is hosted in customer-controlled HSM (preferred for strict custody), or (b) a co-managed HSM model where key material is imported into a dedicated HSM instance with contractual controls.
+
+What Redwood DOES / DOES NOT persist:
+- We persist DEKs encrypted at rest (wrapped). We do NOT persist customer KEKs in plaintext.
+- Audit logs record KMS wrap/unwrap operations and key identifiers; access logs are available for compliance review.
+
+Logging and retention:
+- Hosted default: operational access logs retained 90 days (can be extended).
+- Dedicated/Private: default retention 2 years; longer retention is available as an add-on.
+- We can provide sampled key-usage logs and sign them for audit when pairing with customer KMS.
+
+Suggested contract items (short):
+- Clear definition of key custody (customer holds CMK in their KMS)
+- Audit access window and log retention guarantee
+- SLA fallback if KMS unwrap failures occur (fail open/closed policy)
+
+Immediate asks / next steps for ClearBank:
+1) Confirm preferred KMS provider (AWS / GCP / Azure) and whether you prefer cross-account CMK or importable key material.
+2) Share ClearBank’s security questionnaire (we can pre-fill the crypto & logging sections).
+3) Identify the legal contact to coordinate wording for key custody + audit rights.
+4) Accept a 90-minute technical workshop (we propose Jan 20 or Jan 21) to walk your cloud engineers through the integration flow and run sample unwrap flows.
+
+Attachments: redwood-byok-options.pdf (high-level), SOC2-evidence-request.xlsx (list of docs we can provide).
+
+If you prefer, Monica can own the technical workshop. Happy to coordinate.
+
+Thanks,
+Ava Chen
+Enterprise Sales (West)
+Redwood Inference
+
+From: Sarah Jenkins <sarah.jenkins@clearbank.com>
+To: Ava Chen <ava.chen@redwood.com>
+Cc: Legal Team <legal@clearbank.com>
+Date: Fri, Jan 15, 2027 at 09:03 GMT
+Subject: Re: KEK/BYO keying and EU data residency: post-demo clarification and next steps
+
+Thanks Ava — helpful summary. A couple of clarifying questions from our security team before we schedule the workshop: 
+
+1) When you say DEKs are persisted wrapped, do you ever persist unwrapped DEKs in any transient store for replay/async processing? We need assurance that plaintext DEKs are never written to disk.
+2) For the cross-account CMK model with AWS KMS, can you describe exactly what IAM role and privileges Redwood requires? We have a strict least-privilege policy and want to lock this down.
+3) Is key rotation customer-managed or is there an automated rotation policy we need to align on? How are old wrapped DEKs handled after rotation?
+4) Logging retention: our baseline is 12 months for KMS/key usage logs for regulatory reasons. You mentioned 90 days by default — what is the incremental cost and SLA to extend to 12 months?
+
+Attaching our security questionnaire (clearbank-security-q.docx) — please fill sections 4/5 (encryption, KMS access) and return.
+
+If the answers are as expected we’ll route to legal. I’ll put potential times for the workshop in a follow-up if we can confirm these.
+
+Best,
+Sarah
+Senior Information Security Engineer
+ClearBank
+(attachment: clearbank-security-q.docx)
+
+From: Ava Chen <ava.chen@redwood.com>
+To: Markus Klein <markus.klein@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Sarah Jenkins <sarah.jenkins@clearbank.com>, Legal Team <legal@clearbank.com>
+Date: Fri, Jan 15, 2027 at 10:05 PST
+Subject: Fwd: KEK/BYO keying and EU data residency: post-demo clarification and next steps
+
+Markus / Monica — forwarding Sarah’s questions from ClearBank. Can you please confirm the short answers below so I can return them and move to scheduling?
+
+Questions needing short, customer-facing answers:
+A) DEK handling: do we ever persist unwrapped DEKs? (I believe 'no' but want exact wording).
+B) AWS cross-account privileges: can you provide the minimal IAM policy and wording we can send to ClearBank security?
+C) Key rotation behavior: short explanation of rotation and how wrapped DEKs referencing old CMKs are handled.
+D) Retention extension: rough pricing/lead time to increase KMS/key-usage log retention from 90 days to 12 months for Hosted customers.
+
+Also attaching sample-clauses.docx (Markus: can you add the 1–2 contract sentences you prefer re custody?). Monica — can you propose two workshop slots (Jan 20/21) and a quick agenda? I’ll respond to Sarah once I have your notes.
+
+Thanks,
+Ava
+
+From: Markus Klein <markus.klein@redwood.com>
+To: Ava Chen <ava.chen@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Sarah Jenkins <sarah.jenkins@clearbank.com>, Legal Team <legal@clearbank.com>
+Date: Fri, Jan 15, 2027 at 12:22 PST
+Subject: Re: Fwd: KEK/BYO keying and EU data residency: post-demo clarification and next steps
+
+Ava / Monica — answers below, please feel free to paste verbatim into a response to ClearBank. I’ve also uploaded a short playbook to the shared drive (link in related_links).
+
+A) DEK handling (customer-facing):
+- Redwood never persists plaintext DEKs to disk. DEKs are generated in-memory and immediately wrapped with the configured CMK. Any transient materials that touch RAM are zeroed after use; we do not write DEKs unencrypted to persistent storage.
+
+B) AWS cross-account privileges (minimal):
+- We require an IAM role with kms:Encrypt, kms:Decrypt, kms:GenerateDataKey, kms:DescribeKey on the specific CMK ARN(s). We recommend a scoped role with resource restrictions and an assume-role trust policy for Redwood's account ID. Sample policy attached (sample-clauses.docx includes the policy snippet).
+
+C) Key rotation and old wrapped DEKs:
+- Rotation is customer-controlled for customer CMKs. When a CMK is rotated, previously wrapped DEKs remain decryptable if the KMS maintains the previous key material (standard KMS behavior). If you import new key material or destroy previous key versions, previously-wrapped DEKs will be irrecoverable — we will not be able to unwrap them. We recommend maintaining historical key versions for the regulatory retention period you require.
+
+D) Retention extension (Hosted):
+- 90 days is our default for Hosted access logs. We can extend to 12 months for an add-on (estimated +15% to monthly Hosted fee for the routes that capture KMS usage and audit logs). For Dedicated/Private deployments retention is configurable and typically provisioned for 2+ years. Lead time: ~2–3 weeks to enable extended retention and to wire in storage and retention policies.
+
+Suggested concise contract language (paste-ready):
+- "Customer will retain sole ownership and custody of the customer master key(s) (CMKs) provisioned in Customer KMS. Redwood will be granted scoped, auditable encrypt/decrypt permissions for KEK wrapping operations only and will not store CMK plaintext. Audit logs for key wrap/unwrap operations will be retained for at least 12 months as agreed in the applicable service addendum."
+
+Attachments I am adding to the thread: sample-clauses.docx (policy snippet & contract language).
+
+Markus
+Head of Security Engineering
+Redwood Inference
+
+From: Sarah Jenkins <sarah.jenkins@clearbank.com>
+To: Ava Chen <ava.chen@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Legal Team <legal@clearbank.com>, Markus Klein <markus.klein@redwood.com>
+Date: Mon, Jan 18, 2027 at 09:05 GMT
+Subject: Re: KEK/BYO keying and EU data residency: post-demo clarification and next steps
+
+Thanks — that answers our main questions and the suggested contract text is helpful. A few quick operational items before we close the initial qualification: 
+
+- We will proceed with AWS KMS cross-account CMK (HSM-backed) as the preferred path.
+- Legal will review the suggested clause and come back with any redlines; I’ve looped them in.
+- We accept the Jan 21 technical workshop (10:00–11:30 CET). Monica — please send the invite and sample agenda.
+- Please send the completed SOC2 evidence matrix you mentioned and the filled sections of our questionnaire (sections 4/5).
+
+Action items (ClearBank): legal review + confirm IAM whitelist.
+Action items (Redwood): fill the questionnaire, send the SOC2 evidence matrix, provide exact IAM role JSON policy, and calendar invite for Jan 21 workshop.
+
+Appreciate the quick turnaround.
+
+Regards,
+Sarah
+Senior Information Security Engineer
+ClearBank
+(attachment: clearbank-security-q.docx - updated when returned)

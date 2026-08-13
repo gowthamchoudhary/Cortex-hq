@@ -1,0 +1,121 @@
+Capacity slope proposal and commitment phasing for AegisAI
+
+From: Leah Park <leah.park@aegisai.com>
+To: marissa_cole@redwood.ai
+Cc: Tom Muller <tom.muller@aegisai.com>
+Date: 2026-10-03T09:12:00-07:00
+Subject: Re: Quick follow-up on dedicated capacity discussion
+
+Marissa,
+
+Thanks for the call earlier — Tom and I sketched out a couple of internal targets and we want to see a concise proposal that ties committed GPU capacity to an onramp schedule and activation windows. Our key constraints: steady latency under 250ms p90 for generation workloads, predictable spend for budgeting (we need ramped commitments that align with our Q1 hiring), and a warm-up plan so peak inference spikes don't cause cold-cache penalties.
+
+Attached is a short workload summary (Aegis_ML_Workload_Overview.pdf) with token rates and peak concurrency. Please propose 2–3 reservation pathways (lean, balanced, aggressive) including cluster size, minimum GPU guarantee, estimated effective throughput, and a recommended ramp schedule (months to full activation). Also flag any operational requirements (warm pools, prewarming windows, data plane region considerations).
+
+Can you send something by EOD Tuesday so we can review in our Friday budget meeting?
+
+Leah
+Director of Platform Engineering
+AegisAI
+
+[attachment: Aegis_ML_Workload_Overview.pdf (pdf)]
+From: marissa_cole@redwood.ai
+To: Leah Park <leah.park@aegisai.com>
+Cc: karthik_iyer@redwood.ai, priyom_das@redwood.ai
+Date: 2026-10-04T10:03:00-07:00
+Subject: Re: Capacity slope proposal and commitment phasing for AegisAI
+
+Leah — good to connect. Thanks for the workload doc, that helped a lot. Attached is a concise proposal workbook (proposed-reservation-terms-AegisAI.xlsx) with three pathways per your ask:
+
+1) Lean Pathway — conservative spend, minimal warm pool
+   - Cluster: 8 x A100-equivalent GPUs (shared across two zones)
+   - Min guarantee: 6 GPUs reserved (60% utilization target)
+   - Expected steady throughput: ~180 tokens/s effective (mix of short and long prompts)
+   - Ramp: 3 months to 90% activation (month-by-month activation: 30% / 30% / 30%)
+   - Notes: 2-week warm pool prewarm before month 1 peak; burst credits available for 10% of traffic.
+
+2) Balanced Pathway — tradeoff of cost and headroom
+   - Cluster: 16 x A100-equivalent GPUs (single region, cross-availability failover)
+   - Min guarantee: 12 GPUs reserved
+   - Expected steady throughput: ~380 tokens/s
+   - Ramp: 2 months to 80%, 4 months to 100% (month-by-month activation: 40% / 40% then 20% after capacity validation)
+   - Notes: KV/prefix caching enabled, recommended 6-hour daily maintenance warmup window to refresh caches after release cycles.
+
+3) Aggressive Pathway — optimized for growth and burst protection
+   - Cluster: 32 x A100-equivalent GPUs (multi-az)
+   - Min guarantee: 24 GPUs reserved
+   - Expected steady throughput: ~820 tokens/s
+   - Ramp: 1 month to 70%, 3 months to 100% (30% / 40% / 30%)
+   - Notes: Dedicated warm pool and priority routing, includes SLA credits for sustained latency breaches beyond 3 outages per quarter.
+
+Common items across pathways:
+- Model variants: recommend starting on a quantized 4-bit variant for balanced and aggressive paths to lower unit cost; lean pathway starts on 8-bit mixed precision.
+- Caching: enable automatic prefix/KV caching for user-session reuse — we estimate a 15–25% token cost reduction.
+- Autoscale guardrails: set burst caps per-minute to protect regional capacity during bot sweeps.
+- Onboarding milestones: integration test (week 1), traffic validation (weeks 2–4), scale validation (weeks 5–12).
+
+Karthik and Priyom are cc'd — Karthik will confirm the warm pool/mechanic details and Priyom will add the activation credit/commit semantics we typically offer for ramp windows. I can update the workbook with a candidate DocuSign path once we agree on a pathway.
+
+Best,
+Marissa Cole
+Enterprise Sales
+Redwood Inference
+
+[attachment: proposed-reservation-terms-AegisAI.xlsx (xlsx)]
+From: karthik_iyer@redwood.ai
+To: marissa_cole@redwood.ai, Leah Park <leah.park@aegisai.com>
+Cc: priyom_das@redwood.ai
+Date: 2026-10-05T08:27:00-07:00
+Subject: Re: Capacity slope proposal and commitment phasing for AegisAI
+
+Leah — quick technical clarifications to map expected latency and activation windows:
+
+- Warm pool sizing: for the Balanced pathway we recommend a 20% warm pool (i.e., keep ~3 GPUs ready per 16-GPU cluster to keep KV caches hot); warm pool can be scheduled to spin up 1 hour before expected daily traffic peaks.
+- Cold-start penalty: worst-case p95 cold-cache penalty measured on similar workloads is ~300–400ms additional tail; with warm pool and prefix caching we push p95 under 180ms in our tests.
+- Prewarming approach: staggered prewarm across AZs to avoid simultaneous capacity spikes; prewarm scripts are run via the deployment playbook — we can provide automation hooks to Aegis's CI so prewarm occurs after a model rollout.
+- Quantization risk: 4-bit quantization reduces token cost ~30% but some prompt-sensitive evals saw small regressions on hallucination; recommend a phased roll where Balanced starts on 8-bit and migrates to 4-bit after evaluation pass.
+
+If you want, I can run a 48-hour pilot in our lab cluster using a sampled workload from your attachment to validate the Balanced pathway's latency profile before you commit.
+
+- Karthik
+Senior Solutions Engineer
+Redwood Inference
+From: Tom Muller <tom.muller@aegisai.com>
+To: marissa_cole@redwood.ai, Leah Park <leah.park@aegisai.com>
+Date: 2026-10-07T13:45:00-07:00
+Subject: Re: Capacity slope proposal and commitment phasing for AegisAI
+
+Marissa / Karthik — this looks well-structured. A few negotiation points from procurement/budget:
+
+- We prefer the Balanced pathway but would like to shift to a 6-month ramp to match hiring cadence rather than 2–4 months. Can you show a 6-month activation schedule and the associated credit/discount profile?
+- If we commit to the 12 GPU minimum for 12 months, what is the maximum monthly overage rate and how does burst credit consumption affect our invoice forecasting?
+- We need a simple SLA addendum that guarantees p90 latency and defines measurement windows. The mention of SLA credits is good — can you provide concrete credit formulas?
+
+Also curious whether Redwood will allow a mid-contract adjustment to add an additional 8 GPUs with a prorated fee and a 30-day activation window. That flexibility would help us secure internal approval.
+
+Tom
+VP Product
+AegisAI
+From: marissa_cole@redwood.ai
+To: Tom Muller <tom.muller@aegisai.com>, Leah Park <leah.park@aegisai.com>
+Cc: karthik_iyer@redwood.ai, priyom_das@redwood.ai
+Date: 2026-10-09T16:40:00-07:00
+Subject: Re: Capacity slope proposal and commitment phasing for AegisAI
+
+Tom — great questions. Quick answers and next steps: 
+
+- 6-month ramp: we can present a 6-month activation schedule for the Balanced pathway (month activation: 15% / 15% / 20% / 20% / 15% / 15%). I'll add a tab with month-by-month cost and the expected effective throughput per month.
+- Overage & burst: overage billed at a fixed premium (1.8x committed unit price) up to a soft cap; burst credits are purchasable in advance and consumed before overage billing — I'll include a sample forecast showing burst credit consumption scenarios.
+- SLA credits: standard formula is credit = (monthly committed fee) * min(0.25, outage_minutes / 1440 * 1.0) for sustained breaches; we can tighten the formula for p90 guarantees and include a measurement window (30-day rolling). I'll draft a tightened addendum and circulate.
+- Mid-contract additions: yes — prorated add-on for +8 GPUs with a 30-day activation SLA is acceptable; we'll include a clause for prorated fees and a single 30-day activation window with priority on provisioning.
+
+I'll update the workbook and share a revised workbook + a candidate DocuSign path by EOD Monday. Priyom will add the commercial language (commit term, early termination mechanics, onboarding credits).
+
+Next call? I propose Wednesday 11:00 PT to walk the spreadsheet and the SLA addendum. Does that work for you both?
+
+Thanks,
+Marissa
+Enterprise Sales
+Redwood Inference
+
+[attachment: SLA-exceptions-summary.docx (docx)]

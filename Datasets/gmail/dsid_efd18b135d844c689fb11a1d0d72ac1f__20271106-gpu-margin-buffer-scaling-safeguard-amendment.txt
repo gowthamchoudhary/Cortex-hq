@@ -1,0 +1,145 @@
+Dedicated capacity amendment — margin buffer and autoscale safeguards
+
+From: Emily Price <emily.price@heliotech.com>
+To: Ben Carter <ben@redwood.com>
+Cc: Sanjay Rao <sanjay@heliotech.com>, procurement@heliotech.com
+Date: 2027-11-06T09:12:00-07:00
+Subject: Dedicated capacity amendment — margin buffer and autoscale safeguards
+
+Ben —
+
+Thanks again for the call this morning. We're fast-approaching a staged product launch and need a short-term operational plan to avoid throttling during peak week. Two asks from our side: 1) a temporary margin buffer (headroom) that guarantees an uplift of ~30% sustained throughput for a 6-week window starting 2027-12-01; and 2) explicit autoscale safeguards so we can avoid noisy preemption impacting live inference (SLO is 150ms p95).
+
+Specifically:
+- Can Redwood commit to a transient slab model (reserved-but-ephemeral) for that period and provide clear eviction behavior and priority tiers?
+- We need billing clarity — how transient uplift will be invoiced (credits vs prorated usage).
+- We also need an incident runbook and a named incident contact for the launch window.
+
+I've attached our internal capacity forecast for context (capacity_matrix_v3.xlsx). If you can send a short amendment draft that outlines the uplift model + billing mechanics we can get procurement moving.
+
+Can you confirm by EOD Monday (11/08)? We have a contract review scheduled the following week.
+
+Appreciate it —
+Emily Price
+Head of Cloud Ops, HelioTech
+em: emily.price@heliotech.com
+ph: +1 415-555-2198
+
+Attachment: capacity_matrix_v3.xlsx (Excel, 72KB)
+
+From: Ben Carter <ben@redwood.com>
+To: Emily Price <emily.price@heliotech.com>
+Cc: Marcus Lin <marcus@redwood.com>, Laura Bennett <laura@redwood.com>
+Date: 2027-11-06T13:44:00-07:00
+Subject: Re: Dedicated capacity amendment — margin buffer and autoscale safeguards
+
+Emily —
+
+Thanks for the clear ask and the forecast. We can support a transient uplift model without converting to a permanent reserve. High-level proposal (quick summary):
+
+1) Transient margin buffer (ephemeral slab):
+   - Uplift: +30% baseline throughput expressed as a temporary slab allocation for 2027-12-01 to 2028-01-12 (6 weeks).
+   - Implementation: dedicated ephemeral pool (preemptible-capable instances) attached to your Dedicated capacity namespace. Pool will be tagged with a higher eviction priority to avoid affecting your core slab.
+
+2) Autoscale & safeguard policy:
+   - Canary ramping: new traffic shifts will be canaried to the transient pool with a 72-hour progressive ramp (25% -> 50% -> 75% -> full), with automated rollback triggers at 5% error delta or p95 latency degradation > 20%.
+   - Burst credits: we propose a credit-bucket model to smooth short spikes; credits are consumed first before billing uplifts.
+   - Min-instance floor: a hard floor (min_instances) for your core slab so that preemptions do not drop below X GPUs (we'll set X based on your baseline to keep p95 target).
+
+3) Billing & commercial mechanics:
+   - Option A (preferred for transparency): prorated usage for the ephemeral slab at discounted burst rate, plus a one-time setup credit to cover rapid ramping.
+   - Option B: predefined ephemeral hours allocation (credit bucket) applied to the period; excess beyond credits billed at on-demand uplift.
+
+4) Runbook & contacts:
+   - We'll deliver a launch runbook with explicit escalation paths. During the 6-week window Redwood will provide an on-call escalation for incidents regarding eviction or latency regressions.
+
+I'll circulate a one-page amendment draft and a more detailed ops runbook by EOD Monday. Marcus and Laura are looped here for the technical/ops sections.
+
+Next step: can we do a 30-minute sync on Wednesday 11/10 to walk the amendment and the runbook? I propose 10:00 PT.
+
+Thanks,
+Ben Carter
+Senior Sales Engineer, Redwood Inference
+ben@redwood.com | +1 510-555-0123
+
+Attachments: proposed_amendment_draft.pdf (PDF, 48KB)
+
+From: Marcus Lin <marcus@redwood.com>
+To: Ben Carter <ben@redwood.com>, Emily Price <emily.price@heliotech.com>
+Cc: Laura Bennett <laura@redwood.com>
+Date: 2027-11-07T08:05:00-07:00
+Subject: Re: Dedicated capacity amendment — margin buffer and autoscale safeguards
+
+Emily / Ben —
+
+A few technical clarifications so expectations align:
+
+- Eviction semantics: the ephemeral pool will be composed of preemptible instance types. Eviction is controlled at GPU allocation level; when capacity pressure occurs we will first reclaim ephemeral pool GPUs (L2 eviction) before touching core slab. We'll attach a priority tag so orchestration respects your reserved floor.
+
+- Warmup & cold-start: KV-cache warmup for long-context models can cause a transient latency hit for the first few minutes after a scale event. We recommend a staggered canary (as Ben suggested) and a lightweight prefix-warmup probe (synthetic requests that populate caches) during each ramp stage.
+
+- Cooling window and autoscale hysteresis: set scale-down cooldown to 10m for the ephemeral pool to avoid thrash; scale-up should be immediate but gated by request queue-latency thresholds.
+
+- Headroom calculation: we'll compute headroom as 1.3 * 95th-percentile steady token throughput over the last 7 days, plus a 10% safety margin for burst jitter. This produces a conservative target you can validate with your forecast.
+
+- Fallback routing: in the event the ephemeral pool cannot satisfy requests we will route degraded traffic to a smaller, quantized model variant with a clear degradation profile (lower token throughput but preserved correctness) — included in the amendment as a graceful degradation option.
+
+I'll include these details in the ops runbook and a short ops checklist (pre-launch probes, SLOs, rollback).
+
+—Marcus
+Marcus Lin
+Principal Systems Engineer, Redwood Inference
+marcus@redwood.com
+
+From: Emily Price <emily.price@heliotech.com>
+To: Ben Carter <ben@redwood.com>
+Cc: Sanjay Rao <sanjay@heliotech.com>, Marcus Lin <marcus@redwood.com>, procurement@heliotech.com
+Date: 2027-11-08T10:21:00-07:00
+Subject: Re: Dedicated capacity amendment — margin buffer and autoscale safeguards
+
+Ben / Marcus —
+
+This looks reasonable. A couple items procurement needs before we sign:
+1) Exact billing example for the two options (sample invoice lines showing credits applied).
+2) A rollback clause that allows HelioTech to revert the ephemeral slab early within the 6-week window without penalty if it negatively affects latency or costs exceed thresholds; we suggest a 48-hour notice window for early termination.
+3) The ops runbook (including the named on-call escalation and the synthetic warmup probe steps).
+
+We prefer Option A if the sample invoice lines show predictable spend. Also, please include a clause that guarantees the canary rollback will be executed automatically on the defined triggers (error delta, p95 latency).
+
+Procurement has a DocuSign template ready — if you can attach the amendment draft we will route it internally. If you can get the sample invoice and runbook before Wednesday call, procurement can likely sign on the call.
+
+Thanks —
+Emily
+
+Attachment: none
+
+From: Ben Carter <ben@redwood.com>
+To: Emily Price <emily.price@heliotech.com>
+Cc: Marcus Lin <marcus@redwood.com>, Laura Bennett <laura@redwood.com>, procurement@heliotech.com
+Date: 2027-11-09T16:42:00-07:00
+Subject: Re: Dedicated capacity amendment — margin buffer and autoscale safeguards
+
+Emily —
+
+Great — we've updated the amendment draft to include:
+- a sample invoice with Option A and Option B (line items for ephemeral hours, credit consumption, and overage),
+- an explicit early-termination clause allowing HelioTech to exit the ephemeral slab with 48 hours' notice and pro-rated billing through termination date,
+- automatic canary rollback triggers (5% error delta, p95 > +20% baseline) and an IR contact list.
+
+Attached: proposed_amendment_draft.pdf (updated with billing examples) and a short ops checklist (runbook excerpt). Links below:
+- Ops runbook (preview): https://drive.google.com/drive/folders/1a2b3c-HelioTech-capacity
+- DocuSign: https://www.docusign.com/heliotech/amendment/ DL-2027-1184
+
+Next steps:
+1) We can sign via DocuSign as soon as procurement confirms Option A or B.
+2) Ops checklist delivery: Marcus will post the full runbook by close of day Tuesday 11/15.
+3) Confirmed call: Wed 2027-11-10 at 10:00 PT — meeting invite sent separately.
+
+If that's all good I'll route the final DocuSign envelope and loop the legal teams for a quick sign-off.
+
+Thanks everyone —
+Ben
+Senior Sales Engineer, Redwood Inference
+ben@redwood.com | +1 510-555-0123
+
+Attachments: proposed_amendment_draft.pdf (updated, 64KB), runbook_excerpt.txt (4KB)

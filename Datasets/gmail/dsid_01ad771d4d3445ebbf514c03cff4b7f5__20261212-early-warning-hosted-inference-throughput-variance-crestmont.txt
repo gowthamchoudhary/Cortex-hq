@@ -1,0 +1,101 @@
+Early warning: transient hosted API throughput variance in us-east (Dec 12)
+
+From: Camila Reyes <camila.reyes@redwood.com>
+To: Alex Chen <alex@crestmont.io>
+Cc: laura.bennett@redwood.com, hannah.schmitt@redwood.com
+Date: Sat, 12 Dec 2026 09:14:00 -0800
+Subject: Early warning: transient hosted API throughput variance in us-east (Dec 12)
+
+Hi Alex —
+
+We observed a short window of elevated queuing and p95 response times (us-east, 09:00–09:28 PST) that may have affected background scoring jobs. Traffic returned to baseline after we applied an autoscale override and enabled an idle-prefetch bypass.
+
+We wanted to proactively surface this to you in case you saw any customer-facing slowdowns. Details:
+- Impact window: ~09:00–09:28 PST (partial increase in p95, occasional enqueueing)
+- Affected surface: hosted inference API (generation & scoring routes) in us-east region only
+- Immediate mitigation: manual autoscale override + temporary KV-cache eviction on a subset of GPUPools
+- Status page: https://status.redwood-inference.com/incidents/INC-2026-12-12-01 (we opened an incident and posted a brief note there)
+
+If you have sample request IDs or timestamps that map to user-visible failures, please reply with those (I attached a small sample of request_ids that we flagged). We are treating this as a priority — internal follow-up going to SRE and runtime.
+
+Sorry for the interruption. I will share a short summary as soon as we confirm root cause and long-term remediation.
+
+Best,
+Camila
+Camila Reyes
+Customer Success Manager, Redwood Inference
+attachments: investigation_snapshot.txt, request_ids_sample.csv
+
+From: Alex Chen <alex@crestmont.io>
+To: Camila Reyes <camila.reyes@redwood.com>
+Date: Sat, 12 Dec 2026 09:21:00 -0800
+Subject: Re: Early warning: transient hosted API throughput variance in us-east (Dec 12)
+
+Thanks for the heads up, Camila. We did see a ~5–7 minute blip in our nightly scoring pipeline around 09:05 PST — some jobs retried automatically but a handful timed out and required manual restart. I can share exact request IDs if that helps.
+
+Two quick questions: 1) Do you have an ETA for a root cause and fix? 2) Should we change any retry/timeouts on our side to avoid visible customer impact?
+
+—Alex
+Alex Chen
+Engineering Lead, Crestmont Analytics
+
+From: Laura Bennett <laura.bennett@redwood.com>
+To: camila.reyes@redwood.com, hannah.schmitt@redwood.com
+Date: Sat, 12 Dec 2026 09:45:00 -08:00
+Subject: RE: Early warning: transient hosted API throughput variance in us-east (Dec 12)
+
+Camila / Hannah — quick tech summary for the customer follow-up:
+
+What we saw (prelim):
+- Control plane scheduler mis-evaluated a burst policy during a short spike, delaying allocation of additional GPUPool capacity by ~90s.
+- Simultaneously, KV cache pressure on a subset of nodes increased tokenization latency for some concurrent requests, which made certain requests hit enqueue paths.
+- Net effect: higher p95 for ~25 minutes with several requests experiencing timeouts at the application layer.
+
+Actions taken (done):
+- Manual autoscale override to force immediate capacity slices active
+- Targeted KV eviction on 3 nodes to clear cache pressure
+- Rolling restart of the affected scheduling agent (to clear a stale policy evaluation state)
+- Increased short-term retroactive capacity for the pool (3 nodes) to avoid regressing if a second spike occurs
+
+Next steps (in progress):
+- INF-2483 created (https://redwood.atlassian.net/browse/INF-2483) to track root cause and a fix to the scheduler evaluation logic
+- We will add a guard in the scheduler that fails open to the burst policy when enqueue rates exceed threshold, to prevent allocation stalls
+- SRE to run a 72-hour soak to ensure no recurrence in us-east; monitoring dashboards updated with alert thresholds
+
+Attachments: scheduler-logs-12-12.txt (excerpted), investigation_snapshot.txt
+
+Please send Alex a short, non-technical summary and a recommended immediate mitigation for their pipelines (timeouts/retry guidance). I can provide logs if they want deeper postmortem artifacts.
+
+—Laura
+Laura Bennett
+Senior SRE, Redwood Inference
+
+From: Camila Reyes <camila.reyes@redwood.com>
+To: Alex Chen <alex@crestmont.io>
+Cc: laura.bennett@redwood.com, hannah.schmitt@redwood.com, ops-team@crestmont.io
+Date: Sat, 12 Dec 2026 10:20:00 -08:00
+Subject: Follow-up: us-east transient throughput variance — status, impact, and recommended mitigations
+
+Hi Alex / Crestmont ops —
+
+Thanks for confirming the impact, and sorry again for the disruption. Short summary and recommended next steps you can apply immediately:
+
+Summary (non-technical):
+- We observed a localized scheduling and cache pressure event in us-east that increased response times for some requests between 09:00–09:28 PST. We applied manual mitigations and the service returned to normal; we have an active ticket (INF-2483) to put a permanent fix in place. More details are on the incident page: https://status.redwood-inference.com/incidents/INC-2026-12-12-01
+
+Recommended immediate mitigations for Crestmont (optional):
+- Increase HTTP request timeout to 12s for background scoring jobs that can tolerate slightly longer latency (this reduces spurious downstream failures when we have short enqueueing windows).
+- Add an exponential backoff (start 200ms, cap 2s) for retries on idempotent scoring requests.
+- If you keep a short window of queued request IDs, forward them to us and we will correlate (we already have a subset of IDs from logs attached).
+
+We will:
+- Share a postmortem with timelines and corrective actions within 72 hours (INF-2483).
+- Offer a one-time operational credit to offset manual restart effort — I can get details from billing if you want.
+
+Would you like a 20-minute sync to walk through the timeline and action items tomorrow? I can schedule Laura and Hannah to join.
+
+Best regards,
+Camila Reyes
+Customer Success Manager, Redwood Inference
+Phone: +1 (415) 555-0172
+attachments: investigation_snapshot.txt, scheduler-logs-12-12.txt

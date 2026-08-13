@@ -1,0 +1,110 @@
+Uploader failures — on-prem edge NAT/MTU investigation
+
+From: Kevin J. Park <kevin@brightleaf.io>
+To: priyom_das <priyom@redwood.com>
+Date: Mon, 13 Sep 2027 09:12:00 -0700
+Subject: Uploader timeouts from on-prem agents
+
+Hi Priyom,
+
+We've started seeing intermittent failures from our on-prem uploader agents to Redwood's private endpoint (us-west-2). Large PUTs (around 8-12MB) either hang for ~30s and then fail with 504 or they succeed but the app reports truncated uploads. This started after we rolled a firmware update on our edge appliance last week.
+
+Repro steps we see:
+- From an internal host behind the appliance: curl -T bigfile.bin https://uploads.brightleaf.com/upload -> timeout after ~30s
+- Smaller files (<1MB) succeed consistently
+
+Attached: upload-sample.log (curl verbose) and a short tcpdump capture from the appliance's WAN interface (tcpdump-brightleaf-20270913.pcap).
+
+Can you take a look or point me to the right team? This is a high-priority production issue for our nightly ingestion.
+
+Thanks,
+Kevin Park
+SRE Lead | BrightLeaf
+kevin@brightleaf.io
+
+From: priyom_das <priyom@redwood.com>
+To: Kevin J. Park <kevin@brightleaf.io>
+Cc: jonas_weber <jonas@redwood.com>, marissa_cole <marissa@redwood.com>
+Date: Mon, 13 Sep 2027 09:45:12 -0700
+Subject: Re: Uploader timeouts from on-prem agents
+
+Kevin —
+
+Thanks for the quick report and for attaching the logs. I pulled the pcap and the curl output; initial guess is a combination of PMTU blackholing + SNAT behavior on the edge appliance (we've seen similar with some NAT engines and MSS/clamp interaction).
+
+Can you confirm:
+- Which model/firmware is running on the appliance?
+- Are you doing any port-preserving NAT or port randomization?
+- Any stateful firewall that might be limiting ephemeral ports?
+
+I've looped in Jonas (network infra) and Marissa (edge team). Jonas — can you take the pcap and check for MTU/MSS clamp signs and whether the appliance is rewriting TCP options? I can share the tcpdump and the curl trace in the ticket (INF-3421).
+
+Attachments: upload-sample.log (from Kevin)
+
+Best,
+Priyom Das
+Network Reliability Engineer | Redwood Inference
+priyom@redwood.com
+
+From: jonas_weber <jonas@redwood.com>
+To: priyom_das <priyom@redwood.com>, marissa_cole <marissa@redwood.com>
+Cc: Kevin J. Park <kevin@brightleaf.io>
+Date: Mon, 13 Sep 2027 13:02:33 -07:00
+Subject: Re: Uploader timeouts from on-prem agents
+
+I've pulled the pcap and ran a quick correlation with the server-side traces in INF-3421. Notes: 
+
+- I see repeated SYN / SYN-ACK exchanges where the client sets MSS=1460, server/cloud path responds with ICMP Fragmentation Needed (type 3 code 4) for large segments but those ICMPs come back to the appliance and appear dropped by the appliance (no DSCP rewrite, just dropped). That's classic PMTU blackhole.
+- Separately, the appliance is performing PAT (SNAT) and reusing source ports aggressively. The cloud-facing side shows ~300 concurrent NAT translations for that customer and we observed several TCP flows failing with RST after port reuse — symptomatic of ephemeral port exhaustion and translation collision.
+
+Immediate mitigations we can try (low risk):
+1) On appliance: enable MSS clamping on the WAN/egress interface to 1380 (captures indicate MSS ~1460 -> clamp should avoid fragmentation). Command (example): set interface wan mss-clamp 1380
+2) Increase ephemeral port pool on appliance or enable port-preserving SNAT so translations don't collide (device-specific). Example: set nat ephemeral-range 32768-61000
+3) On firewall/Security Group: allow the ephemeral port range 32768-61000 for outbound TCP so replies aren't blocked; confirm no restrictive connection tracking timeouts are set below 60s.
+
+Longer-term: the appliance firmware seems to be dropping ICMP type 3 code 4 when under high conntrack churn; we should consider a firmware rollback or vendor fix. I recommend we schedule a rolling config change to enable MSS clamp + ephemeral range increase for tomorrow's off-peak window and monitor.
+
+I've attached a short config diff and a reference KB: https://support.vendor.example/KB/ICMP-PMTU-issues
+
+– Jonas Weber
+Network Infrastructure | Redwood Inference
+jonas@redwood.com
+
+From: marissa_cole <marissa@redwood.com>
+To: priyom_das <priyom@redwood.com>, jonas_weber <jonas@redwood.com>
+Cc: Kevin J. Park <kevin@brightleaf.io>
+Date: Tue, 14 Sep 2027 08:11:44 -07:00
+Subject: Re: Uploader timeouts from on-prem agents
+
+Team —
+
+We can implement Jonas's mitigations during a short maintenance window tomorrow (2027-09-15 01:00–02:00 PDT). Plan:
+- Stage config change to enable MSS clamp 1380 on WAN interface
+- Expand NAT ephemeral pool to 32768-61000 and enable port-preserving SNAT flag if appliance supports it
+- Add ephemeral port range to edge firewall outbound allow-list
+- Deploy on a canary set of 10% of appliances first and monitor connections for 30 minutes before full rollout
+
+Please confirm the rollback plan: revert config changes + reboot appliance if any adverse impact. I'll open INF-3421 to track this and will attach edge-appliance-config.diff with the exact commands.
+
+Kevin — does the 01:00–02:00 PDT window work for you (off-peak for your ingestion)? If not, propose a different time.
+
+Thanks,
+Marissa Cole
+Edge Operations Lead | Redwood Inference
+marissa@redwood.com
+
+From: Kevin J. Park <kevin@brightleaf.io>
+To: marissa_cole <marissa@redwood.com>, priyom_das <priyom@redwood.com>, jonas_weber <jonas@redwood.com>
+Date: Wed, 15 Sep 2027 11:23:02 -07:00
+Subject: Re: Uploader timeouts from on-prem agents
+
+Marissa, Priyom, Jonas —
+
+Thanks. 01:00–02:00 PDT works for us. We'll pause batch ingestion for that window and have our ops engineer (ops@brightleaf.io) on standby. Please post the rollout notes and the canary results to INF-3421. If the MSS clamp + ephemeral range doesn't fully resolve the truncated uploads we will be prepared to test a firmware rollback.
+
+Appreciate the quick coordination.
+
+— Kevin
+Kevin Park
+SRE Lead | BrightLeaf
+kevin@brightleaf.io

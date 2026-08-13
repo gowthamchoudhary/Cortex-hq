@@ -1,0 +1,194 @@
+Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+
+From: Ava Chen <ava.chen@redwoodinference.com>
+To: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>
+Cc: Sean Gallagher <sean.gallagher@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Omar El-Sayed <omar.elsayed@redwoodinference.com>, Logan Wright <logan.wright@redwoodinference.com>, Allison Grant <allison.grant@redwoodinference.com>, Connor O'Brien <connor.obrien@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Mon, Mar 3, 2025 at 9:12 AM PT
+Subject: Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+Attachments: CacheTelemetrySprint_OnePager_2025-03-03.pdf; CacheMetricsCardinalityBudget_v6.xlsx
+
+Team — requesting go/no-go today so we can start implementation tomorrow.
+
+Proposed sprint: Prefix + KV cache telemetry + initial “increase hit-rate” recommendations MVP (internal report / minimal Console stub).
+
+Scope (2–3 weeks):
+1) Runtime instrumentation (prefix cache + KV cache):
+   - hit/miss counters + partial-hit semantics (per ADR)
+   - miss reason taxonomy (stable set)
+   - eviction + memory pressure signals
+   - wasted prefill metric (privacy-safe, bucketed)
+   - sampling + local rate limiting
+2) Joinability/tags from gateway/control plane:
+   - model_id + model_version_id, route_id, deployment_mode, region
+   - strict allowlists; no per-tenant high-cardinality labels in raw metrics
+3) Ingestion + cardinality controls:
+   - enforce label policy + drop/aggregate forbidden label combos
+   - sampling strategy to keep cost stable
+4) Dashboards/alerts + runbook:
+   - SRE dashboards for triage and regression detection
+   - guardrail SLO proposal (internal; no customer SLA)
+5) Recommendations MVP:
+   - daily batch job that produces per-route/actionable levers (cache bytes/TTL/policy/routing locality/prompt canonicalization)
+
+Key risks (need explicit sign-off):
+- Metric cardinality/cost blowup if labels drift (route/model/version alone can be high)
+- Runtime overhead: must be near-zero on p95/p99
+- Privacy: no raw prompts; only bucketed lengths + hashed/canonicalized features
+- Cross-system join correctness (model version IDs, route IDs)
+
+Acceptance gates (proposal):
+- Perf canary: p95 latency regression <0.5% at default sampling; no measurable throughput drop
+- Cardinality: within budget in attached sheet; ingestion drops/guards tested in staging
+- Data QA: dashboards show sane counts across Hosted + Dedicated canary; missing-tag rate <1% on canary
+
+Owners (draft):
+- Runtime instrumentation: Omar (lead), Samir (impl), Noah (review), Sofia (approval)
+- Platform tags/join keys: Ethan + Amara
+- Ingestion/cardinality: Logan (lead) + Nadia + Caleb
+- Dashboards/alerts/runbook: Allison (lead) + Sergio + Aisha; approval: Sean
+- Perf/overhead: Marcus (owner)
+- Rollout/canary: Connor
+- Program mgmt: Talia
+
+If approved, I’d like a single-thread “go” from each of you (Runtime, Platform/Telemetry, Reliability/SRE) + any hard constraints we need to bake into the plan.
+
+Thanks,
+Ava
+CTO, Redwood Inference
+
+
+---
+
+From: Mateo Alvarez <mateo.alvarez@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>
+Cc: Priya Natarajan <priya.natarajan@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Omar El-Sayed <omar.elsayed@redwoodinference.com>, Logan Wright <logan.wright@redwoodinference.com>, Allison Grant <allison.grant@redwoodinference.com>, Connor O'Brien <connor.obrien@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Mon, Mar 3, 2025 at 9:34 AM PT
+Subject: Re: Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+
+Go from Runtime.
+
+Hard constraints from our side:
+- Instrumentation MUST be behind config flags, default on only where we’ve validated overhead (staging/canary first).
+- Streaming retries + continuous batching semantics have to be correct (no double counting). We’ve been burned here.
+- Miss reason taxonomy needs to be stable; don’t iterate labels every other day or SRE dashboards will churn.
+
+Omar is set as lead; Noah will review the final metric definitions vs the ADR before we flip anything beyond canary.
+
+Mateo
+VP Engineering, Runtime
+
+
+---
+
+From: Priya Natarajan <priya.natarajan@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>
+Cc: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Omar El-Sayed <omar.elsayed@redwoodinference.com>, Logan Wright <logan.wright@redwoodinference.com>, Allison Grant <allison.grant@redwoodinference.com>, Connor O'Brien <connor.obrien@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Mon, Mar 3, 2025 at 10:02 AM PT
+Subject: Re: Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+
+Go from Platform/Telemetry with two conditions:
+
+1) Cardinality policy is non-negotiable:
+   - allowlist labels only; no “free-form route name”, no tenant_id, no request_id
+   - route_id/model_version_id must be normalized (single source of truth from control plane)
+   - prompt-length/token-count must be bucketed (per standards)
+
+2) Ingestion needs an explicit “drop detection” signal.
+   We need to know when guards are dropping series so dashboards don’t show false “0 hits”. Please make that part of ENG-4823/4825 acceptance.
+
+Logan/Nadia will own schema enforcement; Caleb will implement the guardrails.
+
+Priya
+VP Engineering, Platform
+
+
+---
+
+From: Neha Kapoor <neha.kapoor@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>
+Cc: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Omar El-Sayed <omar.elsayed@redwoodinference.com>, Logan Wright <logan.wright@redwoodinference.com>, Allison Grant <allison.grant@redwoodinference.com>, Connor O'Brien <connor.obrien@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Mon, Mar 3, 2025 at 10:29 AM PT
+Subject: Re: Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+
+Go from Reliability.
+
+A few guardrails:
+- Please treat this as an operational change. Rollout needs canary gates + rollback plan (Connor + Sean to sign off before prod enablement).
+- I want “telemetry pipeline health” on the same dashboard page as cache hit-rate. When data is missing, we need a clear indicator.
+- Any p99 regression >1% at canary should block rollout unless explicitly approved by Runtime + SRE.
+
+If we hit these gates, I’m comfortable proceeding.
+
+Neha Kapoor
+VP Infrastructure & Reliability
+
+
+---
+
+From: Sean Gallagher <sean.gallagher@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>
+Cc: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>, Paula Mendes <paula.mendes@redwoodinference.com>, Omar El-Sayed <omar.elsayed@redwoodinference.com>, Logan Wright <logan.wright@redwoodinference.com>, Allison Grant <allison.grant@redwoodinference.com>, Connor O'Brien <connor.obrien@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Mon, Mar 3, 2025 at 11:11 AM PT
+Subject: Re: Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+
++1 go from SRE.
+
+Specific SRE asks (so we don’t page ourselves to death):
+- Alerts must be “guardrail” and avoid paging on workload mix shifts. Start with ticket-level alerts and promote to page only after we see stable baselines.
+- Add an alert on “hit-rate appears to be zero because metrics are missing” (drop detection + missing-tag).
+- Runbook must include:
+  - how to validate join keys (route_id/model_version_id)
+  - how to distinguish real regression vs telemetry failure
+  - rollback steps and who owns each step
+
+Allison will drive dashboards + runbook; I’ll approve alert policy before prod.
+
+Sean
+Director, Site Reliability Engineering
+
+
+---
+
+From: Paula Mendes <paula.mendes@redwoodinference.com>
+To: Ava Chen <ava.chen@redwoodinference.com>
+Cc: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>, Omar El-Sayed <omar.elsayed@redwoodinference.com>, Logan Wright <logan.wright@redwoodinference.com>, Allison Grant <allison.grant@redwoodinference.com>, Connor O'Brien <connor.obrien@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Mon, Mar 3, 2025 at 12:03 PM PT
+Subject: Re: Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+
+Thanks all.
+
+From Product side: +1 to proceed. The minimal requirements for the “recommendations MVP” slice are:
+- Output is per route + model_version + region (at minimum) and includes a plain-English “why” with suggested levers.
+- Must include caveats when confidence is low (e.g., insufficient sample, high workload volatility).
+- We should explicitly avoid any recommendation that implies logging prompt content.
+
+If we can land a first internal report + 1–2 example recommendations validated by CS, that’s a win for this sprint.
+
+Paula
+Sr PM, Telemetry Requirements / Rollouts
+
+
+---
+
+From: Ava Chen <ava.chen@redwoodinference.com>
+To: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Priya Natarajan <priya.natarajan@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>, Sean Gallagher <sean.gallagher@redwoodinference.com>
+Cc: Paula Mendes <paula.mendes@redwoodinference.com>, Omar El-Sayed <omar.elsayed@redwoodinference.com>, Logan Wright <logan.wright@redwoodinference.com>, Allison Grant <allison.grant@redwoodinference.com>, Connor O'Brien <connor.obrien@redwoodinference.com>, Talia Benson <talia.benson@redwoodinference.com>
+Date: Mon, Mar 3, 2025 at 2:06 PM PT
+Subject: Re: Cache hit-rate instrumentation sprint — go/no-go (prefix/KV cache telemetry + recommendations MVP)
+
+Approved — thank you.
+
+Decisions captured:
+- Proceed with the sprint starting tomorrow.
+- Must ship behind flags; staging -> canary -> prod only with gates.
+- Cardinality policy enforced via allowlists + ingestion guards; add explicit drop-detection metrics.
+- Perf gates: p95 <0.5% regression at default sampling; p99 >1% at canary blocks unless Runtime+SRE approve.
+- Alerts start ticket-level; page only after baseline stabilization.
+- Runbook + telemetry pipeline health indicator are required deliverables.
+
+Talia: please set up a daily 15-min leadership checkpoint this week only (Mon–Fri) to keep decision latency low.
+
+Connor/Allison/Logan/Omar: please reply-all by EOD with the concrete rollout timeline (staging date, canary start, target prod date) + explicit rollback owner.
+
+Ava
+CTO, Redwood Inference

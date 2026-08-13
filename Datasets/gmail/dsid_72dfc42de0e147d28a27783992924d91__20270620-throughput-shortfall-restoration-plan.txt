@@ -1,0 +1,121 @@
+Throughput shortfall: restoration plan & commercial reconciliation
+
+From: Asha Nair <asha.nair@pioneer.ai>
+To: Grace O'Connor <grace_oconnor@redwood.ai>
+Cc: Victor Ramos <victor.ramos@pioneer.ai>
+Date: Fri, 18 Jun 2027 09:12:00 -0700
+Subject: Production throughput drop impacting inference pipelines
+
+Hi Grace,
+
+We're seeing a sustained throughput drop against our Dedicated instance starting ~02:00 UTC yesterday. Our ingest pipelines are backing up and tail latency for critical routes is now >2s, and error rate has spiked to ~6% on inference calls. This is outside the committed SLO for Peak Throughput and is affecting several customer-facing features.
+
+Can you confirm you have visibility into the same metrics and — importantly — what remediation and compensation we should expect? Finance and our CTO are asking for an estimate of the commercial exposure.
+
+Attached is a short export of request counts and error codes from our side.
+
+Thanks,
+Asha
+Asha Nair
+Head of ML Engineering, Pioneer Analytics
+
+Attachment: server_metrics_q2_jun18.csv (csv)
+
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: Asha Nair <asha.nair@pioneer.ai>
+Cc: Victor Ramos <victor.ramos@pioneer.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Date: Fri, 18 Jun 2027 09:45:00 -0700
+Subject: Re: Production throughput drop impacting inference pipelines
+
+Hi Asha — thanks for the heads up and for the export. I can confirm we see the same degradation from our telemetry: a sustained throughput shortfall on the regional pool that hosts your Dedicated capacity (us-west-2) starting ~02:10 UTC. Error rate and tail latency spikes align with your logs.
+
+Immediate actions we've kicked off:
+- Failover to warm standby pool to alleviate load (in progress).
+- Increased continuous batching threshold temporarily to reduce per-token overhead.
+- Ops running a kernel-level profile to identify hot path regressions (ticket: OPS-11249).
+
+I don't have a final remediation timeline yet, but Marcus is looping in engineering to prioritize. I'll keep you posted with a concrete plan and a proposed commercial reconciliation.
+
+Apologies for the disruption — I know this impacts your QPS-critical rollout.
+
+Best,
+Grace O'Connor
+Account Executive, Redwood Inference
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Grace O'Connor <grace_oconnor@redwood.ai>, Jordan Blake <jordan_blake@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Fri, 18 Jun 2027 10:02:00 -0700
+Subject: Fwd: Production throughput drop impacting inference pipelines — triage + commercial calc
+
+Team — forwarding Asha's note. Initial findings from Ops:
+- Root cause likely a regression in the memory allocator in the runtime's continuous-batching path when queue depth exceeds a threshold. This caused higher GC and request slowdowns for models with large KV cache.
+- Warm standby failover reduced tail latency within 45 minutes but throughput remained ~60% of committed for several hours while autoscale rebalanced.
+
+Proposed short-term customer-facing remediation (to send to Pioneer):
+1) Formal incident timeline and RCA within 48 hours.
+2) Immediate one-time credit equal to 25% of their monthly Dedicated fee for June (covers the impacted window) + a technical remediation assurance (patch + canary for next deploy).
+3) Offer a 30-day free upgrade to a higher throughput class for a single route while we validate kernel fix (no additional charge).
+
+Commercial calc notes: if we do 25% credit for June that equals approx $38,000 for RDW-47821. We can discuss partial alternatives if legal/finance push back.
+
+Also tagging Jordan to prepare escalation messaging to Pioneer execs if they request C-level engagement.
+
+Marcus
+Director, Customer Success
+
+Attachment: proposed_recovery_plan_v1.pdf (pdf)
+
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: Asha Nair <asha.nair@pioneer.ai>, Victor Ramos <victor.ramos@pioneer.ai>
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Jordan Blake <jordan_blake@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Sat, 19 Jun 2027 08:30:00 -0700
+Subject: Re: Production throughput drop impacting inference pipelines
+
+Asha / Victor — thank you for your patience. I wanted to share the proposed reconciliation and next steps while we finish the RCA: 
+
+Summary & immediate proposal: 
+- Impact window: 2027-06-17 02:10 UTC through 2027-06-17 08:40 UTC (verified by both sides).
+- Observed reduction: average throughput ~60% of committed RPS across affected routes, error rate peaked at 6.2%.
+
+Proposed commercial remediation: 
+1) One-time credit: 25% of June Dedicated fees (estimated $38,000) applied to the next invoice.
+2) One-time technical uplift: 30-day free temporary upgrade to the next throughput class for the primary route (no charge).
+3) SLA addendum: retroactive note to the contract acknowledging the breach and a commitment to a prioritized SR for any regression in the next 90 days.
+
+Operational commitments: 
+- RCA with timelines posted within 48 hours (Ops ticket OPS-11249).
+- Targeted runtime patch + canary roll in <=7 business days.
+- Weekly check-ins while validation is ongoing.
+
+If this package is acceptable, we can generate a DocuSign amendment and an invoice credit. If you prefer a different credit structure (e.g., pro-rata token refund or multi-month concession) let me know and we'll work with Finance.
+
+Grace
+Grace O'Connor
+Account Executive, Redwood Inference
+
+Attachment: commercial_reconciliation_draft.xlsx (xlsx)
+
+From: Victor Ramos <victor.ramos@pioneer.ai>
+To: Grace O'Connor <grace_oconnor@redwood.ai>
+Cc: Asha Nair <asha.nair@pioneer.ai>, Pioneer Analytics Legal <legal@pioneer.ai>
+Date: Sun, 20 Jun 2027 16:45:00 -0700
+Subject: Re: Production throughput drop impacting inference pipelines
+
+Grace — thanks for the quick response and the concrete proposal. Pioneer accepts the one-time 25% credit and the 30-day throughput uplift. Our legal team will review the SLA addendum; please send the DocuSign.
+
+Two requests before we sign:
+1) Include a short escalation path with named Redwood exec contacts (VP/Head of CS) in the addendum.
+2) Please confirm the uplift will be enabled by Monday 2027-06-21 09:00 UTC. We need this for a limited customer rollout early next week.
+
+Once those are confirmed, Legal will route the amendment for signature. Appreciate the rapid coordination.
+
+Best,
+Victor Ramos
+VP Product, Pioneer Analytics
+
+On Sun, Jun 20, 2027 at 09:12 AM Grace O'Connor <grace_oconnor@redwood.ai> wrote:
+> Understood — we'll add the named escalation contacts to the amendment (I will include Marcus and Jordan).
+>
+> Monica will confirm the uplift timing and post an enablement note once it's live.
+>
+> Grace

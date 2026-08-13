@@ -1,0 +1,146 @@
+Security intake: audit logging export checklist
+
+From: Maya Srinivasan <maya.srinivasan@redwood.ai>
+To: Sam Cheng <sam.cheng@finserv.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: 2026-06-28T09:12:00-07:00
+Subject: Security intake: audit logging export checklist
+
+Hi Sam — thanks again for taking the call this morning. Quick recap and proposed next steps so we have the same page.
+
+Recap (post-call):
+- Scope: FinServ is evaluating Redwood for customer-facing workflows that will require auditability for regulatory and internal investigations.
+- Compliance posture: Redwood is actively maintaining SOC 2 controls (Type II in progress); we support GDPR data controls and offer BAA for Private customers.
+- Audit logs you care about: admin activity (user/admin actions in Console), API request logs (request metadata, timestamps, routing), system events (start/stop, scaling), and access/auth logs (IAM, token events).
+
+Export and immutability:
+- Export options: periodic export to customer S3, streaming to SIEM via syslog/Kinesis, or BigQuery export (NDJSON/CSV).
+- Formats: NDJSON for event streams, CSV for summarized reports, and JSON schema for full records.
+- Immutability: for Private/Dedicated we can enable S3 Object Lock (WORM) for retention and legal hold. For Hosted customers we provide signed export snapshots with checksums and timestamping; full WORM on hosted requires additional contract terms.
+
+Retention and redaction:
+- Hosted default retention: 90 days for API logs and 365 days for admin events; configurable for Dedicated/Private (30 days to 7 years).
+- Sensitive content: by default we do not store customer prompt/response payloads for hosted inference. For Dedicated/Private deployments, storing full request/response bodies can be turned on with customer consent and appropriate controls.
+
+Attachments sent with this email: redwood-audit-logs-overview.pdf (high-level), soc2-readiness-summary.pdf (status & timeline).
+
+Next steps / action items:
+1) I will send your security questionnaire and an example NDJSON export (redwood-log-export-sample.ndjson).
+2) Rishi/Neha to prepare a short technical doc on export mechanics (S3 signing, checksum, retention config) by EOD 6/29.
+3) Sam to confirm whether you need full request/response bodies or just metadata.
+4) Schedule technical deep-dive next week to walk through a sample export and retention options.
+
+Planned follow-up: propose Wed 7/2 10:00 AM PT for 45 min (technical). Let me know if that works.
+
+Thanks,
+Maya
+Maya Srinivasan
+Senior Solutions Engineer | Redwood Inference
+maya.srinivasan@redwood.ai | +1 (415) 555-0133
+
+---
+Attachment: redwood-audit-logs-overview.pdf (1 page overview)
+Attachment: soc2-readiness-summary.pdf (2 pages)
+From: Sam Cheng <sam.cheng@finserv.com>
+To: Maya Srinivasan <maya.srinivasan@redwood.ai>
+Date: 2026-06-28T11:20:00-07:00
+Subject: Re: Security intake: audit logging export checklist
+
+Hi Maya — thanks for the summary, that captures the call well. A few clarifying questions before the deep-dive: 
+
+1) Can the API request logs contain full request and response bodies (including inputs to the model) if we need them for forensic review?
+2) What is the default retention for admin events and API logs in Hosted? Can retention be extended without moving to Private/Dedicated?
+3) For immutability and chain-of-custody: can Redwood provide a tamper-evident export (signed, timestamped) that would be acceptable for e-discovery/legal hold?
+4) SOC 2 timeline and BAA: what dates should we plan for? Procurement will likely want to start contracting if Private is recommended.
+
+Also please include a sample NDJSON export and the schema so we can validate ingestion on our side.
+
+Sam Cheng
+Head of InfoSec | FinServ Inc
+sam.cheng@finserv.com
+
+On Mon, Jun 28, 2026 at 09:12 AM Maya Srinivasan <maya.srinivasan@redwood.ai> wrote:
+> [original message clipped]
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Sam Cheng <sam.cheng@finserv.com>
+Cc: Maya Srinivasan <maya.srinivasan@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: 2026-06-28T13:45:00-07:00
+Subject: Re: Security intake: audit logging export checklist
+
+Hi Sam — quick answers inline and a few notes on implementation options.
+
+1) Full request/response bodies:
+- Hosted offering: we do NOT retain model prompt/response bodies by default for customer privacy. We can enable capture of request/response bodies for hosted customers under a written agreement and with strict access controls, but this is atypical.
+- Dedicated/Private: full payload capture is supported and commonly used for forensics; these deployments run in the customer VPC or dedicated cluster and you control retention and access policies.
+
+2) Retention:
+- Hosted default: API logs = 90 days; Admin events = 365 days.
+- Dedicated/Private: configurable 30 days up to 7 years (policy + S3 lifecycle).
+
+3) Immutability / chain-of-custody:
+- Private: enable S3 Object Lock + legal hold and provide signed export manifests (SHA256 checksums, signed by Redwood KMS) to correlate export artifacts.
+- Hosted: we offer signed snapshot exports (periodic) with timestamped manifests and checksums; for strict WORM requirements we recommend Dedicated/Private or an export-to-customer-s3 workflow where S3 Object Lock is applied on customer side.
+
+4) SOC 2 / BAA:
+- SOC 2 Type II: audit in progress; report expected Q3 2026 (target: Sept 2026).
+- BAA: available for Private customers; we can initiate paperwork once Procurement signals intent.
+
+I'll put together a short tech note with export schema, sample NDJSON, and an example export manifest. Expect that by tomorrow EOD.
+
+—Rishi
+Rishi Malhotra
+Principal Cloud Architect | Redwood Inference
+rishi.malhotra@redwood.ai
+
+---
+Attachment: (preparing) redwood-log-export-sample.ndjson
+From: Sam Cheng <sam.cheng@finserv.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>
+Cc: Maya Srinivasan <maya.srinivasan@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>, Procurement <procurement@finserv.com>
+Date: 2026-06-29T09:10:00-07:00
+Subject: Re: Security intake: audit logging export checklist
+
+Thanks Rishi — that helps. A couple follow-ups: 
+
+- For our use case we likely need metadata plus full request bodies for a small subset of accounts (e.g., regulated customers). Would Redwood support a phased capture (metadata by default, enable bodies for specific customer IDs)?
+- Please include an estimated export size per 1M API requests/day (NDJSON) so we can budget storage and ingestion.
+- Procurement will want to know estimated costs for Dedicated vs hosted + export egress.
+
+We can take these details on the technical call. Wed 7/2 at 10:00 AM PT works for our team. Can you send a calendar invite?
+
+Sam
+
+On Mon, Jun 28, 2026 at 01:45 PM Rishi Malhotra <rishi.malhotra@redwood.ai> wrote:
+> [snip]
+From: Maya Srinivasan <maya.srinivasan@redwood.ai>
+To: Sam Cheng <sam.cheng@finserv.com>, Procurement <procurement@finserv.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: 2026-06-30T14:05:00-07:00
+Subject: Re: Security intake: audit logging export checklist — sample + next steps
+
+Hi Sam — attaching the sample NDJSON export and a short schema doc. Summary answers to the open items: 
+
+1) Phased capture: yes — we can configure capture at the customer-id or route level so you store full bodies only for regulated customers. Access controls and audit trail for who accesses those logs are included.
+
+2) Volume estimate (rough): NDJSON event size per API call avg ~1.2 KB (metadata-only) and ~6–20 KB if full payloads are included (depends on prompt length). So 1M requests/day -> ~1.2 GB/day (metadata) up to ~6–20 GB/day (with bodies). Paging and compression (gzip) reduce on-disk to ~30–50% of raw.
+
+3) Cost notes: Hosted + periodic export (customer egress) is usually cheaper up-front; Dedicated/Private incurs infra + reserved capacity but provides direct control over retention and WORM. We'll provide a ballpark cost worksheet during the call.
+
+4) SOC2/BAA: Rishi noted SOC2 Type II expected Sept 2026. If you want a BAA, Procurement should signal and we will route to Legal — we can provision a draft BAA once Procurement confirms.
+
+Calendar invite: I have scheduled Wed 7/2 10:00 AM PT (45 min) and sent the invite to Sam/Procurement/Rishi/Neha.
+
+Action items: 
+- Maya: share sample NDJSON and schema (attached).
+- Rishi: deliver export manifest template and signed-checksum workflow doc during call.
+- Neha: prepare notes on access controls and role-based access for archive retrieval.
+- Sam/Procurement: confirm whether you want bodies captured for regulated accounts and whether Procurement will open BAA conversation.
+
+Attachments: redwood-log-export-sample.ndjson (sample, 2 MB), redwood-audit-logs-overview.pdf, soc2-readiness-summary.pdf
+
+Thanks — talk Wed.
+Maya
+
+Maya Srinivasan
+Senior Solutions Engineer | Redwood Inference
+maya.srinivasan@redwood.ai | +1 (415) 555-0133

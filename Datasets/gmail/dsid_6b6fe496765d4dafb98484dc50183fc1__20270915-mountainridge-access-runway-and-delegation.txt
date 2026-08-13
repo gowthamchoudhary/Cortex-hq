@@ -1,0 +1,157 @@
+Mountainridge access runway and delegation
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Samantha Reed <samantha@mountainridge.com>, Kevin Ortiz <kevin.ortiz@mountainridge.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-09-01T10:15:00-07:00
+Subject: Mountainridge access runway and delegation
+
+Hi Samantha / Kevin —
+
+Thanks again for the demo last week. Per our call, this thread will be the single place to track the access-control rollout (SSO / SCIM / IP allowlist / service accounts + org policies). Goal: a staged cutover with a pilot group (10 users) the week of 2027-10-11 and full-environment enforcement two weeks after successful pilot.
+
+Attached is our template listing the SAML metadata we need and the SCIM provisioning scopes (MR-SSO-Requirements.pdf). Quick asks to unblock scheduling: 
+- Confirm which company-owned IP ranges we should whitelist for Redwood’s control plane (we have a separate edge allowlist for the test-phase).
+- Confirm the service-account owner and whether you want separate service accounts per environment (prod/stage).
+- Who will be the delegated admin on your side for org policy signoffs?
+
+I’ve looped Monica (implementation lead) and Marissa (engineering contact) to propose a rollout cadence once you confirm the above.
+
+Cheers,
+Jordan Blake
+Account Executive | Redwood Inference
+---
+Attachment: MR-SSO-Requirements.pdf (PDF, 120KB)
+
+From: Samantha Reed <samantha@mountainridge.com>
+To: Jordan Blake <jordan_blake@redwood.com>, Monica Patel <monica_patel@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Kevin Ortiz <kevin.ortiz@mountainridge.com>
+Date: 2027-09-02T09:02:00-07:00
+Subject: Re: Mountainridge access runway and delegation
+
+Thanks Jordan —
+
+Quick answers:
+- IP ranges: 52.44.120.0/22 and 18.204.0.0/16 for egress from our corp VPN; staging will be limited to 52.44.120.0/22.
+- Service accounts: prefer one per environment; owner will be our SRE lead (kevin.ortiz@mountainridge.com).
+- Delegated admin: Samantha Reed (me) for the pilot; final signoff will be SVP IT.
+
+Couple of clarifying questions for Monica / Marissa:
+1) Can you share the recommended SCIM attribute mapping and whether Redwood will enforce group-sync-only provisioning?
+2) Are there any special header requirements for the SAML assertion (we use a proxy that injects X-Company-Region)?
+
+Also, attaching our internal security checklist for your team to review before pilot.
+
+Best,
+Samantha
+Director, Identity & Access | Mountainridge Financial
+---
+Attachment: mountainridge-security-checklist.pdf (PDF, 95KB)
+
+From: Monica Patel <monica_patel@redwood.com>
+To: Samantha Reed <samantha@mountainridge.com>, Kevin Ortiz <kevin.ortiz@mountainridge.com>
+Cc: Jordan Blake <jordan_blake@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-09-03T11:28:00-07:00
+Subject: Re: Mountainridge access runway and delegation
+
+Hi Samantha / Kevin —
+
+Thanks for the fast replies — below is a concise implementation plan and the answers to your questions. We can slot a 60-minute technical preflight with your SREs next week.
+
+Implementation summary (high level):
+Phase 0 — Preflight (this week)
+- Exchange SAML metadata (ACS URL / Entity ID / fingerprint).
+- Confirm IP allowlist for control plane + staging.
+- Provision service accounts in Mountainridge AWS (names below).
+
+Phase 1 — Pilot (2027-10-11)
+- Create pilot group (10 users), enable SCIM provisioning (group-sync), and test SAML login flows.
+- Monitor auth latency and provisioning logs; collect QA from pilot users.
+
+Phase 2 — Production cutover (2027-10-25)
+- Enforce org policies (MFA required, session timeout), expand allowlist if needed, rotate keys.
+
+Specifics:
+- SCIM mapping: We recommend group-sync-first. Required attributes: userName (email), givenName, familyName, active, groups. Optional: department, title, employeeNumber. We will send a sample mapping JSON in the preflight meeting.
+- SAML headers: Redwood accepts additional headers like X-Company-Region; we do not rely on them for auth decisions but can surface them in logs. ACS URL: https://mountainridge.redwood.example.com/saml/acs. SP Entity ID: urn:redwood:mountainridge:prod.
+- Service account names (suggested):
+  - redwood-mr-bot-prod@mountainridge.com
+  - redwood-mr-bot-stage@mountainridge.com
+  - redwood-mr-deploy@mountainridge.com (for deployment-only ops)
+- Org policies we will enforce: MFA, IP-based conditional enforcement for admin roles, SCIM membership sync as source-of-truth.
+
+Ownership:
+- CS Owner: Jordan Blake (account coordination, go/no-go)
+- Implementation Lead: Monica Patel (integration, config, pilot)
+- Eng Escalation: Marissa Cole (runtime/kv cache and session debugging)
+
+Attachments: I uploaded our implementation template (mr-implementation-template.xlsx) with a checklist and timeline.
+
+Next steps:
+1) Kevin to confirm service account creation and grant minimum IAM roles to the three accounts above.
+2) Schedule 60-min preflight (please propose 2 windows — Monica and Marissa are PST mornings).
+3) We’ll add your Security checklist items to our pilot acceptance criteria and respond inline by 2027-09-10.
+
+On Wed, Sep 1, 2027 at 10:15 AM Jordan Blake <jordan_blake@redwood.com> wrote:
+> Hi Samantha / Kevin —
+> 
+> Thanks again for the demo last week. Per our call, this thread will be the single place to track the access-control rollout...
+
+Regards,
+Monica Patel
+Implementation Lead | Redwood Inference
+---
+Attachment: mr-implementation-template.xlsx (Excel, 45KB)
+
+From: Kevin Ortiz <kevin.ortiz@mountainridge.com>
+To: Monica Patel <monica_patel@redwood.com>, Samantha Reed <samantha@mountainridge.com>
+Cc: Jordan Blake <jordan_blake@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-09-10T14:07:00-07:00
+Subject: Re: Mountainridge access runway and delegation
+
+Monica — thanks for the plan. A couple of notes from our security team (copied):
+
+- They want SCIM to be limited to group membership for the pilot (no attribute updates beyond name / email). That’s a firm ask for the first rollouts.
+- Our proxy will add X-Company-Region; please confirm logs will redact PII and that session traces are stored for 90 days.
+- We attached an XLS with some redlines on the timeline (see redlines-mr-20270910.xlsx).
+
+Quote from their checklist (IT Sec):
+> “We require proof of token rotation cadence and an initial audit log sample before pilot sign-off.”
+
+Can you confirm where we can access a sample audit log and who on Redwood will be responsible for token rotation documentation?
+
+Thanks —
+Kevin Ortiz
+SRE Lead | Mountainridge Financial
+---
+Attachment: redlines-mr-20270910.xlsx (Excel, 12KB)
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Samantha Reed <samantha@mountainridge.com>, Kevin Ortiz <kevin.ortiz@mountainridge.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-09-15T16:03:00-07:00
+Subject: Re: Mountainridge access runway and delegation
+
+Samantha / Kevin —
+
+Appreciate the fast turnaround and the redlines. Summary of commit items and owners: 
+- Monica will provide a sample audit log and token-rotation cadence doc by 2027-09-20. (Monica: confirm ETA)
+- Kevin to provision the three service accounts and grant minimal IAM roles by 2027-09-22.
+- Pilot group creation and SCIM group-only mode agreed for pilot window starting 2027-10-11.
+- Jordan to confirm go/no-go call on 2027-10-07 and prepare HubSpot deal update.
+
+I’ve created the HubSpot task and uploaded the implementation template and redlines to the shared drive. Please use this thread for status updates so the CS <> Eng <> SRE owners are all in the loop.
+
+Meeting options for preflight (60 min):
+- 2027-09-17 9:00am PST
+- 2027-09-17 11:30am PST
+
+Please pick one and I’ll send the calendar invite.
+
+Links: HubSpot deal: https://hubspot.com/deal/MR-2027-07-03 | Drive: https://drive.google.com/drive/folders/1a2b3cMR-implementation | DocuSign: https://www.docusign.com/recipient/abcdef1234567890
+
+Thanks,
+Jordan Blake
+Account Executive | Redwood Inference
+---
+Attachment: MR-SSO-Requirements.pdf (PDF, 120KB)

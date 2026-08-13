@@ -1,0 +1,141 @@
+MedFlow: kickoff for streaming, tool-calls, and structured outputs
+
+From: Alex Morgan <alex.morgan@medflow.com>
+To: Irene Choi <irene.choi@redwood.ai>
+Cc: Rachel Wu <rachel.wu@medflow.com>, Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: 2026-11-22T09:12:00-08:00
+Subject: Kickoff: Streaming + Tool-calls + Structured schema handoff
+
+Hi Irene,
+
+Thanks for the intro call last week — Rachel and I pulled together the immediate priorities so we can get to a short implementation runway. High level: MedFlow wants to enable real-time call transcription + structured diagnostic JSON output and a small set of function/tool calls (patient-record lookup and appointment-suggest). We expect ~3–5 rps at peak, 30s average session, and prefer responses <300ms p50.
+
+Can you confirm what you need from our side to make the handoff smooth? We attached a short MOP (medflow_mop_v1.pdf) that lists current infra and SSO notes.
+
+What we want in the first 2-week sprint:
+- Confirm schema fields for diagnostic JSON (examples attached)
+- Proof-of-concept stream with tool-call for patient lookup
+- Canary: small traffic slice (+ rollback plan)
+
+Available for a quick sync Tue or Wed this week.
+
+Thanks,
+Alex
+Alex Morgan
+Director, Integrations — MedFlow Health
+Attachments: medflow_mop_v1.pdf
+
+From: Irene Choi <irene.choi@redwood.ai>
+To: Alex Morgan <alex.morgan@medflow.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Soojin Lee <soojin.lee@redwood.ai>
+Date: 2026-11-22T11:30:00-08:00
+Subject: Re: Kickoff: Streaming + Tool-calls + Structured schema handoff
+
+Hi Alex — thanks for the summary and the MOP. Looping in Marissa (CS lead) and Ben (implementation eng). Soojin will advise on schema validation patterns.
+
+Quick replies / asks:
+1) Schema: can you attach a one-page example payload for the top 3 diagnostic event types? JSONL or NDJSON is ideal.
+2) Traffic/test access: can you provide a staging API key and a small s3 bucket / sample files with 1k lines of real-ish transcripts? That will let us estimate batching and KV cache sizing.
+3) SLOs: we can meet the 300ms p50 on p3/quantized variants if average token lengths aren't huge — we'll validate in sprint 1.
+
+Proposed cadence (first two weeks):
+- Day 1: alignment call + final schema draft
+- Day 3–7: dev spike (stream + tool-call stubs)
+- Day 8–10: internal demo and canary plan
+- Day 11–14: extended canary and handover docs
+
+I've attached a short checklist we use for these transfers (schema_examples.ndjson referenced below).
+
+Best,
+Irene Choi
+Customer Success Manager — Redwood Inference
+Mobile: +1 (415) 555-0194
+Attachments: schema_examples.ndjson
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Alex Morgan <alex.morgan@medflow.com>, Irene Choi <irene.choi@redwood.ai>
+Cc: Ben Carter <ben.carter@redwood.ai>, Soojin Lee <soojin.lee@redwood.ai>
+Date: 2026-11-22T12:05:00-08:00
+Subject: Re: Kickoff: Streaming + Tool-calls + Structured schema handoff — 2-week plan + checklist
+
+Alex / team — Marissa here. I'll drive the handshake and internal coordination. A few specifics from the implementation side so we can avoid rework: 
+
+Implementation notes (initial sprint):
+- Environments: we will use your staging workspace (token) + our sandbox tenant. Please provide a role-limited API key for the stubbed tool-call endpoints.
+- Streams: we'll validate both WebSocket and HTTP chunking depending on your client. Our runtime supports prefix caching for repeated conversation segments; please flag any PII rules (we'll redact as needed).
+- Tool-calls: define two endpoints with simple JSON input: /lookupPatient {id} and /suggestAppt {range,datePrefs}. We'll return a mocked response first, then swap to your endpoint in canary.
+- Structured outputs: prefer a deterministic top-level object with metadata + events array. We'll share a validation harness.
+
+Deliverables by EOW (end of sprint):
+- Schema v0.2 with examples (we'll version in Git and give you a link)
+- Sandbox stream + tool stub with sample responses
+- Canary runbook (rollback steps and metrics)
+
+Questions for MedFlow:
+- Who owns the patient lookup service? (internal MedFlow service name & team)
+- Are there any rate limits we should expect on your side?
+
+I'll post a short shared checklist to the Drive link Irene added and create a HubSpot activity (HubSpot:HF-12345).
+
+—Marissa
+Marissa Cole
+Senior Customer Success — Redwood Inference
+Attachments: none
+
+From: Alex Morgan <alex.morgan@medflow.com>
+To: Marissa Cole <marissa.cole@redwood.ai>, Irene Choi <irene.choi@redwood.ai>
+Cc: Rachel Wu <rachel.wu@medflow.com>
+Date: 2026-11-23T08:47:00-08:00
+Subject: Re: Kickoff: Streaming + Tool-calls + Structured schema handoff — 2-week plan + checklist
+
+Thanks all — quick answers inline: 
+- Patient lookup service: owned by CoreAPI team (coreapi@medflow.com). We will create a role-limited token that only returns patient metadata (no raw PII).
+- Rate limits: staging is generous (~100 rps), prod will be throttled to 20 rps (per account).
+- Attached: schema_examples.ndjson (top-3 event types) and a small traffic sample (1k transcripts).
+
+We can do the alignment call Tue 11/24 10:00 PT — does that work for your team? I'll also upload a stubbed test endpoint in staging and share credentials after the call.
+
+On the canary, we'd like a gradual ramp to 5% traffic for the first 24h and explicit rollback to the previous system if errors > 1%.
+
+Forwarding the MOP and sample traffic: 
+
+> -----Original Message-----
+> From: Alex Morgan <alex.morgan@medflow.com>
+> Sent: Sunday, November 22, 2026 9:12 AM
+> To: Irene Choi <irene.choi@redwood.ai>
+> Subject: Kickoff: Streaming + Tool-calls + Structured schema handoff
+>
+> [See original message and medflow_mop_v1.pdf attached]
+
+Thanks,
+Alex
+Attachments: schema_examples.ndjson, medflow_traffic_sample_1k.jsonl
+
+From: Irene Choi <irene.choi@redwood.ai>
+To: Alex Morgan <alex.morgan@medflow.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Soojin Lee <soojin.lee@redwood.ai>
+Date: 2026-11-23T10:15:00-08:00
+Subject: Re: Kickoff: Streaming + Tool-calls + Structured schema handoff — mutual action plan
+
+Perfect — thanks for the attachments and the proposed canary ramp. Confirming Tue 11/24 10:00 PT for the alignment call (we'll send a calendar invite). Agenda: 15m alignment, 30m schema + tool-call shapes, 15m canary/runbook checklist.
+
+Mutual action plan (high level):
+- Day 0 (Tue 11/24): alignment call + staging token created
+- Day 1–3: schema v0.2 + validation harness (Redwood delivers draft)
+- Day 4–7: stream spike + tool-call stub + internal demo
+- Day 8–10: canary at 5% with metrics dashboard (errors, latency, token cost)
+- Day 11–14: review, extend canary or rollback; final handover docs + knowledge transfer session
+
+Action items (owners):
+- MedFlow: provide staging token, sample data, and contact for CoreAPI (Alex)
+- Redwood (Marissa/Ben): deliver schema draft, sandbox stream, canary runbook
+- Soojin: prepare schema validation harness + automated checks
+
+Attachments to follow: mutual_action_plan.csv (timeline + owners) and a short runbook template. We'll also link the Git repo for schema v0.2 to the Drive link.
+
+If anything changes before the call, ping me on Slack or reply here. Looking forward to the kickoff.
+
+Best,
+Irene Choi
+Customer Success Manager — Redwood Inference
+Attachments: mutual_action_plan.csv

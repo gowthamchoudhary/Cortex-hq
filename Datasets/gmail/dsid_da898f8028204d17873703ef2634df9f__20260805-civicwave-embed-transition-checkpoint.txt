@@ -1,0 +1,158 @@
+CivicWave: embeddings transition — sequencing, backfill plan, and rerank evals
+
+From: Tessa Morgan <tessa_morgan@redwoodinference.com>
+To: Mira Patel <mira@civicwave.ai>, Raj Desai <raj@civicwave.ai>
+Cc: Ben Carter <ben_carter@redwoodinference.com>, Naomi Feldman <naomi_feldman@redwoodinference.com>
+Date: Wed, 05 Aug 2026 09:12:00 -0700
+Subject: CivicWave: embeddings transition — sequencing, backfill plan, and rerank evals
+
+Hi Mira / Raj —
+
+Great to have you over the finish line on the SOW. Per our onboarding intake, Im kicking off the internal implementation handoff and want to align on three immediate items so we can lock schedule:
+
+1) Index backfill window and export cadence — you attached a small manifest (thanks). Can you confirm: full corpus export vs incremental snapshot? Any soft-deletes we should preserve?
+
+2) Vector store choice — are you constrained to a managed vector DB (you listed Pinecone / Milvus in the intake) or would you prefer Redwood-managed vectors in your private VPC?
+
+3) Rerank evaluation set — we need 300-500 representative queries and judge labels (accept / reject / rank) or a set of business-critical flows to seed the eval.
+
+Attachments: CivicWave_manifest.csv, SOW_CivicWave_v1.pdf
+
+Next steps: Ben will propose an index-phasing plan and Naomi will share an initial rerank acceptance criteria doc. If this sounds right Ill schedule a 30-min technical kickoff for Monday.
+
+Thanks,
+Tessa
+Customer Success
+Redwood Inference
+
+From: Mira Patel <mira@civicwave.ai>
+To: Tessa Morgan <tessa_morgan@redwoodinference.com>
+Cc: Raj Desai <raj@civicwave.ai>
+Date: Wed, 05 Aug 2026 11:03:00 -07:00
+Subject: Re: CivicWave: embeddings transition — sequencing, backfill plan, and rerank evals
+
+Thanks Tessa — happy to confirm details. A couple quick constraints:
+
+- Corpus export: we can provide daily incremental snapshots and a single 100% export (S3) for the initial backfill. The manifest references how docs map to product areas; we also have soft-delete flags (we'd like soft-deletes excluded from the seeded index).
+- Vector DB: preference is for a managed provider (we currently run a small Pinecone cluster) but we are open if Redwood recommends a hybrid (hosted + ephemeral) approach for the initial waves.
+- Rerank evals: we'll aim to assemble ~400 labeled queries across our three priority flows (search, recommendations, internal help).
+
+Linking our engineering lead Raj on timeline: Raj — are you OK with the following window for the full export? Friday 8/7 02:00 UTC for the export snapshot, incremental deltas thereafter.
+
+— Mira
+
+On Wed, Aug 5, 2026 at 09:12, Tessa Morgan <tessa_morgan@redwoodinference.com> wrote:
+> Hi Mira / Raj —
+> 
+> Great to have you over the finish line on the SOW...
+
+From: Ben Carter <ben_carter@redwoodinference.com>
+To: Tessa Morgan <tessa_morgan@redwoodinference.com>, Mira Patel <mira@civicwave.ai>
+Cc: Naomi Feldman <naomi_feldman@redwoodinference.com>, Jordan Blake <jordan_blake@redwoodinference.com>
+Date: Thu, 06 Aug 2026 08:22:00 -07:00
+Subject: Re: CivicWave: embeddings transition — sequencing, backfill plan, and rerank evals
+
+Hi all —
+
+Thanks Mira, this is helpful. Based on the constraints, heres an initial technical sequencing we recommend:
+
+Phase 0 — Preflight (1–2 days):
+- Validate manifest mapping; confirm primary key and soft-delete handling.
+- Confirm vector dimension & model (we suggest 1536 dims / open model X-Emb-Base-v1 or similar).
+
+Phase 1 — Seed index (3 days):
+- Run a sample export (10k docs) to validate embeddings pipeline and vector store mapping.
+- Decide final vector DB: options (ranked): 1) Pinecone (managed), 2) Milvus (self-managed), 3) Redis + HNSW (for low-latency read-heavy). I recommend Pinecone for rapid first wave.
+
+Phase 2 — Backfill & priming (5–10 days):
+- Full export backfill to a staging index using streaming writes with checkpointing.
+- Warm priming using top-queries to populate cache / KV templates.
+- Run a small rerank baseline (see attached checklist).
+
+Phase 3 — Canary & acceptance (2–3 days):
+- Canary traffic (5%) to validate latency and quality.
+- If latency P95 > target, enable quantized model variant + batch sizing adjustments and re-run canary.
+
+Attachments: index_backfill_checklist.xlsx
+
+Notes on vector DB tradeoffs:
+- Pinecone: fast, lower ops, but cost scales quickly on large pods. Good for Q1 go-live.
+- Milvus: flexible + cost-efficient for bulk backfills; more infra work.
+- Redis/HNSW: best for sub-10ms reads at scale but requires custom sharding.
+
+Ill prepare a short runbook for the Friday export (8/7) and a candidate schedule for the 8/9 kickoff.
+
+-Ben
+
+On Wed, Aug 5, 2026 at 11:03, Mira Patel <mira@civicwave.ai> wrote:
+> Thanks Tessa — happy to confirm details...
+
+From: Naomi Feldman <naomi_feldman@redwoodinference.com>
+To: Tessa Morgan <tessa_morgan@redwoodinference.com>, Ben Carter <ben_carter@redwoodinference.com>, Mira Patel <mira@civicwave.ai>
+Cc: Jordan Blake <jordan_blake@redwoodinference.com>
+Date: Fri, 07 Aug 2026 07:45:00 -07:00
+Subject: Re: CivicWave: embeddings transition — sequencing, backfill plan, and rerank evals
+
+Hi team —
+
+Adding the acceptance criteria we'll use for rerank rollouts so expectations are clear. Draft attached (rerank_eval_spec.md). High-level metrics we require for launch:
+
+- Quality: nDCG@10 improvement >= 8% vs current baseline OR top-1 precision +0.05 on priority flows
+- Retrieval: MRR uplift on search queries >= 0.04
+- Latency: end-to-end P95 for search path under 350ms in canary (we can accept higher in staging)
+- Regression checks: syntactic/semantically adverse cases test suite run (50 queries) — zero P0 failures
+
+Evaluation process:
+- Jordan will run a blind A/B of reranker variants on the 400 labeled queries Mira mentioned and produce a results sheet.
+- If thresholds are not met, we will iterate model variant, prompt templates, and candidate generation.
+
+Please review the attached and call out any missing business-critical flows (I flagged internal help and returns).
+
+-Naomi
+
+On Thu, Aug 6, 2026 at 08:22, Ben Carter <ben_carter@redwoodinference.com> wrote:
+> Hi all —
+> 
+> Thanks Mira, this is helpful...
+
+From: Raj Desai <raj@civicwave.ai>
+To: Naomi Feldman <naomi_feldman@redwoodinference.com>, Ben Carter <ben_carter@redwoodinference.com>, Tessa Morgan <tessa_morgan@redwoodinference.com>
+Date: Fri, 07 Aug 2026 12:10:00 -07:00
+Subject: Re: CivicWave: embeddings transition — sequencing, backfill plan, and rerank evals
+
+Thanks Naomi — that looks good. A couple clarifications from our ops side:
+
+- Timeline: we can do the full export Fri 8/7 02:00 UTC as Mira suggested. We'll provide an S3 presigned link to the snapshot and daily deltas thereafter.
+- Canary scope: please include the internal help flow and the top-100 product search queries in the canary (we want early visibility there).
+- Drive link with query samples and a small spreadsheet with labels: https://drive.google.com/drive/folders/1CvWv_example_link
+
+If you can share the runbook for the export this afternoon well confirm the S3 prep steps.
+
+— Raj
+
+On Fri, Aug 7, 2026 at 07:45, Naomi Feldman <naomi_feldman@redwoodinference.com> wrote:
+> Hi team —
+> 
+> Adding the acceptance criteria we'll use for rerank rollouts...
+
+From: Tessa Morgan <tessa_morgan@redwoodinference.com>
+To: Mira Patel <mira@civicwave.ai>, Raj Desai <raj@civicwave.ai>
+Cc: Ben Carter <ben_carter@redwoodinference.com>, Naomi Feldman <naomi_feldman@redwoodinference.com>, Jordan Blake <jordan_blake@redwoodinference.com>
+Date: Mon, 10 Aug 2026 15:34:00 -07:00
+Subject: Re: CivicWave: embeddings transition — sequencing, backfill plan, and rerank evals
+
+Thanks everyone — quick summary and next steps: 
+
+- Raj: full export scheduled 2026-08-07 02:00 UTC. Please post the presigned S3 link in this thread when ready.
+- Ben: send the Friday export runbook + staging backfill checklist by EOD (attached earlier: index_backfill_checklist.xlsx).
+- Jordan: kick off rerank A/B with the 400 queries once the seed index is available; target report 8/17.
+- Naomi: keep rerank acceptance gates as documented (rerank_eval_spec.md).
+- Tessa: Ill schedule a follow-up checkpoint for 8/12 to review staging metrics and any early quality flags.
+
+If anything changes on the export or you want to push the timeline, shout in this thread.
+
+Best,
+Tessa
+
+On Fri, Aug 7, 2026 at 12:10, Raj Desai <raj@civicwave.ai> wrote:
+> Thanks Naomi — that looks good...

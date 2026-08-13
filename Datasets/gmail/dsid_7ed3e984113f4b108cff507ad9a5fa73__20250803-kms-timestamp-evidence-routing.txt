@@ -1,0 +1,106 @@
+Re: KMS timestamping and temporary retention evidence request
+
+From: LumenHealth Security Team <security@lumenhealth.com>
+To: Monica Patel <monica.patel@redwood.com>
+Cc: procure@cloudops.com
+Date: 2025-08-03T09:12:00-07:00
+Subject: Request: KMS timestamping & temporary retention evidence
+
+Hi Monica,
+
+Thanks for the demo last week — LumenHealth's compliance group has two follow-ups we need to close before the pilot can progress to PROD:
+
+1) We need proof artifacts that audit logs include a cryptographic timestamp tied to KMS-encrypted payloads (not just server time). Can you confirm whether Redwood attaches KMS-derived timestamps / key-version IDs to the audit logs and, if so, provide an example record or schema describing the field(s)?
+
+2) For the proposed short-term BYOK retention window (temporary keys held in escrow), the auditors want a clear, step-by-step evidence package showing the retention lifecycle (create -> use -> rotate -> purge) and the roles that can trigger purge. A checklist + example docs would help.
+
+Can you send a short plan and any sample artifacts by EOD Monday? If you need to route this internally, please loop in your infra/product owners.
+
+Appreciate it — we want to keep the timeline for the pilot intact.
+
+— LumenHealth Security (Sara)
+security@lumenhealth.com
+
+[attachment: request-form.pdf (stub)]
+From: Monica Patel <monica.patel@redwood.com>
+To: LumenHealth Security Team <security@lumenhealth.com>
+Cc: priyom.das@redwood.com, karthik.iyer@redwood.com
+Date: 2025-08-03T10:05:00-07:00
+Subject: Re: Request: KMS timestamping & temporary retention evidence
+
+Sara — thanks for the clear asks. Looping in Priyom (infra) and Karthik (product infra) so we can put together an evidence packet. Quick plan:
+
+- Priyom will confirm the exact log fields we surface and a sample record for the KMS timestamp/key-version.
+- Karthik will outline the temporary BYOK retention lifecycle and provide an operations checklist showing who can trigger purge/escrow.
+- I’ll assemble the package (checklist + sample logs + short narrative) and post to the shared drive link below.
+
+Target: draft package by EOD Tuesday (2025-08-04). If we can get an example of the specific auditor questions, we can tailor the artifacts — otherwise we’ll include both sample JSON log records and a one-page narrative.
+
+Sharing an initial checklist we use internally: evidence-checklist.csv (attached).
+
+Monica
+Director, Customer Security Operations
+Redwood Inference
+monica.patel@redwood.com | +1 415-555-0198
+
+---
+On Mon, Aug 3, 2025 at 9:12 AM LumenHealth Security Team <security@lumenhealth.com> wrote:
+> (original message)
+
+From: Priyom Das <priyom.das@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, LumenHealth Security Team <security@lumenhealth.com>
+Cc: karthik.iyer@redwood.com
+Date: 2025-08-04T11:18:00-07:00
+Subject: Re: Request: KMS timestamping & temporary retention evidence
+
+Sara / Monica — quick technical note from infra:
+
+- Redwood does not currently persist a separate KMS-signed timestamp token in the audit DB. We do persist the following fields on every access record: event_ts (server UTC), key_version_id, key_fingerprint, envelope_ciphertext_id, and a SHA256 of the ciphertext.
+
+- For audit-grade proof, we can add a derived_signed_ts field (HMAC over [event_ts,key_version_id,record_id] with a rotation-protected signing key) that will be recorded alongside the existing fields. That adds ~2ms write latency and requires a short change to our ingest pipeline.
+
+- Attached is a sample ingest schema we typically share: kafka-ingest-schema.json (stub). It shows where a derived_signed_ts would live.
+
+Proposal / next steps:
+1) If Lumen needs a cryptographic timestamp today, we can produce a signed attest document for a selected time window (best-effort).
+2) For long term, we propose shipping derived_signed_ts in the next sprint as a configuration toggle for accounts that require it. It will require a minor infra rollout and updates to the log-export path (estimated 2-week effort including QA and canary).
+
+Karthik — can you confirm product acceptance criteria for shipping that toggle and whether we should include an optional retention policy flag in the same rollout?
+
+Thanks,
+Priyom
+SRE, Redwood Inference
+
+> On Aug 3, 2025, Monica Patel wrote:
+> > (internal plan)
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Priyom Das <priyom.das@redwood.com>, LumenHealth Security Team <security@lumenhealth.com>
+Cc: grace.oconnor@redwood.com
+Date: 2025-08-05T16:03:00-07:00
+Subject: Re: Request: KMS timestamping & temporary retention evidence
+
+Thanks — useful summary. A few product clarifications and a proposed schedule:
+
+- Acceptance criteria: Lumen will need (a) sample JSON log records showing key_version_id + derived_signed_ts (or signed attest) and (b) a one-page retention lifecycle diagram with roles/approvers listed.
+
+- Risk/constraints: our current SSO/role mappings mean only EscrowOps and Security Admin can trigger key purge in Dedicated/Private deployments. For hosted accounts we have a delegated escrow service; we’ll provide a clear separation of duties doc.
+
+- Delivery plan:
+  * Short-term (by EOD Aug 06): provide a signed attest for the sample window + the one-page lifecycle diagram. (Monica to deliver attestation draft; Priyom to provide sample records.)
+  * Medium-term (2-week): ship derived_signed_ts as a config toggle + include retention-policy flag on the account config. Grace — can your team accept the QA scope for this toggle in next sprint?
+
+- Ops ask: I will create a canary rollout playbook and include rollback criteria (token mismatch rate > 0.1% or ingestion latency > 5ms).
+
+If Lumen wants proof-of-concept sooner, we can do a targeted POC on a sandbox tenant next week. Let me know which auditors / exact evidence fields to prioritize.
+
+Karthik
+Head of Product, Inference Platform
+Redwood Inference
+
+---
+Forwarded message: see thread above
+
+[attachments: redwood-kms-proof-stub.txt]
+
+-- End of thread --

@@ -1,0 +1,137 @@
+Region pin & timebound wipe — evidence and runbook request
+
+From: Soma Patel <soma.patel@montecarlohealth.com>
+To: Camila Reyes <camila.reyes@redwood.ai>
+Cc: Monica Ghosh <monica.ghosh@montecarlohealth.com>
+Date: Thu, 20 Jun 2028 09:12:00 -0700
+Subject: Dedicated region pin + deletion evidence for PHI workloads
+
+Hi Camila —
+
+Thanks again for the call this morning. As we evaluate Redwood Dedicated for Montecarlo Health's PII/PHI workloads, legal and infosec have asked for two concrete items before we move to procurement:
+
+1) A statement of how "region pinning" is enforced for a Dedicated deployment (network boundaries, control plane vs data plane, and exactly where snapshots/backups are stored).
+2) A timebound deletion/wipe proof workflow we can include in the contract — we need to know what artifacts we will receive to demonstrate deletion of tenant data from both hot KV caches and long-term backups, and estimated timelines.
+
+Can you send a runbook or short evidence pack we can review? If you need to loop in engineering, please do.
+
+Appreciate it — aiming to close by end of month.
+
+— Soma
+Soma Patel
+Head of IT Security | Montecarlo Health
+
+From: Camila Reyes <camila.reyes@redwood.ai>
+To: Soma Patel <soma.patel@montecarlohealth.com>
+Cc: Monica Ghosh <monica.ghosh@montecarlohealth.com>
+Date: Thu, 20 Jun 2028 10:05:00 -0700
+Subject: Re: Dedicated region pin + deletion evidence for PHI workloads
+
+Hi Soma —
+
+Thanks — I pulled together a short runbook and a topology diagram addressing both questions (attached). High level answers:
+
+- Region pinning: In Dedicated we pin the data plane to a single cloud region and tenant-dedicated GPU pool. Control plane (shared) handles orchestration but has no access to plaintext input/output; all control calls to the data plane are over mutually authenticated mTLS with RBAC.
+
+- Snapshots & backups: Periodic snapshots are stored in the customer-scoped object store within the same region by default. Cross-region replication is opt-in only and is disabled for your account per our current provisioning notes.
+
+- Deletion evidence: The runbook describes the end-to-end purge flow: invalidate prefix/KV caches, trigger a tenant drain job, zeroize ephemeral volumes, delete snapshots and object-store blobs, then produce a signed wipe manifest (SHA256 hashes + timestamps) and an execution log from the orchestration engine. Typical completion time for a standard Dedicated cluster is 6–12 hours, longer if we coordinate on-site tape/archive recovery.
+
+Attaching: redwood_pin-and-wipe-runbook-v1.pdf, dedicated-topology-diagram.png
+
+I'll loop in Karthik and Vivek for low-level confirmation (they can add exact artifact names and the commands we run).
+
+Would you like a short executive summary for procurement as well?
+
+— Camila Reyes
+Account Executive, Redwood Inference
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Camila Reyes <camila.reyes@redwood.ai>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Thu, 20 Jun 2028 13:37:00 -0700
+Subject: Re: Dedicated region pin + deletion evidence for PHI workloads
+
+Camila / Soma —
+
+Here are the technical details to include in the runbook (paste-friendly):
+
+1) Region pin enforcement:
+- Provisioning: Tenant is bound to a region tag at creation time; all data-plane resources (VMs, attached NVMe, EBS equivalent, object store buckets) carry that tag. Our provisioning service refuses lifecycle operations that would move resources out of region without an explicit cross-region replication flag.
+- Networking: VPC subnets and ENI attachments are scoped to the region. We enforce security groups and route tables that prevent egress to other region subnets.
+
+2) Caching & KV store:
+- Hot KV (prefix cache) lives on NVMe ephemeral attached to the inference nodes; we explicitly flush and invalidate KV entries via the runtime API: runtime.admin.invalidate_prefix(tenant_id, prefix).
+- Memory zeroization: when nodes are drained we run secure-memzero on process heaps and unmap memory before container termination. For added assurance we can provide a memzero log (PID, timestamp) as evidence.
+
+3) Snapshots & object-store blobs:
+- Snapshots are written to a tenant-scoped object path: s3://redwood-dedicated/<tenant-id>/<cluster-id>/snapshots/<snapshot-id>. Deletion triggers a three-step pipeline: transient delete (soft-delete for 24h), hard-delete by garbage collector, and then a metadata tombstone record. The GC job is region-local.
+
+4) Backup replication:
+- Cross-region replication is disabled by default for your account. If you elect to enable it we will document destination region(s) and retention.
+
+5) Evidence artifacts we can produce on request:
+- wipe-manifest-<tenant>-<timestamp>.json (signed by orchestration key)
+- orchestration-exec-log-<runid>.log (shows tasks executed and node IDs)
+- memzero-report-<runid>.txt
+- object-store-deletion-report-<runid>.csv (lists blob keys and hard-delete timestamps)
+
+6) SLA/timeline:
+- Typical full purge (cache + volumes + snapshots) for one cluster: 6–12 hours. If the tenant has archived cold backups on a separate vault, that path is separate and we will include an estimated service window in the SOW.
+
+If you want, I can add the exact commands we run and a short example wipe-manifest (sanitized) to the PDF.
+
+— Karthik
+Principal Infrastructure Engineer, Redwood Inference
+
+From: Soma Patel <soma.patel@montecarlohealth.com>
+To: Camila Reyes <camila.reyes@redwood.ai>
+Cc: Monica Ghosh <monica.ghosh@montecarlohealth.com>
+Date: Fri, 21 Jun 2028 14:05:00 -0700
+Subject: Re: Dedicated region pin + deletion evidence for PHI workloads
+
+Camila / Karthik —
+
+This is exactly what we needed, thank you. A couple quick follow-ups before procurement:
+
+- Please include a sample signed wipe-manifest (sanitized) so our legal team can validate the attributes.
+- Confirm that snapshots in the soft-delete window (24h) will not be accessible by any other tenant or admin while awaiting GC; we need assurance of isolation during that window.
+- Can you commit to retaining the orchestration-exec-log for 90 days (for audit) and provide a process for on-demand retrieval?
+
+If you can provide those three pieces (sample manifest, soft-delete isolation note, log retention statement) by end of day Monday we should be able to move to procurement.
+
+— Soma
+
+
+On Thu, Jun 20, 2028 at 13:37, Karthik Iyer <karthik.iyer@redwood.ai> wrote:
+> Camila / Soma —
+> 
+> Here are the technical details to include in the runbook (paste-friendly):
+> 
+> 1) Region pin enforcement:
+> - Provisioning: Tenant is bound to a region tag at creation time; all data-plane resources (VMs, attached NVMe, EBS equivalent, object store buckets) carry that tag. Our provisioning service refuses lifecycle operations that would move resources out of region without an explicit cross-region replication flag.
+> - Networking: VPC subnets and ENI attachments are scoped to the region. We enforce security groups and route tables that prevent egress to other region subnets.
+> 
+> 2) Caching & KV store:
+> - Hot KV (prefix cache) lives on NVMe ephemeral attached to the inference nodes; we explicitly flush and invalidate KV entries via the runtime API: runtime.admin.invalidate_prefix(tenant_id, prefix).
+> - Memory zeroization: when nodes are drained we run secure-memzero on process heaps and unmap memory before container termination. For added assurance we can provide a memzero log (PID, timestamp) as evidence.
+> 
+> 3) Snapshots & object-store blobs:
+> - Snapshots are written to a tenant-scoped object path: s3://redwood-dedicated/<tenant-id>/<cluster-id>/snapshots/<snapshot-id>. Deletion triggers a three-step pipeline: transient delete (soft-delete for 24h), hard-delete by garbage collector, and then a metadata tombstone record. The GC job is region-local.
+> 
+> 4) Backup replication:
+> - Cross-region replication is disabled by default for your account. If you elect to enable it we will document destination region(s) and retention.
+> 
+> 5) Evidence artifacts we can produce on request:
+> - wipe-manifest-<tenant>-<timestamp>.json (signed by orchestration key)
+> - orchestration-exec-log-<runid>.log (shows tasks executed and node IDs)
+> - memzero-report-<runid>.txt
+> - object-store-deletion-report-<runid>.csv (lists blob keys and hard-delete timestamps)
+> 
+> 6) SLA/timeline:
+> - Typical full purge (cache + volumes + snapshots) for one cluster: 6–12 hours. If the tenant has archived cold backups on a separate vault, that path is separate and we will include an estimated service window in the SOW.
+> 
+> If you want, I can add the exact commands we run and a short example wipe-manifest (sanitized) to the PDF.
+> 
+> — Karthik
+> Principal Infrastructure Engineer, Redwood Inference

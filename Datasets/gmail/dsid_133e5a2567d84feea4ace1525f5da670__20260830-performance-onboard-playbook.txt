@@ -1,0 +1,122 @@
+Post-demo: performance & cost plan for inference onboarding
+
+From: Elena Torres <elena@payflow.ai>
+To: lauren_bishop@redwood.com, marissa_cole@redwood.com
+Cc: rishi_malhotra@redwood.com
+Date: Mon, 30 Aug 2026 14:02:00 -0700
+Subject: Follow-up: Performance targets & cost constraints after demo
+
+Hi Lauren / Marissa,
+
+Thanks again for the demo today — team was impressed with the latency numbers and the routing options. Before we kick off the implementation I want to confirm a few constraints so your onboarding plan can be aligned with procurement and infra. High level:
+
+- Volume & SLOs: ~20 QPS sustained, peak bursts to ~40 QPS. Target p95 generation latency <250ms for our 1k-token-ish prompts.
+- Cost target: we need to average ~ $0.15 / 1k tokens (including caching benefits) for year-1 run-rate to fit into our budget.
+- Compliance: currently evaluating private deployment later this year; for now we’ll run on Redwood hosted but need clear data retention & audit log plans.
+
+We attached two sample traces from our staging traffic (payflow-sample-traces.zip) and a short csv of payload size distribution. Can you send a short implementation plan that calls out the order you’ll evaluate batching, caching TTLs, quantization profiles, and routing policies? Also want a brief canary/rollback plan for any model or quantization changes.
+
+Would prefer if the plan gives an initial recommended set of safe defaults so our infra team can approve procurement while we run engineering tests.
+
+Best,
+Elena
+
+--
+Elena Torres
+Head of Platform Engineering, PayFlow AI
+elena@payflow.ai
+
+From: lauren_bishop@redwood.com
+To: Elena Torres <elena@payflow.ai>
+Cc: marissa_cole@redwood.com, rishi_malhotra@redwood.com, monica_patel@redwood.com
+Date: Mon, 30 Aug 2026 16:14:00 -0700
+Subject: Re: Follow-up: Performance targets & cost constraints after demo
+
+On Mon, Aug 30, 2026 at 2:02 PM Elena Torres <elena@payflow.ai> wrote:
+> Thanks again for the demo today — team was impressed with the latency numbers and the routing options. Before we kick off the implementation I want to confirm a few constraints so your onboarding plan can be aligned with procurement and infra.
+
+Elena — thanks for the clear constraints, this is exactly what we need to draft an actionable onboarding plan. Below is a concise, prioritized implementation and tuning plan tailored to your targets. I broke it into discrete phases with recommended "safe defaults" (so procurement has numbers) and the telemetry checks we'll use during canary and rollout.
+
+Phase 0 — Kickoff / Data collection (1–3 days)
+- Kickoff call: align on success metrics (latency p50/p95, cost / 1k tokens, error budget).
+- Collect representative traces (you already shared staging traces — perfect). Also request 48h of production-like requests if possible.
+- Deliverable: baseline perf report (latency, token counts, sequence length distribution).
+
+Phase 1 — Baseline & profiling (2–4 days)
+- Run baseline on your preferred model variant (fp16 / fp32) to establish current latency/cost.
+- Generate per-sequence latency distribution and memory/KV cache hit patterns.
+- Deliverable: perf profile + recommended quantization candidates.
+
+Phase 2 — Quantization experiments (3–7 days, iterative)
+- Safe default (procurement): assume FP16 runtime, per-token cost estimate based on q4_0-like quantization gains (conservative) — estimate: $0.22 / 1k tokens without caching; with realistic caching expect to get near your $0.15 target.
+- Stepwise plan: test q4 variants first (balance quality/latency) then aggressive int8-like configs if quality is acceptable on your eval prompts. For each profile we’ll capture ROUGE/EMB similarity and latency & memory footprint.
+- Canary approach: A/B split 95/5 for 48–72 hours; if quality regression < threshold and latency/cost improvements as expected, expand to 25% then 100% with staged rollback conditions.
+
+Phase 3 — Batching & dynamic batching (2–5 days)
+- Default for initial rollout: dynamic batching with max batch size = 8 and per-request latency cap = 200ms to keep p95 under target.
+- We’ll tune batching window (5–15ms) based on your QPS and observed token lengths. If bursts occur, autoscale + temporary larger batching for throughput-intensive paths.
+
+Phase 4 — Caching strategy (1–3 days)
+- Safe default TTL: 30s for prefix caching on identical start-of-conversation prompts; evaluate per-route TTLs based on hit-rate.
+- Implement prefix/KV caching plus a small LRU for repeated short prompts — should reduce token consumption and push effective cost closer to your $0.15 target.
+
+Phase 5 — Routing policy & rollout (ongoing)
+- Routing: latency-sensitive routes -> low-latency pool (higher unit cost), background or thrift routes -> cost-optimized pool (quantized, batched).
+- Fallbacks: automatic fallback to fp16 / lower-quant model in case of quality regressions or sudden latency spikes.
+
+Observability & guardrails (continuous)
+- Dashboards: per-route p50/p95, token usage, cost per 1k tokens, model quality metrics on eval prompts, cache hit rate.
+- Alerts: p95 > 300ms for 15min, quality regression > threshold, cost per 1k > budget for 1 hour.
+- Canary rollback policy: immediate rollback on quality regression or sustained error rate increase >1% over baseline during canary window.
+
+Deliverables: onboarding checklist (attached: redwood-onboard-checklist.pdf), perf baseline report, quantization A/B logs, and a canary runbook.
+
+Next steps: propose two kickoff slots (tomorrow 10:00–10:45am PT or Wednesday 3:00–3:45pm PT) — which works for PayFlow infra?
+
+Thanks — I’ll have Marissa and Rishi operationalize the canary and monitoring playbook once we lock the kickoff.
+
+—
+Lauren Bishop
+Senior Customer Success Manager | Redwood Inference
+lauren_bishop@redwood.com
+
+From: marissa_cole@redwood.com
+To: Elena Torres <elena@payflow.ai>
+Cc: lauren_bishop@redwood.com, rishi_malhotra@redwood.com, monica_patel@redwood.com
+Date: Tue, 31 Aug 2026 08:05:00 -0700
+Subject: Re: Follow-up: Performance targets & cost constraints after demo
+
+Lauren — adding a few operational specifics and the quick checklist we'll run during canary.
+
+- Canary size & duration: 5% for 48h -> 25% for 48h -> 100%. If at any stage quality or error rate is outside thresholds we pause and revert.
+- Metrics to capture at 1min granularity: p50/p95, tokens/generated, cache hit rate, QPS, error rate, model confidence score (where available).
+- Cost guardrails: automated budget throttle if predicted monthly run-rate > 10% above projection. We’ll surface a "cost growth" alert to both your infra leads and our sales ops.
+- Rollout notes for quantization: when moving to a more aggressive profile we’ll keep shadow runs for 24h to compute delta quality metrics before any traffic shift.
+
+Attachments I’ll push to the drive folder: canary-runbook.md (lightweight runbook) and perf-dashboard-template.json (for your Grafana team).
+
+—
+Marissa Cole
+Director, Customer Success Operations | Redwood Inference
+marissa_cole@redwood.com
+
+From: Elena Torres <elena@payflow.ai>
+To: lauren_bishop@redwood.com
+Cc: marissa_cole@redwood.com, rishi_malhotra@redwood.com, monica_patel@redwood.com
+Date: Tue, 31 Aug 2026 09:24:00 -0700
+Subject: Re: Follow-up: Performance targets & cost constraints after demo
+
+Thanks Lauren & Marissa — this is exactly what we needed. The safe defaults and stepwise quantization path look reasonable. We accept the kickoff slots: tomorrow 10:00–10:45am PT works for the core infra team. Jacob Stern from Acme is also joining the kickoff to talk about billing integration.
+
+Two quick asks before the call:
+1) Can you attach an estimated cost model spreadsheet (conservative / optimistic) for FP16 vs q4 vs int8 so procurement can see tradeoffs?
+2) Please include the short canary-runbook and the Drive links in a single email post-call for our action items.
+
+We’ll see you tomorrow — calendar invite incoming.
+
+Elena
+
+--
+Elena Torres
+Head of Platform Engineering, PayFlow AI
+elena@payflow.ai

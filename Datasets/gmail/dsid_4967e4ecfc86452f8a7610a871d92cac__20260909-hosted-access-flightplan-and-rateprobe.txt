@@ -1,0 +1,115 @@
+Post-demo: hosted access flightplan and rate probe
+
+From: Dylan Brooks <dylan@redwood.ai>
+To: Samir Patel <samir@brightcart.com>
+Cc: Soojin Lee <soojin@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: 2026-09-09T15:10:00-07:00
+Subject: Post-demo: hosted access flightplan and rate probe
+
+Hi Samir — thanks again for your time today. Quick recap + proposed next steps based on what we discussed on the call: 
+
+Summary from demo
+- BrightCart wants fast time-to-value and to validate low-latency inference for chat suggestions in the customer UI.
+- Two main constraints flagged: (1) sustained peak throughput to support black-friday-like bursts and (2) PCI/PII considerations for payment flows.
+
+High-level deployment guidance (our recommendation for a first pass)
+- Start with Host ed API pilot (fastest onboarding, hosted sandbox endpoints) to validate latency and integration patterns.
+- If the pilot shows sustained high throughput or strict network isolation is required, we map to Dedicated or Private later.
+
+Proposed hosted quickstart (what Redwood will deliver)
+1) Sandbox slice: provision a sandbox endpoint group and a traffic slice we can monitor (suggest starting with 150 req/s sustained, 500 req/s burst for 30s).
+2) Endpoint mapping: small set of endpoints to mirror your integration — Chat streaming endpoint, Embeddings batch endpoint, Reranker endpoint.
+3) Rate limits: default throttle policy during pilot (150/s with a token-bucket burst of 500, 95th percentile latency SLO 200ms for streaming token send).
+4) KV cache/prefix caching: we’ll enable prefix caching for repeated prompts to reduce token cost.
+5) Security: SOC2 evidence + optional VPC peering conversation if you need private egress later.
+
+Attachments: brightcart_traffic_snapshot_v1.csv (please confirm this file matches your expected traffic buckets)
+
+Asks for you
+- Can you confirm the expected 95th percentile request size (tokens per request) and concurrency for peak page loads?
+- Any regulatory/contractual must-haves (we heard PCI flag; please confirm whether cardholder data will be sent to the model path or only tokenized/hashed upstream).
+
+Next actions (proposed timeline)
+- You: confirm traffic snapshot + indicate whether card data flows will reach the model. (Action: Samir) — target: EOD 09/10
+- Us: send an endpoint matrix + sandbox access once we have the traffic confirmation (Action: Soojin) — target: 09/10
+- Schedule a 30m tech touch to go over integration and SDKs (I’ll propose slots).
+
+Thanks — I’ll standby after you send the traffic confirmation and PCI note.
+
+Cheers,
+Dylan Brooks
+Account Executive | Redwood Inference
+
+From: Samir Patel <samir@brightcart.com>
+To: Dylan Brooks <dylan@redwood.ai>
+Cc: BrightCart TechOps <ops@brightcart.com>
+Date: 2026-09-09T17:05:00-07:00
+Subject: Re: Post-demo: hosted access flightplan and rate probe
+
+Hi Dylan — appreciate the clear recap. A few clarifications from our side: 
+
+- Traffic: attaching a brief snapshot of expected qps per region and average tokens/request (see brightcart_traffic_snapshot_v1.csv). During normal hours we expect ~80 req/s; peak (promo) days could approach 1200 req/s for short windows (~5–10 minutes). Average tokens per request ~420.
+- PCI: payment flows are handled in a separate microservice; we do not send raw card numbers to model endpoints. We do send obfuscated transaction context to the model for fraud scoring — would like confirmation that that is compliant with hosted pilot (no cardholder data).
+- Deployment preference: prefer hosted for speed of evaluation, but if the pilot demonstrates sustained peak load we will evaluate Dedicated. Also open to VPC peering conversation for production.
+
+Attached: brightcart_ops_contact.txt (Ops/infra contact)
+
+Confirming I’ll get you any additional traffic percentiles you need. Would like the tech touch late next week.
+
+Thanks,
+Samir Patel
+Product Lead, Relevance — BrightCart
+
+From: Soojin Lee <soojin@redwood.ai>
+To: Samir Patel <samir@brightcart.com>
+Cc: Dylan Brooks <dylan@redwood.ai>, Marissa Cole <marissa@redwood.ai>
+Date: 2026-09-10T09:20:00-07:00
+Subject: Re: Post-demo: hosted access flightplan and rate probe
+
+Samir — thanks for the traffic snapshot, that helps a lot. I put together a pragmatic endpoint matrix and pilot config for the hosted trial (attached: hosted_endpoint_matrix.xlsx). Key points: 
+
+Pilot endpoint matrix (summary)
+- /v1/chat.stream (streaming tokens): aimed at UI suggestions; route to low-latency nodes, target 95p latency < 250ms. Prefetch + small prefix KV cache enabled.
+- /v1/embed.batch (batch writes): designed for nightly or micro-batch embedding jobs; we’ll enable larger batching windows to reduce cost.
+- /v1/rerank (sync): smaller payloads, medium latency SLO.
+
+Rate policy recommendation for pilot
+- Sandbox slice: start 200 req/s sustained, 800 req/s burst for 60s (gives headroom to test peak patterns you described).
+- Token-based billing estimates: with avg 420 tokens/request we’ll model cost; I’ll attach a conservative estimate in the Drive sheet.
+
+Security notes
+- Hosted pilot: acceptable if no cardholder data is posted to model endpoints (sounds like your flow is fine). We will still provide SOC2 docs and the typical data handling attestation.
+- If you require egress on a private network or dedicated tenancy, we can follow with Dedicated or Private evaluation after pilot.
+
+Operational asks from Ops
+- Please provide a 95/99/Max percentile token size and the daily peak window times so we can simulate traffic in our staging environment.
+- Provide the Ops contact (I saw brightcart_ops_contact.txt) — I’ll reach out to schedule a short ops-onboarding call.
+
+Links: HubSpot deal BRIGHT-2345 (https://app.hubspot.com/contacts/1234567/deal/BRIGHT-2345)
+
+Next steps
+- I’ll provision the sandbox slice after you confirm peak window and we sign the standard pilot agreement (Dylan will send).
+- Proposed tech touch: 09/16 or 09/17 (late morning PT) — I’ll send calendar invites.
+
+Attachment: hosted_endpoint_matrix.xlsx
+
+— Soojin
+Sooj in Lee
+Senior Solutions Engineer | Redwood Inference
+
+From: Samir Patel <samir@brightcart.com>
+To: Soojin Lee <soojin@redwood.ai>, Dylan Brooks <dylan@redwood.ai>
+Date: 2026-09-11T10:32:00-07:00
+Subject: Re: Post-demo: hosted access flightplan and rate probe
+
+Thanks Soojin — this looks good. Quick replies: 
+- We confirm average tokens/request ~420, 95p ~780, max spikes to ~1500 tokens. Peak windows are typically 11:00–13:00 PST on promo days.
+- Pilot agreement is fine — we prefer hosted sandbox for the initial run. Please provision the sandbox slice at 200 req/s sustained, 800 req/s burst to start.
+- We need SOC2 evidence and a simple NDA for PII/data handling before dev keys are issued — can Dylan send those docs?
+
+I’ll loop in our security lead after you send the SOC2 docs. Looking forward to the tech touch next week.
+
+Attachment: BrightCart_Security_QA.pdf
+
+Samir
+Product Lead, Relevance — BrightCart

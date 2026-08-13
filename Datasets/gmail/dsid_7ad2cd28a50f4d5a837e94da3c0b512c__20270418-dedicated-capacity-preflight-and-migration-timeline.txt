@@ -1,0 +1,153 @@
+Dedicated capacity preflight: sizing validation & migration timeline
+
+From: Tom Keller <tom.keller@everlane-ai.com>
+To: jasmine_liu@redwood.ai, Procurement <procurement@everlane-ai.com>
+Cc: 
+Date: Wed, 14 Apr 2027 15:12:00 -0400
+Subject: Dedicated capacity — initial sizing data and timeline ask
+
+Hi Jasmine,
+
+Thanks again for the walkthrough yesterday. We're excited to move from Hosted to a Dedicated pool to get predictable latency for our product queries. Before we sign the reserved-capacity contract, procurement needs a short preflight from Redwood confirming expected GPU footprint and a recommended migration timeline (we're targeting GA of the new SLA-sensitive feature in Q3).
+
+Attached a short sample (customer_usage_sample.csv) showing 30 days of production traffic at hourly granularity. Key asks:
+- Can you validate the sizing assumptions (qps, concurrency, burst handling) and confirm recommended GPU types and count?
+- What validation/testing windows do you need (staging runs, perf validation) and how long do cutover rehearsals usually take?
+- Any suggested canary rollout cadence and fallback thresholds?
+
+Procurement is CC'd for timeline alignment; they're looking for a 6–8 week prep window if possible.
+
+Appreciate the quick turn on this.
+
+—Tom
+Tom Keller
+Head of Platform, Everlane AI
+ops@everlane-ai.com
+Attachment: customer_usage_sample.csv (CSV, 2.1MB, sample hourly traffic)
+From: jasmine_liu@redwood.ai <jasmine_liu@redwood.ai>
+To: Tom Keller <tom.keller@everlane-ai.com>
+Cc: dev_patel@redwood.ai, laura_bennett@redwood.ai, Procurement <procurement@everlane-ai.com>
+Date: Thu, 15 Apr 2027 09:33:00 -0700
+Subject: Re: Dedicated capacity — initial sizing data and timeline ask
+
+Tom — thanks for the data and clear asks. Quick notes up front:
+- We can run a sizing validation pass within 3 business days if you provide a brief token-length distribution and 95th percentile latency target.
+- Typical planning: 2 weeks for sizing + procurement/contract finalization, 1 week for Dedicated pool provisioning, 1 week for staging/perf validation, 1 week for canary cutover (can be parallelized). That fits your 6–8 week window but we'll lock dates after the sizing pass.
+
+Questions for dev sizing:
+- Target P95 latency (ms)?
+- Expected steady-state RPS vs peak burst RPS (5-min window)?
+- Are there multi-region residency requirements?
+
+I looped Dev (Dev Patel) and PM for staging slots (Laura). Dev — can you take a first pass on GPU type and rough node count from the attached CSV and Tom's expected 95th latency target of 250ms (assume single-region us-west) if we don't hear otherwise?
+
+I'll propose a 30-minute sizing call tomorrow 11:00 AM PT to walk the data unless you prefer an async note.
+
+Thanks,
+Jasmine Liu
+Account Executive — Dedicated Solutions
+Redwood Inference
+---
+On Wed, Apr 14, 2027 at 03:12 PM Tom Keller <tom.keller@everlane-ai.com> wrote:
+> (original message attached)
+From: dev_patel@redwood.ai <dev_patel@redwood.ai>
+To: jasmine_liu@redwood.ai, Tom Keller <tom.keller@everlane-ai.com>
+Cc: laura_bennett@redwood.ai
+Date: Fri, 16 Apr 2027 08:42:00 -0700
+Subject: Re: Dedicated capacity — initial sizing data and timeline ask
+
+Tom / Jasmine — I pulled the CSV and ran a quick model of expected token throughput and KV cache requirements. Initial assumptions used: average request length ~ 120 tokens, 95th latency target 250ms, single region (us-west-2).
+
+Preliminary sizing (ballpark):
+- Model: LLM-13B-optim (quantized 8-bit)
+- Expected steady tokens/sec: ~3800
+- Burst tokens/sec (95th 5-min): ~14,000
+- Concurrency target (active requests): ~120
+- Suggested fleet: 8 x A100-80GB equiv nodes (shared across 2 model shards) with 10% headroom for cache warmups.
+- Expected sustained QPS per node: ~15–20 generation QPS depending on response length; batching behavior will help.
+
+I'll attach a short workbook with the calculations (dedicated_estimate_v1.xlsx). Main caveats: workload variance, sequence length tail, and any synchronous reranking will change counts. We should validate by running a 48–72 hour staging run at production injection rates.
+
+Next steps I recommend:
+1) Confirm latency SLO + any region constraints.
+2) Provision a Dedicated pool (8 nodes) in a reserved sandbox account for the 72-hour staging run.
+3) Run perf tests with real traffic replay; collect P50/P95/P99 and token costs.
+4) Iterate on model quantization profile if unit costs are high.
+
+Attachment: dedicated_estimate_v1.xlsx (Excel, 360KB)
+
+—Dev
+Dev Patel
+SRE — Inference Runtime
+Redwood Inference
+From: laura_bennett@redwood.ai <laura_bennett@redwood.ai>
+To: jasmine_liu@redwood.ai, Tom Keller <tom.keller@everlane-ai.com>
+Cc: dev_patel@redwood.ai, marcus_lin@redwood.ai
+Date: Mon, 18 Apr 2027 09:05:00 -0700
+Subject: Re: Dedicated capacity — initial sizing data and timeline ask
+
+Thanks everyone — here's a concise validation & migration timeline we typically follow. I broke it into discrete windows so procurement can map internal approvals.
+
+Week 0 (sizing pass, sign-off) — Apr 18–20
+- Redwood completes validation of sizing worksheet.
+- Customer confirms SLOs + sign-off via email.
+- Procurement provides final PO/contract term alignment.
+
+Week 1 (provisioning) — Apr 21–27
+- Dedicated pool provisioning and initial smoke tests.
+- Network/VPC peering and KMS keys configured (customer-owned KMS if requested).
+
+Week 2 (staging run) — Apr 28–May 04
+- 72-hour continuous staging run replaying production traffic with full telemetry.
+- Performance review: P50/P95/P99, token cost, and error budgets.
+
+Week 3 (canary & rollback rehearsals) — May 05–11
+- Canary rollout at 5% traffic -> 25% -> 50% over three days with automatic rollback thresholds at P95 breach > 20% or error-rate > 1%.
+- Runbook validation and ops playbooks exercised.
+
+Week 4 (final cutover & monitoring ramp) — May 12–18
+- Full cutover window (off-hours suggested) and 72-hour monitoring ramp with SLA checks.
+- Post-cutover retrospective and handover to customer success.
+
+Edge notes: if procurement needs an earlier go-live, we can compress provisioning to 3 business days by prioritizing capacity and skipping a portion of the staging run (higher risk).
+
+Marcus — can you add routing/fallback notes for mixed Hosted/Dedicated traffic? I'll include the canary thresholds in the canary_plan.md we attach.
+
+—Laura
+Laura Bennett
+Product Manager — Dedicated
+Redwood Inference
+From: marcus_lin@redwood.ai <marcus_lin@redwood.ai>
+To: laura_bennett@redwood.ai, jasmine_liu@redwood.ai, Tom Keller <tom.keller@everlane-ai.com>
+Cc: dev_patel@redwood.ai
+Date: Mon, 18 Apr 2027 10:22:00 -0700
+Subject: Re: Dedicated capacity — initial sizing data and timeline ask
+
+Adding routing notes:
+- Recommend sticky routing for session affinity during canary to reduce cold-kv misses: route 5% of user IDs to Dedicated, retain kv cache affinity for 48 hours.
+- Fallback policy: if Dedicated P95 > hosted P95 + 150ms for 3 consecutive checks, automatically fail traffic back to Hosted API while keeping Dedicated in warm state.
+- Autoscale burst buffer: reserve 1 spare node for burst headroom; if burst > 70% sustained for 10 minutes, trigger burst capacity (subject to contractual burst allowance).
+
+I'm attaching the short canary runbook (canary_plan.md) with explicit thresholds and playbook steps.
+
+—Marcus
+Marcus Lin
+Infrastructure — Serving Runtime
+Redwood Inference
+Attachment: canary_plan.md (Markdown, 4KB)
+From: Tom Keller <tom.keller@everlane-ai.com>
+To: jasmine_liu@redwood.ai, laura_bennett@redwood.ai
+Cc: Procurement <procurement@everlane-ai.com>, dev_patel@redwood.ai, marcus_lin@redwood.ai
+Date: Mon, 18 Apr 2027 11:48:00 -0700
+Subject: Re: Dedicated capacity — initial sizing data and timeline ask
+
+Team — this is perfect, thank you. The timeline fits our internal windows; procurement can turn the PO by May 1 if sizing is confirmed this week. We'll proceed with the 8-node recommendation for the staging run and schedule the 30-min sizing call tomorrow at 11:00 AM PT.
+
+One ask: can you include an explicit SLB (Service Level Baseline) doc we can attach to procurement — something that lists expected latency ranges, rollback triggers, and expected token cost bands for the canary? If you can share that by Friday, procurement says they can move faster.
+
+See you on the call.
+
+—Tom
+Tom Keller
+Head of Platform, Everlane AI
+tom.keller@everlane-ai.com

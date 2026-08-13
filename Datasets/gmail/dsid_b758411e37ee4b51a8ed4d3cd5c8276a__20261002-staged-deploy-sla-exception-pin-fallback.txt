@@ -1,0 +1,134 @@
+SLA exception request: staged-deploy safeguards (pinning + auto-fallback)
+
+From: Kiran Patel <kiran@acme.com>
+To: Marissa Cole <marissa@redwoodinference.com>
+Date: Thu, 01 Oct 2026 09:12:00 -0700
+Subject: Request: SLA carveout for staged deployment during prod migration
+
+Hi Marissa,
+
+Thanks again for the call this morning. We're planning to flip traffic to Redwood for our chat assistant on Oct 20. Legal and our SRE team are asking for one small contractual carveout: during the initial production ramp we want to use staged (canary / A-B) deployments and have the right to request a temporary SLA exception that allows Redwood to perform automatic fallback / pin model-versions if we hit performance regressions.
+
+Specifically they're asking for:
+- an official clause that allows staged traffic (we'll start at 3-5% and ramp)
+- an automatic fallback behaviour if 95th pct latency > 350ms or error rate > 0.7% for two consecutive measurement windows
+- the ability to pin traffic to the last known-good model version for up to 72 hours while debugging
+
+Can you confirm whether Redwood can (a) support pinning at the route level, (b) provide automatic fallback triggers as above, and (c) accept a short-term SLA exception + amendment for the ramp window? I've attached a one-page SLA summary the legal team prepared.
+
+Appreciate a fast turnaround — our migration timeline is tight.
+
+Thanks,
+Kiran Patel
+SRE Lead, Acme Cloud
+Attachment: SLA_Summary.pdf
+
+From: Marissa Cole <marissa@redwoodinference.com>
+To: Aditya Rao <aditya@redwoodinference.com>, Laura Bennett <laura@redwoodinference.com>, Connor O'Brien <connor@redwoodinference.com>
+Date: Thu, 01 Oct 2026 09:28:00 -0700
+Subject: Fwd: Request: SLA carveout for staged deployment during prod migration
+
+Folks — forwarding an ask from Acme (Kiran). TL;DR: they want to formalize staged deployments as an SLA mitigation during their migration window: automatic fallback triggers, and ability to pin to a previous model version for up to 72 hours. They'd like confirmation we can do this and a suggested contract amendment.
+
+Please reply with:
+- a short technical statement of what we can support now (pinning, automatic fallback, traffic split control, ramp timings)
+- recommended trigger thresholds and rollback timing (we should propose conservative defaults)
+- any operational caveats (cold start risks, pre-warm requirements, observability needs)
+
+Related: HubSpot DEAL-2391: https://app.hubspot.com/contacts/12345/deal/2391
+Marissa
+
+---------- Forwarded message ---------
+From: Kiran Patel <kiran@acme.com>
+Date: Thu, 01 Oct 2026 09:12:00 -0700
+Subject: Request: SLA carveout for staged deployment during prod migration
+To: Marissa Cole <marissa@redwoodinference.com>
+
+(see above)
+
+From: Aditya Rao <aditya@redwoodinference.com>
+To: Marissa Cole <marissa@redwoodinference.com>, Laura Bennett <laura@redwoodinference.com>, Connor O'Brien <connor@redwoodinference.com>
+Date: Thu, 01 Oct 2026 11:02:00 -0700
+Subject: Re: Fwd: Request: SLA carveout for staged deployment during prod migration
+
+Marissa + team,
+
+We can support the behavioural primitives Acme is asking for from the runtime side. High-level capabilities and constraints:
+
+What we support today:
+- Route-level version pinning: you can pin a route to an explicit model artifact id (e.g., model-x.y.z) for traffic percentage 0-100. Pinning persists across restarts until unpinned.
+- Automatic fallback: we have a policy engine that can swap traffic to a fallback model when alarms fire. The fallback is executed as an atomic traffic shift to a pre-configured model-version.
+- Traffic splitting + staged ramps: percentage-based splits with time-based ramps (we support step ramps and linear ramps down to 1% increments).
+- Canary health checks: we ingest p50/p95 latency and error-rate windows (configurable 1m/5m) and can trigger rollback.
+
+Recommended defaults (conservative, production-safe):
+- Initial canary: 3% traffic for 10 minutes. If health checks pass, ramp to 10% over 20 minutes, then 50% over 1 hour.
+- Rollback triggers: if p95 latency > 350ms OR error rate > 0.5% for two consecutive 1-minute windows, automatically shift 100% of the canary traffic back to pinned model-version.
+- Pin duration: allow up to 72 hours as requested; we recommend an explicit review at 24/48 hours with SRE.
+
+Operational caveats:
+- Cold starts: pinning to an older or quantized model variant may have different latency profiles; we should pre-warm endpoints (we can schedule pre-warm to match canary ramp times).
+- KV cache loss: switching model families (different tokenizer or architecture) can invalidate KV caches and temporarily increase latency — avoid cross-family fallbacks unless necessary.
+- Observability: need ingestion of the customer's APM traces or at least request IDs to correlate errors; otherwise we only see platform-side metrics.
+
+Implementation notes for contract language: we can promise the mechanisms (pinning, fallback) but cannot guarantee that a fallback will restore the customer's pre-change latencies if the regression is driven by model-internal quality rather than infra. That nuance should be in the amendment.
+
+If useful I can draft a short ops playbook with step-by-step traffic split params and the exact policy YAML we would add.
+
+- Aditya
+
+From: Laura Bennett <laura@redwoodinference.com>
+To: Marissa Cole <marissa@redwoodinference.com>, Aditya Rao <aditya@redwoodinference.com>, Connor O'Brien <connor@redwoodinference.com>
+Date: Fri, 02 Oct 2026 08:15:00 -0700
+Subject: Re: Fwd: Request: SLA carveout for staged deployment during prod migration
+
+Thanks Aditya — this is very helpful. I drafted recommended contract and process language below and attached a one-page amendment draft for legal to start from. Key points:
+
+Proposed amendment language (summary):
+- Duration: SLA exception window applies only to the initial migration window (up to 14 days) and only when a staged-deploy clause is in effect.
+- Mechanism: Redwood will enable route-level model pinning and automated rollback to a pre-defined fallback model; automatic fallback will be triggered by agreed metric thresholds (we propose Aditya's defaults).
+- Outcome guarantee: Redwood will use commercially reasonable efforts to restore prior performance via fallback and pinning, but the underlying SLA (latency SLO) remains subject to the same exclusions for model quality regressions.
+- Governance: Customer can request pin/unpin and Redwood will act within 60 minutes during business hours; emergency manual overrides available 24/7 via support rota.
+
+Operational playbook (high-level):
+1) Pre-cutover: identify last-known-good model-version and pre-warm resources for pinned model.
+2) Canary start: 3% traffic for 10m -> monitor p95 / error.
+3) If trigger fires: automatic rollback to pinned version + notify both SRE teams; open a joint incident bridge.
+4) Post-rollback: a 72-hour pin lock is available while investigation occurs; after 72 hours, pin expires unless both parties agree to extend.
+
+I've attached amendment-draft.docx for legal. Suggest we run this past Solutions Legal and then present to Acme with the rollout schedule.
+
+Laura
+Attachment: amendment-draft.docx
+
+From: Marissa Cole <marissa@redwoodinference.com>
+To: Kiran Patel <kiran@acme.com>
+Cc: Laura Bennett <laura@redwoodinference.com>, Aditya Rao <aditya@redwoodinference.com>, Connor O'Brien <connor@redwoodinference.com>
+Date: Fri, 02 Oct 2026 09:03:00 -0700
+Subject: Re: Request: SLA carveout for staged deployment during prod migration
+
+Kiran — thanks for the clear ask and SLA summary. We can support the staged-deploy safeguards you're requesting. Below is the consolidated operational + contract approach we propose:
+
+1) Technical controls (what Redwood will enable)
+   - Route-level version pinning (persisted until unpin)
+   - Automatic fallback to a pre-configured model-version when agreed metric thresholds are breached
+   - Percentage-based traffic splits with time-based ramping (we recommend the default ramp below)
+
+2) Suggested defaults (we'll make these configurable for your runbook)
+   - Initial canary: 3% for 10 minutes
+   - Ramp: 3% -> 10% over 20 minutes -> 50% over 1 hour
+   - Rollback triggers: p95 > 350ms OR error rate > 0.5% for two consecutive 1-minute windows -> automatic shift to pinned model
+   - Pin duration: up to 72 hours with mandatory 24/48 hour check-ins
+
+3) Contract amendment: Laura attached a draft amendment that limits the exception to the migration window (up to 14 days) and clarifies "commercially reasonable efforts" for outcome restoration. If this reads ok for you, we'll route the amendment to Legal and send a DocuSign link.
+
+Next steps:
+- Please confirm you accept the defaults above or send any edits by EOD Mon Oct 5.
+- If accepted we'll circulate the amendment to Legal and provide a proposed cutover schedule (we can pre-warm 48 hours before your Oct 20 date).
+
+DocuSign request will follow once Legal confirms the amendment language: https://www.docusign.com/requests/ABCD-1234
+
+Thanks,
+Marissa
+Account Exec, Redwood Inference
+Cc: Laura Bennett (Product), Aditya Rao (Engineering), Connor O'Brien (Customer Reliability)

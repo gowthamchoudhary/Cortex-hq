@@ -1,0 +1,386 @@
+Pilot closeout + deployment decision (Dedicated vs Private) - Helix Health Systems
+
+MEETING HEADER
+Title: Pilot closeout + deployment decision (Dedicated vs Private) - Helix Health Systems
+Date: 2025-06-11
+Time: 3:00 PM PT
+Duration: 47 min
+Organizer: Priyom Das (Redwood)
+
+Attendees (Redwood): Priyom Das, Rachel Kim, Fatima Noor, Naomi Feldman
+Attendees (Helix): Megan Patel, Jordan Ellis, Nina Alvarez, Kyle Chen, Samir Desai
+
+---
+Auto-Generated Summary (Fireflies)
+- Helix recapped pilot goals (de-identified clinical summarization + limited patient support drafts) and confirmed they want to stay inside a Helix-controlled network boundary for phase 1.
+- Deployment direction: Helix leaning toward Dedicated-in-VPC for pilot and initial production, with Private control plane considered a phase 2 option if their governance model requires it.
+- Remaining gaps are mostly security/compliance evidence and precise configuration clarity: SOC 2 report process, audit log schema/export, retention controls (request/response payloads), data residency/telemetry, and IAM (SAML + possible SCIM).
+- Agreed next steps include sending evidence pack index under NDA process, a security-focused follow-up session, and a draft pilot plan + commercial outline to bring Procurement in.
+
+Topics
+1) What “closeout” means: outcomes, what’s blocked, and what needs to happen to move to procurement
+2) Dedicated vs Private decision (and why)
+3) Security gaps: SOC 2, audit logs, retention, data residency, KMS, SSO/SAML/SCIM
+4) Procurement and implementation timeline
+
+Questions
+- Do we need a BAA for the pilot or only for production?
+- Can we fully disable request/response content logging by default? What’s the minimal metadata retained?
+- Are audit logs exportable to SIEM in near-real-time or batch?
+- Can we guarantee US-only processing AND US-only storage for logs/telemetry?
+
+---
+
+[00:00] Priyom Das: Alright, cool. Thanks everyone for making time. This is kind of a “pilot closeout / next step” call. Goal is to leave with: one, where we landed on Dedicated versus Private; two, the remaining security gaps and who owns them; and three, a realistic procurement and implementation timeline. Sound good?
+
+[00:17] Megan Patel: Yep, works.
+
+[00:18] Jordan Ellis: Yep.
+
+[00:19] Rachel Kim: Sounds good.
+
+[00:20] Fatima Noor: Yep.
+
+[00:23] Priyom Das: Quick roll call just to make sure I caught everybody—Megan, Jordan, Nina, Kyle, Samir from Helix. On our side, me, Rachel from CS, Fatima from SE, and Naomi joined from security.
+
+[00:35] Nina Alvarez: Hi.
+
+[00:36] Kyle Chen: Hey.
+
+[00:38] Naomi Feldman: Hello.
+
+[00:40] Priyom Das: Great. Megan, do you want to start with how you’re thinking about the pilot status? Like what you consider “done” versus what’s still open.
+
+[00:49] Megan Patel: Sure. So from the app side, what we validated is mostly: the workflow is feasible with de-identified notes, and the latency looked in the right ballpark for the summarization use case. The big blocker for us has been we don’t want to move anything forward until Jordan and Nina are comfortable with the controls. And then internally we also have to pick who owns what operationally.
+
+[01:12] Priyom Das: Got it.
+
+[01:13] Megan Patel: Like, we’re not trying to run GPU clusters ourselves. That is a non-starter. So if the option is “you own it” versus “we own it,” we prefer managed.
+
+[01:23] Priyom Das: Yep, heard loud and clear.
+
+[01:24] Jordan Ellis: And I’ll add: our leadership is okay with the innovation team moving fast, but they’re not okay with ambiguity around PHI boundaries and retention. Like we can do de-identified first, but the system can’t be accidentally storing sensitive stuff by default.
+
+[01:39] Rachel Kim: Makes sense.
+
+[01:40] Priyom Das: Maybe let’s hit the big fork first—deployment. Jordan, last time we talked, we had three terms floating around: hosted, dedicated, and private. For Helix specifically we were looking at either Dedicated in your VPC boundary or the full Private control plane. Where are you leaning now?
+
+[01:58] Jordan Ellis: I’m leaning Dedicated in VPC for phase one. And I want to be careful about the wording. It’s basically: our network boundary, and we can control ingress/egress, and we have clarity on what telemetry leaves. Private control plane is… maybe later. The concern is governance: who administers it, what our audit obligations are.
+
+[02:21] Priyom Das: That aligns with what we’ve seen. Fatima, do you want to sanity-check that mapping? Like in Redwood speak.
+
+[02:28] Fatima Noor: Yeah. So Dedicated-in-VPC means we deploy the serving stack inside a Helix VPC environment, with isolation at the network layer. You get the throughput predictability and we can pin models/versions, set routing policies, etc. The full Private deployment is a bigger package where the control plane components are also in your environment and we integrate deeper with your internal systems, but it’s heavier operationally.
+
+[02:54] Kyle Chen: When you say “control plane,” that’s like the admin console piece?
+
+[02:58] Fatima Noor: Exactly. Identity, policy management, audit logging configuration, deployment lifecycle. In Dedicated-in-VPC we still have a managed layer, but we can constrain the data plane to your boundary.
+
+[03:11] Jordan Ellis: Right and that’s the part I need to make explicit in our risk doc: what is managed, what is in our boundary, what data is visible where.
+
+[03:21] Naomi Feldman: And we can help with that. We have a standard “data flow and boundaries” diagram we share in regulated reviews. We’ll tailor it for the VPC deployment.
+
+[03:31] Priyom Das: Perfect. So tentatively: Dedicated-in-VPC for pilot + initial prod, Private as phase 2 only if required. Is that fair as a decision?
+
+[03:42] Megan Patel: From my side, yes.
+
+[03:44] Jordan Ellis: Yes, with the caveat that if we can’t satisfy the audit/retention requirements in that mode, we’ll revisit. But I think we can.
+
+[03:55] Priyom Das: Great. Let’s list the remaining security gaps. Nina, you had a list from the questionnaire side. Want to run through?
+
+[04:03] Nina Alvarez: Yep. Let me pull it up. Okay. First is SOC 2. We need the report, but our process requires NDA and then it goes into our secure vendor portal. Second is encryption: confirm at-rest and in-transit, and for the VPC mode whether keys can be customer managed—KMS, or HSM if needed.
+
+[04:25] Fatima Noor: Yep.
+
+[04:26] Nina Alvarez: Third is audit logs. We need a sample—fields, what events are included, and how we export to Splunk. Fourth is retention: exact defaults for request and response payloads, and whether we can set retention to, like, near zero.
+
+[04:41] Jordan Ellis: Yeah, like “off unless we turn it on.”
+
+[04:44] Nina Alvarez: Fifth is data residency. We’re US-only. That includes processing and storage. And then there was a separate question from our privacy officer about whether any telemetry goes to non-US systems.
+
+[04:59] Priyom Das: Okay.
+
+[05:01] Nina Alvarez: Sixth is identity. SAML is required. SCIM is “nice to have” but our IAM team might require it for production. Kyle can speak.
+
+[05:12] Kyle Chen: Yeah. SAML for sure. We’re Okta. SCIM is usually mandatory if you have a console with roles. Otherwise we end up with manual provisioning, which we try to avoid. But for a pilot we can do SAML-only if we have an admin and a break-glass process.
+
+[05:29] Rachel Kim: That’s helpful.
+
+[05:30] Priyom Das: Great list. Naomi, can you speak to the SOC 2 item and how we share it?
+
+[05:37] Naomi Feldman: Yeah. We don’t email the report directly. The usual path is: we share the evidence pack index publicly-ish, then for SOC 2 we route through NDA. Once NDA is in place we provide access via a secure link with time-bound access. Nina, we can coordinate with your portal if needed, but generally it’s quicker to start with our process, then upload into your portal on your side.
+
+[05:59] Nina Alvarez: That’s fine. As long as we can document chain of custody.
+
+[06:03] Naomi Feldman: Yep.
+
+[06:04] Priyom Das: On encryption/KMS: Fatima can you cover what’s accurate so we don’t over-promise?
+
+[06:10] Fatima Noor: Sure. In the VPC deployment, data in transit is TLS. At rest, storage volumes are encrypted. For customer-managed keys, we can integrate with cloud KMS in that environment. HSM specifically depends on the cloud provider and the pattern—some customers do KMS + external key store. We should treat HSM as “discuss in security deep dive,” not a blanket yes/no.
+
+[06:38] Jordan Ellis: That’s fine. We mostly want KMS. The “HSM” question was our standard template.
+
+[06:43] Priyom Das: Great.
+
+[06:44] Priyom Das: Audit logs next. Jordan, what is “must-have” for you? Like what do you need to see?
+
+[06:50] Jordan Ellis: Admin actions. Who changed routing policies, who changed retention settings, who created API keys, who modified roles. And then ideally some request-level metadata: model version used, region, maybe token counts, but not the content itself.
+
+[07:07] Fatima Noor: Yep.
+
+[07:08] Jordan Ellis: And export. We need to ship it to Splunk. If it’s JSON lines or syslog or S3 bucket, we can work with that. But we need to know the format.
+
+[07:18] Fatima Noor: We have JSON-based audit events. We can share an example payload. There are a few export options—batch to object storage, or streaming via an integration. I’ll send the current “supported patterns” doc. Some of the wording in our docs is being tightened, so I’ll make sure it matches what’s in product today.
+
+[07:40] Naomi Feldman: And just to be explicit: audit logs cover admin and control-plane events. Application logs are separate. We’ll spell out what’s in/out.
+
+[07:49] Jordan Ellis: Perfect.
+
+[07:51] Priyom Das: Retention: I think this is the biggest anxiety point. Rachel, can you talk about how we typically configure for regulated pilots?
+
+[07:59] Rachel Kim: Yeah. For pilots with sensitive data boundaries, we typically recommend: request/response content logging disabled by default, or set to minimal retention if needed for troubleshooting. We keep operational metrics—latency, error rates, token counts—without storing prompts/responses. Then audit logs have their own retention and export. But we need to confirm with Fatima/Naomi what’s configurable in the VPC deployment and what defaults are.
+
+[08:27] Jordan Ellis: That’s exactly what we want.
+
+[08:29] Megan Patel: And for the app team, as long as we can debug when something goes wrong, that’s fine. But we don’t need content stored long term.
+
+[08:37] Priyom Das: Data residency/telemetry: Jordan you asked last time if anything “phones home.” Can you clarify what your bar is?
+
+[08:46] Jordan Ellis: My bar is: no content leaves our boundary. Telemetry… depends. If it’s just system health metrics, maybe okay, but it needs to be US-only and documented. And we need an option to turn it off if our privacy officer insists.
+
+[09:04] Fatima Noor: Understood.
+
+[09:06] Naomi Feldman: We should handle that in the follow-up. We have standard language on what telemetry we collect in each deployment mode and how it’s region-bound. I don’t want to improvise here and say the wrong thing.
+
+[09:18] Priyom Das: Totally fair.
+
+[09:20] Priyom Das: Identity: Kyle, if we do SAML-only for pilot, what do you need from us? Metadata, attributes, role mapping, etc.
+
+[09:28] Kyle Chen: We need SAML metadata exchange, assertion attributes for email and group or role. And then ideally you support role mapping based on Okta groups. If SCIM isn’t there, we can manually manage users for the pilot, but we need an admin workflow that’s auditable.
+
+[09:48] Fatima Noor: We do role-based access control and SAML. Group mapping is possible depending on how you set it up. SCIM is… I won’t promise timeline in this call. But we can talk through what’s supported.
+
+[10:03] Kyle Chen: Okay.
+
+[10:05] Priyom Das: Cool. So those are the gaps. Let’s talk “what happens next” and timeline. Samir, from your side, when do you pull procurement in?
+
+[10:15] Samir Desai: Typically after security gives at least conditional approval. Then procurement creates the vendor record, we do the standard MSA and DPA review. If there’s a BAA, that’s another step. Realistically, if you get us the security packet by next week, we could get a conditional approval by end of June.
+
+[10:36] Priyom Das: End of June, okay.
+
+[10:38] Samir Desai: Then contracting in July. Signature by early August if nothing weird comes up.
+
+[10:46] Nina Alvarez: “Nothing weird” is doing a lot of work there.
+
+[10:49] Samir Desai: (laughs) Yeah.
+
+[10:51] Priyom Das: That’s helpful. Megan, for implementation, what’s your target go-live?
+
+[10:56] Megan Patel: For the de-identified summarization workflow, we’d like something running in August, even if it’s limited users. Then we can expand to more clinics in Q4.
+
+[11:08] Rachel Kim: That’s doable from a CS standpoint if we start the deployment work in parallel with contracting, at least planning-wise.
+
+[11:15] Jordan Ellis: Careful. We can plan, but we can’t deploy until the network boundary is approved.
+
+[11:20] Rachel Kim: Yep, totally.
+
+[11:22] Priyom Das: If we assume Dedicated-in-VPC, what does implementation look like? Fatima, high level.
+
+[11:28] Fatima Noor: High level: we align on the VPC topology, subnets, inbound endpoints, and the allowed egress list. We set up identity integration for console access. We configure audit log export. Then we deploy the model endpoint(s) and validate SLOs. Typical timeline is a few weeks once the environment is ready, but it depends on networking approvals.
+
+[11:54] Jordan Ellis: Networking is always the long pole.
+
+[11:56] Fatima Noor: Yep.
+
+[11:57] Priyom Das: Let’s make this concrete. I’m going to propose a two-track plan:
+1) This week: evidence pack index + SOC2 process, plus an updated architecture diagram with exact data boundaries.
+2) Next week: 60-min security deep dive. Outcome is “conditional approval” and a list of required contract terms (BAA yes/no).
+Then we draft a pilot SOW / order form with a time box and clear data boundaries.
+
+[12:26] Nina Alvarez: That works.
+
+[12:27] Megan Patel: Works.
+
+[12:29] Jordan Ellis: Works.
+
+[12:31] Priyom Das: Great. Naomi, anything you want to add on “what not to say” for HIPAA? I know that came up earlier.
+
+[12:39] Naomi Feldman: Yeah, thank you for calling that out. We should avoid saying “HIPAA certified” or “HIPAA compliant” as a blanket marketing claim. What we can say, and what we’ll document, is: deployment in a customer-controlled VPC, encryption controls, audit logging, and retention configuration options. For a BAA, we treat that as a contractual conversation with legal. Nina/Jordan, if your policy requires a BAA before any PHI touches the system, we need to know that. For de-identified data, some customers proceed without a BAA, but that’s your call.
+
+[13:16] Jordan Ellis: Yep. Our legal team will decide. We just need the option.
+
+[13:20] Nina Alvarez: We can confirm our policy. Usually pilot with de-identified doesn’t require, but production does.
+
+[13:27] Priyom Das: Great. Anything else on security gaps? We covered SOC2, encryption/KMS, audit logs/export, retention defaults, data residency/telemetry, identity.
+
+[13:38] Kyle Chen: One small thing—do you support multiple IdPs? Not for now, but long term we sometimes do merger situations.
+
+[13:45] Fatima Noor: For now, typically one IdP per org. But we can discuss if you need multiple connections. Not sure it’s in scope for phase one.
+
+[13:54] Kyle Chen: Okay.
+
+[13:56] Megan Patel: I have one question on Dedicated vs Private. If we start with Dedicated-in-VPC, how painful is it to move to Private later if Jordan’s team forces it?
+
+[14:06] Fatima Noor: It’s not starting from zero. The application integration stays pretty similar because the API surface is consistent. The heavier part is control plane components and operational ownership. But your prompts, routes, and evaluation harness—those move. The biggest change is governance and networking.
+
+[14:27] Rachel Kim: And we’d do it as a phased migration. You wouldn’t have to stop everything.
+
+[14:33] Megan Patel: Okay, good.
+
+[14:35] Priyom Das: I want to check success criteria quickly. Megan, for the pilot, what are you going to report up? Like what makes this a “yes.”
+
+[14:44] Megan Patel: Three things. One, performance: interactive summarization feels fast enough for clinicians. Two, quality: we can control outputs, no hallucinated meds or anything. And three, security sign-off: Jordan can say, “we have auditability and retention controls, and we’re not storing PHI.”
+
+[15:04] Jordan Ellis: Yep.
+
+[15:05] Priyom Das: Great. Rachel, from CS side, we’ll create a quick mutual action plan doc with those as top-line criteria and owners.
+
+[15:12] Rachel Kim: Yep, I can do that.
+
+[15:14] Priyom Das: Cool. Let’s zoom in on the evidence pack. Naomi, what’s included in the index?
+
+[15:20] Naomi Feldman: Index will point to: SOC2 process, encryption overview diagram, audit logging overview, incident response summary, and a few policy statements like retention options and access controls. For some items we can provide sample artifacts—like a redacted audit log sample—depending on what’s approved.
+
+[15:42] Nina Alvarez: We’ll take whatever you can provide. Even the index helps.
+
+[15:46] Priyom Das: Great.
+
+[15:47] (crosstalk)
+
+[15:48] Samir Desai: On the commercial side, are we talking a pilot credit or a short-term contract?
+
+[15:53] Priyom Das: Good question. Our normal approach is a time-boxed pilot with a defined scope and either credits or a reduced pilot fee, then conversion to an annual commit if successful. I don’t want to negotiate live here, but we’ll send an outline with guardrails.
+
+[16:11] Rachel Kim: And we’ll align it with the implementation timeline so we’re not burning time.
+
+[16:14] Megan Patel: Okay.
+
+[16:16] Jordan Ellis: The key for us is the contract language on data usage. Like, no training on our data, explicit boundaries.
+
+[16:23] Naomi Feldman: Understood. That’s standard.
+
+[16:25] Priyom Das: Yep.
+
+[16:27] Priyom Das: I want to capture the “remaining gaps” as a checklist. Let me read back and you tell me if I missed anything:
+- SOC2 report via NDA process
+- Data flow / boundaries diagram for Dedicated-in-VPC
+- Audit log schema + export pattern (Splunk)
+- Retention defaults and how to set to minimal/off
+- US-only residency and clarity on telemetry
+- SAML setup details, SCIM optional but desired
+- Clarify BAA requirement and timing
+
+[16:58] Nina Alvarez: That’s it.
+
+[16:59] Jordan Ellis: That’s it.
+
+[17:01] Kyle Chen: Yep.
+
+[17:02] Priyom Das: Great. Now, what’s the “security follow-up” meeting? I’d like to schedule it now. Jordan, who needs to be there?
+
+[17:11] Jordan Ellis: Me, Nina, Kyle. Maybe our privacy officer if we can get them, but not sure.
+
+[17:18] Megan Patel: I’d like to join for the first 15 minutes just so we stay aligned.
+
+[17:22] Priyom Das: Works.
+
+[17:24] Priyom Das: Fatima and Naomi from us, plus me. Rachel optional.
+
+[17:28] Rachel Kim: I can join if helpful.
+
+[17:30] Priyom Das: Okay.
+
+[17:31] Priyom Das: Timing—early next week?
+
+[17:34] Jordan Ellis: Tuesday afternoon is good.
+
+[17:37] Priyom Das: Tuesday 2 PM PT?
+
+[17:39] Jordan Ellis: Works.
+
+[17:40] Priyom Das: Great, I’ll send.
+
+[17:42] (pause)
+
+[17:44] Megan Patel: One more thing. Internally, the “why not just use Azure OpenAI” question comes up. The pitch we’ve been using is: we need VPC, audit logs, and predictable throughput. Can you help us with a one-slide summary we can use?
+
+[17:58] Priyom Das: Yep. We can provide a neutral comparison. We won’t trash them, but we’ll frame the Dedicated-in-VPC + control knobs + observability.
+
+[18:08] Fatima Noor: And also the ability to pin model versions and have rollback policies, which for clinical workflows matters.
+
+[18:15] Megan Patel: Yes.
+
+[18:16] Jordan Ellis: As long as it doesn’t claim “HIPAA ready” or something.
+
+[18:20] Priyom Das: Yep, we’ll keep it tight.
+
+[18:22] Rachel Kim: Also we can include the operational posture: you’re not managing GPUs.
+
+[18:27] Megan Patel: Exactly.
+
+[18:29] Priyom Das: Cool. Switching gears: are there any “red flag” contract terms we should anticipate? Samir, Nina?
+
+[18:37] Samir Desai: Data processing addendum. We have standard clauses. Liability cap discussions sometimes take time. And if a BAA is required, that’s the long one.
+
+[18:49] Nina Alvarez: Also audit rights language. Our template asks for audit rights, but we’re flexible if we have SOC2 and evidence.
+
+[18:57] Naomi Feldman: That’s typical.
+
+[19:00] Priyom Das: Great. We’ll loop in our legal when we send the commercial outline.
+
+[19:05] (audio blip)
+
+[19:07] Priyom Das: Sorry, I think I cut out for a second. Can you still hear me?
+
+[19:09] Megan Patel: Yep.
+
+[19:10] Jordan Ellis: Yep.
+
+[19:12] Priyom Das: Great.
+
+[19:13] Priyom Das: Rachel, can you talk about implementation handoff and what you need from Helix for the pilot to run smoothly?
+
+[19:21] Rachel Kim: Sure. Typically we ask for: a named technical owner on your side for networking; an owner for identity integration; clarity on the evaluation dataset and success metrics; and then who will receive operational alerts. We’ll also set up dashboards in the console for latency and error rates. For regulated accounts, we also align on incident communications—who we contact and how fast.
+
+[19:48] Samir Desai: That’s helpful. I can be the program manager for pulling people together, at least until it moves to operations.
+
+[19:55] Rachel Kim: Perfect.
+
+[19:57] Megan Patel: On evaluation dataset, we’ll stick to de-identified notes. We have a process. We’ll provide maybe 200 to start.
+
+[20:05] Fatima Noor: Great. That’s enough to calibrate performance and quality.
+
+[20:09] Jordan Ellis: And again, we need to document de-identification. Not your problem, but we’ll note it.
+
+[20:15] Priyom Das: Yep.
+
+[20:16] Priyom Das: Okay, I think we have what we need. I’m going to do a recap and then we can close.
+
+[20:23] Priyom Das: Recap:
+- Deployment direction: Dedicated-in-VPC for pilot and likely initial production. Private is optional phase 2.
+- Open security items: SOC2 NDA process, audit logs schema/export, retention defaults + ability to minimize/disable content logging, data residency and telemetry details, KMS integration, SAML setup (Okta) and SCIM discussion, and confirming BAA timing.
+- Timeline: target conditional security approval by end of June, contracting in July, aiming for signature early August, and limited go-live in August for de-identified summarization.
+- Next meetings: Priyom to schedule security deep dive for Tuesday 2 PM PT next week.
+- Deliverables this week: evidence pack index + SOC2 instructions (Naomi), updated VPC reference architecture/data flow (Fatima), mutual action plan/pilot plan outline (Rachel/Priyom).
+
+[21:15] Priyom Das: Did I miss anything?
+
+[21:17] Nina Alvarez: No, that’s good.
+
+[21:18] Jordan Ellis: Looks good.
+
+[21:19] Megan Patel: Good.
+
+[21:20] Kyle Chen: Works.
+
+[21:22] Priyom Das: Great. Thanks everyone. We’ll follow up with notes and the calendar invite.
+
+[21:27] Rachel Kim: Thanks all.
+
+[21:28] Naomi Feldman: Thank you.
+
+[21:29] Jordan Ellis: Thanks.
+
+[21:30] Megan Patel: Bye.
+
+---
+Note: Transcript is auto-generated and may contain errors.

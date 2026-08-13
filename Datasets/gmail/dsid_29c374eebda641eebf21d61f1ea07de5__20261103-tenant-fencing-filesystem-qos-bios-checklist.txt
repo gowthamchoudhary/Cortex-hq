@@ -1,0 +1,148 @@
+On‑prem multitenancy: filesystem QoS, node BIOS, and tenant fencing (planning)
+
+From: Liam O'Connor <liam.oconnor@hearthstone.io>
+To: Tessa Morgan <tessa.morgan@redwood.ai>
+Cc: Hearthstone Procurement <procure@hearthstone.io>
+Date: Mon, 1 Nov 2026 09:12:00 -0700
+Subject: On‑prem multitenancy: filesystem QoS and node BIOS questions
+
+Hi Tessa,
+
+Thanks again for taking time last week. We're starting the detailed prep for our private deployment and hit a few items we want to align on before the site visit:
+
+- Multitenant filesystem strategy: we have mixed tenants (batch inference, low‑latency API, and nightly retraining). Do you recommend hostpath vs. a shared block+LVM approach for tenant isolation and predictable QoS?
+- Per‑tenant IO priorities: can Redwood enforce IOPS/QoS at the storageclass level or should we carve separate nodepools for QoS domains?
+- BIOS / firmware baseline: we have older servers — any mandatory BIOS settings (C‑states, turbo, memory interleaving) for Redwood GPU inference pods?
+- Backup/retention expectations and impact on IO during snapshots.
+
+Attached is our inventory and a short fio run we did on a candidate node. Can someone from your side propose a short checklist we can validate during the onsite?
+
+Attachments: tenant_inventory.xlsx (spreadsheet), fio-baseline-results.pdf (fio summary)
+
+Thanks,
+Liam
+Liam O'Connor
+Head of Platform Engineering | Hearthstone Labs
+liam.oconnor@hearthstone.io
+--
+On Mon, Nov 1, 2026 at 09:12 AM Liam O'Connor <liam.oconnor@hearthstone.io> wrote: (original)
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Priya Natarajan <priya.natarajan@redwood.ai>
+Cc: Liam O'Connor <liam.oconnor@hearthstone.io>
+Date: Mon, 1 Nov 2026 11:03:00 -0700
+Subject: Re: On‑prem multitenancy: filesystem QoS and node BIOS questions
+
+Thanks Liam — got the inventory and fio outputs. Vivek/Priya, looping you in for a quick design call.
+
+High level I propose we create a short validation checklist for the site:
+1) Tenant isolation options (separate block devices per tenant vs shared filesystem + per‑tenant cgroup/io throttling)
+2) StorageClass profiles (replication/async snapshots, fs type, reclaimPolicy, volumeBindingMode)
+3) Nodepool layout (gpu/latency/burst pools + system pools for control plane)
+4) Minimum BIOS baseline for inference nodes (C‑states, NUMA config, SMT on/off, PCH/PCIe settings)
+5) Snapshot/backup windows and expected IO amplification during backups
+
+Can you draft concrete defaults for (2) and (3) we can send to Liam prior to the workshop? I can own the checklist and run the meeting during the site visit.
+
+I'll schedule a 30‑minute sync today if that works for you both.
+
+—Tessa
+Tessa Morgan
+Solutions Engineer, Private Deployments | Redwood Inference
+mailto:tessa.morgan@redwood.ai | +1 (415) 555‑0193
+
+On Mon, Nov 1, 2026 at 09:12 AM Liam O'Connor <liam.oconnor@hearthstone.io> wrote: (quoted)
+> Hi Tessa,
+> ...
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Priya Natarajan <priya.natarajan@redwood.ai>
+Cc: Liam O'Connor <liam.oconnor@hearthstone.io>
+Date: Mon, 1 Nov 2026 12:05:00 -0700
+Subject: Re: On‑prem multitenancy: filesystem QoS and node BIOS questions
+
+On Mon, Nov 1, 2026 at 11:03 AM Tessa Morgan <tessa.morgan@redwood.ai> wrote:
+> High level I propose we create a short validation checklist for the site:
+
+Quick notes / proposed defaults from infra perspective:
+
+- Nodepool layout (proposed):
+  * system‑infra (non‑gpu, 3 nodes, taint system:control‑plane=true) — control plane and storage controllers
+  * gpu‑lowlat (GPU, 6 nodes, 1x A100/RTX per node) — low latency, small batch, pin to NUMA local memory
+  * gpu‑batch (GPU, 4 nodes) — large batch, higher tolerated latency, aggressive prefetch/caching
+  * storage‑io (non‑gpu, 4 nodes, NVMe JBOD) — host the blockstore volumes, run CSI controller replicas here
+
+- Isolation: prefer separate block devices per tenant when tenants have strict IO SLAs. That reduces noisy neighbor risk and simplifies QoS at the host level. Shared filesystem (e.g., XFS on top of a distributed block store) is OK for low‑priority tenants.
+
+- StorageClass profiles (defaults):
+  * redwood‑fast (Provisioner: local‑csi or external CSI; parameters: fsType=xfs, ioScheduler=none, discard=on, replica=1; reclaimPolicy=Delete; volumeBindingMode=WaitForFirstConsumer)
+  * redwood‑durable (Provisioner: external CSI; parameters: fsType=ext4, replica=3, snapshotEnabled=true; reclaimPolicy=Retain)
+  * redwood‑ephemeral (emptyDir‑based, nodeLocal cache, for scratch)
+
+- QoS mechanisms: use nodepool separation as primary QoS boundary. Kubernetes blkio/cgroup v2 throttling is material but less predictable with complex CSI drivers. Where you must use shared volumes, we recommend CSI that supports IOPS/throughput parameters exposed to the scheduler.
+
+- BIOS baseline (must haves):
+  * Smt: on for throughput jobs, consider off for noisy single‑threaded workloads — default ON unless profiling shows regressions
+  * C‑states: disable deep C‑states for low latency nodes
+  * NUMA: set interleaving disabled; bind processes to NUMA for GPU nodes
+  * PCIe ASPM: disable on inference nodes (reduces latency jitter)
+
+- Backup/retention: recommend rolling snapshots with staged throttle (use CSI snapshot + rate limit) and schedule outside 15:00–19:00 local peak window.
+
+I've put these notes into a short markdown file for the meeting: redwood-nodepool-suggestion.md (attached). Happy to convert to a checklist.
+
+—Vivek
+Vivek Kulkarni
+Senior Site Reliability Engineer | Redwood Inference
+
+From: Priya Natarajan <priya.natarajan@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Cc: Liam O'Connor <liam.oconnor@hearthstone.io>
+Date: Tue, 2 Nov 2026 09:18:00 -0700
+Subject: Re: On‑prem multitenancy: filesystem QoS and node BIOS questions
+
+Thanks — a couple compliance / risk items to flag before the workshop:
+
+- Encryption at rest: Hearthstone will need proof of KMS integration for private deployments. We should bring the KMS integration guide (customer KMS + Redwood key wrapping) and a short checklist for key rotation.
+- Audit logging: they asked about immutable audit trails for admin actions. We should propose forwarding to their SIEM (rsyslog/Fluent) and a retention baseline (90/365/1095 days).
+- Tenant fencing: for regulated tenants, require separate storage class + network policy + optionally separate Kubernetes control plane namespaces (or dedicated small clusters). That increases operational cost but gives stronger isolation.
+- Canaries: propose a two‑tier rollout for host changes: (1) single host validation (fio + perf‑regress), (2) 10% nodepool, (3) full rollout. Include rollback playbook in the checklist.
+
+I'll upload a short compliance checklist to the shared drive. Also confirm whether snapshot metadata is encrypted — if not, we must call it out in the runbook.
+
+—Priya
+Priya Natarajan
+Security & Compliance | Redwood Inference
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Liam O'Connor <liam.oconnor@hearthstone.io>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Priya Natarajan <priya.natarajan@redwood.ai>, Hearthstone Procurement <procure@hearthstone.io>
+Date: Tue, 3 Nov 2026 16:45:00 -0700
+Subject: Re: On‑prem multitenancy: filesystem QoS and node BIOS questions — workshop plan and next steps
+
+Liam — thanks for the quick responses, attaching the combined checklist and proposed nodepool layout for your review. Summary / next steps: 
+
+Action items for Hearthstone:
+- Confirm which tenants require hard isolation vs. soft isolation (share back tenant list in tenant_inventory.xlsx) — due: Nov 6
+- Share KMS provider details and whether snapshot metadata must be encrypted — due: Nov 6
+
+Action items for Redwood:
+- Provide final StorageClass YAMLs for redwood‑fast / durable / ephemeral and a short helm chart we can apply during site validation — due: Nov 5 (Vivek)
+- Draft key rotation + KMS integration doc snippets for the runbook — due: Nov 5 (Priya)
+- Onsite checklist & workshop plan + invite (30 minutes prep call + 4 hour onsite session) — due: Nov 4 (Tessa)
+
+Meeting: I scheduled a 30‑minute prep sync for Thu Nov 4 10:00–10:30 PT. Invite: https://calendar.google.com/event?eid=example_invite_id
+
+I've uploaded the checklist + nodepool suggestions to the shared drive: https://drive.google.com/drive/folders/1a2B_example_shared_plan (redwood‑nodepool‑suggestion.md and the fio pdf are in the folder).
+
+Attachments: redwood-nodepool-suggestion.md
+
+If that timeline works, we'll close the prep and run the workshop next week.
+
+Thanks,
+Tessa Morgan
+Solutions Engineer, Private Deployments | Redwood Inference
+T: +1 (415) 555‑0193
+E: tessa.morgan@redwood.ai
+
+---
+Forwarded attachment: redwood-nodepool-suggestion.md (text/markdown)

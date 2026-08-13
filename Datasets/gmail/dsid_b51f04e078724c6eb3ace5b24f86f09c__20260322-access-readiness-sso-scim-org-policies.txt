@@ -1,0 +1,131 @@
+Access readiness: SSO, SCIM mappings & org policies
+
+From: Emily Choi <emily.choi@orthomed.com>
+To: Tessa Morgan <tessa@redwood.com>
+Cc: marissa.cole@redwood.com, monica.patel@redwood.com
+Date: 2026-03-22T09:14:00-07:00
+Subject: Re: Access controls for Redwood deployment (SSO/SCIM)
+
+Hi Tessa —
+
+Thanks for the quick demo last week. Orthomed is ready to move into production onboarding but we need to lock down the access controls scope before the kickoff:
+
+- SSO/SAML: we'll be on Okta — we can export metadata but need the assertion attributes Redwood expects (email, groups, employeeNumber).
+- SCIM: we want automatic provisioning for group membership and a few custom attributes (costCenter, location).
+- IP allowlist: legal wants to know the static egress IP ranges for outbound webhook callbacks.
+- Service accounts: need guidance on recommended lifetime, keys, and rotation policy.
+
+Can you share a concise checklist and any sample SAML metadata / SCIM mapping we can validate with our IdP team? Also copy procurement (procurement@orthomed.com) for PO timing.
+
+Best,
+Emily
+Emily Choi
+IT Lead, Orthomed Inc.
+
+From: Tessa Morgan <tessa@redwood.com>
+To: Emily Choi <emily.choi@orthomed.com>
+Cc: monica.patel@redwood.com, dev.patel@redwood.com, marissa.cole@redwood.com
+Date: 2026-03-22T11:02:00-07:00
+Subject: Re: Access controls for Redwood deployment (SSO/SCIM)
+
+Emily —
+
+Great — thanks for the clear list. I've attached a compact implementation checklist and two stubs: sample SAML metadata (for our SP) and a starter SCIM attribute-mapping sheet your IdP team can edit. Highlights below so you can pass to Okta engineers quickly: 
+
+1) SSO/SAML (Okta)
+   - SP metadata attached: upload to Okta as a Service Provider.
+   - Required assertion attributes: email (primary), groups (multivalued, prefix: roles:), employeeNumber (optional but recommended).
+   - NameID format: emailAddress.
+   - Recommended signing algorithm: RSA-SHA256.
+
+2) SCIM provisioning
+   - Endpoint: we configure a SCIM v2.0 endpoint per tenant.
+   - Minimal attributes: userName (email), externalId (employeeNumber), active, displayName, groups (by externalId).
+   - Custom attributes allowed: costCenter, location — provide mapping in the attached sheet.
+
+3) IP allowlists
+   - We will provide a region-specific static egress set for webhook callbacks and admin console access (see checklist).
+   - For your staging -> prod cutover, you can register the staging set first and add prod ranges 24 hours before cutover.
+
+4) Service accounts & org policies
+   - We recommend a machine/service account per integration; keys are short-lived (90 days) with automated rotation.
+   - For audit purposes, we log service account usage per token and tie to the tenant id.
+
+5) Audit & compliance
+   - We capture admin actions (SSO config, SCIM toggles, allowlist changes) in the tenant audit log and provide export for SOC2 review.
+
+I'll loop in Monica (implementation engineer) to propose a 2-week rollout plan and a short kickoff sync.
+
+Attachments: Redwood-Access-Implementation-Checklist-v1.pdf, orthomed_saml_metadata.xml, scim-attribute-mapping.xlsx
+
+Thanks —
+Tessa Morgan
+Senior Customer Success Manager
+Redwood Inference
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Emily Choi <emily.choi@orthomed.com>, Tessa Morgan <tessa@redwood.com>
+Cc: dev.patel@redwood.com
+Date: 2026-03-22T12:40:00-07:00
+Subject: Re: Access controls for Redwood deployment (SSO/SCIM)
+
+Hi Emily / Tessa —
+
+Thanks — read the checklist and the SCIM sheet. A few clarifying items from the implementation side so we can size the work for the kickoff: 
+
+- SCIM mapping: can you confirm whether Orthomed wants us to be the source of truth for group membership (Redwood-managed) or whether Okta will push group changes? The mapping differs slightly and affects provisioning cadence.
+
+- IP allowlists: we will publish the canonical ranges per region. For US-east production the outbound webhook IP set is: 54.142.120.0/22, 3.218.40.0/22 (these are placeholders until eng confirms). Can your network/security team accept CIDR ranges or prefer specific NAT IPs?
+
+- Service accounts: Redwood issues a long-lived service principal but tokens are scoped and rotate. Are you comfortable with 90-day key rotation? We can do 30 days if you have stricter policy — note operational overhead.
+
+- SAML metadata: our metadata uses groups as a space-delimited multi-value attribute named 'roles'. If Okta needs CSV, we can convert.
+
+Proposal: 30-minute kickoff tomorrow 10:00 AM PT — topics: SAML upload, SCIM mapping finalization, allowlist confirmation, and demo of how tokens are rotated.
+
+Can procurement hold on PO finalization until after kickoff? That will keep the timeline flexible.
+
+Cheers,
+Monica Patel
+Implementation Engineer, Redwood Inference
+
+From: Emily Choi <emily.choi@orthomed.com>
+To: Monica Patel <monica.patel@redwood.com>, Tessa Morgan <tessa@redwood.com>
+Cc: procurement@orthomed.com
+Date: 2026-03-22T13:06:00-07:00
+Subject: Re: Access controls for Redwood deployment (SSO/SCIM)
+
+Monica —
+
+Thanks for the details. Quick answers from our IdP/security leads: 
+- Okta will be the source of truth for groups; they will push group changes to Redwood via SCIM.
+- The network team prefers CIDR ranges for allowlisting; staging will accept temporary ranges.
+- 90-day rotation OK but procurement/security prefer automated rotation and notify windows documented in the checklist.
+
+We can do the 10:00 AM PT kickoff tomorrow. I've looped procurement so they can prepare a pro forma PO.
+
+Regards,
+Emily
+
+From: Tessa Morgan <tessa@redwood.com>
+To: Emily Choi <emily.choi@orthomed.com>, monica.patel@redwood.com, dev.patel@redwood.com
+Cc: marissa.cole@redwood.com
+Date: 2026-03-22T16:27:00-07:00
+Subject: Re: Access controls for Redwood deployment (SSO/SCIM)
+
+Perfect — thanks everyone. Action items I captured for the kickoff: 
+
+- Orthomed: confirm final SCIM custom attribute names in the attached sheet (Emily).
+- Redwood implementation: provide final egress IP ranges and production NAT IPs by EOD (Monica/Dev).
+- Security/Procurement: confirm PO timing post-kickoff and any compliance packaging (procurement@orthomed.com).
+- Tessa: send calendar invite for 2026-03-23 10:00 AM PT and include pre-kickoff checklist link.
+
+If there are any blockers on the SAML metadata upload, reply-all and we'll get an engineer on the call quickly.
+
+Thanks — looking forward to the kickoff.
+
+--
+Tessa Morgan
+Senior Customer Success Manager
+Redwood Inference
+attachments: Redwood-Access-Implementation-Checklist-v1.pdf (17KB stub), orthomed_saml_metadata.xml (2KB stub), scim-attribute-mapping.xlsx (8KB stub)

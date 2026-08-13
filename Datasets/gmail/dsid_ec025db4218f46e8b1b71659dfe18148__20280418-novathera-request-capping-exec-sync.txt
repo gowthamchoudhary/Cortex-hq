@@ -1,0 +1,154 @@
+Urgent: NovaThera — sustained 5xx/429 spike during peak window, exec sync requested
+
+From: Samantha Choi <samantha.choi@novathera.com>
+To: laura.bennett@redwoodinference.com
+Cc: ops@novathera.com
+Date: Wed, 18 Apr 2028 09:12:00 -0700
+Subject: Production: Elevated 5xx/429s during 08:00-10:00 PT
+
+Hi Laura,
+
+We started seeing elevated errors and a large increase in 429s during our morning traffic window (08:00–10:00 PT) starting yesterday evening. Latency to your API has jumped from ~120ms p50 to >1.2s p50 and p95 is spiking above 3s. Throughput dropped by ~40% despite sustained request volume. Attached is a screenshot of our Grafana alert and a sample request log (nova_request_log_0418.csv).
+
+This is impacting our real‑time scoring pipeline; several downstream jobs are failing. Our oncall team attempted retries but the errors persist. Can you confirm if anything changed on your side — rate windows, burst credits, or routing?
+
+We need an initial triage and ETA within 30 minutes if possible — NovaThera will consider this a P1.
+
+Thanks,
+Samantha Choi
+Head of Integrations, NovaThera
+
+---
+Attachment: nova_errors_2028-04-18.png (image/png)
+Attachment: nova_request_log_0418.csv (text/csv)
+From: Laura Bennett <laura.bennett@redwoodinference.com>
+To: marissa.cole@redwoodinference.com, karthik.iyer@redwoodinference.com, vivek.kulkarni@redwoodinference.com
+Date: Wed, 18 Apr 2028 09:25:00 -07:00
+Subject: Fwd: Production: Elevated 5xx/429s during 08:00-10:00 PT
+
+Marissa / Karthik / Vivek — forwarding NovaThera P1.
+
+Summary: customer reporting sustained 5xx and 429s during their peak window (08:00–10:00 PT). Logs attached. They reported latency & throughput degradation; downstream jobs failing. They flagged this as a P1.
+
+Ask: Can infra & serving triage immediately? If this is a policy/burst-window regression we should consider a temporary override. Please include an ETA and any customer‑facing wording. CC me on status updates.
+
+Laura
+Director, Enterprise Accounts
+Redwood Inference
+
+> On Wed, Apr 18, 2028 at 09:12 Samantha Choi <samantha.choi@novathera.com> wrote:
+> > We started seeing elevated errors...
+> > (attachments: nova_errors_2028-04-18.png, nova_request_log_0418.csv)
+From: Karthik Iyer <karthik.iyer@redwoodinference.com>
+To: laura.bennett@redwoodinference.com, marissa.cole@redwoodinference.com
+Cc: vivek.kulkarni@redwoodinference.com
+Date: Wed, 18 Apr 2028 09:38:00 -07:00
+Subject: RE: Fwd: Production: Elevated 5xx/429s during 08:00-10:00 PT
+
+Laura / team — quick triage notes: 
+
+1) Reproduced errors in our staging replay using their sample log. The shape is consistent with a token‑bucket enforcement that is firing earlier than expected (requests are being rate‑limited mid‑burst).
+2) Configuration check: NovaThera was migrated to the new pacing regime last night at ~02:00 (policy id: pacing_v2). The tenant's burst window was set to 15s instead of expected 120s due to a template merge bug. That reduces effective peak throughput dramatically under sustained bursts.
+
+Immediate mitigation options (ordered by risk):
+- TEMP OVERRIDE: apply tenant-level burst_window=120s and add 2x burst credits (low risk, instant).
+- ROUTE: shift NovaThera requests to the compatible model variant on the same cluster that has more permissive quota (requires routing change; ~10–20 min).
+- FALLBACK: enable small retry/backoff on the customer side — I can provide recommended headers/backoff policy but it's not ideal for real-time scoring.
+
+I can push the temp override now if we have approval; will monitor error rate and latency after change. Attached: runbook_rate_override.md (small script + rollback steps).
+
+Karthik
+Sr. Manager, Serving Runtime
+Redwood Inference
+
+> On Wed, Apr 18, 2028 at 09:25 Laura Bennett <laura.bennett@redwoodinference.com> wrote:
+> > Marissa / Karthik / Vivek — forwarding NovaThera P1.
+
+From: Vivek Kulkarni <vivek.kulkarni@redwoodinference.com>
+To: karthik.iyer@redwoodinference.com, laura.bennett@redwoodinference.com
+Cc: marissa.cole@redwoodinference.com
+Date: Wed, 18 Apr 2028 09:46:00 -07:00
+Subject: RE: Fwd: Production: Elevated 5xx/429s during 08:00-10:00 PT
+
+Thanks Karthik — agree with your assessment. Additional notes from infra: 
+- The pacing_v2 rollout included a template override pushed to the tenant group; the 15s burst_window value is the template's default for newly onboarded tenants but should have been replaced by tenant-specific policy during migration. That replacement failed in ~2% of cases (we're seeing a small set of customers).
+- Cluster headroom is tight in the us-west region this morning (scheduled capacity increase was delayed). If we apply the temp override we should do it staged (start with a single host) to avoid sudden pressure on a constrained pool.
+
+Plan:
+1) Approve temp override for NovaThera with 120s burst_window and +2 burst credits.
+2) Deploy override to a single host and monitor for 10 min. If metrics normalize, cascade to full pool.
+3) Post‑mortem: revert template default and run a tenant sanity check job.
+
+I can implement step 1 in ~7 minutes once Marissa or Laura sign off. I will also open a JIRA (INF-5421) to track the template fix.
+
+Vivek
+Head of Infrastructure
+Redwood Inference
+
+> On Wed, Apr 18, 2028 at 09:38 Karthik Iyer <karthik.iyer@redwoodinference.com> wrote:
+> > 1) Reproduced errors...
+> > (see attached runbook_rate_override.md)
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: laura.bennett@redwoodinference.com, karthik.iyer@redwoodinference.com, vivek.kulkarni@redwoodinference.com
+Date: Wed, 18 Apr 2028 09:53:00 -07:00
+Subject: RE: Fwd: Production: Elevated 5xx/429s during 08:00-10:00 PT
+
+Thanks for the rapid triage. Approve the TEMP OVERRIDE per Vivek's staged plan — prioritize minimizing customer impact.
+
+Two asks for coordination:
+- Customer comms: Laura, please send NovaThera a short note acknowledging P1 status, explaining that we identified a policy migration bug and are applying a temporary fix; provide an ETA for full resolution and compensation approach. Keep it concise.
+- Commercial flag: we should pre‑approve a credit of up to 7 days pro‑rata for the peak impact window; I'll coordinate with finance after the patch. If this becomes >24h outage we escalate to the Exec SRE war room.
+
+Marissa
+VP, Customer Success & Sales Operations
+Redwood Inference
+
+> On Wed, Apr 18, 2028 at 09:46 Vivek Kulkarni <vivek.kulkarni@redwoodinference.com> wrote:
+> > Plan: 1) Approve temp override...
+
+From: Laura Bennett <laura.bennett@redwoodinference.com>
+To: samantha.choi@novathera.com
+Cc: ops@novathera.com, marissa.cole@redwoodinference.com, karthik.iyer@redwoodinference.com, vivek.kulkarni@redwoodinference.com
+Date: Wed, 18 Apr 2028 10:05:00 -07:00
+Subject: RE: Production: Elevated 5xx/429s during 08:00-10:00 PT
+
+Samantha — thanks for the report and for the sample logs. We’ve identified a configuration migration bug that set NovaThera's burst window to 15s (should be 120s). Our infra team is applying a temporary tenant override now (staged) and will monitor for 10 minutes. Expected customer impact: immediate reduction in 429s and latency to baseline within ~10–20 minutes after the override cascades.
+
+Next steps:
+- We will apply the staged override now and report back within 15 minutes with a short update.
+- After monitoring and verification, we will run the tenant migration sanity job to ensure the template replacement is fixed and schedule a permanent policy remediation.
+- We will issue a pro‑rata credit for the affected peak window; Marissa will coordinate commercial details.
+
+Apologies for the interruption — we’re treating this as high priority. I will update you in 15 minutes (or sooner if metrics clear).
+
+Best,
+Laura Bennett
+Director, Enterprise Accounts
+Redwood Inference
+
+> On Wed, Apr 18, 2028 at 09:53 Marissa Cole <marissa.cole@redwoodinference.com> wrote:
+> > Thanks for the rapid triage...
+
+From: Laura Bennett <laura.bennett@redwoodinference.com>
+To: marissa.cole@redwoodinference.com, karthik.iyer@redwoodinference.com, vivek.kulkarni@redwoodinference.com
+Date: Thu, 19 Apr 2028 15:40:00 -07:00
+Subject: Post‑mortem / customer follow up: NovaThera peak window incident (resolved)
+
+Team — follow up from yesterday's incident:
+
+What happened: Template migration set a default burst_window of 15s for a small set of tenants; NovaThera was impacted during their daily peak. That led to elevated 429s/5xx and throughput loss.
+
+What we did: Staged tenant override (120s burst_window + 2x burst credits) at 09:55 PT yesterday. Error rate returned to baseline within 8 minutes on the staged host and fully normalized after cascading to the pool. We opened JIRA INF-5421 and scheduled a template migration sanity job.
+
+Customer outcome: NovaThera confirmed the service is back to normal and accepted our offer for pro‑rata credit for the affected peak window. They appreciated the quick communications.
+
+Action items:
+- P1: deploy tenant sanity check to block bad defaults (assigned to Karthik; ETA 48h).
+- P2: add validation in the migration pipeline to surface template/tenant mismatches (assigned to Vivek; ETA 72h).
+- Comms: Laura to send formal post‑mortem and credit details to NovaThera (in progress).
+
+Thanks everyone for the quick reaction. I'll share the customer note draft today for review.
+
+Laura
+Director, Enterprise Accounts
+Redwood Inference

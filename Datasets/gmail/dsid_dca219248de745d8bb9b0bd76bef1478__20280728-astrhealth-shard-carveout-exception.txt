@@ -1,0 +1,109 @@
+AstraHealth experimental shard carveout & autoscale exception
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Cc: Alice Moreno <alice.moreno@astrahealth.com>
+Date: Fri, 28 Jul 2028 09:12:00 -0700
+Subject: AstraHealth experimental shard carveout & autoscale exception
+
+Team —
+
+Quick ask from the AstraHealth pilot team (cc'd): they want a short-lived, reserved carveout to run an intensive inference experiment next month. High level:
+- Duration: 3 weeks (2028-08-07 -> 2028-08-27)
+- Hardware: 8 x A100v5 dedicated GPUs (single contiguous slice preferred) + hotlane for bursts
+- Traffic shape: steady 3k reqs/min during business hours, spikes to ~9k during load tests (10–15 min windows)
+- Latency SLO target: p95 < 120ms for model endpoint (existing production SLOs are 90ms)
+
+They are asking for two special ops changes:
+1) carveout of the 8 GPU slice from pool G-3 for the run window (non-preemptible)
+2) temporary autoscale exception so the slice doesn't scale down below baseline during scheduled tests and can accept burst allocations beyond normal quotas
+
+Rationale is that the experiment is validating a streaming clinical summarization model and results are timing-sensitive; AstraHealth will give us a short case-study if the test succeeds. They signed off on an accelerated procurement path but we need internal sign-off on the carveout and the autoscale exception.
+
+Attachments: AstraHealth-experiment-carveout.xlsx (proposal) and AstraHealth-runbook-draft.md (initial runbook).
+
+Can ops/infra comment on feasibility and cost delta? Product, please confirm acceptance criteria and rollback conditions.
+
+— Priyom
+Priyom Das
+Senior Partnerships Manager | Redwood Inference
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Priyom Das <priyom_das@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Cc: Alice Moreno <alice.moreno@astrahealth.com>
+Date: Fri, 28 Jul 2028 09:24:00 -0700
+Subject: Re: AstraHealth experimental shard carveout & autoscale exception
+
+Thanks Priyom — quick clarifying questions from Product before we lock anything down:
+
+1) Can AstraHealth tolerate a slightly higher p95 during spike windows (e.g., p95 < 180ms) if that materially reduces the size of the carveout? We want to explore a smaller baseline + hotlane instead of a full contiguous carveout.
+2) What is the fallback model/version we route to if the reserved slice becomes unavailable? We need a clear rollback mapping for the canary run.
+3) What success metrics will AstraHealth accept for the case study (latency, accuracy delta, cost per 1k requests)?
+
+If the answers make the experiment less carveout-dependent, I'd prefer a conditional plan: try a 4-GPU reserve + hotlane and then scale to 8 if telemetry shows instability during the first week. That reduces risk to other pools.
+
+Laura Bennett
+Director, Product — Redwood Inference
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Priyom Das <priyom_das@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Cc: Alice Moreno <alice.moreno@astrahealth.com>
+Date: Fri, 28 Jul 2028 10:03:00 -0700
+Subject: Re: AstraHealth experimental shard carveout & autoscale exception
+
+Priyom / all —
+
+Operational notes after a quick slot check: G-3 has fragmented capacity the week of 08/07; a contiguous 8x A100v5 slice is available but it will require a short rebalancing window (estimated 4–6 hours of ops work) and an ops-flag to mark the slice non-preemptible. A few considerations:
+- Non-preemptible carveouts increase backlog pressure on shared pools; we should limit slice duration to the shortest possible window and ensure automated teardown.
+- Autoscale exception: we can implement a temporary policy that pins min_replicas to 2 and allows burst_up to +50% of baseline for scheduled windows; this will require an infra ticket and a config commit (I can own the ticket).
+- Preemption/fallback: we recommend a tiered fallback rather than full failover — route to a quantized variant of the model in the fallback pool (lower cost, slightly higher latency) and surface a clear telemetry flag to Product so they can stop the run if degradation exceeds thresholds.
+
+I agree with Laura's conditional approach. If Product commits to clear metrics and a teardown time, Ops is prepared to stand up the carveout with the exception policy. I'll need a firm approval and the runbook updated with the exact schedule to create the infra ticket.
+
+— Soojin
+Soojin Lee
+Senior Infrastructure Engineer — Redwood Inference
+
+From: Alice Moreno <alice.moreno@astrahealth.com>
+To: Priyom Das <priyom_das@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Soojin Lee <soojin_lee@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Date: Fri, 28 Jul 2028 11:08:00 -0400
+Subject: Re: AstraHealth experimental shard carveout & autoscale exception
+
+Hi everyone —
+
+Thanks for the quick responses. We can be flexible: if you prefer a 4-GPU baseline + hotlane and a plan to expand to 8 if telemetry demands it, we can do that and shift our heavy load tests to the second week (08/14–08/20) to give your ops team time to validate.
+
+Success metrics we care about:
+- p95 latency < 150ms (primary) during regular windows, with clear visibility during spikes
+- end-to-end extraction F1 >= 0.88 compared to our internal baseline
+- total infra cost delta for the run < $7k (AstraHealth covers the carveout premium)
+
+Procurement note: we can sign the expedited MSA addendum by next Wednesday if Redwood provides a short confirmation e-mail on the exact slice and schedule.
+
+— Alice
+Alice Moreno
+Head of ML Engineering — AstraHealth
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, Michael Grant <michael_grant@redwood.ai>
+Cc: Alice Moreno <alice.moreno@astrahealth.com>
+Date: Mon, 31 Jul 2028 17:45:00 -0700
+Subject: Re: AstraHealth experimental shard carveout & autoscale exception
+
+Folks — thanks for the input. Quick summary / agreed plan so we have a single source of truth: 
+
+1) Baseline carveout: 4 x A100v5 reserved (G-3) from 2028-08-07 00:00 -> 2028-08-27 23:59.
+2) Hotlane / burst: allow burst_up to +50% for scheduled load windows (08/14–08/20 heavy tests).
+3) Autoscale exception: min_replicas pinned to 2 for baseline; temporary policy commit by Ops (Soojin to open INF ticket and assign to Michael for infra changes).
+4) Fallback policy: route to quantized model variant in fallback pool; Product to instrument a telemetry flag (p95 > 180ms or F1 drop > 0.05) that auto-halts the experiment.
+5) Procurement: AstraHealth to sign the addendum by 2028-08-02. Priyom will email a one-line confirmation once Ops provides the ticket id and infra ETA.
+
+Michael — can you take the infra action to prepare the config patch and a short runbook update? Soojin will create the ticket and include the rebalancing window. Laura / Product — please add the telemetry thresholds to the runbook and confirm the halt conditions.
+
+I'll attach the updated runbook after Michael's changes. Thanks all — let's keep the thread for status updates only.
+
+Attachments: AstraHealth-runbook-draft.md (will iterate).
+
+— Priyom
+Priyom Das
+Senior Partnerships Manager | Redwood Inference

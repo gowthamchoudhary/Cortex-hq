@@ -1,0 +1,147 @@
+TLS handover for private deployment: options and CSR checklist
+
+From: Sam Patel <sam.patel@greenfieldhealth.com>
+To: neha_kapoor <neha_kapoor@redwood.ai>
+Cc: Aisha Rahman <aisha.r@greenfieldhealth.com>
+Date: Mon, 5 Oct 2026 09:12:00 -0700
+Subject: Private deploy - TLS termination and certificate responsibilities
+
+Neha,
+
+Thanks for taking this. We're moving towards a dedicated/private Redwood deployment inside our VPC and need to map responsibility for DNS, certs and TLS termination. High level constraints:
+- We must terminate TLS at our perimeter (corporate edge) for all customer-facing hosts.
+- Internal service-to-service mTLS is preferred but not mandatory in Phase 1.
+- We're using an internal PKI (Entrust) and occasionally rotate leaf certs via our cert ops team.
+
+Questions:
+1) Can Redwood accept customer-provided certificates (PEM + private key) and install them on the private endpoint behind our load balancer?
+2) Do you have a CSR/CN naming template we should use so certs include the correct SANs (private FQDNs)?
+3) If we prefer Redwood-managed certs (ACME/on-prem sidecar), what DNS proof or connectivity would you need from us?
+
+We also need an ops checklist to hand this off to our network/security teams. Can you share the steps and a quick recommended timeline (we'd like this done before our next maintenance window on Oct 20).
+
+Thanks,
+Sam Patel
+Senior Infrastructure Engineer
+Greenfield Health
+
+
+From: neha_kapoor <neha_kapoor@redwood.ai>
+To: Sam Patel <sam.patel@greenfieldhealth.com>
+Cc: karthik_iyer <karthik_iyer@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Mon, 5 Oct 2026 11:04:00 -0700
+Subject: Re: Private deploy - TLS termination and certificate responsibilities
+
+Sam — thanks for the clear constraints. Short answers up front: yes, and yes, plus a third hybrid option. Below I've sketched three supported patterns and attached a concise CSR + handoff checklist for your ops team.
+
+Options (tradeoffs summarized):
+1) Customer-edge termination (your preference):
+   - You terminate TLS at your perimeter proxy/LB (recommended when org policy requires egress inspection).
+   - Redwood's private endpoint remains inside the VPC and speaks mTLS or plain TLS to your edge (you control the leaf certs).
+   - You provide either the cert/key pair (rare, we prefer not to hold private keys) or you terminate entirely and present a proxied connection to Redwood.
+   - Pros: meets enterprise policy, gives you full cert lifecycle control. Cons: you must map SNI/FQDNs and maintain the edge proxies.
+
+2) Customer-managed certs installed on Redwood private-facing load balancer:
+   - You generate certs using your PKI (CSR->cert), deliver PEM and chain to us; we install on the private endpoint.
+   - Requires secure upload channel and acceptance of transfer during the maintenance window.
+   - Pros: canonical TLS between public edge and Redwood with standard termination. Cons: private key handing implies additional compliance review.
+
+3) Redwood-managed ACME sidecar (recommended when you want minimal ops):
+   - We run an ACME agent inside the private VPC (ACME DNS-01 via delegated subdomain OR HTTP-01 via short-lived nat).
+   - Requires a DNS delegation or an agreed transient connectivity path for validation.
+   - Pros: automatic renewal, no key transfer. Cons: needs DNS delegation or NAT; not suitable for fully air-gapped environments.
+
+Actionables and checklist (attached: onprem-tls-csr-checklist.pdf):
+- If you want option 2, use the included csr-template.pem.txt and generate a cert with these SANs: *.private.greenfield.internal, redwood-api.private.greenfield.internal.
+- If option 1, confirm the SNI list and update your proxy so it forwards X-Forwarded-Proto and preserves client cert headers if you enable mTLS.
+- If option 3, we need one of: delegated _acme-challenge.<subdomain> write access, or a short maintenance window with a temporary NAT rule to allow ACME HTTP validation.
+
+I'll loop in Karthik for implementation details and Marissa for runbook/ops verification. Proposed timeline:
+- Confirm pattern and sign-off by Oct 8
+- Deliver certs/CSR or grant DNS delegation by Oct 14
+- Validation and smoke test Oct 15–19
+
+Would a 30-min sync tomorrow at 3pm PT work for your network/security team?
+
+—Neha
+Neha Kapoor
+Product Security Manager
+Redwood Inference
+
+
+From: karthik_iyer <karthik_iyer@redwood.ai>
+To: neha_kapoor <neha_kapoor@redwood.ai>, Sam Patel <sam.patel@greenfieldhealth.com>
+Cc: marissa_cole <marissa_cole@redwood.ai>
+Date: Mon, 5 Oct 2026 15:18:00 -0700
+Subject: Re: Private deploy - TLS termination and certificate responsibilities
+
+Looping in some implementation details from infra:
+
+Karthik here — key notes for Greenfield ops:
+- If you're doing customer-edge termination (Option 1), ensure your proxy preserves the TLS Client Hello SNI for backend routing, or configure an explicit mapping table. Redwood's private runtime binds to the private FQDNs; we route by SNI when multiple tenants share a gateway.
+- For Option 2 (you hand us cert + key): we ask that your team uses PKCS#8 private key format, and P-256 or RSA-2048/3072. Please avoid RSA-4096 for performance-sensitive endpoints.
+- For Option 3 (ACME sidecar): recommend delegating a short-lived subdomain (e.g., redwood-validation.greenfield.internal). We'll only request TXT records for DNS-01 and rotate no more than once every 60 days unless requested.
+- mTLS: if you enable client certs on the perimeter, Redwood can validate on the private endpoint. We'll need the CA chain you trust (PEM) and the expected subject DN pattern.
+
+Operational hints:
+- Attachments we typically need: CSR template (we provided), FQDN to SNI mapping, list of IPs allowed to initiate ACME validation (if HTTP-01).
+- If your security/compliance team requires we never store private keys, Option 1 is the safest operational model.
+
+I'll be on the sync if scheduled.
+
+—Karthik
+Principal Infra Engineer
+Redwood Inference
+
+
+From: Sam Patel <sam.patel@greenfieldhealth.com>
+To: neha_kapoor <neha_kapoor@redwood.ai>
+Cc: Aisha Rahman <aisha.r@greenfieldhealth.com>, karthik_iyer <karthik_iyer@redwood.ai>
+Date: Tue, 6 Oct 2026 08:47:00 -0700
+Subject: Re: Private deploy - TLS termination and certificate responsibilities
+
+Thanks Neha/Karthik — that makes sense. For compliance reasons we prefer Option 1 (terminate at our perimeter) and will not share private keys. A couple of clarifications:
+- We'll preserve SNI and forward the original client cert headers; want to confirm Redwood can consume those headers for auth metadata.
+- For internal calls from Redwood to our services, we'll establish a short-lived mTLS relationship (we will provide CA certs for validation).
+
+We need the CSR template mainly so our cert ops team can see what CN/SANs you expect for any certs we generate in the future. Also please send the attachment named csr-template.pem.txt (as referenced) and the checklist so our ops group has an ordered handoff.
+
+Can we do the 30-min sync on Wed Oct 7 at 3pm PT? That works for our network and compliance folks.
+
+Sam
+Senior Infrastructure Engineer
+Greenfield Health
+
+
+From: neha_kapoor <neha_kapoor@redwood.ai>
+To: Sam Patel <sam.patel@greenfieldhealth.com>
+Cc: karthik_iyer <karthik_iyer@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Wed, 7 Oct 2026 16:20:00 -0700
+Subject: Re: Private deploy - TLS termination and certificate responsibilities
+
+Sam — perfect, thanks for confirming.
+
+I've attached the csr-template.pem.txt and the onprem-tls-csr-checklist.pdf to this thread (see attachments). Key next steps for the sync (Wed 3pm PT):
+- Walkthrough of your edge mapping and confirm SNI->backend mapping table.
+- Exchange CA bundle for Redwood to validate inbound mTLS (we'll store only the CA, not any leaf keys).
+- Confirm maintenance window and the firewall rules we'll need for smoke tests (we'll request an allowlist for Redwood validation IPs for 30 minutes during Oct 15 test).
+
+Marissa will produce a short runbook (runbook link included in Drive) and I'll open a HubSpot ticket (HS-2345) to track approvals and evidence for your compliance team. I'll add meeting notes and the ticket link after the sync.
+
+See you all at 3pm PT.
+
+—Neha
+Product Security Manager
+Redwood Inference
+
+On Tue, Oct 6, 2026 at 08:47 AM Sam Patel <sam.patel@greenfieldhealth.com> wrote:
+> Thanks Neha/Karthik — that makes sense. For compliance reasons we prefer Option 1 (terminate at our perimeter) and will not share private keys. A couple of clarifications:
+> - We'll preserve SNI and forward the original client cert headers; want to confirm Redwood can consume those headers for auth metadata.
+> - For internal calls from Redwood to our services, we'll establish a short-lived mTLS relationship (we will provide CA certs for validation).
+>
+> We need the CSR template mainly so our cert ops team can see what CN/SANs you expect for any certs we generate in the future. Also please send the attachment named csr-template.pem.txt (as referenced) and the checklist so our ops group has an ordered handoff.
+>
+> Can we do the 30-min sync on Wed Oct 7 at 3pm PT? That works for our network and compliance folks.
+>
+> Sam
+>

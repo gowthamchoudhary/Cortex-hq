@@ -1,0 +1,105 @@
+Post-demo: clarifying hyperscaler reservation constraints and proposed next tests
+
+From: Priya Natarajan <priya.natarajan@redwood.com>
+To: Janet Lowe <janet.lowe@medsys.ai>, Alex Turner <alex.turner@cumuluscloud.com>
+Cc: Dylan Brooks <dylan_brooks@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Tue, 15 Jun 2027 09:14:00 -0700
+Subject: Post-demo recap + proposed validation tests
+
+Thanks again for the time this morning — appreciate the candid discussion on MedSys's latency targets and the production window for the inference rollout. Quick recap and the tests we propose to validate tradeoffs between Redwood Dedicated and the hyperscaler route: 
+
+- Observed constraints from call: 99th pct latency target <= 120ms for 1.2k QPS (50-token avg). Data residency: US-only.
+- Hyperscaler constraints raised: minimum reserved GPU commitment and inability to autoscale across AZs without additional network configuration.
+
+Proposed next tests (we can run these in parallel):
+1) Latency SLO validation: run 48-hour steady-state at 1.2k QPS with target load profile (50-token avg), capture 50/95/99/99.9 latencies and token cost.
+2) Failure and fallback exercise: simulate node preemption/failure and verify Redwood automatic fallback to compatible quantized variant (and the hyperscaler cold-start behavior).
+3) Cold-start + burst behavior: measure tail latency for sudden +300% burst over 10s windows.
+4) Cost delta analysis: modeled per-1M token unit cost across Dedicated (reserved pool) vs hyperscaler reserved + per-second scaling.
+
+Attachments: medsys_poc_matrix.xlsx (POC matrix with inputs we need), and a short comparison doc I started (redwood_vs_hyperscaler_comparison.pdf) — both attached as stubs here.
+
+Asks from your side:
+- Janet: confirm the target QPS/timezone for the test window and whether you can provide a sample request distribution (intent mix).
+- Alex: please confirm the smallest reservation footprint Cumulus requires for sustained 1.2k QPS on your suggested GPU sku and any contractual minimums that would affect trial runs.
+
+I'll coordinate scheduling once we have those two items. Goal: run the first latency validation in the next 10 business days.
+
+Thanks,
+Priya
+Senior Sales Engineer | Redwood Inference
+priya.natarajan@redwood.com
+[attachment: medsys_poc_matrix.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+[attachment: redwood_vs_hyperscaler_comparison.pdf (application/pdf)]
+From: Janet Lowe <janet.lowe@medsys.ai>
+To: Priya Natarajan <priya.natarajan@redwood.com>
+Cc: Dylan Brooks <dylan_brooks@redwood.com>
+Date: Tue, 15 Jun 2027 11:02:00 -0700
+Subject: Re: Post-demo recap + proposed validation tests
+
+Thanks, Priya — this is helpful. A few clarifications from our side: 
+
+- Confirming the 1.2k QPS target during our busiest window (US East, 08:00–18:00 local). Average payload is ~45–60 tokens; 95% are short queries, 5% longer (300–800 tokens).
+- We'll attach a synthetic distribution and a small dataset for test replay by EOD today.
+
+On the hyperscaler side, our procurement team has flagged two concerns: minimum reservation windows (12 months typically) and sustained-usage discounts that only kick in after a high aggregate commit. If Cumulus requires a 12-month minimum to get throughput guarantees that would meaningfully change our evaluation.
+
+We want to see a head-to-head where both sides are run with realistic constraints — appreciated if you can capture contract-level blockers alongside the raw benchmarks.
+
+Janet
+Director, Platform Engineering | MedSys Health
+janet.lowe@medsys.ai
+From: Dylan Brooks <dylan_brooks@redwood.com>
+To: Priya Natarajan <priya.natarajan@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Wed, 16 Jun 2027 08:40:00 -0700
+Subject: Fwd: Post-demo recap + proposed validation tests
+
+Forwarding Janet's note — flags procurement constraints. Karthik, can you please: 
+1) Draft an acceptance criteria doc we can present to MedSys that ties latency percentiles + cost thresholds to a pass/fail for the POC.
+2) Identify the least-privileged measurement endpoints we need to collect (traces, per-token accounting, KV cache hit rates).
+
+I'll take point on the test harness and load profile. Priya — if we can get Alex's reservation minimum in writing that will help the evaluation matrix.
+
+-Dylan
+Principal Solutions Engineer | Redwood Inference
+From: Alex Turner <alex.turner@cumuluscloud.com>
+To: Priya Natarajan <priya.natarajan@redwood.com>, Janet Lowe <janet.lowe@medsys.ai>
+Cc: Dylan Brooks <dylan_brooks@redwood.com>
+Date: Thu, 17 Jun 2027 09:22:00 -0700
+Subject: Re: Post-demo recap + proposed validation tests
+
+Appreciate the clear ask. Quick note from Cumulus's side on reservation mechanics: 
+
+- Minimum reservation: production-level SLA-backed reserved clusters require a 6-month minimum commitment for the A100-equivalent family; 12-month is preferred for volume discounts.
+- Burst capacity: can be provisioned but is governed by AZ quotas and cross-AZ bandwidth; sustained cross-AZ autoscaling typically requires additional networking setup and a higher tier of support.
+- For a trial: we can offer a 30-day sandbox with pre-emptible nodes (no SLA) or a time-limited reserved test (6-week minimum) if you want SLA mimicry; the latter requires procurement paperwork and a deposit.
+
+If you want, Cumulus can run our own benchmark on the SKU we recommend (8xA100 equivalent) using your workload profile — we can supply raw telemetry and a config file. That said, contractual minimums are real and will affect any cost comparisons if MedSys plans to push for SLA-equivalent reservations.
+
+Regards,
+Alex Turner
+Enterprise Cloud Partnerships | Cumulus Cloud
+alex.turner@cumuluscloud.com
+From: Priya Natarajan <priya.natarajan@redwood.com>
+To: Dylan Brooks <dylan_brooks@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Janet Lowe <janet.lowe@medsys.ai>, Alex Turner <alex.turner@cumuluscloud.com>
+Date: Fri, 18 Jun 2027 16:02:00 -0700
+Subject: Re: Post-demo recap + proposed validation tests (next steps)
+
+Thanks, everyone — good alignment. Short plan and owners: 
+
+- Karthik: please publish a one-page Acceptance Criteria doc (DRAFT) by Monday 21 Jun — include pass/fail thresholds for 50/95/99/99.9 latencies, required token-cost delta thresholds (e.g., Dedicated must be <= 15% higher cost or deliver better tail latency), and the KV cache hit-rate targets. Link output to the Drive doc (see related_links).
+- Dylan: lead load harness execution. Target window: 30 Jun–02 Jul for a 48-hour steady-state run (we'll pick US-East calendar once Janet confirms the exact start time).
+- Priya (me): coordinate procurement constraints capture with Alex and produce a table that translates Cumulus reservation terms into an apples-to-apples cost view (monthlyized and 12-month annualized). Deliverable by Wed 23 Jun.
+
+Janet — once you drop the sample request distribution (expected today) we'll finalize the harness. If procurement rejects anything shorter than 6 months for SLA parity, we'll clearly annotate that in the comparison.
+
+One more ask: please include any existing telemetry you have from your pre-production runs (p95/p99) so Karthik can baseline our expectations.
+
+Next sync: 23 Jun (quick 30m) to review the Acceptance Criteria draft and confirm the test window. I'll send calendar invites once Karthik posts the doc.
+
+Thanks,
+Priya
+Senior Sales Engineer | Redwood Inference
+priya.natarajan@redwood.com
+[Quoted text hidden]

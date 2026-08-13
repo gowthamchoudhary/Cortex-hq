@@ -1,0 +1,106 @@
+Model 4b (v2026-08-29) P95 latency spike — priority escalation & rollback plan
+
+From: neha_kapoor <neha_kapoor@redwood.ai>
+To: vivek_kulkarni <vivek_kulkarni@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>
+Cc: marissa_cole <marissa_cole@redwood.ai>, platform@novusretail.com
+Date: 2026-08-30T08:12:00-07:00
+Subject: [URGENT] Observed P95 spike for Model 4b v2026-08-29 (NovusRetail)
+
+Team —
+
+Monitoring flagged a sustained P95 latency increase for Model 4b deployed 2026-08-29 in the us-west cluster serving NovusRetail. Key observations: 
+- Baseline P95 (last 72h pre-deploy): ~940ms
+- Current P95 (since 02:00 UTC 2026-08-30): ~3.1s
+- Error rate: steady at 0.4% (within tolerances), but tail latency is materially above SLA of 2.5s P95
+
+This is directly impacting their interactive storefront path; account team alerted me that page load times correlate with the model call. Given the SLA (SLA clause 3.1: 99% P95 <= 2.5s) and the customer business impact, I'd like to initiate a priority investigation and consider an immediate rollback to the prior model version (v2026-08-27) if we confirm regression.
+
+I've attached logs and the P95 trend chart for the last 48 hours. Initial ask: Marcus, can you confirm whether the v2026-08-29 build included any kernel changes or quantization path toggles that could affect tail latency? Vivek, please loop in CS for the customer comms.
+
+Next steps proposed:
+1) Triage & root-cause within 1h (SRE/Runtime)
+2) If root-cause points to model variant/compile change, schedule canary rollback (90m window)
+3) Notify customer with ETA and mitigation plan
+
+Thanks —
+Neha
+Neha Kapoor
+SRE Lead, Serving Reliability
+Redwood Inference
+Attachments: latency-logs-20260829.zip (log archive), p95-trend-4b.png (chart)
+From: vivek_kulkarni <vivek_kulkarni@redwood.ai>
+To: neha_kapoor <neha_kapoor@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>
+Cc: marissa_cole <marissa_cole@redwood.ai>, platform@novusretail.com, Alex Monroe <alex@novusretail.com>
+Date: 2026-08-30T08:28:00-07:00
+Subject: Re: [URGENT] Observed P95 spike for Model 4b v2026-08-29 (NovusRetail)
+
+Thanks Neha —
+
+Acknowledged. Marcus: please prioritize triage. If the issue is tied to the new compilation/quant path, we should prepare a controlled rollback to v2026-08-27. Engineering ops to prepare rollback checklist and impact window. Marissa, could you draft a short customer note for NovusRetail explaining we are investigating and will share ETA within 60 minutes? Keep messaging to impact and planned steps; do not speculate on root cause.
+
+I am standing up a short warroom (Redwood Zoom: zoom.redwood/warroom-4b) and will join in 5. If Marcus needs elevated compute to re-run perf tests, mark priority.
+
+Vivek
+Vivek Kulkarni
+Head of Production Engineering
+Redwood Inference
+Attachments: rollback-checklist-v2.pdf
+
+
+From: marcus_lin <marcus_lin@redwood.ai>
+To: vivek_kulkarni <vivek_kulkarni@redwood.ai>, neha_kapoor <neha_kapoor@redwood.ai>
+Cc: marissa_cole <marissa_cole@redwood.ai>
+Date: 2026-08-30T09:05:00-07:00
+Subject: Re: [URGENT] Observed P95 spike for Model 4b v2026-08-29 (NovusRetail) — initial findings
+
+Quick update from runtime triage: 
+- Reproduced elevated tail on a copied request mix against v2026-08-29 in us-west. Median unchanged, tail increased.
+- Recent changes in the release: toggled fused-attention kernel for weights with mixed-quant (int8 path) and a new memory allocation fallback for KV cache that can trigger on heavy concurrency.
+- Preliminary hypothesis: the fused kernel falls back to a slower path for certain sequence-length distributions the customer triggers; it increases per-token compute in the tail which manifests at P95.
+
+Mitigation options:
+A) Canary rollback of NovusRetail's traffic to v2026-08-27 (no model code changes) — low risk, restores prior behavior; ETA ~ 60-90m to canary + validation
+B) Hotfix compile with forced non-fused attention on affected nodes — ETA 3-4h plus validation; risk: new binary rollout complexity
+
+Recommend option A to meet SLA quickly. I will prepare the canary plan and target 10% traffic for 30m validation window, then scale to 100% if metrics hold. I will also capture perf traces to validate hypothesis.
+
+Marcus
+Marcus Lin
+Runtime Engineering Manager
+Redwood Inference
+Attachments: perf-trace-sample.txt (excerpt)
+From: Alex Monroe <alex@novusretail.com>
+To: platform@novusretail.com, vivek_kulkarni <vivek_kulkarni@redwood.ai>
+Cc: neha_kapoor <neha_kapoor@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>
+Date: 2026-08-30T09:41:00-07:00
+Subject: Re: [URGENT] Observed P95 spike for Model 4b v2026-08-29 (NovusRetail)
+
+Thanks for the quick triage and transparency. Our storefront logs match the timing you listed; conversion is dropping on pages that hit the model call. Please proceed with the canary rollback (Option A) — we need the SLA behavior restored ASAP.
+
+Requested from our side: please confirm the validation criteria (what P95 target and error thresholds you will accept) and an expected full-restoration ETA. We can accept a short maintenance blip if needed but need to notify ops.
+
+Alex Monroe
+Head of Platform
+NovusRetail
+
+From: vivek_kulkarni <vivek_kulkarni@redwood.ai>
+To: marcus_lin <marcus_lin@redwood.ai>, neha_kapoor <neha_kapoor@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>, Alex Monroe <alex@novusretail.com>, platform@novusretail.com
+Date: 2026-08-30T11:03:00-07:00
+Subject: Re: [URGENT] Observed P95 spike for Model 4b v2026-08-29 (NovusRetail) — canary started and outcome
+
+Update: canary rollback initiated at 10:15 PT (10% traffic to v2026-08-27). Validation window 30m. Criteria: P95 <= 2.5s and error rate delta <= 0.5% relative to baseline.
+
+Outcome: after canary, P95 for the canary cohort: 980ms; error rate unchanged. We progressed to 100% rollout at 10:55 PT. Continuous monitoring now; early telemetry shows P95 ~ 1.0s for NovusRetail.
+
+Next steps:
+- Marcus to keep perf trace capture running for 24h and compare traces to find root cause of fused-kernel fallback.
+- Neha to update the incident ticket and create a postmortem stub.
+- Marissa to send official customer notification confirming rollback and expected timeline for root-cause update (EOD).
+
+Alex — we will send a short note you can share with ops. Apologies for the impact and thanks for the quick alignment.
+
+Vivek
+Vivek Kulkarni
+Head of Production Engineering
+Redwood Inference
+Attachments: rollback-checklist-v2.pdf (executed), postmortem-stub.md

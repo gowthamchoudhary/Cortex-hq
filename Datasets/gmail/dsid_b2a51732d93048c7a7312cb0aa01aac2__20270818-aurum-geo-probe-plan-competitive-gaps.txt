@@ -1,0 +1,120 @@
+Aurum Health - multi-region probe plan & competitive gaps
+
+From: Kate Lin <kate.lin@aurumhealth.com>
+To: jonas.weber@redwood.com
+Cc: procurement@aurumhealth.com
+Date: 2027-08-18T15:12:00-07:00
+Subject: Post-call: geo perf & residency requirements
+
+Thanks for the call earlier — quick summary from our side and a few clarifying items so we can scope the evaluation: 
+
+- What we need: consistent <50ms median and sub-150ms p99 for user-facing text generation across our primary US regions (us-east, us-west). EU presence is important for later phases.
+- Data residency: all inference inputs/outputs must stay in US-controlled regions for now.
+- Throughput target: sustained 50 requests/sec with typical prompt sizes (~120 tokens input, ~200 tokens output) and burst to 200 rps for 30s.
+- Competitive baseline: we currently see CloudGiant endpoints hitting ~60ms median but p99 spikes to ~300ms under bursts. Inferly's API is more stable but costs 2x for equivalent throughput.
+
+Requested deliverables from Redwood: latency matrix by region, configuration used (batching/quantization/instance type), and a small test plan we can run against a sandbox. Also we need to confirm any data retention/logging policies before we start sending sample data.
+
+Next steps: can you send a short test plan and an estimate for how long the evaluation will take? Also include any required credentials/access and the default throttling limits we should anticipate in the trial.
+
+Thanks,
+Kate
+Kate Lin
+Head of Platform Integrations
+Aurum Health
+
+--
+Attachment: sample-prompt-set.csv (stub)
+From: jonas.weber@redwood.com <jonas.weber@redwood.com>
+To: Kate Lin <kate.lin@aurumhealth.com>
+Cc: ben.carter@redwood.com, marissa.cole@redwood.com, procurement@aurumhealth.com
+Date: 2027-08-18T18:27:00-07:00
+Subject: Re: Post-call: geo perf & residency requirements
+
+Thanks Kate — great convo. Recap + proposal below.
+
+Recap of what we heard:
+- Primary ask: low-latency multi-region reads (US first) with strict US-only data residency.
+- Perf targets: ~50ms median, p99 <150ms under normal traffic; handle bursts to 200 rps.
+- Competitive context: you're benchmarking against CloudGiant and Inferly and care about unit cost + predictability.
+
+How Redwood differentiates for this evaluation:
+- Predictable latency via dedicated regional pools and prewarmed KV cache to reduce cold-start p99s.
+- Cost controls: per-route batching/quantization templates that keep token costs predictable and transparent on the console.
+- Data residency + compliance: private VPC option and configurable audit logging retention; we will keep inference payloads in US regions only for this trial.
+
+Proposed small-scale probe plan (attached): aurum-probe-plan-v1.pdf — highlights:
+1) Regional latency sweep: 1000 requests from US-East, US-West, EU-West (compare median/p95/p99).
+2) Burst test: ramp to 200rps sustained for 30s, measure p50/p95/p99 and error rate.
+3) Cold-warm cycle: restart pool, measure first-request penalty across model variants.
+4) Failover & routing: simulate us-east outage and validate fallback to us-west within 3s.
+
+Configuration we plan to run initially:
+- Model: open-llm/xxl (quantized fp16-8bit profile)
+- Dedicated pool: 4 x A800 equivalent (regional), prewarmed KV cache enabled, continuous batching set to 8-12ms window
+
+Questions / asks for you:
+- Provide a sandbox endpoint or short-lived token (recommended scope: test-infer) and a sample of representative prompts (you mentioned sample-prompt-set.csv).
+- Confirm procurement/contact for any security paperwork — I see procurement@aurumhealth.com on cc.
+
+Timing: we can stand up the probe within 3 business days of receiving sandbox creds and a representative prompt set. I'll loop in Ben and Marissa for technical support (see notes inline).
+
+Cheers,
+Jonas Weber
+Account Executive, Redwood Inference
+jonas.weber@redwood.com
+
+--
+Attachment: aurum-probe-plan-v1.pdf (stub)
+From: ben.carter@redwood.com <ben.carter@redwood.com>
+To: jonas.weber@redwood.com, marissa.cole@redwood.com
+Cc: Kate Lin <kate.lin@aurumhealth.com>, procurement@aurumhealth.com
+Date: 2027-08-19T09:14:00-07:00
+Subject: Re: Post-call: geo perf & residency requirements
+
+Adding technical detail for the probe plan so Aurum knows exactly what we'll measure and why.
+
+Key test knobs we should capture in the matrix (and include in hyperscaler comparison):
+- Batching window and target batch size (continuous batching changes latency/cost tradeoff dramatically).
+- KV cache hit rate: for chat-style workloads we expect 60-80% hit if prefixes align; measure both cold and warmed states.
+- Quantization profile: 8-bit QLoRA vs fp16 baseline impact on p99 and token throughput.
+- Cold-start cost: measure first 50 requests after a pool restart to capture penalty.
+- P99 under burst: synthetic bursts should model realistic prompt distributions (we'll use the sample-prompt-set.csv Kate referenced).
+
+Suggested measurements to present in the comparison spreadsheet: median, p95, p99, mean tokens/sec, 99th-error-rate, cost-per-1M-tokens (normalized). I've prefilled a comparison matrix: hyperscaler-comparison-matrix.xlsx (contains CloudGiant / Inferly / Redwood rows with columns above).
+
+Operational note: because Aurum requires US-only residency, we'll provision dedicated regional pools in us-east-1 and us-west-2 with strict routing. For EU tests we'll spin a separate pool but won't persist data outside US for the initial phase.
+
+I'll own the test run and post the raw results to the linked Drive folder. If we see p99 spikes during burst, next step is to try a slightly larger prewarmed pool or reduce batching window — we'll document the impact so Aurum can pick the right tradeoff.
+
+Ben
+Senior Solutions Engineer, Redwood Inference
+ben.carter@redwood.com
+
+--
+Attachment: hyperscaler-comparison-matrix.xlsx (stub)
+From: Kate Lin <kate.lin@aurumhealth.com>
+To: jonas.weber@redwood.com
+Cc: procurement@aurumhealth.com, security@aurumhealth.com
+Date: 2027-08-21T09:03:00-07:00
+Subject: Re: Post-call: geo perf & residency requirements
+
+Thanks Jonas / Ben — appreciate the clear plan and matrix.
+
+A few quick confirmations:
+- We'll provide short-lived sandbox tokens by EOD Monday (I put our dev lead on this thread).
+- Procurement will kick off an NDA + data processing addendum; procurement@aurumhealth.com is the contact.
+- For the initial probe, prioritize US-East and US-West only. EU-only tests can be scheduled after we review the US baseline.
+
+Next steps agreed:
+1) Aurum sends token + sample prompt set (by 2027-08-23).
+2) Redwood runs the probe and shares raw results in the Drive folder + summary dashboard (expected within 3 business days of receiving token).
+3) Meeting to review results and decide canary config (tentative: 2027-08-27).
+
+Procurement: please confirm if we need anything else to allow test-data to flow during the probe (security@aurumhealth.com is cc'd).
+
+Appreciate the responsiveness — excited to see the matrix.
+
+Kate
+Head of Platform Integrations, Aurum Health
+kate.lin@aurumhealth.com

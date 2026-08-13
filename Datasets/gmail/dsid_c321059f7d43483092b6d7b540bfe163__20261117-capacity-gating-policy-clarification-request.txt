@@ -1,0 +1,124 @@
+Urgent: capacity gating & quota policy clarification needed for Novus Health
+
+From: Patrick O'Connor <patrick@novushealth.com>
+To: Stephanie Nguyen <stephanie@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: Tue, 17 Nov 2026 09:12:00 -0800
+Subject: Production spike: 429s + latency, looks like quota/burst reset
+
+Stephanie / Marissa —
+
+We started seeing a sharp increase in 429 responses and token-level latency at ~09:05 PST this morning. Traffic profile was steady; then requests started returning intermittent 429 with response payloads indicating rate limit enforcement. Endpoint: api.redwood.com/v1/generate (Novus account).
+
+Quick details:
+- Window: 09:05–09:20 PST
+- Failure rate: ~6% 429s rising to 18% at peak
+- Median generation latency jumped from ~120ms to ~1.3s
+- Throughput dropped ~42% compared to same period yesterday
+
+We've attached a trimmed server-side log (novus-logs-1117.txt) and a sample request id: req_9f2a4b. This is impacting our live clinical triage pipeline; we are throttling customer-facing jobs to avoid visible errors, but this reduces coverage.
+
+Can you confirm whether any quota/burst policy changes were pushed to our account overnight or if there's a global policy change? We need either an immediate override or mitigation plan.
+
+Patrick
+Director of Platform Integrations
+Novus Health
+
+---
+Attachment: novus-logs-1117.txt (text, 240KB)
+
+From: Stephanie Nguyen <stephanie@redwood.com>
+To: Markus Klein <markus@redwood.com>, Connor O'Brien <connor@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: Tue, 17 Nov 2026 09:28:00 -08:00
+Subject: Re: Production spike: 429s + latency, looks like quota/burst reset
+
+Markus / Connor — FYI inbound from Novus. They report a sustained window of 429s and elevated latency. Please triage immediately.
+
+Immediate asks:
+- Connor: open a PD incident, label as P1-customer-impact, link Novus account and the attached logs. (Please post the PD link back into the thread.)
+- Markus: check the effective rate-cap and burst window applied to NOVUS (acct id NVS-298). Look for any recent policy commits or a mismatched units/scale (e.g., seconds vs minutes). If a policy drift is confirmed, propose a fast rollback or temporary override for Novus.
+
+We may need an exec-level override (capacity or credit) if this is customer-impacting for >2 hours. Marissa — tagging you for awareness and potential approval on credits/SLA exception.
+
+Thanks,
+Stephanie Nguyen
+Head of Customer Success — Enterprise
+Redwood Inference
+
+On Tue, 17 Nov 2026 at 09:12 AM Patrick O'Connor <patrick@novushealth.com> wrote:
+> Stephanie / Marissa —
+> 
+> We started seeing a sharp increase in 429 responses and token-level latency at ~09:05 PST this morning...
+
+From: Markus Klein <markus@redwood.com>
+To: Stephanie Nguyen <stephanie@redwood.com>, Connor O'Brien <connor@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: Tue, 17 Nov 2026 10:03:00 -08:00
+Subject: Re: Production spike: 429s + latency, looks like quota/burst reset
+
+Quick triage notes (initial):
+- I reviewed the policy commits and the live evaluation for NVS-298. There's a policy entry pushed at 02:14 UTC today that changed the burst_window from 3600 -> 60 (units in seconds) for the route group used by Novus. That reduces their long-window credit massively.
+- The change appears to be a human error in a config conversion (minutes->seconds) in the new quota-engine migration patch. The commit id: a7b9c1f.
+- Evidence: effective_quota JSON snapshot shows quota_window: 60 and burst_capacity: 300 whereas expected quota_window: 3600 and burst_capacity: 1800.
+
+Proposed immediate actions:
+1) Roll back the problematic commit for the Novus route group (safe, reversible).
+2) Apply a temporary override to increase burst_capacity 4x for NVS-298 while monitoring.
+3) Schedule a controlled canary rollback to avoid cascading impacts.
+
+I'll prepare the rollback patch and run a canary at 12:30 PST after Connor raises PD for coordination. Attaching a minimal patch diff (policy-diff.patch) and a canary script (canary-rollback.sh).
+
+Markus
+Principal Engineer, Serving Runtime
+Redwood Inference
+
+---
+Attachment: policy-diff.patch (text, 2.1KB)
+
+From: Connor O'Brien <connor@redwood.com>
+To: Stephanie Nguyen <stephanie@redwood.com>, Markus Klein <markus@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: Tue, 17 Nov 2026 10:32:00 -08:00
+Subject: Re: Production spike: 429s + latency, looks like quota/burst reset
+
+PD incident created: INC12345 (https://pagerduty.com/incidents/INC12345). I linked the Novus logs and flagged it as customer-impacting. Response play:
+- On-call infra (Markus) to perform canary rollback at 12:30 PST.
+- Ops to monitor token-latency and 429 rate for the next 60 minutes post-rollback.
+- CS (Stephanie) will coordinate customer comms (we should notify Novus of the rollback window).
+
+I've attached pd-incident-INC12345.txt with incident metadata. I'll keep the incident updated in PD.
+
+Connor
+SRE, Customer Incidents
+Redwood Inference
+
+---
+Attachment: pd-incident-INC12345.txt (text, 1.2KB)
+
+From: Stephanie Nguyen <stephanie@redwood.com>
+To: Marissa Cole <marissa@redwood.com>
+Cc: Markus Klein <markus@redwood.com>, Connor O'Brien <connor@redwood.com>
+Date: Tue, 17 Nov 2026 15:48:00 -08:00
+Subject: Exec update: Novus production impact — root cause & recommended exec asks
+
+Marissa — quick summary and request for approval. I will also send a short note to Novus confirming the rollback window and mitigation plan once I have your OK for the credit/exception.
+
+Summary:
+- Root cause: misapplied quota migration patch converted quota_window incorrectly (minutes -> seconds) for Novus route group (commit a7b9c1f). This reduced their burst window from 1 hour to 60 seconds, causing rapid depletion of burst credits and elevated 429s / latency.
+- Actions taken: PD INC12345 opened; Markus will run a canary rollback at 12:30 PST and apply a temporary override to restore expected burst_capacity. Connor is monitoring.
+- Customer impact: transient 6–18% 429 rate and ~40% throughput reduction for ~25 minutes before mitigation steps were enacted.
+
+Recommended exec asks:
+1) Approve a one-time credit (25% of November usage) for Novus to cover customer impact and goodwill.
+2) Approve an SLA exception window for the affected period (11/17 09:05–09:35 PST).
+3) Sponsor a postmortem review with a remediation item to add a config-schema guard (validation in the migration) and an automated canary that validates quota_window semantics.
+
+If you approve, I'll draft the customer communication and confirm with Novus.
+
+Thanks,
+Stephanie Nguyen
+Head of Customer Success — Enterprise
+Redwood Inference
+
+---
+Attachments: canary-rollback.sh (bash script, 4.5KB)

@@ -1,0 +1,127 @@
+VPC routing & security ops alignment for private deploy - validation + diagrams
+
+From: Sam Torres <sam.torres@acme-corp.com>
+To: dylan_brooks <dylan.brooks@redwood.ai>
+Cc: kimberly_park <kimberly.park@redwood.ai>, neha_kapoor <neha.kapoor@redwood.ai>
+Date: Tue, 02 Apr 2029 08:22:00 -0700
+Subject: Private VPC - routing validation request + diagrams
+
+Hi Dylan —
+
+Thanks again for the walkthrough this morning. Our network team finished a first-pass review of the control-plane <-> data-plane demarc and has a couple of asks before we can sign off on the cutover window:
+
+1) Can you confirm the advertised prefixes and BGP ASN(s) Redwood will originate for the edge cluster? We need exact prefix lists to program into our transit fabric.
+2) We see potential asymmetric return paths for requests that are NAT'd by our egress proxy. Please call out the recommended source IPs for the inference nodes (or the NAT pools) so we can map reverse-path policies.
+3) Certificate plan: the security team wants the mTLS trust domains and the expected cert rotation cadence.
+
+We tried to interpret the diagram you shared but couldn't find an explicit mapping between the inference worker subnets and the control plane peering interface. Could you attach an updated diagram (annotated per-subnet) and a routing matrix (who advertises what to whom)? If possible, include a short note on probe/health-check ports (L4) that need to be allowed.
+
+Our target cutover is next Friday, 2029-04-12, but we need the above clarified by EOD Thursday (2029-04-04) to keep that date.
+
+Appreciate it — Sam
+
+--
+Sam Torres
+Head of Edge Operations
+Acme Corp
+attachments: none in this message
+
+From: dylan_brooks <dylan.brooks@redwood.ai>
+To: Sam Torres <sam.torres@acme-corp.com>
+Cc: kimberly_park <kimberly.park@redwood.ai>, neha_kapoor <neha.kapoor@redwood.ai>
+Date: Tue, 02 Apr 2029 10:15:00 -07:00
+Subject: Re: Private VPC - routing validation request + diagrams
+
+Sam — thanks for the clear list. I pulled together the items below and attached two artifacts: vpc-edge-diagram_v3.png (annotated subnets) and egress-routing-matrix.xlsx.
+
+Responses inline:
+
+1) Advertised prefixes / ASN
+- Redwood will originate the following: 203.0.113.0/24 (control-plane), 198.51.100.0/24 (inference-egress NAT pool).
+- Primary ASN: 64521 (Redwood-transit); we will accept BGP session from your edge fabric and support either static route import or dynamic prefix filtering.
+
+2) Asymmetric paths / NAT pools
+- Inference nodes are in private subnets (10.44.0.0/18) behind an egress NAT gateway. The NAT gateway will translate to the 198.51.100.0/24 pool. For reverse path allowances please expect source IPs from 198.51.100.0/24.
+- If you prefer node-level source IP preservation we can enable 1:1 SNAT for specific customers, but that will require a configuration window to carve additional public IPs.
+
+3) mTLS trust domains & cert rotation
+- Control plane <-> customer control-plane proxies: mTLS with trust domain redwood/control-plane. Certs are short-lived (90-day rotation) managed by Redwood's customer KMS integration.
+- Data-plane (inference node -> control-plane telemetry): mutual auth with workload certs rotated every 30 days. See attached mTLS-zones-and-certs.pdf for the table.
+
+Health/probe ports
+- L4 probes: TCP 8080 (application health), TCP 22 for jump host maintenance (restricted), and UDP 123 only for time sync on the control-plane nodes. We recommend allowing these from your monitoring clusters' egress ranges.
+
+Cutover contingency
+- If we detect asymmetric drops during the canary, Redwood will automatically failover to a hosted fallback endpoint in us-west-2 for 15 minutes while we triage. We'll share the monitoring dashboard link prior to cutover.
+
+Next steps
+- Attachments: vpc-edge-diagram_v3.png, egress-routing-matrix.xlsx, mTLS-zones-and-certs.pdf
+- Kimberly, Neha — can you review the BGP/ASN and NAT guidance for gaps? I plan to push an updated diagram to the Drive folder and then sync on Thursday 09:00 PT for final sign-off.
+
+Thanks — Dylan
+
+--
+Dylan Brooks
+Senior Solutions Engineer, Redwood Inference
+
+From: kimberly_park <kimberly.park@redwood.ai>
+To: dylan_brooks <dylan.brooks@redwood.ai>
+Cc: Sam Torres <sam.torres@acme-corp.com>, neha_kapoor <neha.kapoor@redwood.ai>
+Date: Wed, 03 Apr 2029 09:08:00 -07:00
+Subject: Re: Private VPC - routing validation request + diagrams
+
+Thanks Dylan — I reviewed the artifacts. A couple of operational notes from networking security that I want recorded here:
+
+- BGP session hardening: please include MD5 auth on the BGP session and TTL-security if acme's edge supports it. We'll include this in the peering playbook.
+- Route filters: we should include a max-prefix limit of /24 and explicit deny of 0.0.0.0/0 to avoid accidental route leaks from either side.
+- Asymmetric path handling: Acme's egress proxy will perform SNAT for outgoing requests; we must ensure the health-check source IPs are pinned to a stable pool (we recommend adding health probes from 198.51.100.250-198.51.100.254).
+- ACLs for management plane: restrict SSH to a jump host in Acme's mgmt VLAN and ensure we use ephemeral port-forwarding during maintenance windows — avoid opening TCP/22 to the world.
+
+I also added two rows to the routing matrix spreadsheet with suggested peer filtering and probe IPs. If Acme prefers node-level source IPs (no NAT) we can support via 1:1 SNAT -> please confirm public IP budget.
+
+I'll join Thursday's 09:00 PT sync.
+
+Kimberly
+
+--
+Kimberly Park
+Network Security Lead, Redwood Inference
+attachments: none in this message
+
+From: Oliver Chen <oliver.chen@thirdparty.net>
+To: dylan_brooks <dylan.brooks@redwood.ai>, kimberly_park <kimberly.park@redwood.ai>, Sam Torres <sam.torres@acme-corp.com>
+Date: Thu, 04 Apr 2029 07:32:00 -07:00
+Subject: Re: Private VPC - routing validation request + diagrams
+
+Looping in a note from our infra team: we validated the BGP MD5 and TTL options against our fabric (Juniper MX). MD5 works fine, TTL-security needs firmware 21.1+ in a subset of spine nodes — we will patch on Thu night (2029-04-04 23:00 PT).
+
+Also, a quick ask: can Redwood emit BGP COMMUNITY tags for canary vs prod prefixes (we planned to use communities for traffic steering during the initial phase)? If so, include example community values in the routing matrix (e.g., 64521:10 for canary, 64521:20 for prod).
+
+Oliver
+Network Engineer, Acme Edge Integrations
+attachments: none in this message
+
+From: dylan_brooks <dylan.brooks@redwood.ai>
+To: Sam Torres <sam.torres@acme-corp.com>, Oliver Chen <oliver.chen@thirdparty.net>
+Cc: kimberly_park <kimberly.park@redwood.ai>, neha_kapoor <neha.kapoor@redwood.ai>
+Date: Thu, 04 Apr 2029 16:05:00 -07:00
+Subject: Re: Private VPC - routing validation request + diagrams
+
+Appreciate the confirmations and the firmware heads-up. Quick readout to close the loop:
+
+- BGP MD5 + TTL-security: agreed. We'll publish the peering config snippet in the Drive folder by 18:00 PT today.
+- Communities: yes — we will tag prefixes as 64521:10 (canary) and 64521:20 (prod) in the initial rollout. Matrix updated.
+- Health probe IPs: we will reserve .250-.254 in the NAT pool for probe sources as Kimberly recommended.
+- Cert cadence and evidence: mTLS PDF updated with rotation windows; attaching proof-of-rotation policy to the JIRA ticket.
+
+Cutover checklist (high level):
+- Thu 09:00 PT: final config push to BGP filters (redwood + acme).
+- Fri 02:00 PT: small canary (10% traffic) — monitor metrics for 30 minutes.
+- Fri 03:00 PT: escalate to full cutover if no regressions.
+- Fallback: auto-failover to hosted endpoint for 15 minutes if packet loss > 1% or latency spikes > 150ms.
+
+Sam/Oliver: if that timeline still works for you we'll mark the Drive artifacts read-only and hand over the peering playbook. Thanks all — looking forward to the sync tomorrow morning.
+
+Dylan
+Senior Solutions Engineer, Redwood Inference
+attachments: vpc-edge-diagram_v3.png, egress-routing-matrix.xlsx, mTLS-zones-and-certs.pdf

@@ -1,0 +1,137 @@
+Delegated SSH + SAML assertion flow for Private Control Plane access
+
+From: Diego Fernandez <diego.fernandez@redwood.com>
+To: Tim Jenkins <tim.jenkins@acme.com>, Marissa Cole <marissa.cole@redwood.com>, Naomi Feldman <naomi.feldman@redwood.com>
+Cc: Aditya Rao <aditya.rao@redwood.com>
+Date: Tue, 20 Apr 2027 08:14:00 -0700
+Subject: Delegated SSH + SAML assertion flow for Private Control Plane access
+
+Hi Tim / Acme security team —
+
+Following our call last week, I put together a lightweight proposal for how teams at Acme could get short-lived SSH access into customer-managed on-prem/private control plane instances without opening long-lived host accounts. The goal: let Acme engineers/ops use your IdP (SAML) + SCIM group sync to mint ephemeral SSH certificates that are accepted by the private control plane bastion. Key points: compact summary below, diagram attached.
+
+What we want to validate with you:
+- Acceptable SAML attribute mapping for role -> SSH principal (groups, eduPersonEntitlement, or custom claim)
+- SCIM cadence and group-to-RBAC mapping (we propose 15m sync window + delta sync)
+- Network requirements: egress, reverse-proxy, and whether Acme requires mTLS between bastion and Redwood agent
+- Audit/logging: token/claim capture, certificate issuance logs, and central retention requirements
+
+High-level flow (attached diagram):
+1) User signs in to Acme IdP and requests SSH via internal portal (or CLI shim).
+2) IdP issues SAML assertion with attributes for groups and expiration.
+3) A short-lived certificate authority (CA) in the private control plane mints an SSH cert after validating the SAML assertion via an assertion-proxy (we can host the proxy inside the VPC).
+4) SCIM sync keeps group membership aligned to control-plane RBAC so long-lived role bindings are maintained.
+
+Attachments: delegated-ssh-diagram.png (flow), scim-group-mapping-sample.json (example), runbook-delegated-ssh.md (draft runbook).
+
+Can you confirm if Acme's IdP can emit a persistent group claim (or whether we should use an intermediate entitlement service)? Also, do you have a constraint on allowing an outbound connection from the bastion/agent to Redwood endpoints, or do you require an inbound-only webhook model?
+
+If it helps, I can run a short PoC (staging only) that mints certs for 1-2 users and shows the audit trail.
+
+Thanks,
+Diego
+Diego Fernandez
+Principal Solutions Engineer, Redwood Inference
+diego.fernandez@redwood.com
++1 (415) 555-0132
+
+
+From: Tim Jenkins <tim.jenkins@acme.com>
+To: Diego Fernandez <diego.fernandez@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Naomi Feldman <naomi.feldman@redwood.com>
+Cc: Acme Security <sec-team@acme.com>
+Date: Tue, 20 Apr 2027 11:03:00 -0700
+Subject: Re: Delegated SSH + SAML assertion flow for Private Control Plane access
+
+Thanks Diego — useful summary. A few quick constraints/questions from Acme Sec: 
+
+1) Network: we cannot allow any uncontrolled outbound traffic from the customer bastion to public internet endpoints. If the assertion-proxy needs to validate with Redwood, it must either run entirely inside our VPC (preferred) or communicate via an approved proxy over mTLS.
+
+2) Audit: we need immutable issuance logs with user principal, assertion id, CA serial, and a tamper-evident digest. Will your PoC produce logs we can ship to our SIEM (Splunk) over syslog or HTTPS?
+
+3) Short-lived certs: acceptable TTL is 15m-1h. Prefer 15m for admin access, 1h for low-privilege jobs.
+
+4) SAML claims: our IdP (Okta) can emit group DNs and custom attributes. We prefer group-based mapping using SCIM groups. However, we will not expose raw SAML assertions outside our VPC — the assertion-proxy must be able to verify assertions without sending the raw assertion elsewhere.
+
+5) Compliance: can you share evidence of your CA rotation policy and whether you support HSM-backed keys inside private deployments? We need to map that to our internal control objective AC-SSH-1.
+
+If you can provide a minimal staging runbook and a short checklist for SCIM delta sync settings, we can review with our infra team tomorrow.
+
+—Tim
+Tim Jenkins
+Lead Security Engineer, Acme Corp
+tim.jenkins@acme.com
+
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Tim Jenkins <tim.jenkins@acme.com>, Diego Fernandez <diego.fernandez@redwood.com>, Naomi Feldman <naomi.feldman@redwood.com>
+Cc: Aditya Rao <aditya.rao@redwood.com>
+Date: Wed, 21 Apr 2027 09:12:00 -0700
+Subject: Re: Delegated SSH + SAML assertion flow for Private Control Plane access
+
+Hi Tim — thanks, noted. I pulled together a short runbook and mapping that should address the points below (see runbook-delegated-ssh.md attached). Summary highlights here inline: 
+
+- Local deployment model: assertion-proxy and short-lived CA run inside customer VPC (AMI/container we provide). No outbound requests required to Redwood core for validation — proxy validates SAML via IdP metadata and local keys.
+
+- SCIM sync: we recommend SCIM 2.0 push/pull with a delta-sync every 15 minutes. Sample mapping in scim-group-mapping-sample.json: SCIM group -> control-plane role (admin, operator, viewer). We also include a fallback mapping for nested groups.
+
+- Auditing: the proxy writes signed issuance events locally and ships a compact envelope to your SIEM over HTTPS or syslog via an outbound, customer-managed collector in the VPC. We include a reproducible hash (SHA256) of the assertion and cert serial in the envelope for tamper-evidence.
+
+- Key management: private deployments support HSM-backed CA via customer KMS/HSM (AWS CloudHSM or customer HSM appliance). CA rotation is configurable; our suggested default rotation window is 90 days with automated rollovers and an overlap grace period for cert validation.
+
+- Example SAML->SSH mapping: 
+  - SAML attribute: groups -> control-plane role
+  - SAML attribute: email -> ssh principal username
+  - Custom claim: acme:scoped_role -> granular RBAC scope
+
+Action items I propose: 
+1) Diego to run PoC image inside Acme staging VPC (we'll provide AMI/container and deployment script).
+2) Acme to confirm SCIM endpoint and Okta provisioning settings (OAuth client + SCIM access token).
+3) Naomi to provide HSM/KMS integration checklist and example CloudHSM config.
+
+If this looks good I'll formalize the runbook and enumerate the exact syslog fields for your SIEM.
+
+Best,
+Marissa Cole
+Staff Product Manager, Private Deployments — Redwood Inference
+marissa.cole@redwood.com
+
+
+From: Diego Fernandez <diego.fernandez@redwood.com>
+To: Tim Jenkins <tim.jenkins@acme.com>, Marissa Cole <marissa.cole@redwood.com>, Naomi Feldman <naomi.feldman@redwood.com>
+Cc: Aditya Rao <aditya.rao@redwood.com>
+Date: Wed, 21 Apr 2027 16:22:00 -0700
+Subject: Re: Delegated SSH + SAML assertion flow for Private Control Plane access
+
+Thanks everyone — good alignment. Quick recap and proposed timeline: 
+
+- PoC: Diego (me) will deploy the assertion-proxy + CA container into Acme staging VPC on Thurs (2027-04-22) morning PST. PoC will:
+  * validate Okta SAML assertion locally (no raw assertion leaves VPC)
+  * mint 15m SSH certs for two staging users
+  * emit signed issuance envelopes to Acme SIEM collector endpoint
+
+- SCIM: Marissa will provide the sample payload and mapping (done). Acme to supply SCIM base URL + token by Friday EOD.
+
+- HSM/KMS: Naomi, please send the CloudHSM/Key config checklist and the minimal IAM role for the assertion-proxy to use when interacting with the HSM.
+
+Tim — could you confirm (1) a syslog/HTTPS endpoint for the PoC SIEM shipping and (2) a contact for Okta provisioning to coordinate the SCIM bootstrap? If you prefer, we can do a 30-min walkthrough on Friday morning.
+
+I'll keep this thread in my inbox and upload the PoC artifacts to the drive link: https://drive.redwood.com/drive/folders/1a2b3c-delegated-ssh
+
+Thanks,
+Diego
+Diego Fernandez
+Principal Solutions Engineer, Redwood Inference
+diego.fernandez@redwood.com
++1 (415) 555-0132
+
+On Wed, Apr 21, 2027 at 09:12 AM Marissa Cole <marissa.cole@redwood.com> wrote:
+> Hi Tim — thanks, noted. I pulled together a short runbook and mapping that should address the points below (see runbook-delegated-ssh.md attached). Summary highlights here inline:
+> 
+> - Local deployment model: assertion-proxy and short-lived CA run inside customer VPC (AMI/container we provide). No outbound requests required to Redwood core for validation — proxy validates SAML via IdP metadata and local keys.
+> 
+> - SCIM sync: we recommend SCIM 2.0 push/pull with a delta-sync every 15 minutes. Sample mapping in scim-group-mapping-sample.json: SCIM group -> control-plane role (admin, operator, viewer). We also include a fallback mapping for nested groups.
+> 
+> - Auditing: the proxy writes signed issuance events locally and ships a compact envelope to your SIEM over HTTPS or syslog via an outbound, customer-managed collector in the VPC. We include a reproducible hash (SHA256) of the assertion and cert serial in the envelope for tamper-evidence.
+> 
+> Best,
+> Marissa

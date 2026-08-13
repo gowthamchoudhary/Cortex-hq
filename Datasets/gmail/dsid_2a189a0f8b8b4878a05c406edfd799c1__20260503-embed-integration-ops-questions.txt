@@ -1,0 +1,111 @@
+Embedding integration: vector dims, batching, auth & migration - follow-up
+
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Alex Turner <alex.turner@datascout.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Dev Patel <dev.patel@redwood.ai>
+Date: Sun, 3 May 2026 13:15:00 -0400
+Subject: Post-call: embedding integration / migration items (vector dims, batching, auth)
+
+Alex — thanks for the call earlier. Quick recap and proposed next steps so we can get your engineers unblocked this week. High-level notes: 
+
+- Goal: migrate DataScout search embeddings from VendorX to Redwood, keep query latency <= 120ms P95 and retain search MRR/precision within 1-2 points.
+- Primary integration areas: SDK auth (API keys vs token exchange), runtime routing (region + canary), embeddings config (dimensionality + normalization), batching/throughput, and a plan for migrating existing vectors.
+
+Action items I captured: 
+1) Tech validation: your infra to run a small pilot (10k vectors + 5k queries/day) — Dev to coordinate.
+2) Migration strategy: either in-place reindex or dual-indexing with A/B traffic routing.
+3) SDK changes: we suggested using Redwood client v0.9+ with streaming/structured-output off for this path.
+4) Security: confirm whether you need token exchange (OIDC) instead of static API keys.
+
+I've attached a one-page migration checklist and some SDK auth snippets for your infra team. Please confirm who on your side will own the pilot and an ETA for access.
+
+Thanks,
+Rishi
+Account Exec | Redwood Inference
+[rishi_malhotra@redwood.ai]
+
+[attachment: embed-migration-plan.xlsx (spreadsheet)] [attachment: redwood-sdk-auth-snippets.txt (text)]
+
+---
+
+From: Alex Turner <alex.turner@datascout.ai>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>
+Cc: Jordan Hale <j.hale@acme-retail.com>
+Date: Sun, 3 May 2026 14:02:00 -0400
+Subject: Re: Post-call: embedding integration / migration items (vector dims, batching, auth)
+
+Thanks Rishi — helpful summary. A few clarification items from our engineering lead (Jordan) after the call: 
+
+1) Vector dims: VendorX uses 1024-d vectors. Are there accuracy tradeoffs if we quantize to 768d on Redwood?
+2) Normalization: does Redwood expect L2-normalized vectors for cosine similarity? We currently store raw vectors and normalize at query time.
+3) Batching: what's the recommended batch size for ingestion on an n1-standard pool vs a dedicated GPU pool?
+4) Migration: can we do a live rescore against both indices during a short cutover window? Any templates/examples for routing/traffic split?
+
+Jordan will own the pilot; he can provide credentials for a staging index. Can your team share a short sample request/response for the embeddings API (including auth header examples)?
+
+Best,
+Alex
+Sr. Product Manager, DataScout
+
+---
+
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Alex Turner <alex.turner@datascout.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Dev Patel <dev.patel@redwood.ai>
+Date: Sun, 3 May 2026 15:10:00 -0400
+Subject: Re: Post-call: embedding integration / migration items (vector dims, batching, auth)
+
+Alex / Jordan — answers inline + next steps. See also attached SDK snippets.
+
+1) Vector dims: if VendorX is 1024-d and you keep models producing 1024, Redwood supports that happily. Quantizing to 768 may reduce retrieval recall depending on your model & eval sets — typical drop is 1-3% in top-k NDCG for semantic search but can be mitigated by re-tuning the retriever or hybrid reranking. We recommend running a small A/B on 2k queries to measure delta before committing.
+
+2) Normalization: Redwood's vector store supports both raw and L2-normalized vectors. For cosine similarity you can either: (a) store raw vectors and enable query-time normalization (what you do today), or (b) pre-normalize at ingest and use dot-product — both are supported. Pre-normalizing slightly speeds queries and is simpler for cross-system parity. Recommend pre-normalizing if you can.
+
+3) Batching: ingestion throughput depends on hardware. Rough guidance:
+- n1-standard worker (cpu-bound): batch size 64-128 vectors per POST to keep memory steady.
+- Dedicated GPU pool: batch size 512-2048 (depending on GPU memory + quantization).
+
+Dev, Marissa — I left more granular perf knobs in the checklist: chunking, concurrent writes, and preferred retry semantics.
+
+4) Migration approach: we strongly recommend dual-indexing + traffic split for live validation. Redwood Console supports canary splits at route-level and automatic fallback. Workflow:
+- Create a staged index on Redwood and replicate a subset (10-20%) of writes.
+- Run A/B queries between VendorX and Redwood using the same query set and collect recall/latency.
+- If metrics align, ramp writes and traffic over a week.
+
+Attachments include: sample curl + auth headers, SDK snippet for Node/Python, and a spreadsheet template for A/B metrics.
+
+Next steps: Jordan to share staging creds and 2k evaluation queries; Dev to confirm batch window and whether they prefer token-exchange or API keys. I'll check with engineering on any quantization presets we can recommend for your model family and get back by EOD.
+
+Thanks,
+Rishi
+
+[attachment: redwood-sdk-auth-snippets.txt (text)]
+
+---
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>, Dev Patel <dev.patel@redwood.ai>
+Date: Sun, 3 May 2026 16:20:00 -0400
+Subject: Re: Post-call: embedding integration / migration items (vector dims, batching, auth)
+
+Quick internal notes for the pilot engineers: 
+- If they want pre-normalized vectors, we'll expose a flag in the ingest API to accept normalized vectors and skip an extra normalization step in the pipeline.
+- For quantization presets, recommend start with q4_0 for 1024d, test q4_1 if latency is critical.
+- We have an example traffic-split routing rule you can import into the Console; I'll drop the link into the HubSpot record.
+
+I'll stand by to help with the pilot once Jordan shares creds.
+
+Marissa
+Senior Solutions Engineer | Redwood Inference
+
+---
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Sun, 3 May 2026 17:02:00 -0400
+Subject: Re: Post-call: embedding integration / migration items (vector dims, batching, auth)
+
+Nice recap — Rishi, push the migration checklist to the HubSpot deal and add a tentative pilot SOW line item. If Jordan signs off on the pilot this week, I'll prep a short pilot pricing note for ACME. Keep me posted.
+
+-Ben
+Head of Sales | Redwood Inference

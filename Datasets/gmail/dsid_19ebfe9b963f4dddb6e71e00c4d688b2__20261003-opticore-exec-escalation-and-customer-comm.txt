@@ -1,0 +1,165 @@
+High error & latency impacting OptiCore — exec update and customer comms
+
+From: Amanda Li <amanda.li@opticore.com>
+To: Monica Patel <monica.patel@redwood.com>
+Cc: Ben Torres <ben.torres@opticore.com>, support@opticore.com
+Date: 2026-10-03T08:12:00-07:00
+Subject: Production errors and timeouts affecting API calls
+
+Monica —
+
+We're seeing elevated 5xx and a lot of timeouts from the Redwood API since ~07:45 PT. Our payment reconciliation pipeline is timing out and we're getting HTTP 502/504 and occasional 429 spikes. Latency has jumped from ~150ms to >1.5s for many requests. This is impacting our end users and merchant settlements are delayed.
+
+Attached is a short sample of request IDs from this morning. Can you confirm receipt and provide an ETA for a fix? We need an exec-level update for our CTO in the next hour.
+
+Thanks,
+Amanda
+Amanda Li
+Head of Platform Reliability, OptiCore
+
+Attachments: opticore-request-sample-07-45.csv (referenced)
+From: Monica Patel <monica.patel@redwood.com>
+To: Sean Gallagher <sean.gallagher@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Laura Bennett <laura_bennett@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: 2026-10-03T08:30:00-07:00
+Subject: Fwd: Production errors and timeouts affecting API calls
+
+Team — forwarding OptiCore's report. Amanda asked for an exec-level update within an hour. Immediate asks:
+- Confirm impact surface and short-term mitigations we can offer (routing, fallback model, rate limiting adjustments).
+- ETA on root cause analysis and a candidate mitigation timeline.
+- Draft customer-safe update (I can send to Amanda once reviewed).
+
+I'll coordinate with Legal/Sales if credits or SLA exceptions are requested. Marking P1.
+
+Monica
+Director, Customer Success — Redwood Inference
+
+--- Forwarded message ---
+
+(Original message from Amanda attached)
+From: Sean Gallagher <sean.gallagher@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: 2026-10-03T08:38:00-07:00
+Subject: Re: Fwd: Production errors and timeouts affecting API calls
+
+Monica / team —
+
+I just pulled the first set of metrics from the serving fleet and high-level notes:
+- 5xx rate at ~4.2% across the us-west-2 pool, spikes to 12% for requests >1k tokens.
+- Concurrent connection surge consistent with retry amplification from some customers (evident from identical correlation IDs).
+- Autoscale is saturated for a subset of dedicated nodes; fallback routing to shared pool is partially failing with increased latencies.
+
+Short-term actions (now):
+1) Apply immediate throttling policy on OptiCore's API key to soften retry storm (reduce their token concurrency by 30%).
+2) Push a soft-fallback config to route OptiCore traffic to our warm reserve pool (non-blocking routing for reads only).
+3) Open a debug stream and request their sample request IDs (Amanda already attached some).
+
+I'll own applying throttles and routing. Karthik/Lawrence: can you confirm reserve pool capacity and whether warm nodes accept their model variant?
+
+Sean
+Principal SRE — Redwood Inference
+
+Attachment: opticore-logs-20261003.zip (received)
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Sean Gallagher <sean.gallagher@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Laura Bennett <laura_bennett@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: 2026-10-03T09:02:00-07:00
+Subject: Re: Fwd: Production errors and timeouts affecting API calls
+
+Sean —
+
+Reserve pool: warm nodes have capacity to accept ~40% of OptiCore's peak RPS if we temporarily reduce per-connection concurrency. Two caveats:
+- Their model variant is quantized differently; we can accept it but latency will increase ~20-30% on those nodes.
+- KV cache population will need a warm-up; expect transient 5xx/429s during the transition window (~6–9 minutes).
+
+Tactical plan:
+- Start with throttling (Sean) and route 25% of traffic to reserve for 5 minutes to observe.
+- If 5xx/429 rates decrease, gradually shift additional 25% every 7 minutes.
+- Keep an open rollback: revert routing and throttles if user impact grows.
+
+I will prepare a short mitigation-runbook-v2.pdf and share it here in 20 minutes.
+
+Karthik
+Head of Serving Runtime — Redwood Inference
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Amanda Li <amanda.li@opticore.com>
+Cc: Ben Torres <ben.torres@opticore.com>, Sean Gallagher <sean.gallagher@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: 2026-10-03T10:05:00-07:00
+Subject: Draft: Customer update for OptiCore — 10:05 PT
+
+Monica / Amanda —
+
+Below is a short, customer-safe update we can send to OptiCore execs. Please flag edits. I recommend sending at 10:15 unless we have blocking changes.
+
+Subject: Update — Redwood service interruption impacting some API requests (Oct 3)
+
+Hi Amanda / Ben —
+
+Thank you for the sample request IDs and for flagging this so quickly. We understand this is impacting your payments pipeline — we apologize for the disruption.
+
+What we know:
+- Starting ~07:45 PT, a combination of unusually high retry traffic and a hot request size distribution caused higher-than-normal error rates and increased latency for requests routed through our us-west-2 pool.
+- Our engineers have applied temporary throttling and are shifting traffic to warm reserve nodes. We've started targeted routing changes at 10:02 PT to stabilize error rates.
+
+What we're doing:
+- Immediate throttles on your API key to reduce retry amplification.
+- Gradual traffic migration to warm reserve nodes while we monitor for regressions.
+- Collecting detailed logs and will share a timeline and root cause analysis within 48 hours.
+
+ETA / next update:
+- We will provide an update within 60 minutes with mitigation metrics and any further actions.
+
+If you want real-time updates, I can set up a shared debug channel and provide streaming logs for the request IDs you provided.
+
+Best,
+Marissa (on behalf of Redwood)
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: 2026-10-03T11:18:00-07:00
+Subject: Re: Fwd: Production errors and timeouts affecting API calls
+
+Team —
+
+Update from operations after the first two waves:
+- After applying throttles and migrating ~50% traffic to reserve nodes, 5xx rate for OptiCore fell from 12% -> 3.6% and average p95 latency dropped from 1.5s -> 420ms.
+- We are still observing intermittent 429s tied to sudden concurrent reconnects from their ingestion workers.
+- Recommend we keep throttles in place for another 30–45 minutes and have Sales/CS coordinate with OptiCore to stagger worker restarts on their side to avoid synchronized retries.
+
+If we hold this plan, I'll prepare a status page update and hand the customer update over to Monica/Marissa.
+
+Laura
+Sr. Ops Manager — Redwood Inference
+
+Attachment: mitigation-runbook-v2.pdf (internal)
+From: Monica Patel <monica.patel@redwood.com>
+To: Amanda Li <amanda.li@opticore.com>, Ben Torres <ben.torres@opticore.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Sean Gallagher <sean_gallagher@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Laura Bennett <laura_bennett@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: 2026-10-03T13:45:00-07:00
+Subject: RE: Production errors and timeouts affecting API calls — Immediate update
+
+Amanda / Ben —
+
+Quick update from Redwood leadership and ops: we understand the severity and apologize for the disruption. Key points: 
+
+- What changed: an unusual retry amplification pattern from a subset of customers combined with a hot request size distribution increased load on the us-west-2 serving pool, which strained autoscaling and caused elevated 5xx/429 rates.
+- What we did so far: applied temporary throttles to OptiCore's API key, migrated ~50% of your traffic to our warm reserve pool, and fine-tuned routing to reduce cross-pool latency.
+- Current state (13:40 PT): 5xx rate reduced to ~3.2%, p95 latency ~410ms for your key. We continue to observe intermittent 429s during burst restarts.
+
+Next steps and ETA: 
+- Keep throttles and staged routing for another 45 minutes; if metrics remain stable we'll remove throttles and continue monitoring for 24 hours.
+- Engineering is completing a targeted patch to improve KV cache warm-up behavior; expected deploy in ~6 hours (ETA 19:50 PT).
+- We'll provide a post-incident timeline and root cause analysis within 48 hours and share any suggested credits if SLA thresholds were missed.
+
+If you'd like, I can schedule a 15-minute call with our CTO and your CTO for 15:30 PT to walk through the mitigation snapshot.
+
+Again, I'm sorry for the impact — we are fully focused on restoring full performance.
+
+Monica Patel
+Director, Customer Success — Redwood Inference
+
+Attachments: customer-update-draft.html
+
+---
+On Oct 3, 2026, at 10:05 AM, Marissa Cole <marissa_cole@redwood.com> wrote: (see draft above)

@@ -1,0 +1,122 @@
+Next steps: model shortlist, eval plan & guardrail prompts
+
+From: camila.reyes@redwoodinference.com
+To: aliya@veridianhealth.com, samir.patel@veridianhealth.com
+Cc: sergio.alvarez@redwoodinference.com, marissa.cole@redwoodinference.com
+Date: Sat, 11 Jul 2026 15:03:00 -0700
+Subject: Post-call recap + proposed model shortlist and safety checks
+
+Hi Aliya / Samir —
+
+Thanks again for taking the time today. Quick recap and proposed next steps so we have a single place to track items: 
+
+What we heard from you:
+- Primary goals: high-quality discharge summary generation and standardized patient Q&A (both in the US and limited EU pilot).
+- Hard constraints: PHI cannot leave your VPC, audit logs are required, typical response SLO ~ 300–500ms for 95% of short prompts, throughput ~ 25 req/s steady.
+- Evaluation priorities: model hallucination on medication names, safe refusals on diagnostic advice, and consistent redaction of identifiers.
+
+Suggested model candidates for initial eval (we'll run these with your prompt set):
+1) rw-instruct-13b-q4 — balanced cost/latency, strong instruction-following baseline.
+2) rw-safety-7b — optimized for stricter refusals and fewer risky generations (lower hallucination baseline).
+3) Llama-2-70b-instruct (quantized, 8k) — higher-context, best for long discharge summaries if latency budget permits.
+
+Initial evaluation plan (what we'll run next):
+- Smoke tests: 200 prompt set (see attached veridian_eval_prompts_v1.txt) covering PHI leakage, medication hallucinations, and medical advice refusal cases.
+- Safety/refusal matrix: targeted prompts for sensitive scenarios (self-harm, legal/medical diagnostics, PHI requests) and expected refusal patterns.
+- Regression gating: define pass/fail thresholds (e.g., <2% hallucination on medication names, >98% correct redaction of MRN-like patterns).
+
+Attachments & links:
+- Mutual Action Plan (attached: veridian_map_v1.pdf)
+- Eval prompt set (attached: veridian_eval_prompts_v1.txt)
+- Benchmark sheet & live Drive folder: https://drive.google.com/drive/folders/1a2b3c-eval-resources
+
+Immediate next steps:
+1) If this shortlist looks right, we’ll provision a private eval endpoint in your VPC and run the prompt set over the next 48–72 hours.
+2) Please share the security contact who will receive SOC2 / evidence requests (I’ve attached a SOC2 request template to speed this up).
+3) Can we lock a 30-min checkpoint on Monday to review initial numbers? I’m proposing Mon 07/13 10:00 AM PT — if that works I’ll send a calendar invite.
+
+Thanks — I’ll loop in Sergio (technical lead) and Marissa (security) for follow-through.
+
+Best,
+Camila Reyes
+Senior Account Executive
+Redwood Inference
+
+Attachment stubs: veridian_map_v1.pdf (application/pdf), veridian_eval_prompts_v1.txt (text/plain)
+
+From: aliya@veridianhealth.com
+To: camila.reyes@redwoodinference.com
+Cc: samir.patel@veridianhealth.com
+Date: Sat, 11 Jul 2026 17:12:00 -07:00
+Subject: Re: Post-call recap + proposed model shortlist and safety checks
+
+Camila —
+
+Thanks for the clear recap. The shortlist looks sensible; a couple quick clarifications before we kick off: 
+- For the PHI constraint, we need the eval to run inside our VPC. You mentioned a private eval endpoint — can you confirm what data access patterns are required and whether the model weights stay within our network?
+- On the safety matrix: can you include explicit tests for advice that could lead to harmful action (e.g., overdose, self-harm) and a separate set for medical advice where we want graduated responses (safe refusal + signpost to docs)?
+- SOC2: please send the evidence request to security@veridianhealth.com — I copied Samir who is our clinical lead and will triage clinical prompts.
+
+Also, cost: we are sensitive to eval run cost. Can you include an estimate of expected token usage and cost for the 200-prompt smoke test, and a rough runtime estimate for each candidate model?
+
+If you can confirm those details I’ll approve the MAP and we can proceed. Monday 07/13 10:00 AM PT works for me.
+
+Best,
+Aliya Hassan
+Head of Product Partnerships
+Veridian Health
+
+From: camila.reyes@redwoodinference.com
+To: aliya@veridianhealth.com, samir.patel@veridianhealth.com
+Cc: marissa.cole@redwoodinference.com, sergio.alvarez@redwoodinference.com
+Date: Sun, 12 Jul 2026 08:47:00 -07:00
+Subject: Re: Post-call recap + proposed model shortlist and safety checks
+
+Aliya — thanks, answers below and a short execution plan.
+
+1) Private eval endpoint & data handling:
+- We will deploy the inference endpoint into a customer-managed subnet (private) in your VPC. Request payloads, generated tokens, and KV caches remain on your infra — Redwood’s control plane gets only metadata (request ids, aggregate perf) unless you opt-in to telemetry.
+- Model weights can be deployed to the node(s) you control (on-prem/VPC) — we’ll provide container images and a small init script. No model weights leave your network.
+
+2) Safety matrix specifics:
+- Yes — we will run three labelled buckets: a) immediate-harm prompts (self-harm, overdose), b) high-risk medical diagnostics (ask for next step responses but require refusal + signpost), c) PHI-extraction attempts (ensure redaction/refusal).
+- Each bucket will have explicit expected behaviors and a set of golden responses for automated scoring.
+
+3) Cost & runtime estimate (200-prompt smoke test, ballpark):
+- rw-safety-7b: ~0.8–1.2 token/sec per GPU; estimated cost ~ $120–$180 for the full run.
+- rw-instruct-13b-q4: ~0.4–0.6 token/sec; estimated cost ~ $280–$420.
+- Llama-2-70b (quantized): ~0.1–0.2 token/sec; estimated cost ~ $900–$1,200 (higher infra time).
+- These are very rough — Sergio will provide a more precise token/latency calc after profiling with your prompt set.
+
+Execution plan / timeline:
+- Today: internal prep + Sergio to validate prompt set formatting.
+- Mon/Tue: provision endpoint in your VPC, run smoke tests.
+- Wed: share preliminary safety/regression dashboard and a short list of failure cases.
+
+I’m attaching the SOC2 evidence request template and the model_shortlist CSV (redwood_model_shortlist.csv) for your records. I’ll schedule the Mon 10:00 AM PT checkpoint.
+
+—Camila
+
+Attachment stubs: redwood_model_shortlist.csv (text/csv), soc2_evidence_request_template.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)
+
+From: camila.reyes@redwoodinference.com
+To: sergio.alvarez@redwoodinference.com, marissa.cole@redwoodinference.com
+Date: Sun, 12 Jul 2026 09:22:00 -07:00
+Subject: Internal: Veridian eval — immediate ask for profiling and safety harness
+
+Sergio / Marissa —
+
+Quick internal action items following Aliya's sign-off: 
+1) Sergio: can you profile the attached prompt set against the three candidates (rw-safety-7b, rw-instruct-13b-q4, llama-2-70b-8k-q4) and return: expected avg latency (95th), token consumption estimate for the 200 prompts, and notes on failure modes we should instrument (hallucination on medication, tokenization edge cases on MRN-like strings). Please prioritize obtaining a small sample trace so we can give Aliya a more defensible cost estimate by EOD Mon.
+
+2) Marissa: please prep the SOC2 evidence package and be ready to push the evidence request to security@veridianhealth.com once they confirm. Also flag any additional compliance blockers for private endpoint deployment (KMS/HSM integration, key rotation policy).
+
+3) I’ll coordinate the VPC provisioning steps with their infra team and confirm the calendar invite.
+
+Thanks — keep the thread updated with short replies; no need for long emails.
+
+Camila
+Senior Account Executive
+Redwood Inference
+
+Attachment referenced: veridian_eval_prompts_v1.txt (for profiling)

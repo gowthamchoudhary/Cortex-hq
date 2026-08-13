@@ -1,0 +1,84 @@
+Account health & regional scale planning - Redwood / NovaCloud
+
+Renewal and expansion check-in. NovaCloud is considering upgrading Dedicated capacity, adding eu-west and ap-southeast regions, and moving from a 12-month to an 18-month contract in exchange for stepped discounts and an SLA commitment. Technical concerns center on cross-region KV cache warming, VPC peering, and certs/KMS integration. Next steps: pricing appendix, capacity-sizing workshop, SOC2 + network diagram, test capacity in eu-west-1.
+Redwood to send updated 18-month term pricing and capacity schedule
+Schedule capacity-sizing workshop with NovaCloud infra & ML teams (Tom to lead)
+Share SOC 2 and network diagram + KMS/HSM integration notes
+Provision test GPUs in eu-west-1 for a 2-week soak test
+Redwood legal to send draft MSA to Jenna for review
+Tom Alvarez | Run a throughput/latency sim with NovaCloud's 6k concurrent users profile | 2026-12-09
+Maya Chen | Prepare pricing appendix showing incremental discounts for 12/18/24 month commits | 2026-12-07
+Ellen Park | Send onboarding checklist and runbook for Dedicated tiling | 2026-12-05
+Marko Ilic | Share current infra diagrams and compliance contacts | 2026-12-04
+Meeting header:
+- Date/Time: 2026-12-02 15:00 UTC
+- Duration: ~55 minutes
+- Attendees: Maya Chen (Redwood AE), Tom Alvarez (Redwood SE), Ellen Park (Redwood CSM); Priya Shah (NovaCloud VP Eng), Marko Ilic (NovaCloud Cloud Ops), Jenna Ross (Procurement), Carlos Vega (ML Lead)
+
+Auto-summary (auto-gen, may be fuzzy): renewal intent, expansion regions, capacity bump, legal timeline discussed.
+
+00:00 Maya: Hi everyone, thanks for joining. Maya from Redwood, I'm the AE on the account. Quick roll call?
+00:08 Priya: Hey Maya, Priya here. Marko and Jenna on as well. Carlos is joining for the infra details.
+00:14 Tom: Hey all, Tom from Redwood's infra SE team. I know we've done a few of these; today is mostly to align on numbers and next steps.
+00:22 Jenna: Jenna Ross, procurement. We'll mostly be on the call for timeline and contract questions.
+00:28 Maya: Great. Agenda — renewal / capacity, additional regions (eu, apac), and procurement timeline.
+00:35 Priya: Sounds good. To kick off, quick context: traffic has been up ~3.2x QoQ for our assistant API, and our Q1 roadmap expects another +40% with a marketing push. We're at ~reserved 200k tokens/min today on Dedicated, and hitting burst limits during peak.
+00:53 Tom: Can you remind us of the current instance types and whether you're running multi-tenant or isolated pools? I recall you're on a mix of r-1000-dedicated and some hosted for burst?
+01:03 Marko: Yeah we're on Redwood Dedicated pools — a mix of G5-like nodes, 16-slot pools. We also have a hosted fallback for overflow. The issue is cold-starts between regions and KV cache warming when we failover.
+01:18 Tom: Right, KV cash — sorry, I mean KV cache — warming is a common thing. We have a couple of options: proactive prefix caching, cross-region replication of cached prefixes, or longer-lived warmers on the dedicated pools. Each has cost/latency implications.
+01:32 Carlos: How much overhead does replication add? We can't have cross-region replication that doubles token costs.
+01:40 Tom: It doesn't double token costs but you pay for the extra write and storage. More importantly, the warmers reduce request latency on the first M tokens split across sessions. We can quantify with a sim — if you share session distribution we can model.
+01:55 Priya: So for the regional ask: we want eu-west-1 and ap-southeast-2 added as Dedicated regions. We're willing to commit more spend if latency improves below 140ms p95.
+02:08 Maya: Great, that's doable. For eu-west-1 we can provision a pilot pool — subject to capacity — to run a two-week soak. If ping shows p95 under 140ms with the warmers we'll proceed to scale.
+02:19 Marko: Timeline wise, we need eu by Jan 15th to support a product launch. Can you hit that?
+02:25 Maya: We're scoped to try for mid-Jan but need to confirm GPU availability. If we commit to an 18-month extension, we can prioritize capacity procurement in our next reserved batch.
+02:36 Jenna: So procurement is looking at 18 months vs 12. What incentives do you offer for 18 months?
+02:42 Maya: Typical structure: steeper discounts at 18/24 months, guaranteed capacity windows for Reserved batches, and a bumped SLA (uptime/latency credits). I'll send an appendix with a tiered pricing table.
+02:52 Jenna: Also send the standard MSA redlines earlier clients requested — logs retention, data residency, and termination for convenience language.
+02:59 Maya: Will do.
+03:02 Tom: Back to tech — on the private deployment / VPC side, Marko mentioned peering and KMS integration. We support customer-managed KMS and HSM-backed keys, but the cert rotation and HSM access needs a short integration window.
+03:17 Marko: Our security team will need the network diagrams and port lists. Also we need to validate latency between our VPCs and Redwood's private endpoints.
+03:24 Ellen: I'll share the onboard runbook and a minimal network diagram; note these are templates and we'll tailor them.
+03:29 Priya: For cost, what's the rough delta if we do cross-region replication vs no replication? We want an order of magnitude.
+03:36 Tom: Ballpark: replication adds ~8-12% in infra cost depending on how aggressively you replicate and the size of the KV state. Warmers add compute cost but reduce user-facing latency. The bigger cost is actually holding idle reserved capacity in multiple regions — that's a reservation premium.
+03:51 Priya: Understood. Our product team is okay with a reservation premium if it guarantees low p95 and no cold starts at launch.
+03:58 Maya: Ok. On pricing, if you move to 18 months and commit to a 1.5x increase in reserved tokens/min, we can offer a blended discount and a capacity-forward pledge to hit mid-Jan for eu-west-1. I'll send numbers by EOD Monday.
+04:12 Jenna: For procurement timeline: we'd like redlines and price by next Tues. Legal review normally takes 2 weeks, but we can parallel track.
+04:20 Maya: Noted.
+04:22 Carlos: A couple of SE questions — Tom, how do you handle KV cache invalidation during model rollouts? We plan A/B and can be sensitive to stale cache.
+04:30 Tom: Good question. We recommend rolling model changes with cache versioning — the runtime supports parallel cache namespaces during rollouts so you can warm the new model namespace before cutover. There's a small memory overhead but avoids user regressions.
+04:42 Priya: That helps. Also we need to make sure we can hang metrics into our Datadog stack — event hooks, token-level metrics.
+04:49 Tom: We have Datadog integrations and can push token-level traces and per-route metrics. There's a small instrumentation step on your side for sampling.
+04:57 Priya: Ok. Any blockers from Redwood side on ap-southeast?
+05:02 Maya: Capacity is the main one; region procurement cycles vary. If you commit earlier we'll queue it. Also some GPU SKUs are limited.
+05:10 Marko: Could we do a staged approach: provision eu-west now with pilot, then ap-southeast in Q2 if pilot looks good? That reduces risk.
+05:18 Priya: Yes, that sequence works for us.
+05:21 Jenna: On the contract — if we go 18 months and do a Q1 expansion clause for apac, can we include a cap on price increases and a rollback clause if usage drops?
+05:31 Maya: We can negotiate a usage floor and a cap on percentage increases. Rollback clauses are trickier but we can include a structured review cadence with adjustment terms. Legal will propose draft language.
+05:42 Priya: Great. Let's talk pilot specifics — Tom, what's the minimum Dedicated pool size we should allocate to validate 140ms p95?
+05:50 Tom: For your traffic profile I'd start with 8-12 slots in eu-west for the soak test, with a couple of warmers and prefix caching enabled. We'll simulate the concurrent session churn with your distribution; that will tell us scale curves.
+06:03 Carlos: Simulation data — I'll send a sample of session lengths, token distributions, and concurrency by Dec 4th.
+06:10 Tom: Perfect. That will let me run the throughput sim and give a confidence band.
+06:16 Maya: Quick note — there may be some transcript fuzz here, the auto-open did ‘KV cash’ earlier.
+06:22 (laughter)
+06:25 Speaker 1: [inaudible]
+06:30 Priya: Any other risk items? Security, compliance?
+06:33 Marko: SOC 2 cert is needed; also we need to validate encryption in transit + at rest, and that Redwood's logs can be provided for audits.
+06:41 Ellen: We maintain SOC 2 and can provide audit artifacts under NDA. We also support SAML SSO and RBAC for team-level controls.
+06:49 Jenna: How about data residency for EU traffic — can you guarantee data remains in region?
+06:54 Maya: With Dedicated in eu-west you can set routing policies at the account level so EU requests get routed there. For logs and backups we can localize storage if included in the contract.
+07:06 Priya: Ok good. Let's capture recap and next steps.
+07:09 Maya: Recap — NovaCloud aims to add eu-west-1 pilot by mid-Jan, commit to 18-month term to unlock priority capacity. Action items and owners as noted. Redwood will send pricing appendix, SOC2/network docs, and schedule the capacity-sizing workshop.
+07:24 Jenna: We'll expect the pricing and legal redlines next Tue.
+07:28 Maya: Sounds good. Any final questions?
+07:31 Priya: None from me. Thanks all.
+07:35 Maya: Thanks everyone. We'll follow up with the artifact links and next steps.
+
+References shared on the call:
+- Pricing appendix (to be sent)
+- SOC2 summary + network diagram (Redwood templates)
+- Capacity sizing template (Tom)
+
+Action items (auto-gen may duplicate): see action_items above.
+
+End of transcript.

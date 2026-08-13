@@ -1,0 +1,112 @@
+Cascade expunge timeline and restore impacts
+
+From: Sam Liu <sam.liu@greenbancorp.com>
+To: Michael Grant <michael_grant@redwood.ai>
+Cc: legal@greenbancorp.com
+Date: Tue, 20 Jun 2028 09:12:00 -0700
+Subject: Cascade expunge — timeline and effects on DR/restore
+
+Hi Michael,
+
+Thanks again for taking this. We submitted a formal deletion request for a subset of user data last week (see attached redacted request). Legal has asked for a clear statement on two things so we can close our internal ticket: 
+
+1) When does an expunge (final deletion) reach offsite/DR replicas? We need to know the maximum window — from request acceptance to when data is unrecoverable from any backup copy.
+2) If we run a restore/DR failover during the retention/expunge window, will the restored snapshot contain the deleted data? Put another way: are snapshots/replicas immutable and therefore possible carriers of deleted content until they expire?
+
+Our compliance team is sensitive to any windows where deleted PII might still exist in DR copies. If you can give a stepwise timeline and any mitigation controls (e.g., targeted restoration exclusions, legal hold interrupts), that would be helpful.
+
+Appreciate a high-level answer and any downstream playbooks you can share.
+
+Best,
+Sam
+Sam Liu
+Data Privacy Manager, GreenBank Financial
+
+Attachment: delete-request-redacted.pdf (pdf, 48KB)
+From: Michael Grant <michael_grant@redwood.ai>
+To: Sam Liu <sam.liu@greenbancorp.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Wed, 21 Jun 2028 10:04:00 -0700
+Subject: Re: Cascade expunge — timeline and effects on DR/restore
+
+Sam — thanks for the clear ask and the redacted request. Putting an initial high-level answer below; looped in Vanessa (DR/replication) and Karthik (security/compliance) to confirm numbers and any caveats.
+
+High level:
+- Acceptance -> tombstone creation: immediate (within seconds) on the primary write path.
+- Tombstone propagation -> regionally replicated storage: typical roll-forward within 2–6 hours for same-region replicas, 6–36 hours for cross-region async replicas depending on backlog.
+- Snapshot immutability: snapshots taken before the delete will continue to reference pre-delete blocks. Those snapshots are logically immutable — meaning the deleted data can be present until that snapshot is expired or explicitly removed.
+- Offsite/archival copies: may persist beyond normal snapshot expiry windows (policy-dependent).
+
+Implications for restores: if you perform a restore from a snapshot or copy that was taken before the deletion, the restored dataset may contain the deleted records. If you restore from a backup taken after the expunge propagation completes (post-expunge snapshot), those records will not be present.
+
+Mitigations we can offer:
+- Targeted restore filters (preferred): when feasible, we can run a targeted restore job that excludes the deleted user IDs — we will need the identifiers in discrete form.
+- Playbook for legal holds: we can pause expunge for affected objects to preserve for eDiscovery, then resume once hold is lifted.
+- Verify window: we will provide an expected maximum propagation SLA and an annotated timeline for your account.
+
+I am attaching a quick sketch of the expunge flow (expunge-flow.png). Vanessa/Karthik — can you confirm the upper bound on cross-region expunge in our current fleet and whether there are rare edge cases (e.g., long replication backlog during DR exercises) that could extend this window?
+
+I will follow up with a concise timeline and a link to our DR playbook once Vanessa confirms.
+
+—Michael
+Michael Grant
+Director, Product Security, Redwood Inference
+
+Attachment: expunge-flow.png (image/png, 120KB)
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Michael Grant <michael_grant@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Thu, 22 Jun 2028 11:28:00 -0700
+Subject: Re: Cascade expunge — timeline and effects on DR/restore
+
+Thanks — adding the technical detail so we can give GreenBank concrete numbers. Quoting Michael below for context.
+
+Notes (technical):
+- Tombstone generation is immediate; it marks records for expunge and prevents new reads from surface indexes.
+- Local region streaming: tombstones are included in the change stream and consumed by local replica appliers within a median of ~45 minutes; 95th percentile ~3 hours under normal load.
+- Cross-region async copy: we ship a compacted change log to cold-region replication every 4 hours. Typical arrival-to-apply is 2–18 hours; 99th percentile in current telemetry is ~36 hours during peak backlog.
+- Archive/offsite snapshots: incremental snapshots and deep cold archives are on a separate cadence (daily for incremental, weekly for deep archive). Deep archives can retain blocks for up to configurable retention durations — these are the longest-lived carriers.
+- Restore semantics: a point-in-time restore will rehydrate historic blocks referenced by the snapshot. If the snapshot references slate that contains deleted blocks, those records will be present after restore.
+
+Edge cases and controls:
+- Ongoing DR exercises can cause replication backlogs; during a DR event the cross-region tail can extend beyond the 99th percentile. We can flag a customer and mark their expunge as higher priority to accelerate tail processing.
+- For GreenBank's legal requirement, the recommended approach is: (1) identify the exact object identifiers, (2) schedule a targeted scrub to run once cross-region appliers confirm tombstone applied, (3) if immediate removal is required, coordinate a snapshot invalidation/expiry + targeted scrub for any cold archives (this may require additional egress/work and a short outage for the affected namespace).
+
+Estimated max windows (conservative, account-specific, US-only):
+- Same-region finality: 3–6 hours
+- Cross-region finality: 24–72 hours (we will validate for your shard map; typical observed 24–36h)
+- Deep archive removal: depends on archive TTL — could be days to weeks unless an admin-assisted purge is run.
+
+I attached a small CSV with our observed telemetry percentiles for the last 90 days (expunge-timeline-approx.csv). Note that legal-hold overrides will pause the process.
+
+—Vanessa
+Vanessa Ortiz
+Senior Engineering Manager, Replication & DR, Redwood Inference
+
+Attachment: expunge-timeline-approx.csv (text/csv, 8KB)
+From: Michael Grant <michael_grant@redwood.ai>
+To: Sam Liu <sam.liu@greenbancorp.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>, legal@greenbancorp.com
+Date: Tue, 25 Jun 2028 15:40:00 -0700
+Subject: Re: Cascade expunge — timeline and effects on DR/restore
+
+Sam — quick summary and proposed next steps based on our internal validation.
+
+Summary (short):
+- Expected finality window for deleted records to be removed from all hot/cold replicas: typically 24–36 hours; conservative upper bound 72 hours in rare backlog/DR conditions.
+- Snapshots taken before the expunge can contain deleted records; restoring from those snapshots will reintroduce them.
+- Deep cold archives may persist beyond the above window unless an admin-assisted purge is executed.
+
+Proposed next steps for GreenBank:
+1) Share a list of identifiers (user IDs or object keys) you need expunged.
+2) Decide on either (A) standard expunge (we will confirm 24–36h expected finality and provide evidence), or (B) expedited purge + archive invalidation (we will coordinate a scheduled maintenance window and provide verification artifacts).
+3) If a legal hold is required, confirm scope and we will pause expunge and provide snapshots to preserve state.
+
+I'll schedule a 30-min call if you want to walk through the playbook doc. For reference, our DR expunge playbook is here: https://redwood.example.com/handbook/dr-expunge-playbook
+
+If you can confirm the identifiers and preferred path, we will generate a timeline with ETA and start the work.
+
+Thanks,
+—Michael
+Michael Grant
+Director, Product Security, Redwood Inference
+

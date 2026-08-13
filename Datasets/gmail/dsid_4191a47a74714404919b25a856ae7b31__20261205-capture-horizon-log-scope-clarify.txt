@@ -1,0 +1,138 @@
+Clarifying what Redwood stores by default — requests, model outputs, and derived artifacts
+
+From: Sara Liu <sara.liu@maplehealth.com>
+To: Priyom Das <priyom@redwood.ai>
+Cc: Maple Health Security <security@maplehealth.com>
+Date: Tue, 01 Dec 2026 09:12:00 -0800
+Subject: Quick question on what you keep by default (prompts vs outputs)
+
+Hi Priyom —
+
+Thanks again for the demo. Security has a couple of quick clarifying items before we proceed: by default, does Redwood store the raw request payloads (our prompts/system messages), the model-generated outputs, or both? Also curious whether derived artifacts like embeddings are persisted and for how long.
+
+We captured some questions in the attached spreadsheet — can you confirm the retention windows and any options for immediate purge or residency controls?
+
+Thanks,
+Sara
+Sara Liu
+Head of Integrations, Maple Health
+
+Attachments: MapleHealth_Security_Questions.xlsx (spreadsheet of Qs)
+From: Priyom Das <priyom@redwood.ai>
+To: Sara Liu <sara.liu@maplehealth.com>
+Cc: Kimberly Park <kimberly@redwood.ai>, Markus Klein <markus@redwood.ai>
+Date: Tue, 01 Dec 2026 11:00:00 -08:00
+Subject: Re: Quick question on what you keep by default (prompts vs outputs)
+
+Sara —
+
+Appreciate the spreadsheet, that’s helpful. Quick summary first, then details below.
+
+TL;DR (summary)
+- Default capture windows at Redwood (hosted API): raw request payloads (prompts + system messages + request metadata) are retained for 30 days by default.
+- Model-generated outputs (the responses we return) are retained for 60 days by default.
+- Derived artifacts: embeddings and reranker vectors are retained for 90 days by default unless you turn off derivation storage for the project.
+- Ephemeral items (KV cache for streaming / in-flight prefixes): kept up to 12 hours and then dropped.
+- Aggregate telemetry (usage/latency metrics): retained for up to 365 days for dashboarding/SLAs.
+
+Options and notes
+- Residency: hosted customers in our US region have defaults above. For EU or APAC you can pick regional residency (data stays in-region) at sign-up or via an enterprise contract.
+- Immediate purge: self-service purge is available for Dedicated/Private customers (via console or key rotation for Private). Hosted customers can request an immediate purge via a support ticket; we require the ticket + account ID and DPA reference.
+- Pseudonymization and access: within Redwood we separate access to raw artifacts from telemetry; only our security/infra team can access raw payloads and we log access.
+
+Below are a few clarifications tied to items in your spreadsheet (referencing tab names):
+- Tab "Prompts vs Outputs": the classification is the same across APIs — prompts are part of the raw request object. Outputs are a generated artifact stored separately and subject to the 60-day window.
+- Tab "Embeddings": embeddings produced via the embeddings endpoint are considered derived artifacts and follow the 90-day default. If you never call the store API or configure "no_store" at the project level, embeddings aren't persisted.
+- Tab "Streaming / KV cache": the runtime keeps a short-lived prefix/KV cache to serve subsequent tokens quickly — this is intentionally short (12 hours) and not included in backups.
+
+I'll let Kimberly and Markus confirm the support/purge flow text for hosted customers so we give the exact steps.
+
+Best,
+Priyom
+Senior Sales Engineer, Redwood Inference
+
+On Tue, Dec 1, 2026 at 09:12 AM Sara Liu <sara.liu@maplehealth.com> wrote:
+> Hi Priyom —
+> 
+> Thanks again for the demo. Security has a couple of quick clarifying items before we proceed: by default, does Redwood store the raw request payloads (our prompts/system messages), the model-generated outputs, or both? Also curious whether derived artifacts like embeddings are persisted and for how long.
+> 
+> We captured some questions in the attached spreadsheet — can you confirm the retention windows and any options for immediate purge or residency controls?
+> 
+> Thanks,
+> Sara
+
+From: Markus Klein <markus@redwood.ai>
+To: Priyom Das <priyom@redwood.ai>, Kimberly Park <kimberly@redwood.ai>
+Date: Thu, 02 Dec 2026 09:15:00 -08:00
+Subject: Re: Quick question on what you keep by default (prompts vs outputs)
+
+Couple of micro-edits before we send final language to the customer:
+- Change 'self-service purge' note: hosted API customers cannot trigger a full account-level purge from the dashboard today. They must open a support request; Dedicated customers with console access can run project-level purge.
+- Add the exact support request payload we require: account ID, project ID, approximate time range, and the signed DPA clause reference. If it's a legal request (subject access/erasure), we need the formal DSAR flow.
+- Recommend we offer Maple Health a 12-month retention-first trial in EU region (if residency matters) — Kimberly, can sales run that offer?
+
+If that looks good I'll sign off.
+
+-Markus
+Director, Product Security
+
+On Tue, Dec 1, 2026 at 11:00 AM Priyom Das <priyom@redwood.ai> wrote:
+> Sara —
+> 
+> Appreciate the spreadsheet, that’s helpful. Quick summary first, then details below.
+> 
+> TL;DR (summary)
+> - Default capture windows at Redwood (hosted API): raw request payloads (prompts + system messages + request metadata) are retained for 30 days by default.
+> - Model-generated outputs (the responses we return) are retained for 60 days by default.
+> - Derived artifacts: embeddings and reranker vectors are retained for 90 days by default unless you turn off derivation storage for the project.
+
+From: Priyom Das <priyom@redwood.ai>
+To: Sara Liu <sara.liu@maplehealth.com>
+Cc: Maple Health Security <security@maplehealth.com>, Kimberly Park <kimberly@redwood.ai>, Markus Klein <markus@redwood.ai>
+Date: Fri, 05 Dec 2026 14:03:00 -08:00
+Subject: Re: Quick question on what you keep by default (prompts vs outputs)
+
+Sara —
+
+Following up with the finalized answers and next steps. Thanks for the patience while we verified internal purge and residency flows.
+
+Final confirmation (hosted API, US region unless otherwise requested):
+- Raw request payloads (prompts, system messages, request headers) — retained 30 days by default; accessible to infra/security with logged access.
+- Model outputs (responses, completions) — retained 60 days by default.
+- Derived artifacts (embeddings, reranker vectors) — retained 90 days by default; you can disable derivation storage at the project level.
+- Ephemeral runtime state (KV cache/streaming prefixes) — kept for up to 12 hours; not backed up.
+- Aggregate telemetry (latency, token counts) — stored up to 365 days; this data is sampled/aggregated and does not contain full payloads.
+
+How to request changes or an immediate purge
+- Hosted customers: open a support ticket (link below) with: account ID, project ID, time range for purge, and DPA reference. Our security team will validate and perform the purge; expected SLA for hosted purge is 5 business days after validation.
+- Dedicated: admins can run project-level purge from the console and configure auto-expiry windows per project.
+- Private (on-prem/VPC): you control retention via your deployment config and KMS key rotation; we provide runbooks.
+
+Action items for Maple Health
+1) Confirm which region you'd like your workspace created in (US / EU / APAC).
+2) If you want an immediate hosted purge once we go live, please supply the account ID and the DPA clause number and we'll open the internal purge workflow.
+3) If you'd like a contract note on retention windows (allowing shorter than default), let me know and we'll add to the SOW.
+
+I've attached a short PDF summary and linked the internal support ticket template.
+
+Links and attachments:
+- Redwood Data Retention Summary (attached: Redwood_Data_Retention_Summary.pdf)
+- Support ticket template: https://support.redwood.ai/ticket/PRJ-4521
+- Internal runbook (read-only): https://drive.google.com/open?id=redwood-retention-summary-2026
+
+Thanks — happy to hop on a quick call with Security to walk through examples.
+
+Best,
+Priyom
+Senior Sales Engineer, Redwood Inference
+Phone: +1 (415) 555-0123
+
+On Thu, Dec 2, 2026 at 09:15 AM Markus Klein <markus@redwood.ai> wrote:
+> Couple of micro-edits before we send final language to the customer:
+> - Change 'self-service purge' note: hosted API customers cannot trigger a full account-level purge from the dashboard today. They must open a support request; Dedicated customers with console access can run project-level purge.
+> - Add the exact support request payload we require: account ID, project ID, approximate time range, and the signed DPA clause reference. If it's a legal request (subject access/erasure), we need the formal DSAR flow.
+> - Recommend we offer Maple Health a 12-month retention-first trial in EU region (if residency matters) — Kimberly, can sales run that offer?
+> 
+> If that looks good I'll sign off.
+> 
+> -Markus

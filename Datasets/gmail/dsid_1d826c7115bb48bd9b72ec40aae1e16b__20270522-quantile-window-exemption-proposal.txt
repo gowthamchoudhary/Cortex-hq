@@ -1,0 +1,106 @@
+Catalyst Health — latency SLO windowing & carve-out proposal
+
+From: Alex Porter <aporter@catalysthealth.com>
+To: Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: procurement@catalysthealth.com
+Date: 2027-05-22T09:12:00-07:00
+Subject: Latency commitments — follow up from last week's call
+
+Neha,
+
+Thanks again for the demo on Friday. As we map SLOs to our clinical workflows, Procurement wants firm language on p50/p95 commitments and how you measure them. Two items they flagged:
+
+- Our peak windows (batch imports and nightly reconciliation) create short bursts that spike p95 despite good typical latency.
+- We need a measurable, auditable approach in the contract — measurement windows, aggregation rules, and any carve-outs for scheduled maintenance or cold starts.
+
+Can you share a written proposal for how Redwood would define p50/p95 and what exceptions you would accept? We attached a short template from procurement with required fields.
+
+Also cc'd Lisa (SRE) who will validate telemetry needs.
+
+Regards,
+Alex Porter
+Director of Platform Engineering
+Catalyst Health
+
+Attachment: procurement-slo-template.xlsx (spreadsheet stub)
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Alex Porter <aporter@catalysthealth.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, procurement@catalysthealth.com
+Date: 2027-05-22T12:05:00-07:00
+Subject: RE: Latency commitments — follow up from last week's call
+
+Alex — thanks for the clear ask and the template. Draft proposal below; attaching a PDF with formal wording and an example measurement run. High level summary first, then details.
+
+Summary (proposal):
+- P50 target: 80ms measured as a rolling 30-second quantile (captures steady-state user-facing latency).
+- P95 target: 450ms measured as a 5-minute sliding-window quantile, aggregated into hourly buckets for reporting (this reduces noise from transitory bursts).
+- Exception carve-outs: scheduled maintenance windows (pre-notified >24h), scheduled large batch imports (customer-initiated, max 2/hr windows), and operator-triggered model cold-starts (documented in diagnostics).
+- Remedies: for monthly breach beyond agreed threshold (more than 1% of hourly buckets in month exceeding p95 target), Redwood proposes a billing credit of 2% of the monthly invoice for that calendar month and a joint post-mortem.
+
+Measurement details (brief):
+- Telemetry: request-level latencies measured at the ingress proxy (front-door) with RFC3339 timestamps and a sampling of full traces (1/1000) for root cause.
+- Quantile computation: streaming t-digest per window to avoid heavy storage; we will publish hourly rollups as CSV with timestamped buckets.
+- Reporting: hourly CSVs retained for 90 days and exported to a shared Drive link for audit.
+
+Next steps: if this aligns, Marissa (legal/product) will proposer final contract language. Ben can attach the measurement example and a small script you can run to reproduce the bucketed reporting.
+
+Neha Kapoor
+Head of Sales (Hosted)
+Redwood Inference
+
+Attachment: SLO-exception-proposal-v2.pdf (proposal PDF stub)
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Alex Porter <aporter@catalysthealth.com>, Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, procurement@catalysthealth.com
+Date: 2027-05-23T10:00:00-07:00
+Subject: RE: Latency commitments — follow up from last week's call
+
+Alex — looping in a concise clause we think would satisfy procurement (we'll add to the master services schedule):
+
+"Measurement and exceptions: P50 will be evaluated as the 30-second rolling median measured at Redwood's ingress. P95 will be computed using a 5-minute sliding quantile and reported as hourly aggregates. Scheduled maintenance and customer-approved bulk import windows (documented in mailbox or shared calendar) are excluded. Short-duration spikes caused by provider-side autoscaling or transient hardware preemption will be eligible for review and potential carve-out if supported by trace-level evidence; carve-outs will not be automatic."
+
+We can tighten the credit mechanism into a tiered scale if you'd prefer (e.g., 2% for first breach, 5% for repeat in 3 months). Happy to discuss.
+
+-Marissa
+VP Product, Redwood Inference
+
+On Mon, May 22, 2027 at 12:05 PM Neha Kapoor <neha.kapoor@redwood.ai> wrote:
+> Alex — thanks for the clear ask and the template. Draft proposal below; attaching a PDF with formal wording and an example measurement run...
+From: Ben Carter <ben_carter@redwood.ai>
+To: Alex Porter <aporter@catalysthealth.com>, Neha Kapoor <neha.kapoor@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: 2027-05-23T15:30:00-07:00
+Subject: RE: Latency commitments — follow up from last week's call
+
+Alex / Neha — technical note and reproducibility script attached. A couple of implementation points we wanted to flag:
+
+- The 30s rolling quantile uses a micro-bucket approach (six 5s sub-windows) to reduce jitter for p50. That helps represent UI latency during interactive sessions while still being resilient to 1–2s blips.
+- For p95, the 5-minute sliding window is computed using t-digest with max compression 100; we then materialize the hourly aggregate as the max of all five-minute quantiles within that hour (this biases slightly toward penalizing sustained elevated latency rather than single-sample outliers).
+- Cold-start detection: we annotate requests where model container up-time < 30s; those are eligible for discretionary carve-out review if they correlate with autoscaling events.
+
+I've uploaded a sample CSV from a simulated run to the shared Drive; link in the PDF. If you'd like, we can run a 24-hour live measurement against your test workload prior to contract signature.
+
+Ben Carter
+Principal Reliability Engineer
+Redwood Inference
+
+Attachment: measurement-samples.csv (sample data stub)
+From: Lisa Nguyen <lisa.nguyen@catalysthealth.com>
+To: Neha Kapoor <neha.kapoor@redwood.ai>, Alex Porter <aporter@catalysthealth.com>
+Cc: procurement@catalysthealth.com, Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: 2027-05-24T15:42:00-07:00
+Subject: RE: Latency commitments — follow up from last week's call
+
+Neha / Marissa / Ben — thanks, this is exactly the level of detail we needed. Procurement reviewed the wording and asked for two small clarifications:
+
+1) For the scheduled bulk import carve-out, can Redwood require the customer to flag the import via a dedicated API header (X-RH-Import: true) or shared calendar invite? Procurement prefers an auditable signal rather than an ad hoc email.
+2) For the credit mechanism, please add a cap: credits will not exceed 10% of the monthly invoice.
+
+If you can add those two items to the final PDF, Procurement is prepared to accept the clause and proceed to countersign. We will also take you up on the 24-hour test run before signature.
+
+Lisa Nguyen
+SRE Lead
+Catalyst Health
+
+On Tue, May 23, 2027 at 03:30 PM Ben Carter <ben_carter@redwood.ai> wrote:
+> Alex / Neha — technical note and reproducibility script attached...

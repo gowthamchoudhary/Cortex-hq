@@ -1,0 +1,115 @@
+DPA redline: telemetry export to analytics subprocessor — product/security sign‑off needed
+
+From: Sara Lim <sara.lim@helixhealth.com>
+To: Logan Wright <logan.wright@redwood.ai>
+Date: 2027-06-03T09:12:00-07:00
+Subject: DPA redline: telemetry export to analytics subprocessor
+
+Hi Logan,
+
+Thanks again for the demo last week — Helix is excited to move forward. I attached our redline of Redwood's DPA (Helix_DPA_Redline_v2.pdf) and a short spec for the telemetry exports our analytics vendor needs (Telemetry_export_spec.xlsx).
+
+Request in short: we need a carveout in the DPA to allow aggregated telemetry exports to PulseMetrics (our analytics subprocessor). They will receive aggregated usage metrics and KV-cache-level counters (no customer PII, no raw prompts). PulseMetrics will process these metrics to build our operational dashboards.
+
+Ask: Can Product and Security confirm if Redwood can sign the redline or what a minimal carveout/controls would look like? Key constraints from Helix:
+- Must be able to receive aggregated metrics daily.
+- Retention of exported metrics: 30 days max.
+- No raw prompts, no request/response payloads, and no customer identifiers in the export.
+
+Timeline: Helix is targeting a pilot the week of June 15. Can you let us know by EOD Tuesday (June 8) if this is feasible?
+
+Thanks — attaching the files.
+
+Regards,
+Sara Lim
+Head of Integrations
+Helix Health
+
+Attachments: Helix_DPA_Redline_v2.pdf (PDF redline), Telemetry_export_spec.xlsx (Excel, fields/sample)
+
+From: Logan Wright <logan.wright@redwood.ai>
+To: Olga Petrov <olga.petrov@redwood.ai>, Priya Natarajan <priya.natarajan@redwood.ai>
+Cc: Jonas Weber <jonas.weber@redwood.ai>, Sara Lim <sara.lim@helixhealth.com>
+Date: 2027-06-03T10:03:00-07:00
+Subject: Re: DPA redline: telemetry export to analytics subprocessor
+
+Olga / Priya — looping you both in for Product + Security perspective.
+
+Context: Helix (HLX-437) has attached a DPA redline and is requesting an explicit carveout allowing aggregated telemetry exports to their analytics partner (PulseMetrics). They insist on daily aggregated metrics, 30-day retention, and no raw prompts or identifiers. Pilot target: week of June 15.
+
+Questions / requested actions:
+- Olga (Product): can you confirm whether the Telemetry_export_spec.xlsx fields are product-impacting (KV cache counters, session counts, token histograms). If we can emit these as aggregated metrics with enforced PII scrubbing, does that satisfy Helix? Any product risks or roadmap work required?
+- Priya (Security): can you evaluate whether the proposed carveout + controls (aggregation, pseudonymization, 30-day retention, contract clause for subprocessor obligations + KMS keys) is acceptable? If not, what additional contractual commitments do we need (audit rights, SOC evidence from PulseMetrics, encryption in transit at endpoints)?
+- Jonas (Legal/Privacy): please advise on minimal language for the DPA amendment to cover this flow — specifically around allowed telemetry, retention, and subprocessor responsibility.
+
+Next steps I propose:
+1) Product quick-scan today: confirm no PII leaves the runtime and whether we can enable an aggregated export mode for Helix.
+2) Security quick-scan: list required controls and whether PulseMetrics needs to be on our approved subprocessor list.
+3) If both green by Friday 6/6, I will send a short mutual action plan to Helix and schedule an internal sync.
+
+Olga / Priya — any initial thoughts welcome. Happy to set a 30-min sync.
+
+Thanks,
+Logan Wright
+Senior Account Executive
+Redwood Inference
+
+--
+On Thu, Jun 3, 2027 at 09:12 AM Sara Lim <sara.lim@helixhealth.com> wrote:
+> (original message and attachments)
+
+From: Olga Petrov <olga.petrov@redwood.ai>
+To: Priya Natarajan <priya.natarajan@redwood.ai>, Logan Wright <logan.wright@redwood.ai>
+Cc: Jonas Weber <jonas.weber@redwood.ai>
+Date: 2027-06-03T13:27:00-07:00
+Subject: Fwd: DPA redline: telemetry export to analytics subprocessor
+
+Forwarding Helix request with inline product notes.
+
+Logan — quick notes after scanning Telemetry_export_spec.xlsx:
+- Fields look narrowly scoped: token_histogram, session_count, kv_cache_hit_rate, model_version, latency_p50/p95. None of these necessarily include raw prompts if implemented as counters/metrics.
+- Critical: we must ensure the export pipeline strips any session/customer identifiers before any file leaves our cluster. "Aggregated" must mean either (a) bucketed anonymous counts, or (b) per-customer sums with an HMAC key under customer control. Helix asked for "no customer identifiers" — we should keep to that.
+- Retention: 30 days is reasonable, but we need to enforce retention on the export recipient side via contract and periodic attestations.
+
+Security asks for the spec: Priya, can you confirm if the current telemetry pipeline supports an anonymous aggregation mode, and whether we can add a transform step to drop identifying labels prior to export? If the transform is small, Product could ship a config toggle before the pilot. If it's larger, we'll need to schedule in the roadmap.
+
+Jonas — legal redline note: include a requirement that PulseMetrics maintain SOC2 Type II (or equivalent) and agrees to deletion confirmations on request. Also add a narrow purpose clause for metrics-only processing.
+
+I'll ping Priya directly to get a security POV and will propose language suggestions once I have that.
+
+Thanks,
+Olga Petrov
+Director, Product Management (Runtime)
+
+> On Thu, Jun 3, 2027 at 10:03 AM Logan Wright <logan.wright@redwood.ai> wrote:
+> > Olga / Priya — looping you both in for Product + Security perspective...
+
+From: Logan Wright <logan.wright@redwood.ai>
+To: Sara Lim <sara.lim@helixhealth.com>, Paul Mendelson <paul.m@helixhealth.com>
+Cc: Olga Petrov <olga.petrov@redwood.ai>, Priya Natarajan <priya.natarajan@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>
+Date: 2027-06-04T15:38:00-07:00
+Subject: Re: DPA redline: telemetry export to analytics subprocessor — next steps and sign‑off path
+
+Sara / Paul — thanks for the quick turnaround. Internal alignment summary and next steps below.
+
+Short answer: we can support Helix's request provided a few contractual and technical controls are in place. See proposed conditions:
+1) Data shape: exports limited to aggregated counters only (token_histogram, session_count, kv_cache_hit_rate, model_version, latency_p50/p95). No raw prompts, no request/response payloads, no PII or customer identifiers in any exported artifact.
+2) Transform: Redwood must run an enforced transform to remove identifiers before export. Product has confirmed a light-weight config toggle can be enabled for the pilot to produce anonymous aggregates.
+3) Retention & subprocessor commitments: Helix must include PulseMetrics as a named subprocessor in the DPA amendment and require 30-day retention with deletion attestations on request. PulseMetrics must provide SOC2 evidence (or equivalent) as part of onboarding.
+4) Contract: legal to add a limited-purpose telemetry carveout clause and a subprocessor attachment referencing PulseMetrics and the deletion/attestation obligations.
+
+Action plan and dates (proposal):
+- By 2027-06-06 EOD: Security (Priya) to confirm the transform approach and list any mandatory controls.
+- By 2027-06-07: Legal (Jonas) to propose DPA amendment language and small redline to Helix's PDF.
+- By 2027-06-09: Helix to confirm PulseMetrics' SOC2/attestation docs and sign the subprocessor addendum.
+- Week of 2027-06-15: Pilot export enabled in anonymous-aggregate mode.
+
+Sara — if that works, I will send a one-page mutual action plan and a proposed DPA clause tomorrow. Also attaching the two documents you sent to this thread.
+
+Logan Wright
+Senior Account Executive, Redwood Inference
+log.wright@redwood.ai | +1 415 555 0198
+
+Attachments referenced: Helix_DPA_Redline_v2.pdf, Telemetry_export_spec.xlsx
+
+Related HubSpot record: https://hubspot.example/contacts/HLX-437

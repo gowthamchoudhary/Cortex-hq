@@ -1,0 +1,132 @@
+Urgent: Orchard HealthTech throughput spike causing checkout failures - Exec bridge requested
+
+From: Susan Lin <susan.lin@orchard.ai>
+To: support@redwoodai.com, sean.gallagher@redwoodai.com
+Cc: zach.ryan@orchard.ai
+Date: Wed, 18 Aug 2027 09:12:00 -0700
+Subject: Critical: checkout failures and 5xx spike across our region
+
+Team,
+
+We started seeing a severe increase in 5xx errors and end-to-end latency for checkout flows in us-west-2 around 08:50 PDT. Our telemetry shows token-level error rates climb from ~0.1% to ~4% and median latency double (from ~220ms to ~510ms) — peak errors are causing visible checkout failures for customers.
+
+Attached are a condensed log bundle and a pcap that correlate several 500-level responses to inference requests originating from our traffic. We rolled a quick routing change on our side and that reduced throughput for a short window, but the underlying errors appear tied to Redwood inference responses.
+
+We are prepared to open an executive bridge — this is affecting 18% of transactions over the last 30 minutes and is impacting revenue-sensitive checkout flows.
+
+Please confirm receipt and next steps. We need an ETA for a mitigation path and an executive readout for our CTO and Ops.
+
+Attachments: orchard_error_logs_20270818.tar.gz, packet_capture_08-18.pcap
+
+Thanks,
+Susan Lin
+Head of Platform, Orchard HealthTech
+
+From: Sean Gallagher <sean.gallagher@redwoodai.com>
+To: susan.lin@orchard.ai, ops@orchard.ai
+Cc: karthik.iyer@redwoodai.com, marissa.cole@redwoodai.com, laura.bennett@redwoodai.com
+Date: Wed, 18 Aug 2027 09:21:00 -07:00
+Subject: Re: Critical: checkout failures and 5xx spike across our region
+
+Susan — thanks for the signal and the artifacts, we have the files and the packet capture. I'm initiating an executive bridge now.
+
+Immediate plan (first 30m):
+- Stand up an exec bridge (Redwood war-room) and invite Orchard leadership and our SRE/infra leads.
+- Karthik, can you lead initial triage (kernel, model runtime, routing)? Prioritize error-classification (model- vs infra-origin).
+- Marissa, please prepare a short external status note for Orchard leadership (1-2 bullets + ETA).
+- Laura, I'll keep leadership updated; if we need credits/contractual gestures we can cover that after containment.
+
+Bridge link: https://zoom.us/rdw/bridge-orchard-20270818 (joining now)
+Slack channel: #warroom-orchard-20270818
+
+Cc'ing Orchard Zach — we will get a containment plan in the next 20–30 minutes and a full exec readout within 3 hours.
+
+Sean Gallagher
+Director, Customer Reliability
+Redwood Inference
+(555) 555-0142
+
+From: Karthik Iyer <karthik.iyer@redwoodai.com>
+To: sean.gallagher@redwoodai.com, marissa.cole@redwoodai.com
+Cc: susan.lin@orchard.ai, zach.ryan@orchard.ai
+Date: Wed, 18 Aug 2027 09:35:00 -07:00
+Subject: Re: Critical: checkout failures and 5xx spike across our region
+
+Team — initial triage notes from the bridge: 
+- Symptom: high token-generation error rates (internal 5xx), stack traces point to an internal stack overflow when KV-cache exceeds expected size on a hot-shard sequence. This correlates with a sequence-length distribution spike from Orchard (long prompts appended via custom metadata).
+- Scope: impacting a small subset of model shards in us-west-2 serving LLM-v2-medium quantized 8-bit. Error surfaces at peak concurrency and long-context requests.
+
+Immediate mitigations applied (09:30–09:33):
+1) Automated prefix-caching disabled for Orchard routes to avoid KV inconsistencies.
+2) Temporary routing rule: route Orchard traffic to model-variant LLM-v2-medium-slim (same quality with truncated context) to reduce KV pressure.
+3) Throttled per-customer concurrency from 20 -> 8 for affected routes.
+
+Early impact: errors dropped from 4% -> 0.8% within ~6 minutes after routing change; median latency trending down toward normal. We'll monitor 30m.
+
+Next steps (30–180m):
+- Run a targeted replay of Orchard's failing traces in sandbox to confirm build/codec issue.
+- Prepare a model patch to improve KV handling for long contexts (ETA 24–36h).
+- Ops to collect detailed perf counters and a focused runcard.
+
+Attachments: warroom_runcard_v1.pdf (triage checklist)
+
+Karthik Iyer
+Head of Serving Runtime
+Redwood Inference
+
+From: Marissa Cole <marissa.cole@redwoodai.com>
+To: susan.lin@orchard.ai
+Cc: sean.gallagher@redwoodai.com, karthik.iyer@redwoodai.com, laura.bennett@redwoodai.com
+Date: Wed, 18 Aug 2027 10:02:00 -07:00
+Subject: Re: Critical: checkout failures and 5xx spike across our region — immediate status update for Orchard execs
+
+Susan / Zach — quick status note for your leadership: 
+- What happened: A sudden increase in long-context requests resulted in a KV-cache condition on a subset of our model shards, producing elevated 5xxs and higher median latency for checkout flows.
+- What we did: Disabled prefix caching for Orchard routes and temporarily routed traffic to a context-slim model variant + applied per-customer concurrency throttles.
+- Impact: Customer-visible errors reduced from ~18% of checkout failures to under 2% on current traffic; end-to-end latency returning to baseline.
+- ETA: We will monitor for 60 minutes; a permanent mitigation (model runtime patch + quantization regression testing) is scoped to 24–36 hours.
+
+As agreed on the bridge, please let us know if you'd like Redwood to proceed with a stricter mitigation (circuit-break to 4 concurrent requests per key) which would eliminate nearly all failures but could increase tail latency temporarily.
+
+We will publish a post-incident update within 4 hours and a technical RCA within 72 hours.
+
+Best,
+Marissa Cole
+Senior Customer Success Manager
+Redwood Inference
+
+On Wed, Aug 18, 2027 at 09:21 AM Sean Gallagher <sean.gallagher@redwoodai.com> wrote:
+> Susan — thanks for the signal and the artifacts, we have the files and the packet capture. I'm initiating an executive bridge now.
+> 
+> Immediate plan (first 30m):
+> - Stand up an exec bridge (Redwood war-room) and invite Orchard leadership and our SRE/infra leads.
+> - Karthik, can you lead initial triage (kernel, model runtime, routing)? Prioritize error-classification (model- vs infra-origin).
+> - Marissa, please prepare a short external status note for Orchard leadership (1-2 bullets + ETA).
+> - Laura, I'll keep leadership updated; if we need credits/contractual gestures we can cover that after containment.
+
+
+From: Sean Gallagher <sean.gallagher@redwoodai.com>
+To: laura.bennett@redwoodai.com, ceo@redwoodai.com
+Cc: karthik.iyer@redwoodai.com, marissa.cole@redwoodai.com, susan.lin@orchard.ai
+Date: Wed, 18 Aug 2027 15:04:00 -07:00
+Subject: Orchard HealthTech incident — executive readout and commitment summary
+
+Team / Execs,
+
+Short summary (for leadership):
+- Timeline: 08:50 PDT — Orchard checkout flows show rising 5xx and latency. 09:12 — customer alerted Redwood; 09:21 — exec bridge initiated; 09:30 — mitigations deployed; 09:36 — error rate reduced to ~0.8%; 10:02 — customer confirmed visible reduction. Ongoing monitoring through 15:00 shows stabilized metrics.
+- Root cause (prelim): KV-cache overflow condition triggered by a spike in long-context requests from Orchard that exposed a KV lifecycle bug under high concurrency on our LLM-v2-medium quantized path.
+- Customer impact: ~18% checkout failure at peak, estimated revenue exposure small but customer-visible; Orchard leadership on bridge; they requested executive visibility and a 72h RCA.
+- Actions & commitments: 1) Immediate containment executed (routing to slim variant + throttles). 2) Patch work to KV lifecycle and additional regression tests — ETA 24–36 hours. 3) Post-incident RCA and follow-up call (scheduled Fri 08/20 10:00 PT). 4) Redwood to provide a one-time service credit and a detailed mitigation plan for long-context traffic (commercials to be handled by GTM).
+
+Requests for Execs:
+- Approve a discretionary service credit up to $20k (proportional to impacted volume) if required by customer discussions.
+- Approve priority engineering allocation (2 engineers, 24–36h) to land the KV patch and run regression.
+
+We will share the RCA doc in GDrive and a customer-facing timeline.
+
+Sean Gallagher
+Director, Customer Reliability
+Redwood Inference
+
+Attachments: warroom_runcard_v1.pdf, orchard_error_logs_20270818.tar.gz

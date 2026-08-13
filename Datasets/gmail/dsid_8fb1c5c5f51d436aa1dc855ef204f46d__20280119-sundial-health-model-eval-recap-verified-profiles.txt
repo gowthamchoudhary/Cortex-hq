@@ -1,0 +1,138 @@
+Post-call recap: model shortlist + Redwood-verified perf profiles (Sundial Health)
+
+From: Sofia Ivanova <sofia_ivanova@redwood.com>
+To: Lena Morales <lena@sundialhealth.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Fri, 19 Jan 2028 10:22:00 -0800
+Subject: Post-call recap: model shortlist + Redwood-verified perf profiles (Sundial Health)
+
+Hi Lena / Michael —
+
+Thanks again for the call this morning. Quick recap and an actionable next step list so we keep momentum:
+
+Summary of what we heard:
+- Primary workload: clinical note summarization + triage intent classification; typical input distribution = median 420 tokens, 95th pct <= 1,600 tokens (with occasional long threads).
+- SLOs: p95 latency <= 400ms for interactive UI flows; throughput target ~120 requests/minute during peak windows.
+- Quality bar: summaries must preserve diagnosis and medication mentions; false-positive triage rates should be <5%.
+
+Redwood-recommended model shortlist (based on your profile + our verification runs):
+1) rw-instruct-13B-8k (FP16) — best balance for quality/latency on 8k context; verified median latency ~42ms/token, p95 single-token latency 180ms (seq=512), steady-state throughput ~480 TPS on a 4-GPU Dedicated slice.
+2) rw-mini-7B-8k-qat (int4) — lower-cost option with modest quality delta; verified p50 end-to-end generation latency 320ms (median seq=420), p95 390ms; effective TPS ~220 under default batching.
+3) open-llama-30B-compat (quantized) — highest-quality option for edge-case extraction (medications), expect p95 ~650ms for longer sequences but better extraction fidelity.
+
+Attachments/links: I attached the CSV (redwood-verified-profiles-20280118.csv) with per-model TPS and latency percentiles for the benchmarking traces you shared. Live dashboard: https://redwood-internal-benchmarks.example.com/dashboard/SDH-2028-01
+
+Quality/regression guardrails we recommend:
+- Baseline prompt set (attached: sundial-prompt-set-v1.txt) derived from 200 sampled notes you shared. Use this as the canonical regression test for evals and alerting.
+- Instrument model outputs with exact-match and entity-F1 for medications/diagnoses; configure alerts at a 3% delta vs baseline.
+- Canary rollout: start with rw-mini-7B-8k-qat for 10% of traffic, monitor token-level latency and entity-F1 for 3 days, then advance to 40/60 split.
+
+Proposed next steps (suggested timeline):
+- This week: SE-run pilot configuration (bench harness + prompt pack) — action: Ben to provision pilot harness and send details (ETA 2 business days).
+- Week 2: 2-week pilot against a synthetic 1k-note trace and sampled production trace (you provide up to 5k redacted notes).
+- Procurement: mutual action plan and simple SOW to follow (attached: mutual-action-plan-sdh-v1.pdf).
+
+If that matches, I’ll have Ben drop the pilot harness link and prompt pack and we can schedule a 30-minute kickoff Monday.
+
+Best,
+Sofia Ivanova
+Account Executive | Redwood Inference
+sofia_ivanova@redwood.com | +1 (415) 555-0126
+
+----
+Attachments: redwood-verified-profiles-20280118.csv; sundial-prompt-set-v1.txt; mutual-action-plan-sdh-v1.pdf
+From: Michael Park <michael.park@sundialhealth.com>
+To: Sofia Ivanova <sofia_ivanova@redwood.com>
+Cc: Lena Morales <lena@sundialhealth.com>, Ben Carter <ben_carter@redwood.com>
+Date: Fri, 19 Jan 2028 11:05:00 -0800
+Subject: Re: Post-call recap: model shortlist + Redwood-verified perf profiles (Sundial Health)
+
+Thanks Sofia — useful summary. Couple quick clarifications: 
+
+1) The p95 numbers you list (e.g., 390ms for rw-mini-7B-8k-qat) — are those end-to-end wall-clock latencies for a single request (incl. tokenization + network) or kernel-only? We need E2E for UX planning.
+2) For the prompt set: are there example negative cases for hallucination checks (e.g., medication invented when none present)?
+
+Also please confirm whether automated quality regression alerts can be hooked to our Sentry/Datadog instance or if Redwood needs to host the alerting.
+
+-Michael
+Michael Park
+Lead ML Engineer, Sundial Health
+michael.park@sundialhealth.com
+
+On Fri, Jan 19, 2028 at 10:22 AM Sofia Ivanova <sofia_ivanova@redwood.com> wrote:
+> (original message)
+From: Ben Carter <ben_carter@redwood.com>
+To: Michael Park <michael.park@sundialhealth.com>, Lena Morales <lena@sundialhealth.com>
+Cc: Sofia Ivanova <sofia_ivanova@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Fri, 19 Jan 2028 13:48:00 -0800
+Subject: Re: Post-call recap: model shortlist + Redwood-verified perf profiles (Sundial Health)
+
+Hi Michael / Lena —
+
+Quick answers:
+1) The numbers in the CSV / dashboard are end-to-end (E2E) numbers measured on Dedicated hosts with a simulated network hop and tokenization overhead. For your traces we report E2E median + p50/p95 token-level + overall generation latency (CSV columns: e2e_median_ms, e2e_p95_ms, tokens_per_second).
+
+2) Prompt pack includes negative-case tests — see section "hallucination_checks" in sundial-prompt-set-v1.txt. We included 30 synthetic cases where the input contains no medication mention and verify that the model doesn't invent entities (we score via entity-F1 and exact-match).
+
+Extra context on throughput/ops:
+- With KV prefix caching enabled for the 8k models (your workload has high repeat prefix similarity), we see 2.2x effective TPS improvement in steady state for conversational note threads.
+- We recommend a batch window of 12-25ms for your pilot to maximize throughput while staying below the 400ms p95 UX target.
+
+Pilot harness access: https://redwood-internal-benchmarks.example.com/dashboard/SDH-2028-01 (I’ll create a guest token for Sundial).
+
+I attached an annotated prompt pack with expected metric thresholds and evaluation scripts. If you want, I can schedule a 30-min SE walkthrough on Monday.
+
+- Ben
+Ben Carter
+Solutions Engineer | Redwood Inference
+ben_carter@redwood.com
+
+On Fri, Jan 19, 2028 at 11:05 AM Michael Park <michael.park@sundialhealth.com> wrote:
+> (Michael’s question)
+From: Sofia Ivanova <sofia_ivanova@redwood.com>
+To: Michael Park <michael.park@sundialhealth.com>, Lena Morales <lena@sundialhealth.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Mon, 22 Jan 2028 09:12:00 -0800
+Subject: Re: Post-call recap: model shortlist + Redwood-verified perf profiles (Sundial Health)
+
+Thanks for the questions — quick confirmations and proposal: 
+
+- E2E numbers: confirmed, Ben’s CSV is E2E and includes tokenization/network overhead. We’ll include an additional column for "measured_from_client_ms" in the pilot run so you can see worst-case client-observed latencies.
+- Alerts: Redwood Optimize supports webhook sinks to Datadog/Sentry — we can push quality/regression alerts to your Datadog account (requires an API key and a small config step on your side).
+
+Proposed pilot scope (condensed):
+A) Setup (week 0): seed pilot with 1k redacted production notes + our synthetic 1k trace.
+B) Run (week 1-2): 14-day validation using the attached prompt set; we auto-collect entity-F1, hallucination rate, p95 latency and TPS.
+C) Readout (end week 2): joint readout + decision gate (go/hold).
+
+I’ll add a draft mutual action plan to the Drive link and loop in our procurement liaison once you signal go; suggested procurement timeline is 10 business days once SOW is signed.
+
+Are you available for a 30-minute kickoff Monday 2028-01-23 at 10:00 PT? If so I’ll lock it and Ben will invite.
+
+Thanks —
+Sofia
+
+On Fri, Jan 19, 2028 at 1:48 PM Ben Carter <ben_carter@redwood.com> wrote:
+> (Ben’s message)
+From: Lena Morales <lena@sundialhealth.com>
+To: Sofia Ivanova <sofia_ivanova@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Tue, 27 Jan 2028 09:05:00 -0800
+Subject: Re: Post-call recap: model shortlist + Redwood-verified perf profiles (Sundial Health)
+
+Sofia / Ben —
+
+Thanks — that all looks good. We can provide 1k redacted notes by Friday.
+
+A few final asks before the kickoff: 
+- Can you share SOC 2 evidence (or our security team’s checklist) and an exportable audit log sample? Procurement will want that before signing.
+- For the mutual action plan, please include a line item for a fallback model + rollback criteria (we prefer explicit rollback conditions tied to hallucination rate and p95 latency).
+
+Confirmed: Monday 2028-01-23 10:00 PT works for the Sundial team. I’ll add our procurement lead (procurement@sundialhealth.com) to the thread once we have the MLP and SOW.
+
+Best,
+Lena Morales
+Director of Product, Sundial Health
+lena@sundialhealth.com
+
+On Mon, Jan 22, 2028 at 09:12 AM Sofia Ivanova <sofia_ivanova@redwood.com> wrote:
+> (Sofia’s proposal)

@@ -1,0 +1,109 @@
+Privately Hosted Feasibility: enablement asks + exception scenarios
+
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Priyom Das <priyom_das@redwood.ai>
+Date: 2026-11-01T09:12:00-08:00
+Subject: Private hosting feasibility — consolidate asks + exception scenarios
+
+Team,
+
+Clearview is asking for a hosted VPC/on-prem option for a pilot (PHI-adjacent) and has pushed for timelines. Before I reply to Procurement I want a concise list of what we need from Product/Infra/Eng to call this feasible and the set of exception scenarios we can entertain (minimal, supported-with-exceptions, not-supported).
+
+Please add the following into the attached pilot-resourcing.xlsx sheet by EOD 11/03:
+- Arch pre-reqs (network, VPN, firewall rules, service mesh) — Karthik
+- Ops headcount for first 90 days (oncall, runbook owners, escalation path) — Priyom
+- Product constraints: feature gating, model catalog availability, data residency notes — Marissa
+
+Also, draft 2 example exception scenarios we could offer if full private-controlplane is not possible:
+A) Limited VPC (DB in customer subnet, Redwood controlplane in our VPC but routed) — list trade offs
+B) Air-gapped appliance with nightly sync (higher ops cost) — list trade offs
+
+I've attached Clearview's security questionnaire; they will want an initial response before the end of the week. If we can't turn something around, I'll set expectations with their security team.
+
+Thanks — Priya
+
+--
+Priya Natarajan
+Product Partnerships | Redwood Inference
+priya_natarajan@redwood.ai
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Date: 2026-11-03T11:04:00-08:00
+Subject: Re: Private hosting feasibility — consolidate asks + exception scenarios
+
+Got it — filling in the product constraints tab now. Quick notes while I update the sheet:
+
+- Model availability: for pilot we can offer a limited set of open models (v1.2 quantized) and Redwood-verified throughput profiles; any custom model onboarding will add 4–6w.
+- Feature gating: function calling + streaming should be available, but we need to disable cross-tenant KV cache to satisfy isolation guarantees. That reduces effective throughput ~12–18% in some workloads.
+- Data residency: Clearview insists logs remain in their VPC; we should confirm whether they expect audit logs to be write-only to their S3 or an exported syslog.
+
+Exception scenarios (draft):
+- "Managed VPC with customer-owned logs": Redwood runs controlplane in our tenancy but configures encrypted log forwarding to customer's bucket + customer-managed VPC peering. Pro: faster to stand up. Con: inability to fully attest to network isolation.
+- "Containment Appliance (sync-lite)": Ship a minimal runtime appliance that hosts tokenization and caching locally, with model weights in a sealed store; nightly encrypted sync for metrics. Pro: more isolation; Con: heavy ops and lower feature parity.
+
+I'll attach my sheet entries. Tentative blocker: if Clearview requires FIPS-certified endpoints and HSM for key operations we need legal + security signoff and a procurement line for cert work.
+
+-M
+
+--
+Marissa Cole
+Sr PM, Private Deployments | Redwood Inference
+marissa_cole@redwood.ai
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: Priyom Das <priyom_das@redwood.ai>
+Date: 2026-11-05T14:26:00-08:00
+Subject: Re: Private hosting feasibility — consolidate asks + exception scenarios
+
+Thanks — added the architecture pre-reqs to the sheet and sketched out estimated engineer-weeks. Highlights:
+
+- Network: Customer must provide 2 subnets (controlplane, runtime) and a defined peering model. We can support TLS-over-mTLS, but mutual-auth requires a cert exchange protocol (we can automate via step function but will add ~2w).
+- KV cache: to avoid cross-tenant leaks we will run per-customer cache instances; memory overhead suggests +30% RAM per runtime node; this has cost implications for Dedicated pools.
+- Quantization: we can support int8 quantized weights; if customer requires non-quantized FP16/32 we need to size for a ~2.5–3x memory footprint.
+
+Exception engineering notes:
+- Managed VPC: acceptable if customer accepts that controlplane logs are stored in our tenancy until TTL export occurs (we will write an encryption-and-export runbook).
+- Appliance: requires on-prem packaging and a minimal ops agent; provisioning the HSM-backed key store is customer responsibility unless they buy our managed HSM add-on.
+
+Blockers for pilot: HSM requirement (unknown cost + legal), and whether Clearview will handle WAN provisioning for nightly syncs.
+
+- Karthik
+
+--
+Karthik Iyer
+Staff Architect, Serving Runtime | Redwood Inference
+karthik_iyer@redwood.ai
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Marissa Cole <marissa_cole@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Cc: Priya Natarajan <priya_natarajan@redwood.ai>
+Date: 2026-11-09T16:03:00-08:00
+Subject: Re: Private hosting feasibility — consolidate asks + exception scenarios
+
+Short summary and next steps:
+
+Thanks for the quick turn on the sheet and write-ups — I consolidated into the exception-case-matrix.csv and attached it. My take:
+- Pilot go/no-go checklist:
+  1) Customer signs exception to standard SLAs (we'll draft) — responsible: Priya/Legal
+  2) Clearview confirms log export destination and retention — responsible: Clearview (sales thread)
+  3) HSM / FIPS requirement clarified — responsible: Marissa + Security
+  4) Ops runway: 2x SREs (shared, 3-mo commitment) + 1 infra eng to automate cert exchange — responsible: Ops (me)
+
+Action items:
+- Priya: set expectation call with Clearview security and Procurement for 11/12 to walk them through trade-offs and draft SLA exception language.
+- Marissa: escalate HSM question to Security; if they require managed HSM we will surface cost estimate by 11/13.
+- Karthik: provide quick estimate for increased runtime memory and a pilot sizing recommendation by 11/12.
+- Priyom: raise a funding ask for 3 months of SRE coverage (I'll seed numbers into pilot-resourcing.xlsx).
+
+If all agree I will reply to Clearview with the initial timeline and request a 11/12 security sync.
+
+Priyom
+
+--
+Priyom Das
+Head of Cloud Operations | Redwood Inference
+priyom_das@redwood.ai

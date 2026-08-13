@@ -1,0 +1,139 @@
+ACME MAP: performance acceptance criteria & test plan
+
+From: Monica Patel <monica.patel@redwoodinference.com>
+To: Jared Park <jared.park@acmesoft.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwoodinference.com>, Tessa Morgan <tessa.morgan@redwoodinference.com>, Karthik Iyer <karthik_iyer@redwoodinference.com>
+Date: 2026-10-28T09:12:00Z
+Subject: ACME MAP: performance acceptance criteria & test plan
+
+Hi Jared —
+
+Following our run-through yesterday, attaching the MAP-focused performance test plan for the long-context/large-sequence acceptance work we discussed. High-level goals:
+
+- Verify 4 production buckets: hosted, 1x dedicated, fallback-cold, fallback-warm.
+- Measure TTFT (time-to-first-token), average token latency, throughput (tokens/sec) at target concurrency, and token-level cost.
+- Exercise max sequence lengths: 4k, 16k, 32k, and 64k input windows with representative prompt-size distributions.
+- KV-cache impact: cold vs warmed KV cache across conversation prefixes; measure cache hit ratio and delta to TTFT/latency.
+- Concurrency sweep: 1, 5, 20, 50 simultaneous streams per model variant.
+
+Acceptance criteria (proposed):
+- TTFT <= 350ms for hosted at typical 4k workloads, <= 500ms at 16k for dedicated.
+- 95th pct token latency < 120ms at target concurrency for dedicated.
+- No correctness regressions on the canonical eval prompts (we'll run standard eval set).
+- KV-cache warmed path must show >=30% effective token cost reduction vs cold path for our chat workflows.
+
+Attachments: test-plan.xlsx (detailed scenarios, prompts, data-set pointers, and runbook).
+
+Next steps: if this checks with you, we will schedule the dedicated-run (3-hour window) next week and share the result CSV. Also included in the plan are the experiments for max sequence length degradation curves and a recommended synthetic prompt distribution that mirrors your agent mix.
+
+Thanks —
+Monica
+SVP, Strategic Accounts
+Redwood Inference
+
+---
+Attachment: test-plan.xlsx (spreadsheet: scenarios / sequences / commands)
+From: Jared Park <jared.park@acmesoft.com>
+To: Monica Patel <monica.patel@redwoodinference.com>
+Cc: Acme Procurement <procurement@acmesoft.com>
+Date: 2026-10-29T13:05:00Z
+Subject: Re: ACME MAP: performance acceptance criteria & test plan
+
+Thanks Monica —
+
+Appreciate the clarity. A couple of quick clarifications from our side before we lock the slot:
+
+- Can you confirm the TTFT target for 32k windows on dedicated? Our product team expects some ramp beyond 16k but would like a baseline number.
+- For the concurrency sweep, do the runs include synthetic user interleaving (multi-turn) or single-shot prompts only? We need multi-turn semantics to reflect our real traffic.
+
+Procurement: Jared here — we'll be tracking the run results against the acceptance criteria before issuing final PO approval. If Redwood can demonstrate the dedicated targets within the schedule below, Procurement can sign off quickly.
+
+Schedule note: We prefer any dedicated runs to finish by Nov 10 so we can close before quarter end.
+
+Best,
+Jared Park
+Head of Platform Engineering, Acme Soft
+
+---
+
+From: Rishi Malhotra <rishi.malhotra@redwoodinference.com>
+To: Monica Patel <monica.patel@redwoodinference.com>, Jared Park <jared.park@acmesoft.com>
+Cc: Tessa Morgan <tessa.morgan@redwoodinference.com>, Karthik Iyer <karthik_iyer@redwoodinference.com>
+Date: 2026-10-30T11:00:00Z
+Subject: Re: ACME MAP: performance acceptance criteria & test plan
+
+On Thu, Oct 29, 2026 at 13:05 Jared Park <jared.park@acmesoft.com> wrote:
+> Can you confirm the TTFT target for 32k windows on dedicated?
+
+Good question — quick summary from the infra team after an initial run this morning:
+
+- Measured TTFT (median) on dedicated:
+  - 4k: 310ms
+  - 16k: 420ms
+  - 32k: 780ms (note: this includes a small prompt-side preprocessing pipeline that we will optimize)
+- 95th pct token latency (dedicated, 16k): 110ms at 20 concurrent streams. At 50 streams it rises to ~210ms — we'll characterize the degradation curve.
+- Throughput: sustained ~9.6k tokens/sec for the dedicated pool at 20 streams on our 8xA100 configuration (32k windows reduce effective throughput due to memory pressure).
+- KV-cache delta: warmed path improved TTFT by ~28% for the standard conversation prefixes used in your demo data. Cold path penalties are most visible at 64k windows.
+
+I've attached the raw run CSV for traceability: map-performance-results.csv. We'll run a follow-up optimization sweep (prompt pretokenization and kernel tuning) next Tuesday.
+
+Rishi
+Director, Solutions Engineering (Redwood)
+
+Attachment: map-performance-results.csv (CSV: run_id/start/end/seq_len/ttft/95pct/throughput/cache_hit)
+
+From: Tessa Morgan <tessa.morgan@redwoodinference.com>
+To: Monica Patel <monica.patel@redwoodinference.com>, Jared Park <jared.park@acmesoft.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwoodinference.com>, Karthik Iyer <karthik_iyer@redwoodinference.com>
+Date: 2026-11-02T15:30:00Z
+Subject: Re: ACME MAP: performance acceptance criteria & test plan
+
+On Fri, Oct 30, 2026 at 11:00 Rishi Malhotra <rishi.malhotra@redwoodinference.com> wrote:
+> KV-cache delta: warmed path improved TTFT by ~28%...
+
+Quick KV cache notes from the diagnostics team:
+
+- We captured KV traces (attached) for a representative multi-turn flow. The big wins are when prefix reuse > 60% across a session; smaller agent sessions show limited cache benefit.
+- For 32k windows the cache warm-up cost (first request after model load) is significant — recommend a lightweight pre-warm that replays the user's last 1-2 messages prior to full run. That reduces TTFT for the warmed path by ~180-220ms in our tests.
+- Memory tuning: raising the per-worker KV slab by 8% reduced cache eviction thrash for the 64k experiments, which improved 95th pct by ~15%.
+
+Attachment: kvcache-kv-trace.html (HTML trace with timeline).
+
+I'll coordinate the pre-warm patch for Tuesday's sweep. If Acme wants, we can include a scripted pre-warm call in the MAP runbook so procurement can see the exact steps for acceptance gating.
+
+Tessa
+Senior Solutions Engineer, Redwood Inference
+
+From: Monica Patel <monica.patel@redwoodinference.com>
+To: Jared Park <jared.park@acmesoft.com>, Acme Procurement <procurement@acmesoft.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwoodinference.com>, Tessa Morgan <tessa.morgan@redwoodinference.com>, Karthik Iyer <karthik_iyer@redwoodinference.com>
+Date: 2026-11-03T16:45:00Z
+Subject: Re: ACME MAP: performance acceptance criteria & test plan — proposed close timeline
+
+Thanks all — summary + proposed close path: 
+
+Summary of results to date (high level):
+- Baseline dedicated TTFT: 310ms (4k), 420ms (16k), 780ms (32k). After two optimizations (pre-tokenize + lightweight pre-warm) projected TTFT for 32k is ~540-600ms.
+- 95th pct latency meets the acceptance target at 16k for 20 streams; at 50 streams we recommend a staged rollout (canary at 20 -> 35 -> 50) to monitor regressions.
+- KV-cache: warmed runs show ~28–35% token-cost reduction; recommended MAP step: include pre-warm script to guarantee warmed-path acceptance.
+
+Proposed MAP close timeline:
+- Nov 04: Execute optimized sweep (pre-tokenize + pre-warm) — Redwood infra team runs dedicated 3-hour window.
+- Nov 05: Deliver final results CSV and a short executive one-pager with pass/fail per acceptance criteria.
+- Nov 08: Acme dev and procurement review results.
+- Nov 10: Sign-off & DocuSign (if all acceptance gates met).
+
+Action items for Acme Procurement: please confirm that the timeline above works for PO approval and let us know any contractual checkpoints we should be aware of.
+
+DocuSign link for acceptance template: https://www.docusign.com/ACME-ACCEPTANCE/12345
+Drive (run artifacts): https://drive.google.com/drive/folders/1a2b3cACME-MAP-Tests
+
+Attachments referenced: test-plan.xlsx, map-performance-results.csv, kvcache-kv-trace.html
+
+Thanks —
+Monica
+SVP, Strategic Accounts
+Redwood Inference
+
+---
+Please let me know if you'd like us to schedule a brief (30m) executive demo of the 32k warm path before sign-off.

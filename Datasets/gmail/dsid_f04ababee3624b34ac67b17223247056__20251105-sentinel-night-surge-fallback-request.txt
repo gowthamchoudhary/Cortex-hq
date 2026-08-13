@@ -1,0 +1,129 @@
+Nightly inference surge from SentinelBank — immediate fallback needed
+
+From: Luis Ramos <luis.ramos@sentinelbank.com>
+To: soojin.lee@redwood.com, marissa.cole@redwood.com
+Cc: support@sentinelbank.com
+Date: Tue, 5 Nov 2025 01:12:00 -0800
+Subject: Nightly inference drop — urgent
+
+Soojín / Marissa,
+
+We started seeing a large spike in latency and a steady stream of 5xx responses around 00:45 PST during our nightly reconciliation window. This is impacting downstream batch jobs — we're missing a chunk of records and the retry loop is causing cascading failures.
+
+Attached a short sample of the error trace (sentinel-error-sample.log). Key observations from our side:
+- Wall-clock latency jumped from ~200ms to 2.8s across many requests.
+- Error rate ~6% for the 00:45–01:05 window.
+- Throughput dropped briefly while queue depth spiked.
+
+We are on a Dedicated pool + reserved capacity (contract SB-912-A). This looks like a capacity/queueing issue and we're moving to failover routes internally to avoid downstream batch failures, but we need Redwood to confirm what's happening and whether burst capacity/fallbacks can be enabled immediately.
+
+Please advise next steps and whether we should open a wider incident.
+
+— Luis
+Luis Ramos
+Head of Platform Engineering | SentinelBank
+luis.ramos@sentinelbank.com
+
+Attachments: sentinel-error-sample.log (text, 12 KB)
+From: soojin.lee@redwood.com
+To: Luis Ramos <luis.ramos@sentinelbank.com>, marissa.cole@redwood.com
+Cc: aditya.rao@redwood.com, vivek.kulkarni@redwood.com
+Date: Tue, 5 Nov 2025 01:28:00 -0800
+Subject: Re: Nightly inference drop — urgent
+
+Hi Luis — thanks for the heads up and the log sample. We're opening this as an internal incident and I'll loop in engineering and operations immediately. High-level plan:
+
+1) Triage on pool utilization and pending queues (Aditya)
+2) Short-term mitigations: enable burst/overflow to hosted pool or route low-priority jobs out of the reserved queue
+3) Customer-facing status update within 30 minutes (Marissa)
+4) Executive approval if we need to consume emergency burst or issue credits (Vivek)
+
+Marissa — can you confirm any business constraints for this window (retention/SLAs)? Aditya — can you prioritize a short analysis of the reserved pool metrics for 00:30–01:15 PST and share any immediate mitigation steps we can take in the next 15–30m?
+
+Luis — we will update you in ~20–30 minutes with actions.
+
+Thanks,
+Soojin Lee
+Senior Account Manager, Redwood Inference
+soojin.lee@redwood.com
+
+> On Tue, Nov 5, 2025 at 01:12 AM Luis Ramos <luis.ramos@sentinelbank.com> wrote:
+> > We started seeing a large spike in latency ...
+> > Attachments: sentinel-error-sample.log
+From: aditya.rao@redwood.com
+To: soojin.lee@redwood.com, marissa.cole@redwood.com
+Cc: vivek.kulkarni@redwood.com
+Date: Tue, 5 Nov 2025 02:05:00 -0800
+Subject: Re: Nightly inference drop — urgent
+
+Quick triage from infra: summary below, attaching a short CSV and a utilization chart.
+
+Findings (00:30–01:20 PST):
+- Dedicated GPU pool for SentinelBank hit sustained GPU utilisation > 98% from 00:42–00:58.
+- KV-cache pressure increased dramatically (cache misses up ~4.7x) leading to token regen overhead.
+- Reserved throughput counters show the committed reservation was fully consumed at 00:45 and the next queued requests were placed on a lower-priority queue, causing the observed latency and 5xx retry behavior.
+- No kernel-level OOMs; this is queueing/backpressure rather than host failures.
+
+Attachments: gpu-util-20251105.png, pool-util-20251105.csv
+
+Immediate mitigation options (pick 1+):
+- Enable burst to hosted shared capacity for low-priority jobs (fastest; increases cost but reduces latency).
+- Temporarily raise reserved throughput for SentinelBank (requires exec approval; will consume reserved pool headroom).
+- Apply a routing rule to bypass KV-cache for specific background jobs and prioritize interactive traffic.
+
+I recommend enabling a short burst window (00:45–01:15) to clear the backlog and then follow with a scheduled provisioning change or routing rule. If we push burst now I can enable within ~5 minutes.
+
+— Aditya Rao
+Principal Infra Engineer, Redwood Inference
+aditya.rao@redwood.com
+
+> On Tue, Nov 5, 2025 at 01:28 AM soojin.lee@redwood.com wrote:
+> > Hi Luis — thanks for the heads up ...
+From: marissa.cole@redwood.com
+To: Luis Ramos <luis.ramos@sentinelbank.com>, soojin.lee@redwood.com
+Cc: aditya.rao@redwood.com
+Date: Tue, 5 Nov 2025 03:10:00 -0800
+Subject: Re: Nightly inference drop — urgent
+
+Luis — short customer update we can send right away (feel free to copy/paste):
+
+Hi Luis / SentinelBank team,
+
+Thanks for flagging this. Our engineering team has identified that your dedicated pool exhausted the reserved throughput during the 00:42–00:58 PST window which caused requests to fall back into lower-priority queues. We are taking the following immediate actions:
+
+- Enabling a short burst window to shared (hosted) capacity to clear the backlog and bring latency back to normal.
+- Applying a routing rule to prioritize interactive/explorer jobs while background batches run on deferred paths.
+- Post-incident analysis and a proposed provisioning change to prevent recurrence.
+
+We estimate normal service will be restored within 20–30 minutes of burst activation. We will confirm when it's complete and follow up with a short postmortem and recommended capacity changes.
+
+If you prefer we can also schedule a dedicated 30-minute call after the window to review recommended provisioning and traffic patterns.
+
+Best,
+Marissa Cole
+Account Executive, Redwood Inference
+marissa.cole@redwood.com
+
+Attachment: proposed-customer-note-draft.txt (small)
+
+> On Tue, Nov 5, 2025 at 02:05 AM aditya.rao@redwood.com wrote:
+> > Quick triage from infra: summary below ...
+From: vivek.kulkarni@redwood.com
+To: marissa.cole@redwood.com, soojin.lee@redwood.com, aditya.rao@redwood.com
+Date: Wed, 5 Nov 2025 06:47:00 -0800
+Subject: Re: Nightly inference drop — urgent
+
+Thanks team — I approve a one-time emergency burst/windows for SentinelBank to clear the backlog and avoid downstream batch failures. Please track the cost delta against SB-912-A and document the actions taken. Also:
+
+- Authorize an immediate temporary +25% reserved throughput for the 01:00–03:00 window if the backlog persists after the burst.
+- Aditya: add KV-cache metrics and per-route token consumption to the postmortem checklist.
+- Marissa/Soojin: schedule a follow-up with SentinelBank for 11/6 to go through mitigation and recommended provisioning.
+
+I'll sign off on any credits necessary after the postmortem. Keep me posted in the PD incident and on HubSpot.
+
+— Vivek Kulkarni
+VP, Customer Ops | Redwood Inference
+vivek.kulkarni@redwood.com
+
+> On Tue, Nov 5, 2025 at 03:10 AM marissa.cole@redwood.com wrote:
+> > Luis — short customer update we can send right away ...

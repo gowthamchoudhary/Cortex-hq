@@ -1,0 +1,124 @@
+Re: BYO keyflow operator handoff & ephemeral wrapping proposal
+
+From: Carlos Ramirez <c.ramirez@cloudcust.com>
+To: Mina Haddad <mina_haddad@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: procurement@cloudcust.com
+Date: 2026-11-01 09:12 -0800
+Subject: Request: customer BYO KMS operator handoff for on-prem deployment
+
+Hi Mina / Marissa,
+
+Thanks for the walkthrough last week. Per our security team we need a formal operator handoff and runbook for the BYO KMS/HSM integration as part of our on-prem Redwood Private deployment. Key items we'd like covered up front:
+
+- Expected KMIP/TLS handshake steps and ports that need to be opened from the Redwood operator container to our HSM cluster.
+- How key material is wrapped/unwrapped during model artifact encryption and during live inference (KV cache).
+- Recommended rotation window and automation hooks (what tooling we need to trigger rotation).
+- Evidence we can present to auditors: rotation logs, signing verification, and a sample key-rotation report.
+
+I've attached a short spreadsheet with our minimum compliance checks (acme-kms-requirements.xlsx). Can we schedule a 30-minute call tomorrow to review?
+
+Appreciate it,
+Carlos
+CloudCust Platform Security
+
+---
+Attachment: acme-kms-requirements.xlsx (spreadsheet, 72KB)
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Carlos Ramirez <c.ramirez@cloudcust.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: 2026-11-01 12:00 -0800
+Subject: Re: Request: customer BYO KMS operator handoff for on-prem deployment
+
+Carlos — thanks for sending this over and for the clear checklist.
+
+We can definitely produce an operator-focused runbook and a sample rotation evidence package. Quick notes / asks before the call (so we can tailor the runbook):
+
+- Which HSM vendor and interface are you planning to expose to Redwood? (KMIP v1.4, PKCS#11, or cloud-HSM bridge?)
+- Do you require split-key escrow or split-knowledge for unseal operations?
+- What rotation cadence will your auditors accept (monthly, quarterly)?
+- Do you want rotation automation that is triggered by your side (customer-initiated) or by Redwood operator tooling with a signed callback?
+
+Proposed 30-minute slot: 2026-11-02 10:00 PT. If that works I'll send a calendar invite. In the meantime attaching a short checklist and an internal operator checklist we use for handoffs (redwood_byo_checklist.md) — this will help pre-populate the runbook.
+
+Sincerely,
+Mina Haddad
+Director, Private Deployments — Redwood Inference
+mina_haddad@redwood.com | +1 (415) 555-0132
+
+---
+Attachment: redwood_byo_checklist.md (text, 8KB)
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Mina Haddad <mina_haddad@redwood.com>, Carlos Ramirez <c.ramirez@cloudcust.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2026-11-02 08:45 -0800
+Subject: Re: Request: customer BYO KMS operator handoff for on-prem deployment
+
+Looping in a few technical notes from the runtime side before the call. High-level proposal: ephemeral-wrapped keys with customer BYOK root. Key points:
+
+- Root key (customer-managed HSM) is used only for wrapping/unwrapping a short-lived envelope key. The envelope key is what the inference runtime stores in its KV cache (encrypted at rest).
+- Envelope keys expire by default after X hours (configurable per workload). On rotation we rotate the envelope and re-wrap; root rotations are handled as an operator event with explicit audit hooks.
+- Recommended operator ports: 5696/TCP (KMIP over TLS) + 443 for management callbacks. We avoid opening unrestricted admin ports to the HSM network.
+- Rotation evidence: operator produces a signed rotation manifest (SHA256) plus the KMIP request/response logs with timestamps. We suggest retention 12 months by default.
+
+I'll bring a short draft of the runbook to the call. Also linking a Confluence draft: https://confluence.redwood.ai/display/OPS/BYO+KMS+Patterns
+
+—Marissa
+Principal SRE, Redwood Inference
+
+> On Nov 1, 2026, at 09:12, Carlos Ramirez <c.ramirez@cloudcust.com> wrote:
+>
+> > Thanks for the walkthrough last week. Per our security team we need a formal operator handoff...
+
+From: security@finserv.co <security@finserv.co>
+To: Mina Haddad <mina_haddad@redwood.com>
+Cc: Carlos Ramirez <c.ramirez@cloudcust.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2026-11-02 10:02 -0800
+Subject: Re: Request: customer BYO KMS operator handoff for on-prem deployment
+
+Mina / team —
+
+A couple of procurement / legal guardrails from our side that we need reflected in the runbook and the operator SLA:
+
+- Rotation SLA: customer-initiated root key rotations must complete within a 24-hour window from request to confirmed re-wrap of active envelopes, with a rollback plan.
+- Auditability: rotation manifests must include requestor identity, operator request IDs, and signed checksums. Logs must be exportable in a machine-readable format (JSON) for audits.
+- Evidence for auditors: we will request a monthly rotation summary and an on-demand signed sample for the past 6 months.
+
+Please ensure the handoff doc explains how the Redwood operator authenticates to the HSM (mutual TLS + client certs preferred) and the process when the customer's HSM operator needs to rotate their own CA certs.
+
+Thanks,
+FinServ Security Team
+security@finserv.co
+
+> On Nov 2, 2026, at 08:45, Marissa Cole <marissa_cole@redwood.com> wrote:
+>
+> > Looping in a few technical notes from the runtime side before the call. High-level proposal...
+
+From: Mina Haddad <mina_haddad@redwood.com>
+To: Carlos Ramirez <c.ramirez@cloudcust.com>, security@finserv.co, procurement@cloudcust.com
+Cc: Marissa Cole <marissa_cole@redwood.com>, Kimberly Park <kimberly_park@redwood.com>, Vivek Kulkarni <vivek_kulkarni@redwood.com>
+Date: 2026-11-02 15:30 -0800
+Subject: Re: BYO keyflow operator handoff & ephemeral wrapping proposal — action items and draft runbook
+
+Team — thanks for the input. Short summary and next steps after today's review: 
+
+1) Runbook scope: operator handoff will include network diagram, KMIP handshake steps, sample mTLS cert config, rotation play (customer-initiated & operator-assisted), rollback procedure, and audit manifest template. Draft attached (operator_handoff_draft.pdf).
+
+2) Rotation cadence: per FinServ request we'll support customer-initiated root rotations with a 24-hour completion target. We'll add an optional automated verification step that emits a signed rotation manifest and stores a copy in the customer-managed audit bucket.
+
+3) Evidence and retention: default retention of rotation logs set to 12 months. We will provide a monthly rotation summary CSV and an on-demand signed sample of rotation events for up to 6 months. (See kms_rotation_matrix.csv attached).
+
+4) Operator access: mutual TLS + client certs required. Operator container will only open KMIP/TLS ports to the HSM subnet. No direct admin console access from operator.
+
+Action items (owners & ETA):
+- Marissa: finalize runtime re-wrap flow and sample manifest format (ETA: 2026-11-06).
+- Kimberly: produce encrypted transport network diagram + firewall rules (ETA: 2026-11-04).
+- Vivek: write the signed rotation manifest template and automated verification script (ETA: 2026-11-09).
+- Mina: consolidate final runbook + deliver to procurement and security (ETA: 2026-11-10).
+
+I'll share the updated runbook once Marissa and Kimberly upload their artifacts. If procurement needs an SOW-style blurb for ACME procurement, we'll provision one next week.
+
+Best,
+Mina
+Director, Private Deployments — Redwood Inference
+---
+Attachments: operator_handoff_draft.pdf (PDF, 210KB); kms_rotation_matrix.csv (CSV, 6KB)

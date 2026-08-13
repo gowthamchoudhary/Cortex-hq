@@ -1,0 +1,179 @@
+DataWave PoC — integration SLOs & 429 resilience
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Leah Park <lpark@datawave.com>, Mark Chen <mchen@datawave.com>
+Cc: alex.martinez@redwood.com, camila.reyes@redwood.com
+Date: 2028-07-22T15:12:00-07:00
+Subject: DataWave PoC — integration SLOs & 429 resilience
+
+Hi Leah / Mark — thanks again for the call today. Quick written recap + proposed next steps so we’re aligned going into the PoC.
+
+High-level PoC scope
+- SDK + server integration (structured output / tool calling example)
+- Auth model: API keys + optional OAuth for service accounts and token rotation
+- Routing: region-aware routing + tiered routing for prod vs. beta customers
+- Embeddings / reranker flow: batch vs. realtime options and dedup/upsert behavior
+- Resilience & economics: per-customer quotas, retry strategy for 429s, idempotency model, request IDs for debugging
+
+Success criteria (what DataWave wants)
+- Functional: ingest sample dataset and return reranker results with <2s median latency for 95th pct under target load
+- Operational: predictable cost per 1k queries, clear retry semantics, per-customer rate limits and health alerts
+
+Immediate risks we flagged
+- Burst traffic causing 429s and inconsistent retries leading to double-charges or duplicate embeddings
+- Missing deterministic idempotency keys for upserts (embeddings)
+- Lack of a common request id across retries makes debugging retries hard
+
+Attachments: redwood-poc-playbook.pdf (PoC plan), datawave-map.xlsx (mutual action plan)
+
+Proposed next steps
+1) Engineering sync (45m) to walk SDK snippet + idempotency pattern — Thu 2028-07-24 10:00 AM PT (suggested)
+2) Eng deliverable: SDK snippet + sample structured-output/tool-calling example before that call
+3) We’ll propose a per-customer quota policy and a recommended server-side retry policy to include in the PoC runbook
+
+Could you confirm the 7/24 time works and whether procurement wants a separate thread for contract/PO?
+
+Thanks — looking forward.
+
+—
+Monica Patel
+Enterprise Sales | Redwood Inference
+monica.patel@redwood.com | +1 (415) 555-0137
+
+From: Leah Park <lpark@datawave.com>
+To: Monica Patel <monica.patel@redwood.com>
+Cc: Mark Chen <mchen@datawave.com>
+Date: 2028-07-22T17:05:00-07:00
+Subject: Re: DataWave PoC — integration SLOs & 429 resilience
+
+Thanks Monica — great recap.  A few clarifications from our side before the engineering sync: 
+
+1) Quotas / bursts: we need per-customer burst capacity (short bursts up to 500 qps) without immediate fails; can your quota model support temporary burst buckets or burst credits?
+2) Cost visibility: can we get a ballpark token-cost estimate for reranker calls vs. standard generation to model economics during PoC?
+3) SDK behaviors: will Redwood SDK automatically attach a request-id and an idempotency key for POST/upsert calls, or do we need to manage that? We prefer server-generated determinism but can add client-side request ids if recommended.
+4) Security / compliance: please attach SOC 2 evidence link (we’ll need that for procurement).
+
+Also please include a short snippet showing structured output -> tool calling (we need to see how to parse tool instructions deterministically).
+
+Procurement (cc) will confirm whether they want a separate thread for the contract.
+
+Best,
+Leah
+Leah Park
+Head of ML Integrations, DataWave Systems
+lpark@datawave.com
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Leah Park <lpark@datawave.com>
+Cc: Mark Chen <mchen@datawave.com>, alex.martinez@redwood.com
+Date: 2028-07-22T18:00:00-07:00
+Subject: Re: DataWave PoC — integration SLOs & 429 resilience
+
+Leah — thanks, answers inline below and we’ll bring engineering-ready artifacts to the 7/24 sync.
+
+1) Burst model: Redwood supports configurable burst credits per API key. For PoC we can enable a 30s burst window up to your 500 qps target with soft-fallbacks to queueing or smaller model variants. We’ll include exact token-bucket params in the runbook.
+2) Token-costs: rough estimate for reranker (two-encoder pass) ~ 3–6x of a single gen token-charge — we’ll provide a more precise estimate after we profile your sample payloads during the PoC prep step.
+3) SDK behaviors: default SDK will attach X-Request-ID and a client-generated Idempotency-Key header for mutating/upsert calls. We can optionally offer server-side idempotency where Redwood issues the idempotency token and returns it in the first response for replay detection — engineering will scope.
+4) SOC2: link included in MAP folder (see Drive link in related links).
+
+We’ll attach the SDK snippet to the internal engineering thread; Alex / Aditya / Camila will own those pieces.
+
+See you Thu 7/24 10am PT — I’ll send the calendar invite.
+
+—
+Monica
+From: Monica Patel <monica.patel@redwood.com>
+To: aditya.rao@redwood.com, camila.reyes@redwood.com, alex.martinez@redwood.com
+Date: 2028-07-23T09:10:00-07:00
+Subject: DataWave PoC: ask list + 429/resilience constraints
+
+Team — forwarding DataWave asks (see Leah’s email below). High level asks we need to prepare for the 7/24 sync:
+
+Quoted: 
+> From: Leah Park <lpark@datawave.com>
+>  Date: 2028-07-22 17:05
+>  Subject: Re: DataWave PoC — integration SLOs & 429 resilience
+>  They need per-customer bursts to 500 qps, token-cost estimates, SDK behavior on request ids & idempotency, SOC2 link, and a structured-output snippet.
+
+Action items (owners & expectations):
+- Aditya Rao: deliver SDK snippet (JS + Python) showing structured-output/tool-call example and header patterns (X-Request-ID, Idempotency-Key). Target: 2028-07-24 12:00 PM PT. Deliverable: sdk-snippet.txt in thread + paste in meeting notes.
+- Camila Reyes: auth options doc (API-key rotation, OAuth for service accounts, KMS integration hints). Target: 2028-07-24 EOD.
+- Alex Martinez: routing & quota proposal. Include: per-api-key token bucket config, burst credits (30s window), fallback policy (smaller model / queued batch endpoint), and circuit-breaker thresholds. Target: 2028-07-25 EOD.
+- Engineering guidance (all): propose server-side retry policy for 429s and idempotency guidance: see my draft below.
+
+Draft retry & idempotency guidance (please edit):
+- 429 handling: honor Retry-After header when present. If absent, apply exponential backoff with full jitter: base 200ms, backoff factor 2, cap 30s. Max retries: 5.
+- Idempotency: require client-supplied Idempotency-Key for POST/upsert semantics on embeddings and reranker jobs. For embeddings upserts, recommend deterministic content-hash (sha256 of normalized input) combined with customer id to prevent cross-tenant collisions. Server should detect duplicate idempotency-key and return 200 + existing resource id.
+- Request IDs: require X-Request-ID on all calls. If not present, SDK injects one. Store request-id in logs and surface it in error payloads for customer debugging.
+- Retry semantics & billing: document that retries may be billed depending on whether the server accepted the request before failing (we’ll add visibility hooks in Console).
+- Circuit-breaker: per-api-key failure rate threshold (e.g. 5xx/429 > 10% over 60s) triggers short cooldown and fallback to queued batch path.
+
+Risks to call out: retries without idempotency keys => duplicates; naive exponential backoff may still be too aggressive for hotkeys; missing request-id complicates SRE troubleshooting.
+
+Please reply with edits to the draft above and add any ops-level concerns.
+
+— Monica
+From: Aditya Rao <aditya.rao@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, camila.reyes@redwood.com, alex.martinez@redwood.com
+Date: 2028-07-23T11:45:00-07:00
+Subject: Re: DataWave PoC: ask list + 429/resilience constraints
+
+Monica / team — putting the SDK snippet here (lightweight JS/Python pseudo). I’ll upload a text file to the thread as sdk-snippet.txt.
+
+--- JS snippet (pseudo) ---
+// send request with request id + idempotency
+const body = { query: 'rerank this list', inputs: [...], options: { structured_output: true } }
+const headers = {
+  'Authorization': `Bearer ${API_KEY}` ,
+  'X-Request-ID': generateUuid(), // SDK injects if missing
+  'Idempotency-Key': generateDeterministicKey(body, customerId)
+}
+try {
+  const resp = await fetch(endpoint, { method: 'POST', headers, body: JSON.stringify(body) })
+  if (resp.status === 429) {
+    const retryAfter = resp.headers.get('Retry-After')
+    if (retryAfter) {
+      await sleep(parseInt(retryAfter) * 1000)
+    } else {
+      // exponential backoff w/ full jitter
+      await backoffWithFullJitter({ base: 200, cap: 30000, factor: 2, attempts: 5 })
+    }
+    // on retry, reuse same Idempotency-Key and X-Request-ID
+  }
+} catch (e) { 
+  // surface X-Request-ID in logs and error payloads
+}
+
+--- Python snippet (pseudo) ---
+# same idea: attach X-Request-ID + Idempotency-Key, honor Retry-After, backoff with jitter
+
+Notes on idempotency for embeddings: use sha256(normalize(input)) + customer_id as Idempotency-Key for upsert flow. Server should return 200 + existing_id for duplicate keys.
+
+Operational suggestion on retries: set max_retries=5, but prefer client-side queueing for high-volume bursts; server-side will provide a `retry-suggested` field when best-effort queuing is used.
+
+I’ll upload sdk-snippet.txt now.
+
+— Aditya
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Leah Park <lpark@datawave.com>
+Cc: Mark Chen <mchen@datawave.com>, procurement@datawave.com
+Date: 2028-07-25T09:32:00-07:00
+Subject: Re: DataWave PoC — integration SLOs & 429 resilience
+
+Leah — quick note to confirm our engineering sync for Thu 7/24 10am PT (calendar invite sent).
+
+Deliverables we’ll bring to the call:
+- SDK snippets (JS/Python) showing X-Request-ID + Idempotency-Key and structured-output example (Aditya)
+- Auth options + token rotation notes (Camila)
+- Routing & quota proposal with burst credit params + fallback policy (Alex)
+- PoC MAP + SOC2 link (attached in Drive)
+
+Links: HubSpot deal: https://app.hubspot.com/deals/1234567890 — MAP in Drive: https://drive.google.com/drive/folders/0Bxyz
+
+If procurement wants a separate thread, please let me know; otherwise we’ll keep procurement cc’d.
+
+Thanks — see you on Thu.
+
+— Monica
+

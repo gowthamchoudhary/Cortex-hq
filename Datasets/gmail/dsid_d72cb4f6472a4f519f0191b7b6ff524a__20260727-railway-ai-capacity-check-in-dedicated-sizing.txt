@@ -1,0 +1,192 @@
+Follow-up & sizing clarifications for Dedicated capacity (Railway AI)
+
+From: Vivek Kulkarni <vivek@redwood.com>
+To: Sam Reyes <sam@railway.ai>
+Cc: Ben Carter <ben@redwood.com>, Marissa Cole <marissa@redwood.com>
+Date: Tue, 27 Jul 2026 15:12:00 -0700
+Subject: Follow-up & sizing clarifications for Dedicated capacity (Railway AI)
+
+Hi Sam —
+
+Thanks again for the call today. Quick recap to make sure our team sizes a Dedicated pool that matches Railway AI's expected workload and constraints. Below are the questions we walked through on the call plus a few follow-ups that will materially affect GPU mix and concurrency guidance: 
+
+1) Traffic / TPS profile
+- What you told us: baseline ~150 TPS with brief peaks to ~400 TPS. Can you confirm peak-window length (e.g., seconds vs minutes) and how often those peaks occur?
+
+2) Token mix (input / output)
+- Please share either raw samples or an aggregated token distribution (counts by request length). Typical profiles we see change GPU utilization by ~20–40% between short (<=64 token) and long (>=512 token) tails.
+
+3) Latency SLOs
+- You mentioned wanting p99-ish latency to be low. Can you confirm the latency target (p95/p99) for the production model and whether streaming is acceptable for longer outputs?
+
+4) Model & KV cache behavior
+- Which model(s) do you intend to serve? Any need for large KV caches (long context / multi-turn state) per session?
+
+5) Deployment preference
+- Are you leaning toward Dedicated-only, Dedicated + Hosted fallback, or Dedicated in a Private VPC? Compliance and procurement requirements will matter here.
+
+6) Burst and autoscale
+- Do you want a small reserved pool with burst/overage to handle spikes, or an always-on steady-state pool sized for peak?
+
+If you can attach: (a) a small traffic extract (first 24–72 hours), (b) token distribution summary, and (c) any latency SLO language from procurement — we’ll turn this into a preliminary sizing worksheet and recommended GPU mix.
+
+I’ve attached our reserved_capacity_workbook.xlsx template for you to fill at a high level; we can do a co-edit during a follow-up session if that’s easier.
+
+Next steps we propose:
+- You send the traffic extract + token distribution (or say if the sample we requested is sensitive).
+- We run a quick back-of-envelope and propose a GPU mix + concurrency settings within 48 business hours.
+- Schedule a 1-hr solutioning session to review the worksheet and operational controls (autoscale, burst, fallback to Hosted).
+
+Thanks — feel free to reply inline.
+
+Best,
+Vivek Kulkarni
+Head of Sales Engineering, Redwood Inference
+attachments: reserved_capacity_workbook.xlsx (xlsx)
+
+
+From: Sam Reyes <sam@railway.ai>
+To: Vivek Kulkarni <vivek@redwood.com>
+Cc: Ben Carter <ben@redwood.com>, Marissa Cole <marissa@redwood.com>, procurement@railway.ai
+Date: Tue, 27 Jul 2026 18:04:00 -0700
+Subject: Re: Follow-up & sizing clarifications for Dedicated capacity (Railway AI)
+
+Vivek —
+
+Thanks for the clear recap. Answers inline: 
+
+1) Peak windows
+- Peaks are short (typically 30–120s) and occur ~6–8 times per day tied to batch report jobs and morning traffic surges. We can provide a 72-hour extract; attaching now: traffic_sample_q1.csv
+
+2) Token mix
+- Average request: ~250 input tokens, ~80 output tokens. Heavy tail: ~5% of requests > 1k tokens. We'll attach an aggregated distribution file shortly.
+
+3) Latency SLOs
+- Target: p95 < 120ms for typical chats, p99 < 350ms acceptable for longer generative flows. Streaming is fine for the long outputs.
+
+4) Model & KV cache
+- Primary model is Llama-2-13B Chat (we may evaluate a 30B variant for specific endpoints). We do maintain session history per user (~20 turns) and plan to use KV caching where helpful.
+
+5) Deployment preference
+- We want Dedicated capacity in a Private VPC for data governance. Hosted fallback is acceptable as long as fallbacks are opt-in and encrypted.
+
+6) Burst and autoscale
+- Prefer a reserved steady-state sized for 1.5x baseline with burst capacity for the short peaks. Budget constraints mean we can’t size for sustained peak.
+
+Procurement: procurement@railway.ai (CCed) — ballpark monthly budget: $65k–90k depending on GPU mix and SLA.
+
+Attaching: traffic_sample_q1.csv
+
+Thanks,
+Sam Reyes
+Head of ML Infrastructure, Railway AI
+attachments: traffic_sample_q1.csv (csv)
+
+On Tue, Jul 27, 2026 at 3:12 PM Vivek Kulkarni <vivek@redwood.com> wrote:
+> Hi Sam —
+>
+> Thanks again for the call today. Quick recap to make sure our team sizes a Dedicated pool that matches Railway AI's expected workload and constraints. Below are the questions we walked through on the call plus a few follow-ups that will materially affect GPU mix and concurrency guidance: 
+>
+> [snip – original message]
+
+
+From: Ben Carter <ben@redwood.com>
+To: Vivek Kulkarni <vivek@redwood.com>, Sam Reyes <sam@railway.ai>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: Wed, 28 Jul 2026 09:08:00 -0700
+Subject: Re: Follow-up & sizing clarifications for Dedicated capacity (Railway AI)
+
+Sam / Vivek —
+
+Thanks for the details, Sam. A couple of notes from an ops sizing perspective and a quick ask to make our estimate more accurate: 
+
+- Short peaks (30–120s) favor burstable capacity with fast autoscale (seconds-level). That pushes us toward some H100 capacity for headroom + A100s for steady throughput.
+- With ~250 input / 80 output avg tokens and 5% heavy tail (>1k), we should model tail-heavy jobs separately when estimating GPU memory pressure.
+- Streaming acceptance is good — it allows us to reduce perceived latency for long outputs while still amortizing GPU work.
+
+Could you confirm:
+- Typical concurrent sessions during peak (approx number of active sessions simultaneously making requests)? Earlier you mentioned ~120 but want to confirm.
+- Any hard constraints on hyperthreading/affinity or GPU families (we can mix H100/A100/L40S but need to know disallowed SKUs).
+
+I’ll draft a quick GPU mix note and attach it (gpu_mix_notes.pdf) with two options: conservative (more H100) and cost-optimized (A100-heavy + autoscale). If you’re fine, I’ll run the spreadsheet with both mixes and share numbers tomorrow.
+
+—Ben
+Ben Carter
+Principal Solutions Engineer, Redwood Inference
+attachments: gpu_mix_notes.pdf (pdf)
+
+On Tue, Jul 27, 2026 at 6:04 PM Sam Reyes <sam@railway.ai> wrote:
+> Vivek —
+>
+> Thanks for the clear recap. Answers inline: 
+>
+> [snip]
+
+
+From: Sam Reyes <sam@railway.ai>
+To: Ben Carter <ben@redwood.com>, Vivek Kulkarni <vivek@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>, procurement@railway.ai
+Date: Thu, 29 Jul 2026 08:22:00 -0700
+Subject: Re: Follow-up & sizing clarifications for Dedicated capacity (Railway AI)
+
+Ben / Vivek —
+
+Confirming concurrent details: peak concurrent sessions ~120–140; typical concurrent in baseline ~45–60.
+
+Model detail: primary is Llama-2-13B Chat for most endpoints, we will pilot Llama-2-30B for the analytics endpoint (low QPS, high token). We cannot share raw prompt templates but can provide an aggregated token distribution (attached: token_distribution_summary.json).
+
+Deployment: Dedicated in Private VPC. No on-prem / air-gapped requirement. We will need KMS integration for keys.
+
+Procurement note: we prefer a two-stage approach — initial 6-month reserved pool with options to add burst credit. Procurement will share a short RFP and PO flow after initial sizing.
+
+Thanks,
+Sam
+Sam Reyes
+Head of ML Infrastructure, Railway AI
+attachments: token_distribution_summary.json (json)
+
+On Wed, Jul 28, 2026 at 9:08 AM Ben Carter <ben@redwood.com> wrote:
+> Sam / Vivek —
+>
+> Thanks for the details, Sam. A couple of notes from an ops sizing perspective and a quick ask to make our estimate more accurate: 
+>
+> [snip]
+
+
+From: Vivek Kulkarni <vivek@redwood.com>
+To: Sam Reyes <sam@railway.ai>
+Cc: Ben Carter <ben@redwood.com>, Marissa Cole <marissa@redwood.com>, procurement@railway.ai
+Date: Thu, 29 Jul 2026 11:02:00 -0700
+Subject: Re: Follow-up & sizing clarifications for Dedicated capacity (Railway AI)
+
+Sam —
+
+Appreciate the quick confirmations. Based on the inputs (150 TPS baseline, short high-frequency peaks, avg token mix, 120–140 concurrent peak sessions, Llama-2-13B primary) here’s what we’ll do next and a preliminary recommendation: 
+
+Immediate next steps (we’ll own these and iterate):
+- Ben and I will run the reserved_capacity_workbook.xlsx against the traffic extract + token distribution and produce two candidate configurations: (A) conservative H100-focused pool for headroom and low-latency safeguards, and (B) cost-optimized A100-heavy pool with autoscale for burst windows. Expect a side-by-side cost and latency projection within 48 business hours.
+- We’ll include guidance on KV cache provisioning and session-affinity settings to hit your p95/p99 targets under the mixed token distribution.
+- We will draft a Private VPC deployment checklist (KMS, IP whitelisting, 3rd-party audit requirements) for procurement.
+
+Preliminary sizing note (very rough):
+- Baseline steady-state: ~6–8 A100 GPUs (for sustained 150 TPS under Llama-2-13B assumptions)
+- Burst headroom: equivalent of ~3–4 H100 GPUs to absorb short 400 TPS spikes with minimal queuing (or alternately, 4 additional A100s with aggressive autoscale and pre-warmed sandboxes)
+
+Why mixed GPU suggestion: H100 provides lower latency for large batches and heavy-tail token jobs; A100 is more cost-effective for sustained throughput. We’ll quantify this with simulation.
+
+Please confirm if KMS integration and Private VPC are non-negotiable — we’ll bake that into the contract path and pricing. Also confirm preferred times for a 60-minute solutioning session next week (Vivek/Ben available Tue/Wed 9–12 PT).
+
+We’ll attach the detailed worksheet and GPU mixes in the next email.
+
+Best,
+Vivek Kulkarni
+Head of Sales Engineering, Redwood Inference
+attachments: reserved_capacity_workbook.xlsx, gpu_mix_notes.pdf (pdf)
+
+On Thu, Jul 29, 2026 at 8:22 AM Sam Reyes <sam@railway.ai> wrote:
+> Ben / Vivek —
+>
+> Confirming concurrent details: peak concurrent sessions ~120–140; typical concurrent in baseline ~45–60.
+>
+> [snip]
+

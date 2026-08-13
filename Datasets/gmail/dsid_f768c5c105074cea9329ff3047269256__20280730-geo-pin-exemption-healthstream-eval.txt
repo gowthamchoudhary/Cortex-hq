@@ -1,0 +1,145 @@
+Geo pin + fallback suppression request — HealthStream pilot
+
+From: Mary Kline <mary.kline@healthstream.com>
+To: sean_gallagher@redwood.com
+Date: Tue, 30 Jul 2028 09:15:00 -0700
+Subject: Geo residency + model constraint for pilot
+
+Sean —
+
+Thanks again for the demo yesterday. We are preparing our security/compliance packet for the pilot and have one firm requirement: all inference for the pilot must remain in US-only infrastructure and be served by the vendor-verified model variant we validated (redwood-model-v2-us). HealthStream cannot accept automatic fallback to other regions or alternate model variants for this pilot due to our state-level data residency commitments and internal audit controls.
+
+Concretely we need:
+- Routing pinned to redwood-model-v2-us (no fallbacks).
+- Audit logs showing model selection and exact instance region per request.
+- Confirmation of KMS/HSM boundary and retention window (30d).
+
+I've attached our short request doc for your security team (healthstream_geo_req.pdf). Can you confirm feasibility and timeline? We are targeting a limited pilot next month and this is blocking internal sign-off.
+
+Thanks,
+Mary Kline
+VP Product, Integrations
+HealthStream
+
+---
+Attachment: healthstream_geo_req.pdf (PDF, 48KB)
+From: Sean Gallagher <sean_gallagher@redwood.com>
+To: irene_choi@redwood.com, lauren_bishop@redwood.com, dylan_brooks@redwood.com
+Cc: 
+Date: Tue, 30 Jul 2028 10:02:00 -0700
+Subject: Fwd: Geo residency + model constraint for pilot
+
+Team — forwarding HealthStream's ask (see attached). TL;DR: pilot must be pinned to redwood-model-v2-us and there must be zero-fallback off-region. Mary says this is a hard compliance requirement for their auditors and they won't sign the pilot otherwise.
+
+Please reply with: feasibility, major blockers, and a proposed rollout plan (canary, capacity reservation, metrics we should expose). Also flag any contract / SLA exceptions we would need to give them.
+
+I'm putting this in the queue for product/infra/ops sync today at 3pm if we can have answers before then.
+
+Thanks — Sean
+Sean Gallagher
+Director, Partnerships 
+Redwood Inference
+
+On Tue, 30 Jul 2028 at 09:15 AM Mary Kline <mary.kline@healthstream.com> wrote:
+> Sean —
+> 
+> Thanks again for the demo yesterday... [trimmed]
+> 
+> ---
+> Attachment: healthstream_geo_req.pdf (PDF, 48KB)
+From: Irene Choi <irene_choi@redwood.com>
+To: sean_gallagher@redwood.com, lauren_bishop@redwood.com, dylan_brooks@redwood.com
+Date: Tue, 30 Jul 2028 11:26:00 -0700
+Subject: Re: Fwd: Geo residency + model constraint for pilot
+
+Sean / team —
+
+Short answer: doable, but with operational and capacity tradeoffs. Notes below: 
+
+1) Geo pinning: we can implement a strict routing policy that requires requests for HealthStream to only be routed to the redwood-model-v2-us variant and to servers in a US region (we'd use us-west-2 by default). This is a routing config change + RBAC (customer account flag).
+
+2) No-fallback requirement: marking this as "no automated fallback" is risky. Typical fallback behavior (to keep apps alive during capacity pressure) is the main tool we have for graceful degradation. Two options: 
+   - Strict no-fallback (what the customer asked): we can enforce it, but we must reserve capacity for the pilot (dedicated pool / committed instances) and add a capacity-surge SLA. If demand exceeds reservation, requests will be throttled (HTTP 429) rather than routed to other variants. We should document outage behavior clearly.
+   - Controlled fallback with cryptographic boundary: allow fallback only to a variant that meets attestations (same model weights, same KMS) and only within US regions; this reduces outage risk but may not satisfy their auditors.
+
+3) Auditing / logs: we can emit model-selection headers and per-request region metadata to their logs. We'll need to maintain longer retention for this customer during the pilot (30 days as requested). We should capture perms for Audit: who can view those logs inside Redwood.
+
+4) KMS/HSM: Key boundary is feasible if we use their customer-managed keys or a dedicated Redwood key umbrella. Need legal sign-off on key access windows.
+
+5) Implementation effort & timeline:
+   - Routing + model pin: ~3 engineer-days (config + e2e test).
+   - Dedicated pool & reservation plan: ops + infra work, ~1-2 weeks to provision and smoke test.
+   - Extra logging & retention tweaks: 2-3 engineer-days.
+
+I attached a draft runbook for the no-fallback behavior (fallback_runbook_draft.md) with failure modes and recommended alerting.
+
+Risks: throttles under peak will look like errors to the app; we need to make sure HealthStream is OK with 429s during spikes.
+
+Happy to discuss at 3pm.
+
+—Irene
+Irene Choi
+Sr. Engineer, Inference Infrastructure
+Redwood Inference
+
+---
+Attachment: fallback_runbook_draft.md (Markdown, 6KB)
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: sean_gallagher@redwood.com, irene_choi@redwood.com, dylan_brooks@redwood.com
+Date: Tue, 30 Jul 2028 13:04:00 -0700
+Subject: Re: Fwd: Geo residency + model constraint for pilot
+
+Thanks, Irene — good breakdown. A few legal/product asks to unblock contract and security review: 
+
+- Confirm the exact audit fields (we need field names and retention semantics to add to the customer's MSA appendix).
+- Confirm whether HealthStream will accept a dedicated Redwood-managed key (with strict access controls) or if they require their own CMK. Their procurement prefers CMK but they sometimes accept a vendor key with attestations.
+- We need an explicit statement of behavior under overload: "requests will be throttled (429) when reserved capacity is exhausted". That needs to be in the pilot SOW.
+
+If we can answer those 3 items today, I'll draft the SOW clause and run it past Legal. Also, Lauren asks: can we provide an explicit cost estimate for a 1-month dedicated reservation (baseline + 2x buffer)? Ops, please provide a ballpark.
+
+—Lauren
+Lauren Bishop
+Head of Product, Platform
+Redwood Inference
+
+On Tue, 30 Jul 2028 at 11:26 AM Irene Choi <irene_choi@redwood.com> wrote:
+> Sean / team —
+> 
+> Short answer: doable, but with operational and capacity tradeoffs... [trimmed]
+From: Dylan Brooks <dylan_brooks@redwood.com>
+To: sean_gallagher@redwood.com, irene_choi@redwood.com, lauren_bishop@redwood.com
+Date: Tue, 30 Jul 2028 16:38:00 -0700
+Subject: Re: Fwd: Geo residency + model constraint for pilot
+
+Team —
+
+Operational plan (high level) to satisfy HealthStream's ask while minimizing blast radius: 
+
+1) Provision a dedicated pool in us-west-2 (min capacity: 4 r4-like instances equiv for pilot) — this will be reserved and billed as dedicated capacity for one month.
+
+2) Routing policy (config snippet):
+   - route_rules: [{"account": "HealthStream", "model": "redwood-model-v2-us", "regions": ["us-west-2"], "allow_fallback": false}]
+   - healthcheck: strict (no cross-region failover)
+
+3) Monitoring & SLOs:
+   - Emit per-request headers: X-Redwood-Model, X-Redwood-Region, X-Redwood-Node
+   - Retain request logs 30d for HealthStream pilot; expose a read-only link to HealthStream security for audit via secure share.
+
+4) Failure mode: when pool exhausted -> 429 returned. Add client-side retry guidance (exponential backoff + jitter).
+
+5) Cost estimate: rough ballpark for 1 month reserved pool + network & storage: $12k–$18k (final after exact sizing). I'll follow up with finance to refine.
+
+Next steps for today:
+- Irene: confirm exact engineering days and clear any infra quotas.
+- Lauren: draft the SOW sentence and confirm key approach (Redwood CMK vs customer CMK).
+- Sean: please confirm whether HealthStream will accept the throttling behavior or insists on a guaranteed failover path.
+
+I'll prepare a short ops runbook from fallback_runbook_draft.md and share.
+
+—Dylan
+Dylan Brooks
+Engineering Manager, Platform Operations
+Redwood Inference
+
+On Tue, 30 Jul 2028 at 10:02 AM Sean Gallagher <sean_gallagher@redwood.com> wrote:
+> Team — forwarding HealthStream's ask (see attached)... [trimmed]

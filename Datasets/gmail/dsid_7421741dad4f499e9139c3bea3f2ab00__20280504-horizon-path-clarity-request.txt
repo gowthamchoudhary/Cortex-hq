@@ -1,0 +1,102 @@
+Horizon: sudden throughput drop + elevated 5xxs — need path clarity
+
+From: Tom Ellis <tom.ellis@horizonretail.com>
+To: jonas.weber@redwood.com
+Cc: ops@horizonretail.com
+Date: 2028-05-04T09:17:00-07:00
+Subject: High latency and 5xx spike impacting checkout (Horizon)
+
+Jonas / Redwood team,
+
+We started seeing a large spike in checkout latency this morning around 08:50 PDT. 95th percentile token latency has tripled and our observability is showing a sharp rise in 502/504 errors against the Redwood inference endpoint used by our payment service. Throughput is also down ~30% compared to yesterday. This is causing failed checkout attempts for customers in us-west-2.
+
+Quick facts:
+- First seen: ~08:50 PDT
+- Region: us-west-2
+- Impact: ~30% throughput drop, 502/504s up from 0.2% to ~4.8%
+- Sample request traces attached (horizon_trace_0504.json)
+
+We need an urgent explanation and ETA for mitigation. This is high-severity for our ops and revenue teams.
+
+Tom Ellis
+Head of Platform, Horizon Retail
+ops@horizonretail.com
+
+[attachment: horizon_trace_0504.json (application/json)]
+From: jonas.weber@redwood.com
+To: Tom Ellis <tom.ellis@horizonretail.com>
+Cc: ops@horizonretail.com, marissa_cole@redwood.com, olga_petrov@redwood.com, vivek_kulkarni@redwood.com
+Date: 2028-05-04T09:29:00-07:00
+Subject: Re: High latency and 5xx spike impacting checkout (Horizon)
+
+Tom — thanks for the heads up and for the traces. I'm escalating to our network & SRE leads immediately. Initial acknowledgement: we see the same telemetry on our side (elevated 5xx and higher tail latency for requests originating from us-west-2 to your pinned model endpoint).
+
+Immediate next steps from our side:
+1) Marissa and Olga will start path-tracing and DNS/peering checks; Vivek will surface any capacity/NAT errors from the Dedicated pool serving this customer.
+2) We'll correlate your traces with our ingress logs and return a short incident summary and mitigation ETA within 60 minutes.
+
+Apologies for the disruption — will update fast.
+
+Jonas Weber
+AM, Strategic Accounts — Redwood Inference
+jonas_weber@redwood.com
++1 415-555-0173
+From: marissa_cole@redwood.com
+To: jonas.weber@redwood.com, olga_petrov@redwood.com, vivek_kulkarni@redwood.com
+Cc: Tom Ellis <tom.ellis@horizonretail.com>, ops@horizonretail.com
+Date: 2028-05-04T10:02:00-07:00
+Subject: Re: High latency and 5xx spike impacting checkout (Horizon) — initial findings
+
+Quick triage summary (10:02 PDT):
+- Path traces: multiple request flows from Horizon's us-west-2 CIDR are being routed through an alternate peering circuit (peer-id: aws-peer-13) with higher RTTs starting ~08:48 PDT.
+- DNS: We observed a concurrent short TTL change on the model gateway CNAME that caused some request fans to resolve to a different edge cluster. TTL change timestamp: 08:46 PDT.
+- Firewall/NAT: SRE reports transient conntrack exhaustion on the Dedicated pool egress gateway around 08:55 PDT — which aligns with the 502/504s. Logs attached (peering-routes-0504.txt).
+
+Hypothesis: A combination of a DNS/edge re-resolution + temporary peering circuit shift increased RTT and pushed some traffic through a different NAT pool that experienced conntrack pressure, producing timeouts and 5xxs.
+
+Immediate mitigations in flight:
+- Forcing a targeted DNS re-resolve to steer Horizon back to the preferred edge cluster (in progress).
+- Expanding conntrack table size on the Dedicated egress gateway for the Horizon tenant (low-risk config).
+- Activating a short canary on the alternative peering to measure true RTT before a full reroute.
+
+I've attached our runbook excerpt for peering/DNS incidents and a snippet of the route flips. Will post updates as we validate each step.
+
+Attachments: peering-routes-0504.txt, redwood_runbook_v2.pdf
+
+— Marissa
+Marissa Cole
+Principal SRE, Redwood Inference
+From: jonas.weber@redwood.com
+To: Tom Ellis <tom.ellis@horizonretail.com>, ops@horizonretail.com
+Cc: marissa_cole@redwood.com, olga_petrov@redwood.com, vivek_kulkarni@redwood.com, leadership@redwood.com
+Date: 2028-05-04T11:30:00-07:00
+Subject: Status update: mitigation actions + ETA (Horizon)
+
+Tom — brief update at 11:30 PDT:
+- What we changed: forced DNS re-resolve for Horizon's model endpoint, expanded conntrack limits on the Dedicated egress gateway serving your tenant, and started a controlled reroute back to the preferred peering circuit.
+- Observed effect: 95th percentile latency trending down (was ~1.9s, now ~1.1s), 5xx rate reduced from peak ~4.8% to ~0.9% in the last 15 minutes. Throughput recovering to ~92% of baseline.
+- ETA: We'll continue monitoring for 2 more hours. If metrics remain stable for 30 minutes we'll call this mitigated and will hold a post-incident summary for 24 hours.
+
+Root-cause (preliminary): simultaneous TTL/CNAME change triggered client-side re-resolution around a maintenance window, combined with a transient NAT/conntrack pressure on the Dedicated egress gateway. The re-resolution pushed ~20% of traffic through a peer circuit with higher RTT which amplified the conntrack pressure.
+
+Next steps:
+1) Postmortem and permanent fix options: pinning resolution to stable edge clusters for Horizon during peak windows, conntrack tuning, and a more conservative DNS TTL policy for model gateways.
+2) We will open a Jira (NET-4321) and share the full traces & config changes.
+3) We can schedule a short bridge with your ops and our SREs if you'd like a walk-through.
+
+I appreciate your patience — one action item for you: please confirm if you want us to schedule a 30-minute technical bridge at 13:00 PDT today.
+
+— Jonas
+From: Tom Ellis <tom.ellis@horizonretail.com>
+To: jonas.weber@redwood.com
+Cc: ops@horizonretail.com, marissa_cole@redwood.com
+Date: 2028-05-04T15:42:00-07:00
+Subject: Re: Status update: mitigation actions + ETA (Horizon)
+
+Thanks Jonas — the improvement is clear on our side. We appreciate the rapid response and the detailed interim fix.
+
+Please go ahead and open the Jira and schedule the 13:00 PDT bridge; include a short agenda: 1) timeline & root cause summary, 2) permanent mitigations, 3) roll-back/rollback criteria for any changes. Also include an item for a DNS TTL policy change (we want to avoid unexpected re-resolves during our peak).
+
+Tom
+Tom Ellis
+Head of Platform, Horizon Retail

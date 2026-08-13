@@ -1,0 +1,120 @@
+Post-call: Multilingual fit + recommended eval plan and risk log
+
+From: Diego Fernandez <diego@redwood.ai>
+To: Lina Vogel <lina@linguae.co>, Taro Saito <taro.saito@linguae.co>
+Cc: Neha Kapoor <neha@redwood.ai>, Marcus Lin <marcus@redwood.ai>
+Date: 2027-03-22T09:12:00-07:00
+Subject: Post-call: Multilingual fit + recommended eval plan and risk log
+
+Hi Lina / Taro —
+
+Thanks again for the call this morning. Quick recap and concrete next steps so we can move to a scoped pilot: 
+
+Key takeaways
+- Primary goals: improve customer-facing QA for EU retail sites (DE, FR, ES) and support Japanese/Korean product labeling workflows in APAC.
+- Volume profile: ~1.2M monthly inference tokens across support and QA generation, bursts during marketing campaigns.
+- Main risk areas you flagged: German legal phrasing correctness and Japanese legal/regulatory term hallucinations.
+
+Recommended immediate actions (proposed timeline in parentheses):
+1) Run a focused qualification suite for the priority locales (DE, FR, ES, JP, KR) using our standard prompt sets + your sample queries (3 business days) — deliverable: locale-level pass/fail and top failure categories.
+2) Model candidates: start with Llama-3-70b-qat (baseline), Redwood-Delta-16b (latency-friendly), and a quantized Red-8q variant for cost testing. We'll include a smaller safety/semantic-checker model for post-filtering of legal outputs.
+3) Prompt & eval artifacts: I'll share a starter prompt set and benchmark snapshots; please add 100-150 real sample queries per locale if possible.
+4) Risk log: we will track hallucination frequency, terminology drift, and latency regressions per model.
+
+Attachments: linguae_prompt_sets_v1.jsonl (starter prompts), per-locale-benchmarks-2027-03-20.html (recent run), linguae_eval_summary_q1_2027.xlsx (template for your samples).
+
+Next steps for Linguae: please confirm priority locales and upload your sample queries by EOD Friday (2027-03-26).
+Next steps for Redwood: we'll kick the qualification runs once we have the samples; expect first pass results by 2027-03-30.
+
+Owners: Diego (project lead), Neha (evaluation configs & infra), Marcus (model tuning & safety filters)
+
+One ask: if there are any regulator-specific glossaries or reference docs (e.g., DE legal glossary), please attach with the sample set — that will reduce noise in the first pass.
+
+Thanks —
+Diego Fernandez
+Director, Solutions Sales | Redwood Inference
+phone: +1-415-555-0182
+
+From: Lina Vogel <lina@linguae.co>
+To: Diego Fernandez <diego@redwood.ai>
+Cc: Taro Saito <taro.saito@linguae.co>
+Date: 2027-03-22T12:05:00+01:00
+Subject: Re: Post-call: Multilingual fit + recommended eval plan and risk log
+
+Diego — thanks for the clear recap. We can confirm the priority list: DE, FR, ES, JP are top-4; KR is lower priority but still useful to include if cost permits.
+
+A few notes/questions: 
+- We can share 150 queries per EU locale by Friday. For JP we can only provide 80 curated queries this week; we have an internal concern: our legal reviewers saw hallucination of statutory terms in a quick PoC — especially substitution of incorrect article numbers in DE and invented clause names in JP. Can the safety/semantic checker you mentioned be tuned to flag legal tokens and prefer verbatim glossary matches?
+- Are there any constraints around using the quantized Red-8q variant for legal/regulatory output? We worry about small-model degradation for nuanced legal language.
+
+I'll upload the sample spreadsheets to the Drive link you provided and cc procurement for pricing/commit discussion.
+
+Best,
+Lina
+Head of Product, Linguae
+
+From: Neha Kapoor <neha@redwood.ai>
+To: Lina Vogel <lina@linguae.co>, Diego Fernandez <diego@redwood.ai>
+Cc: Marcus Lin <marcus@redwood.ai>
+Date: 2027-03-22T13:48:00-07:00
+Subject: Re: Post-call: Multilingual fit + recommended eval plan and risk log
+
+Hi Lina — quick technical notes from infra/evals perspective.
+
+Short answers to your questions: 
+- Quantized variants (8-bit) are great for throughput and cost but we typically do not recommend them as the only safety control for legal/regulatory output. For legal-critical outputs we recommend a two-stage pipeline: generation on a cost-optimized variant, then verification (exact-match/soft semantic match) against authoritative glossaries using a specialist verifier model (we can provide a tuned checker).
+- We can configure the verifier to enforce glossary term preferences and surface a confidence score; outputs below threshold are flagged and routed to the more capable (non-quantized) model or to a human-review queue.
+
+Proposed eval plan (detailed):
+- Stage A (3 days): Run generation comparison across the three model candidates (Llama-3-70b-qat, Redwood-Delta-16b, Red-8q) on your prompt sets. Metrics: BLEU, ROUGE (for templated generation), hallucination-rate (entity insertion), and legal-term F1 against your glossaries.
+- Stage B (2 days): Run verifier pass and estimate false-positive/false-negative rates for glossary enforcement.
+- Stage C (1 day): Latency and cost run under your burst profile; we will test autoscaling behavior with a simulated 2x burst.
+
+Deliverables: per-locale CSV with failure categories, a short deck with recommended production config, and a risk log with severity & mitigation (we'll populate the first draft).
+
+Attachments: I'm including the evaluation template in the Drive link. Will start the Stage A runs once Diego confirms kickoff and we have the samples in the spreadsheet.
+
+– Neha
+Senior Applied ML Engineer, Redwood Inference
+
+From: Diego Fernandez <diego@redwood.ai>
+To: Lina Vogel <lina@linguae.co>
+Cc: Neha Kapoor <neha@redwood.ai>, Marcus Lin <marcus@redwood.ai>, procurement@linguae.co
+Date: 2027-03-23T10:02:00-07:00
+Subject: Re: Post-call: Multilingual fit + recommended eval plan and risk log
+
+Thanks Lina — appreciate the prioritization. A couple of pragmatic notes and a concrete timeline to keep momentum: 
+
+Timeline & owners
+- 2027-03-26 EOD: Linguae uploads sample queries + any glossaries (Linguae owner: Lina / Taro).
+- 2027-03-27: Redwood kicks Stage A (Neha) — we will run baseline generation comparisons and send raw CSVs.
+- 2027-03-30: Draft risk log + per-locale failure breakdown (Diego/Neha).
+- 2027-04-02: Review call to align on production config and any contract adjustments for Dedicated/Private options (all).
+
+Cost note for procurement: Red-8q variant shows ~40% cost reduction on token compute versus the 16b baseline in typical mixes; however, for legal-critical JP/DE flows we recommend a hybrid where outputs below verifier threshold are re-run on Red-16b or routed to a small human review pool. Marcus will prepare a short cost-vs-quality sensitivity chart.
+
+Action items (summarized)
+- Lina/Taro: Upload samples + glossaries by 2027-03-26 (Drive link).
+- Neha: Kick Stage A after samples received (2027-03-27).
+- Marcus: Prep cost/quality sensitivity chart (2027-03-29).
+- Diego: Draft risk log and schedule review call (invite will go out tomorrow).
+
+I'll loop procurement in this thread so they have visibility on potential hybrid architecture pricing.
+
+Diego
+
+From: Taro Saito <taro.saito@linguae.co>
+To: Diego Fernandez <diego@redwood.ai>, Lina Vogel <lina@linguae.co>
+Cc: Neha Kapoor <neha@redwood.ai>, Marcus Lin <marcus@redwood.ai>, procurement@linguae.co
+Date: 2027-03-24T11:45:00+09:00
+Subject: Re: Post-call: Multilingual fit + recommended eval plan and risk log
+
+Diego / team — thanks for the plan. We uploaded three sheets to the Drive: DE_samples.csv, FR_ES_samples.csv, JP_samples_partial.csv and a small glossary DE_legal_glossary.pdf.
+
+Quick confirmation: review call on 2027-04-02 works for us. Procurement noted they may push for an initial one-month Dedicated pilot if the Stage A results look good; I believe Marcus's sensitivity chart will help with that discussion.
+
+One operational ask: can you ensure the evaluation run preserves original tokenization (no normalization) for the JP samples — our reviewers want exact-term behavior preserved.
+
+See you on the call —
+Taro
+Engineering Manager, Linguae

@@ -1,0 +1,124 @@
+Canary v2 rollout causing tail-latency regressions — Aurora Retail
+
+From: Sara Welch <sara.welch@auroraretail.com>
+To: olga_petrov <olga_petrov@redwood.ai>
+Cc: Aurora SRE <sre@auroraretail.com>, Matt Conway <matt.conway@auroraretail.com>
+Date: 2026-12-03T08:14:00-08:00
+Subject: Immediate: p95/p99 tail latency spike since your canary v2
+
+Hi Olga,
+
+We started seeing a significant increase in tail latency right around 07:45 PST this morning after your team pushed canary-v2 for the text-generation endpoint. p95 jumped from ~180ms to ~520ms and p99 is now ~1.6s for our production traffic — this is causing timeouts in our user-facing feature.
+
+We've attached a snapshot of our traffic and a sample trace (aurora-traffic-snapshot-20261203.json). Can you confirm whether the canary rollout touched the model variant we pin (gptx-std-q4_v2)? If so, we need either an immediate rollback or a hotfix; our SREs are already throttling upstream requests.
+
+This is impacting a live promotion — would appreciate an expedited response.
+
+Thanks,
+Sara Welch
+Director, Platform Engineering
+Aurora Retail
+
+Attachments: aurora-traffic-snapshot-20261203.json
+
+From: olga_petrov <olga_petrov@redwood.ai>
+To: Sara Welch <sara.welch@auroraretail.com>, Aurora SRE <sre@auroraretail.com>
+Cc: vivek_kulkarni <vivek_kulkarni@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>
+Date: 2026-12-03T08:22:00-08:00
+Subject: Re: Immediate: p95/p99 tail latency spike since your canary v2
+
+Hi Sara — thank you for the heads up and the snapshot. I apologize for the disruption. We're treating this as high priority. I’ve looped in Vivek and Marcus from Eng and asked for an initial triage.
+
+Immediate steps we are starting now:
+- Pin your traffic to the current stable variant (v1) for affected routes to stop exposure to the canary.
+- Collect end-to-end traces and server-side metrics (uploading a trace bundle as redwood-trace-canary-v2-20261203.zip).
+- Schedule a 30-minute call in the next 20 minutes to coordinate rollback if needed.
+
+Can you confirm the endpoints and any short-lived tokens we should be aware of? I’ll initiate the pin and keep you updated.
+
+—Olga
+Olga Petrov
+Account Executive, Enterprise Sales
+Redwood Inference
+
+Attachments: redwood-trace-canary-v2-20261203.zip
+
+From: olga_petrov <olga_petrov@redwood.ai>
+To: vivek_kulkarni <vivek_kulkarni@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>, priyom_das <priyom_das@redwood.ai>
+Date: 2026-12-03T08:27:00-08:00
+Subject: URGENT: Aurora Retail — canary v2 introduces tail latency regressions (customer escalation)
+
+Team — Aurora (large retail customer, DEAL-AR-2026-09) reporting p95/p99 increase after canary-v2 rollout. Attached are their traffic snapshot and our server traces. Key notes:
+- Time window: ~07:45–08:15 PST correlates with canary traffic increase.
+- Affected model variant: gptx-std-q4_v2 (suspected).
+- Symptoms: p95 ~500ms -> 520ms, p99 spikes to ~1.6s, increase in 5xx timeouts observed by customer.
+
+Requesting immediate triage and one of: rollback canary for this tenant, or a hotfix for kernel path. Please advise on root cause and rollback runbook (who needs to execute, estimated minutes).
+
+I’ll coordinate comms with the customer — please mark this high.
+
+—Olga
+
+From: Vivek Kulkarni <vivek_kulkarni@redwood.ai>
+To: olga_petrov <olga_petrov@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>
+Cc: priyom_das <priyom_das@redwood.ai>
+Date: 2026-12-03T08:40:00-08:00
+Subject: Re: URGENT: Aurora Retail — canary v2 introduces tail latency regressions (customer escalation)
+
+Quick update from runtime triage — we’re seeing an increased decode time in the new quantized kernel path used by canary-v2 for long-context outputs (the KV cache interaction for sequence lengths > 512 looks suboptimal). The p99 is driven by a small subset of requests that hit a de-optimized loop.
+
+Immediate remediation plan:
+- Rollback: revert the canary routing for Aurora to v1 for the affected model and routes (estimated time: 6–12 minutes once started).
+- Mitigation: add a temporary route-level cap on max tokens for the canary group for 24 hours and increase retry budgets.
+- Postmortem: deeper perf fix on kernel selection and stress-testing for long outputs in staging.
+
+I will start the rollback now and post the deployment ID and timeline. Marcus — please prepare a CDC to keep other tenants unaffected.
+
+—Vivek
+Head of Serving Runtime
+Redwood Inference
+
+From: olga_petrov <olga_petrov@redwood.ai>
+To: Sara Welch <sara.welch@auroraretail.com>, Aurora SRE <sre@auroraretail.com>
+Cc: vivek_kulkarni <vivek_kulkarni@redwood.ai>, marcus_lin <marcus_lin@marcus_lin@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>
+Date: 2026-12-03T08:52:00-08:00
+Subject: Re: Immediate: p95/p99 tail latency spike since your canary v2 — rollback started
+
+Sara — we’ve initiated the rollback for your tenant to the stable v1 variant. Estimated completion: ~10 minutes. We expect tail latencies to return to baseline once traffic is fully routed away from canary nodes.
+
+What we’ve done:
+- Pinned Aurora traffic to stable routing for affected endpoints.
+- Disabled per-tenant canary routing for v2.
+- Engineering is collecting traces and will follow up with a root-cause postmortem.
+
+Apologies for the impact — we’ll waive the ingested token charges for the affected window and follow up with a formal incident summary. I’ll update you as soon as we observe p95/p99 returning to normal.
+
+—Olga
+
+From: Sara Welch <sara.welch@auroraretail.com>
+To: olga_petrov <olga_petrov@redwood.ai>
+Cc: Aurora SRE <sre@auroraretail.com>, Matt Conway <matt.conway@auroraretail.com>
+Date: 2026-12-03T09:08:00-08:00
+Subject: Re: Immediate: p95/p99 tail latency spike since your canary v2 — rollback started
+
+Thanks Olga — we see p95 dropping back toward expected levels (~190–200ms) and p99 improving. Appreciate the quick action and the offer on credits. Please keep us posted on the postmortem and mitigation timeline; this feature is in the middle of a promotion so we’ll need a firm ETA before re-accepting any canary traffic.
+
+Best,
+Sara
+
+From: olga_petrov <olga_petrov@redwood.ai>
+To: vivek_kulkarni <vivek_kulkarni@redwood.ai>, marcus_lin <marcus_lin@redwood.ai>, laura_bennett <laura_bennett@redwood.ai>, priyom_das <priyom_das@redwood.ai>
+Date: 2026-12-04T14:22:00-08:00
+Subject: Incident closure & next steps — Aurora canary regression (INC-2026-334)
+
+Team — closing the loop internally. Customer confirmed latencies returned to baseline after rollback. Action items: 
+- Vivek: own the perf postmortem and remediation plan (deadline: 2026-12-10).
+- Marcus: add route-level automated pin/rollback playbook to DevOps runbooks.
+- Laura: coordinate credits and customer-facing summary (I’ll draft).
+- Priyom: run an expanded staging stress test for long outputs covering the quantized path.
+
+I’ll file a short executive summary for sales leadership and the customer. Marking incident INC-2026-334 resolved — creating a follow-up PM for regression tests.
+
+—Olga
+Account Executive, Enterprise Sales
+Redwood Inference

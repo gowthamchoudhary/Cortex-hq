@@ -1,0 +1,132 @@
+Post-incident brief: latency spike debrief + stepwise mitigations
+
+From: Dylan Brooks <dylan.brooks@redwood.ai>
+To: Claire Jensen <claire.jensen@finova.com>
+Cc: markus.klein@redwood.ai
+Date: Mon, 3 May 2027 09:14:00 -0700
+Subject: Post-incident brief: latency spike debrief + stepwise mitigations
+
+Hi Claire —
+
+Thank you again for your patience yesterday during the latency spike that affected a subset of your inference requests between 06:08–06:46 UTC. I wanted to share a concise post-incident brief with our initial findings, timeline, and immediate mitigations we have already completed. Attached: a one-page RCA and the extracted request timeline.
+
+Executive summary
+- What happened: transient GPU host contention in a newly scaled shard caused elevated queue times for short-sequence chats routed to that shard.
+- Impact: ~12% of Finova’s requests saw token latency > 2.5s for ~38 minutes; no data loss.
+- Root cause (short): autoscaler placed additional async workers onto a host that had elevated background disk I/O from an unrelated maintenance job; our runtime’s host-selection heuristics did not deprioritize the host quickly enough.
+
+Timeline (short)
+- 2027-05-03 06:07 UTC — autoscale event triggered for shard-12.
+- 2027-05-03 06:08–06:46 UTC — elevated queueing and token latencies observed for requests routed to shard-12.
+- 2027-05-03 06:48 UTC — rollback of the autoscale placement and re-routing completed; median latency recovered.
+
+Immediate actions taken (already done)
+- Re-routed Finova traffic off shard-12 and pinned routing to the healthy pool for your account (complete).
+- Rolled back the autoscale change that placed workers on the affected host (complete).
+- Temporarily disabled background maintenance jobs during peak in that AZ (complete).
+
+Committed next steps (in-progress)
+- S1: Strengthen host-selection guardrails so autoscaler deprioritizes hosts with recent high disk I/O (owner: infra-eng, ETA: 2027-05-10).
+- S2: Add faster detection for per-shard latency anomalies with automated emergency re-route to warm fallback (owner: runtime team, ETA: 2027-05-07).
+- S3: Add a prefetched KV-cache warm path for short-sequence chat workloads to reduce queue amplification (owner: applied-ml, ETA: 2027-05-24).
+
+Requested items from Finova
+- Please let us know if you need formal evidence for compliance (e.g., log slices, audit timestamps). We can prepare a scoped export.
+- If you want a short downstream impact summary for your execs, we can provide a two-slide briefing.
+
+Attachments: 20270503_finova_rca.pdf (summary), inference-timeline-20270503.csv (event timestamps)
+
+I'll follow up later today with a proposed mutual action plan and owners; looping in Markus from Customer Success for coordination.
+
+Regards,
+Dylan Brooks
+Account Executive — Redwood Inference
++d: +1 (415) 555-0193
+
+---
+
+From: Claire Jensen <claire.jensen@finova.com>
+To: Dylan Brooks <dylan.brooks@redwood.ai>
+Date: Mon, 3 May 2027 11:02:12 -0400
+Subject: Re: Post-incident brief: latency spike debrief + stepwise mitigations
+
+Thanks Dylan —
+
+Appreciate the quick summary and the re-routing. A couple quick questions and one ask:
+
+1) Can you confirm whether any log lines contain PII during the 06:08–06:46 UTC window? We need to know if we should trigger our data-retention workflow.
+2) For S2 (auto re-route), will that be a play that could cause request shaping for other customers? We want to understand whether mitigation could tradeoff impact to neighboring tenants.
+
+Ask: Can we schedule a 30-minute technical sync tomorrow morning (your timezone) so our infrastructure team can review the timeline and confirm the accepted mitigations? 8:00–9:00 PT works for us.
+
+Thanks — Claire
+Claire Jensen
+Head of Platform Reliability
+Finova
+
+On Mon, May 3, 2027 at 09:14 AM Dylan Brooks <dylan.brooks@redwood.ai> wrote:
+> (Original message omitted)
+
+From: Dylan Brooks <dylan.brooks@redwood.ai>
+To: marissa_cole@redwood.ai, lauren_bishop@redwood.ai, markus.klein@redwood.ai
+Date: Mon, 3 May 2027 13:20:00 -0700
+Subject: Fwd: Post-incident brief: latency spike debrief + stepwise mitigations
+
+Folks — forwarding Claire's reply and our brief. Quick internal plan and asks below:
+
+Quoted: "Can you confirm whether any log lines contain PII during the 06:08–06:46 UTC window?"
+
+Short plan (owners & timing)
+- Action A: Scoped log export (token/request ids + timestamps) for the window and a privacy scan run to confirm whether any PII appears in logged payloads. Owner: lauren_bishop. ETA: 2027-05-04 EOD. Deliverable: zipped log slice + privacy-scan report.
+- Action B: Clarify S2 behavior on cross-tenant shaping. Owner: marissa_cole. ETA: 2027-05-05 morning. Deliverable: short note describing routing policy and whether emergency re-route will throttle/coalesce neighbors.
+- Action C: Confirm schedule for technical sync with Finova and prepare two-slide incident impact for their execs. Owner: markus_klein. ETA: 2027-05-04 08:00 PT. Deliverable: calendar invite + slides.
+
+Risk notes: If the privacy scan flags user content in logs, we will need to coordinate with legal and potentially redact before export. Lauren: flag immediately if that looks likely.
+
+Please reply with ack and any concerns. I'll own the customer comms.
+
+Thanks,
+Dylan
+
+> On Mon, May 3, 2027 at 11:02 AM Claire Jensen <claire.jensen@finova.com> wrote:
+> > (Customer message omitted)
+
+From: Dylan Brooks <dylan.brooks@redwood.ai>
+To: Claire Jensen <claire.jensen@finova.com>, Finova Security Team <security@finova.com>, procurement@finova.com
+Cc: markus.klein@redwood.ai, lauren_bishop@redwood.ai, marissa_cole@redwood.ai
+Date: Wed, 5 May 2027 08:05:00 -0700
+Subject: RE: Post-incident brief: latency spike debrief + stepwise mitigations — mitigations completed and artifacts
+
+Hi Claire —
+
+Following our sync yesterday, quick update and artifacts attached. Thank you and your team for the time.
+
+Completed items
+- Scoped log export and privacy scan (by lauren_bishop) — result: no PII detected in request bodies or debug logs for the 06:08–06:46 UTC window. Attached: inference-timeline-20270503.csv and the privacy-scan-summary.
+- Clarified S2 emergency re-route behavior (by marissa_cole) — summary: emergency re-route will move only traffic for the impacted shard to a warm fallback pool; it does not initiate cross-tenant throttling. Detailed note attached in the RCA PDF.
+- Customer-facing slides and calendar invite were sent (by markus_klein) — slides attached.
+
+Committed near-term changes completed or deployed
+- Short-term guardrail: autoscaler now checks recent host I/O metrics before placing new async workers (deployed 2027-05-04 21:40 UTC).
+- Emergency re-route rule implemented (can be toggled per-customer) and validated in canary (deployed 2027-05-04 22:10 UTC).
+
+Attachments: 20270503_finova_rca.pdf, inference-timeline-20270503.csv, mitigation-checklist.xlsx, privacy-scan-summary.txt
+
+Next steps (open items)
+- S3 (KV-cache warm path): applied-ml team to deliver design doc by 2027-05-24.
+- Post-deploy monitoring: we'll send a 14-day latency report scoped to your account (deliverable: 2027-05-19).
+
+We consider this incident mitigated and the immediate action items delivered. If Finova requires a formal SOC2 evidence package for your auditors, we can assemble that within the next 48 hours — let me know scope and recipient.
+
+Thanks again for partnering closely on this. Please reply if you want anything else included in the deliverables.
+
+Best,
+Dylan Brooks
+Account Executive — Redwood Inference
+Redwood Inference
+D: +1 (415) 555-0193
+
+On Tue, May 4, 2027 at 08:12 AM Claire Jensen <claire.jensen@finova.com> wrote:
+> Thanks Dylan, that all looks good. Appreciate the quick turnaround and the togglable re-route option.
+> 
+> Claire

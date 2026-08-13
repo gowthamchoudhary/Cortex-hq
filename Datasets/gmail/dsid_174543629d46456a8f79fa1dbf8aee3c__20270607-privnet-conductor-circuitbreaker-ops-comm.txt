@@ -1,0 +1,132 @@
+Privatenet conductor circuit-breaker triggered during upgrade / next steps
+
+From: Lydia Park <ops+infra@acmehealth.com>
+To: sofia_ivanova@redwood.com
+Cc: Tom Reynolds <cloudops@fastclinic.io>
+Date: Mon, 7 Jun 2027 09:12:00 -07:00
+Subject: Re: Observed circuit-breaker on private cluster during midnight rollout
+
+Hi Sofia,
+
+We saw an automated circuit-breaker trip across three nodes in our privatenet environment during the 00:45–01:15 maintenance window. The control-plane stopped accepting new orchestrator handshakes for ~18 minutes; agent traffic degraded and a few inference jobs failed with 503.
+
+Attached is a log bundle (acme_log_bundle_20270607.zip) with orchestrator traces and the agent heartbeat timeline. We are requesting:
+- Immediate confirmation of what changed on Redwood side at 00:40–01:00 PDT.
+- An interim mitigation so we can finish remaining deployments without repeated hits to our SLA.
+- A plan for evidence and a postmortem timeline for our execs.
+
+This is high priority for compliance reporting. Please advise next steps and if you want to join a short bridge now.
+
+Thanks,
+Lydia Park
+Director, Infrastructure Operations
+Acme Health
+
+-----Original Message-----
+From: ops+infra@acmehealth.com
+
+
+---
+From: sofia_ivanova@redwood.com
+To: Lydia Park <ops+infra@acmehealth.com>
+Cc: Tom Reynolds <cloudops@fastclinic.io>
+Date: Mon, 7 Jun 2027 09:28:14 -07:00
+Subject: Re: Observed circuit-breaker on private cluster during midnight rollout
+
+Hi Lydia — thanks for the quick heads up and for the logs. I’m pulling the on-call infra team onto a bridge now.
+
+Initial notes from our side: we rolled a conductor config change (increasing the concurrent orchestration window) as part of the 00:30 release candidate to improve rollout throughput. Early signs are that the new concurrency setting combined with a burst of puppet-driven deployments caused a short resource pressure on the conductor, which triggered our internal circuit-breaker to prevent K/V cache divergence across nodes. That protection prevents split-brain but does block new handshakes until the cluster stabilizes.
+
+Immediate actions we’ve taken:
+- Temporarily reverted the concurrency flag and pushed a rollback_patch.diff to the cluster (non-disruptive, control-plane only).
+- Scoped and applied a targeted restart for the conductor pod group that removed the breaker condition; agent heartbeats recovered within ~6 minutes following restart.
+- Opened an RCA evidence collection task and staged logs to a shared drive folder (link attached).
+
+Next steps I propose now:
+1) 30-min bridge to walk through logs and handshakes (I’m online).
+2) We’ll package a focused postmortem draft and share preliminary findings within 48 hours.
+3) Offer a short-term SLA fallback: we can route a fraction of critical requests to Hosted lanes while we complete a controlled canary for the fixed config.
+
+I’ll loop in Marcus and Irene for the artifact collection and postmortem.
+
+— Sofia
+Sofia Ivanova
+Senior Customer Reliability Engineer
+Redwood Inference
+
+On Mon, Jun 7, 2027 at 09:45 AM Marcus Lin <marcus_lin@redwood.com> wrote:
+
+> Forwarding the customer logs into our triage channel and assigning actions.
+>
+> On Mon, Jun 7, 2027 at 9:28 AM Sofia Ivanova <sofia_ivanova@redwood.com> wrote:
+> > (see above)
+>
+> Team — quick internal checklist:
+> - Ben: grab the conductor debug traces for 00:30–01:10 in both control-plane zones, annotate the sequence numbers when the breaker counter incremented.
+> - Irene: pull KV cache snapshot diffs and agent reconnect timelines (from the agent monitor).
+> - I’ll validate the rollback_patch.diff and confirm the exact commit and release-id that introduced the config.
+>
+> Keep updates in the incident thread and push any artifacts to the shared drive folder: https://drive.google.com/drive/folders/1aBcDeFgAcme-incident-20270607
+>
+> Marcus Lin
+> Principal Infra Engineer, Redwood Inference
+
+
+From: sofia_ivanova@redwood.com
+To: Lydia Park <ops+infra@acmehealth.com>
+Cc: Tom Reynolds <cloudops@fastclinic.io>, marcus_lin@redwood.com, irene_choi@redwood.com, ben_carter@redwood.com
+Date: Tue, 8 Jun 2027 08:10:00 -07:00
+Subject: Re: Privatenet conductor circuit-breaker triggered during upgrade / next steps
+
+Hi Lydia and Tom,
+
+Thanks for being patient — quick update after triage:
+- Root cause (preliminary): a simultaneous surge of orchestration window expansions from two internal automation jobs coupled with a transient GC pause on one conductor instance. The combination pushed a safety threshold that trips the circuit-breaker to avoid state divergence.
+- Mitigation performed: a targeted rollback of the concurrency change + a hotfix to the breaker threshold; we verified the cluster accepted handshakes post-change and agent heartbeats normalized.
+- User impact: ~18 minutes of handshake rejections; a small number of non-critical in-flight jobs were retried by your client agents and succeeded.
+
+Attached items: privnet_runbook_v3.pdf (current runbook excerpt) and rollback_patch.diff. We’ve also staged the log bundle you sent alongside our annotated traces.
+
+Temporary offers we can make while we finalize the postmortem:
+1) Route 10% of your critical inference traffic to our Hosted fallback for 48 hours (no config change required on your side).
+2) A scheduled postmortem readout with your infrastructure execs next Thursday (we can accommodate 30 minutes).
+
+Please let me know which mitigation you prefer and whether you want Redwood to open a Hosted fallback.
+
+Best,
+Sofia
+
+-----Original Message-----
+> From: Lydia Park <ops+infra@acmehealth.com>
+> Date: Tue, 8 Jun 2027 08:35:00 -07:00
+>
+> Thanks Sofia — the rollback fixed the immediate problem and we saw no further 503s. We’ll take the Hosted fallback as a precaution for the next 36 hours. Please confirm when it’s active and share any executive notes for our compliance team.
+>
+> Lydia
+
+
+From: sofia_ivanova@redwood.com
+To: Lydia Park <ops+infra@acmehealth.com>
+Cc: Tom Reynolds <cloudops@fastclinic.io>, marcus_lin@redwood.com, irene_choi@redwood.com, ben_carter@redwood.com
+Date: Wed, 9 Jun 2027 16:50:00 -07:00
+Subject: Post-incident next steps and draft postmortem timeline
+
+Lydia — thanks again for the quick confirmation earlier. Per your ask, attaching a short executive summary and the initial postmortem draft (postmortem_draft_v1.md) to the shared drive. High-level timeline below for our joint readout: 
+
+- 2027-06-09: Incident closed for immediate mitigation; Hosted fallback active (10% traffic) as requested.
+- 2027-06-10 to 2027-06-11: Redwood performs deep artifacts correlation (conductor traces + GC heap analysis + automation job timing).
+- 2027-06-11: Draft postmortem v1 delivered for your review.
+- 2027-06-14: Executive readout (30 min) — confirm availability; we recommend participation from your infrastructure lead and compliance.
+
+Action items for Redwood:
+- Finalize fix to conductor concurrency gating and push a guarded canary in your staging cluster.
+- Add additional heuristics to avoid simultaneous automation job window expansion.
+- Provide compliance-friendly evidence bundle (signed checksums) for your audit.
+
+If that timeline works I’ll lock calendar invites and share the readout slide deck. Appreciate the partnership and sorry again for the disruption — we’re treating this as high-severity and will provide the evidence you need for your report.
+
+— Sofia Ivanova
+Senior Customer Reliability Engineer, Redwood Inference
+sofia_ivanova@redwood.com
+
+Attachments referenced: acme_log_bundle_20270607.zip (logs/traces), privnet_runbook_v3.pdf (runbook excerpt), rollback_patch.diff (control-plane rollback), postmortem_draft_v1.md (initial draft).

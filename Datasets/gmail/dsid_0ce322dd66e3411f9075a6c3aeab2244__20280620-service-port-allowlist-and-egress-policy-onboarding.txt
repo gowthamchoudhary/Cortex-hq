@@ -1,0 +1,108 @@
+Service port allowlist & egress policy — onboarding requirements
+
+From: Tessa Morgan <tessa.morgan@redwood.com>
+To: Alex Kim <alex.kim@clearview.com>
+Cc: Stephanie Nguyen <stephanie.nguyen@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Tue, 20 Jun 2028 09:12:00 -0700
+Subject: Service port allowlist & egress policy — onboarding requirements
+
+Hi Alex —
+
+Thanks for kicking off the connectivity coordination. To keep the private deployment commissioning on schedule we need a concise allowlist and egress profile from Clearview's network team. Attached is a starting spreadsheet (redwood-egress-ports.xlsx) with the canonical ports, protocols, and destination domains we expect the environment to allow. Please review and confirm the items below so we can move to the connectivity test window next week.
+
+Key asks (high priority):
+- Provide the firewall/nat ticket reference and a contact for the team owning perimeter ACLs (we have NET-4521 on your side).
+- Allow outbound TCP 443 to the following domains (see sheet tab "domains" in the attachment): model-registry.redwood.ai, updates.redwood.ai, telemetry.redwood.ai.
+- Allow DNS (UDP/TCP 53) to your resolvers and outbound NTP (UDP 123) to pool.ntp.org (or equivalent).
+- Shortlist of customer egress NAT IPs so we can pin callback ACLs for health probes and artifact pulls.
+- Internal host requirements: jumpbox SSH from your secure-admin CIDR (we've listed recommended port 22 and an ephemeral bastion port).
+
+We also call out the service ports used by the runtime: 443 (ingress/egress for API), 8443 (control plane, optional), and a dynamic ephemeral range for model-worker outbound connections (16384–32767 UDP/TCP for inter-node comms in isolated setups). If you cannot open a range, we can work with an L4 proxy or tunnel — let us know.
+
+Attachments referenced:
+- redwood-egress-ports.xlsx (master allowlist + domain list)
+- network-topology-v2.drawio (suggested routing/peering diagram)
+
+Proposed immediate next steps:
+1) Please confirm the NAT egress IPs and the firewall ticket by EOD tomorrow.
+2) If there are gating compliance controls (e.g., deny-listing by port ranges), flag them now so we can propose mitigations.
+3) We will schedule a 60-minute connectivity test with your network engineers and our ops on Jun 22.
+
+Cc'ing Steph and Marcus to surface any additional internal constraints.
+
+— Tessa
+Tessa Morgan
+Senior Solutions Engineer, Redwood Inference
+
+From: Stephanie Nguyen <stephanie.nguyen@redwood.com>
+To: Tessa Morgan <tessa.morgan@redwood.com>, Alex Kim <alex.kim@clearview.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Tue, 20 Jun 2028 11:05:00 -0700
+Subject: Re: Service port allowlist & egress policy — onboarding requirements
+
+Thanks Tessa — a couple clarifications from the runtime/infra side that tend to be asked during handoffs:
+
+- MTU and jumbo frame support: our container networking recommends MTU >= 1500; if your fabric uses 9000 we need to confirm host tunable settings.
+- Kernel/tuning: sysctl net.ipv4.ip_forward = 1 for NAT hosts, and we document recommended conntrack limits in the attachment fw-allowlist-ports.txt (I attached an example firewall snippet).
+- Health probes: the control plane will perform periodic outbound probes. For the connectivity test we will perform TCP health probes to port 443 and HTTP path /healthz from a small set of worker IPs (we'll share exact addresses).
+
+If possible, please provide the following in your response:
+- Egress NAT IP list (CIDR or individual IPs) we should allow inbound callbacks from.
+- Any corporate proxy that would terminate TLS (we can support proxied setups but need cert/CA chain details).
+- Your preferred window for the connectivity sweep (we proposed Jun 22; please confirm).
+
+Attaching: fw-allowlist-ports.txt (sample iptables/ACL snippet)
+
+— Steph
+
+From: Alex Kim <alex.kim@clearview.com>
+To: Tessa Morgan <tessa.morgan@redwood.com>
+Cc: Stephanie Nguyen <stephanie.nguyen@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Ben Carter <ben.carter@redwood.com>, IT Ops <itops@clearview.com>
+Date: Wed, 21 Jun 2028 08:30:00 -0700
+Subject: Re: Service port allowlist & egress policy — onboarding requirements
+
+Tessa/Steph —
+
+Appreciate the clear checklist. A few updates from our side:
+
+- Firewall ticket: NET-4521 is open with engineering; primary contact is Priya Desai (priya.desai@clearview.com).
+- Egress NAT IPs: our cloud team provided the following public IPs that will be used for outbound traffic from your deployed nodes (these are what you'll need to allow for callback/probe): 54.23.112.90, 54.23.112.91. We can provide ranges if that changes during scale-up.
+- We have an internal TLS proxy for outbound traffic that terminates to a corporate CA. Do you require mutual TLS to your domains? If so, we'll need CA cert exchange.
+
+Questions:
+1) For ephemeral model workers that spawn in the tenant VPC, will callbacks ever originate from Redwood-managed IPs outside of our NAT block?
+2) For the dynamic ephemeral port range, would you accept a restriction to 16384–20000 instead of up to 32767? That would be easier for our firewall policies.
+
+I've attached a basic topology export (network-topology-v2.drawio) and our ticket link. We can confirm the Jun 22 connectivity test — would 10:00 AM PT work for your ops team?
+
+— Alex
+Alex Kim
+Senior Network Engineer, Clearview Health
+
+From: Tessa Morgan <tessa.morgan@redwood.com>
+To: Alex Kim <alex.kim@clearview.com>, Priya Desai <priya.desai@clearview.com>
+Cc: Stephanie Nguyen <stephanie.nguyen@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Thu, 22 Jun 2028 15:42:00 -0700
+Subject: Re: Service port allowlist & egress policy — onboarding requirements
+
+Thanks Alex — this is exactly what we needed. Quick summary and the plan so nothing slips through the cracks:
+
+Summary of what Clearview will provide by EOD Fri:
+- Confirmed NAT egress IPs (54.23.112.90/91) and the firewall ticket NET-4521 owner (Priya).
+- Decision on reduced ephemeral port range (16384–20000) — that is acceptable to us; Steph please note for runtime config.
+- Confirmation on corporate TLS proxy and whether mutual TLS is required.
+
+Redwood actions / what we'll bring to the Jun 22 10:00 AM PT connectivity test:
+- A concise connectivity sweep (connectivity-test-sweep.md attached) with explicit probe IPs and sequences.
+- A small set of ephemeral worker IPs used during the test; we'll pin those to the allowed list for the window.
+- A follow-up runbook to add to your ticket documenting post-test remediation steps if any probes fail.
+
+Open item for Ben / Marcus: Ben, can you validate the runtime will accept 16384–20000 as the ephemeral range and update the docs? Marcus, can you provide the exact probe IPs we'll use for the test by tomorrow morning?
+
+If all good, we'll move the connectivity test to the calendar invite and loop in Priya and your NET team. Thanks all — close coordination here should make the onboarding gate straightforward.
+
+Best,
+— Tessa
+Tessa Morgan
+Senior Solutions Engineer, Redwood Inference
+attachments: connectivity-test-sweep.md (checklist), redwood-egress-ports.xlsx, fw-allowlist-ports.txt

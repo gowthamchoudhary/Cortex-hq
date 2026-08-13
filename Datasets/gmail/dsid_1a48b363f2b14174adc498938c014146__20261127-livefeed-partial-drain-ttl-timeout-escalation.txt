@@ -1,0 +1,138 @@
+URGENT: Livefeed partial-drain & WS TTL timeouts — exec sync requested
+
+From: Liam Brooks <liam@clearlens.ai>
+To: sofia.ivanova@redwood.com
+Date: Wed, 25 Nov 2026 17:13:00 -0800
+Subject: Livefeed latency spikes & partial payloads during demo
+
+Hi Sofia,
+
+We hit a recurring issue during a customer demo this afternoon — when throughput goes above ~200 req/s our live inference feed sometimes drops into a ‘partial-drain’ state where the websocket connection stays open but the client receives only fragments (a few token chunks) and then nothing for 3–8s. After the pause the stream often resumes with a burst of remaining tokens. This breaks our UI (it appears frozen).
+
+Summary:
+- Time window: 16:45–16:55 PT
+- Symptom: partial chunks / long gaps (3–8s) with keep-alive still present
+- Trigger: high concurrency (200+ req/s), appears more likely on large context generations (1k+ tokens)
+- Impact: product demo failure, customer-visible freeze
+
+I collected a short trace and some client-side timing logs (attaching). Can you triage? We’re live to a handful of enterprise prospects and need an ETA on a mitigation.
+
+Attached: livesteam-trace-20261125.zip (cc: support)
+
+Thanks,
+Liam Brooks
+Head of Product
+ClearLens
+
+From: Sofia Ivanova <sofia.ivanova@redwood.com>
+To: Liam Brooks <liam@clearlens.ai>
+Cc: vanessa.ortiz@redwood.com, support@clearlens.ai
+Date: Wed, 25 Nov 2026 18:02:12 -0800
+Subject: Re: Livefeed latency spikes & partial payloads during demo
+
+Thanks Liam — I see the trace. Sorry for the disruption during a demo. I’ve routed this to our realtime team (looping Vanessa for customer success).
+
+Initial asks so we can triage fast:
+- Can you confirm whether the client observed TCP-level disconnects or only token gaps? (i.e., socket stayed ESTABLISHED?)
+- Any reproducible steps (demo script / dataset link) we can run in our staging?
+
+Immediate next steps from our side:
+1) Engineering will pull the server-side websocket stream logs and token emission timestamps.
+2) We’ll run a mirrored loadtest against your trial workspace to reproduce the partial-drain pattern.
+3) If needed, we’ll propose a temporary workaround (short-polling fallback or reduced per-request context) for your demo.
+
+Cc: Vanessa — can you advise on schedule preferences for a short 30m call tomorrow?
+
+Sofia Ivanova
+Solutions Engineer, Redwood Inference
+sofia.ivanova@redwood.com
+
+From: David Kim <david.kim@redwood.com>
+To: sofia.ivanova@redwood.com, vanessa.ortiz@redwood.com
+Cc: liam@clearlens.ai, support@clearlens.ai
+Date: Thu, 26 Nov 2026 09:17:45 -0800
+Subject: Re: Livefeed latency spikes & partial payloads during demo
+
+Forwarded message:
+
+On Wed, Nov 25, 2026 at 6:02 PM Sofia Ivanova <sofia.ivanova@redwood.com> wrote:
+> Thanks Liam — I see the trace.
+
+Quick triage notes from infra:
+- We see repeated sequences where the server’s token-kv emission continues but the proxy Tier-2 (edge proxy) coalesces or bottlenecks chunked frames under high concurrency. The socket remains ESTABLISHED in all observed traces — so this looks like emission starvation rather than TCP drops.
+- Correlated metrics: a spike in proxy CPU syscalls and an increase in per-connection write-pending queueing ~16:45–16:55 PT (matching your window).
+- We also observed occasional WS TTL expirations on our backend routing layer after ~6s of no chunk delivery; the upstream runtime still had work queued.
+
+Immediate mitigation we can push today (low-risk):
+- Reduce default chunk coalescing threshold at the edge (send smaller chunks more frequently) — reduces throughput efficiency but improves inter-token latency.
+- Short-term canary: route Clearlens to an alternative proxy pool with a higher heartbeat/flush rate.
+
+I’ve attached a cropped trace and a server-side token-emission CSV for the window (livestream-trace-20261125.zip).
+
+Next actions:
+- Sofia/Vanessa schedule a 30m session with ClearLens to validate canary routing.
+- If canary stabilizes, we will promote configuration change to the pod pool and follow up on a perf-impact analysis.
+
+-David
+David Kim
+Senior SRE, Redwood Inference
+Attachment: livesteam-trace-20261125.zip (server token timestamps)
+
+From: Liam Brooks <liam@clearlens.ai>
+To: sofia.ivanova@redwood.com, david.kim@redwood.com
+Cc: support@clearlens.ai, vanessa.ortiz@redwood.com
+Date: Thu, 26 Nov 2026 11:05:08 -0800
+Subject: Re: Livefeed latency spikes & partial payloads during demo
+
+Thanks David — that aligns with what we saw (socket up, client freeze). Additional details:
+- We don’t see TCP retransmits or FINs, just the token gaps.
+- The client’s telemetry shows the freeze consistently when aggregate QPS exceeds ~210 and average generation length > 800 tokens.
+- We collected a sysdiagnose bundle and uploaded it to the link below: clearlens-diagnostics-20261126.tar.gz
+
+Helpful if your canary uses a pool with a higher flush frequency. For the demo tomorrow we need a reliable workaround — short-polling would be acceptable for the next 48 hours.
+
+Liam
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: sofia.ivanova@redwood.com, vanessa.ortiz@redwood.com, david.kim@redwood.com
+Cc: hannah.schmitt@redwood.com, liam@clearlens.ai
+Date: Fri, 27 Nov 2026 08:03:21 -0800
+Subject: URGENT: Livefeed partial-drain & WS TTL timeouts — exec sync requested
+
+Team — escalating to leadership given demo risk and potential renewal timeline with ClearLens (deal DL-8492-CN). Customer impact: demo failure reduced probability of close this quarter.
+
+Proposed immediate remediation (1–2 hours):
+- Canary route ClearLens traffic to high-flush edge pool (engineering).
+- Apply temporary edge config: set chunk_coalesce_ms = 25, heartbeat_interval_ms = 15000, ws_ttl_threshold_s = 12.
+- Offer ClearLens short-polling fallback JS snippet and enable it on their staging workspace for demo traffic.
+
+Communication plan:
+- Offer a 30m call in the next 2 hours to validate canary.
+- If canary shows stability, schedule promotion and postmortem.
+- If not stable, commit to a temporary credits package (TBD) and deeper runtime fix with ETA 2 business days.
+
+Action items:
+- David: can you confirm the canary rollout and expected perf/regressions timeframe?
+- Sofia/Vanessa: schedule the call and send the fallback snippet to the customer now.
+- Hannah: please confirm exec-level availability for a 9:30 PT readout if needed.
+
+Rishi Malhotra
+Account Exec, Redwood Inference
+
+From: Hannah Schmitt <hannah.schmitt@redwood.com>
+To: rishi.malhotra@redwood.com, david.kim@redwood.com, sofia.ivanova@redwood.com
+Cc: vanessa.ortiz@redwood.com, liam@clearlens.ai
+Date: Fri, 27 Nov 2026 09:42:00 -0800
+Subject: Re: URGENT: Livefeed partial-drain & WS TTL timeouts — exec sync requested
+
+Thanks for the clear plan. I’m available for the 9:30 PT readout if the canary needs escalation. Two requests before the call:
+1) Create a one-slide exec brief (one slide, max) summarizing customer impact, proposed short-term mitigation, and timeline to resolution — share to the exec-briefs link.
+2) Capture risk vs. upside for the edge config change (latency improvement vs. throughput delta).
+
+David — if the canary can be done in <1hr, prioritize. If not, bump the fallback (short-polling) to the customer now so their demo isn’t blocked.
+
+Hannah Schmitt
+VP, Customer Success Operations
+
+[Thread footer]
+This conversation remains within Redwood Inference and ClearLens participants. Internal participants are Redwood employees (Sofia Ivanova, David Kim, Vanessa Ortiz, Rishi Malhotra, Hannah Schmitt). Attachments referenced above are diagnostic stubs; locations: https://redwood-drive/diagnostics/clearlens/20261125 and https://redwood-drive/diagnostics/clearlens/20261126.

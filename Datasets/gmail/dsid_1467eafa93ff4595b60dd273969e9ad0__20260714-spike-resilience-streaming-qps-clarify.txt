@@ -1,0 +1,103 @@
+Post-call: spike resilience + streaming QPS clarification
+
+From: Markus Klein <markus.klein@redwood.com>
+To: Tom Meyers <tom.meyers@avalogistics.com>; Ava Logistics SRE Team <sre@avalogistics.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Wed, 14 Jul 2026 09:12:00 -0700
+Subject: Post-call recap: spike resilience + streaming QPS clarification
+
+Tom / SRE team — thanks for the sync this morning. Quick recap and concrete asks so we can size the Dedicated pilot and validate SLO feasibility.
+
+Key points from call:
+- Latency SLO: 95th <= 250ms for short-response streaming, 99th <= 800ms for long streaming sessions (>= 1k tokens)
+- Steady-state QPS: 150 requests/sec average during business hours (US-PST)
+- Peak windows: three classes noted — micro spikes (10–30s), short bursts (2–5 min), and sustained peaks (30–90 min) during end-of-day batch processing
+- Typical payload: request prompts average 1.2k input tokens, responses vary 50–1,500 tokens depending on flow
+- Streaming: a mixture of short partial responses (low-latency, many concurrent) and long-run streaming (concurrent sessions with KV cache usage)
+
+What we need from you to finalize sizing and a pilot plan:
+1) Representative 24‑hour traffic dump (CSV) with timestamped QPS, median/95/99 latency observed on your side, and event labels for known spikes. A sample header we can accept is attached.
+2) Clarify concurrency model: are long streams held open by a single client connection or multiplexed through your gateway? (This impacts slot allocation.)
+3) Confirmation of SLA tolerance for brief fallback to a lower-capacity model during extreme peaks (yes/no).
+
+Attachments: workload CSV template (avalogistics-windowed-workload.csv), draft SLO doc (slo-targets-draft.pdf).
+
+Next steps / timeline:
+- Tom: share CSV + notes by EOD Friday (7/16)
+- Redwood: run a quick capacity sketch and follow up with a 60-min sizing workshop next week if data looks good
+- Action owners: Marissa to prepare sizing worksheet; Neha to map streaming constraints to model variants
+
+Thanks — short bullets are easiest here; we’ll convert this into a mutual action plan after we get the traffic export.
+
+—
+Markus Klein
+Enterprise Solutions
+Redwood Inference
+markus.klein@redwood.com
+
+From: Tom Meyers <tom.meyers@avalogistics.com>
+To: Markus Klein <markus.klein@redwood.com>
+Cc: Ava Logistics SRE Team <sre@avalogistics.com>
+Date: Thu, 15 Jul 2026 11:05:00 -0700
+Subject: Re: Post-call recap: spike resilience + streaming QPS clarification
+
+Markus — thanks for the clear recap. Attached is a first dump of our 24-hour window that includes per-second QPS and latency buckets; we labeled the three spikes we talked about. A few clarifications inline: 
+
+- Concurrency: long streams are held per-user session (WebSocket) and go through our gateway. We typically see a 1:1 mapping from session to backend connection but our gateway multiplexes short-lived chats into pooled workers for efficiency.
+- Peak behavior: the end-of-day sustained peak is tied to our reconciliation jobs that fan out conversational prompts to users; those are often batched in the gateway and can result in many concurrent long-stream sessions starting within ~2 minutes.
+- Fallback: we can accept a fallback to a lower-capacity model for up to 3 minutes during extreme events but prefer graceful degradation (reduced token budget) over abrupt rate limiting.
+
+Attachments: avalogistics-windowed-workload.csv (text/csv) — contains columns: timestamp, qps, p50_latency_ms, p95_latency_ms, p99_latency_ms, active_streams, spike_label
+
+Let me know if you need anything else before Friday.
+
+Tom
+Head of Platform
+Ava Logistics
+tom.meyers@avalogistics.com
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Tom Meyers <tom.meyers@avalogistics.com>
+Cc: Markus Klein <markus.klein@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: Thu, 15 Jul 2026 13:22:00 -0700
+Subject: Re: Post-call recap: spike resilience + streaming QPS clarification
+
+Tom — got the CSV, thanks. Quick note on how we’ll use a few columns so expectations align for the sizing workshop:
+
+- active_streams: will be interpreted as concurrent streaming sessions that hold a slot; for mixed short/long streams we model effective slots = short_streams*0.25 + long_streams*1.0 to approximate CPU/GPU multiplexing benefits
+- qps: we’ll split QPS into streaming-initiations vs non-streaming API calls if you can mark them; if not, we’ll estimate based on session length distribution
+- p95/p99: please confirm whether these numbers include client-side aggregation or represent pure backend processing — we assume backend only for our sketches
+
+Two asks before we run the sketch:
+1) Can SRE mark one CSV row in the sustained peak (timestamp) that best represents the 30–90 min window average? We’ll use that for worst-case capacity checks.
+2) If you have a small sample of long-session transcript lengths (tokens per session), even 50 rows will help model token throughput impact on GPU contexts.
+
+We’ll turn around an initial capacity sketch within 24 hours of the clarifying items. If everything looks reasonable we’ll schedule a 60-minute sizing workshop (proposed Wed 7/21 10am PST).
+
+—
+Marissa Cole
+Solutions Architect, Redwood Inference
+marissa.cole@redwood.com
+
+From: Markus Klein <markus.klein@redwood.com>
+To: Tom Meyers <tom.meyers@avalogistics.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Date: Fri, 16 Jul 2026 15:40:00 -0700
+Subject: Re: Post-call recap: spike resilience + streaming QPS clarification
+
+Tom — appreciate the quick turnaround and the CSV. Final confirmation and immediate next steps:
+
+1) We’ll ingest your CSV and run two sketches: a) steady-state sizing and b) peak-window resilience (simulating micro spikes and the 30–90 min sustained peak). Expect the sketches back by EOD Monday 7/19.
+2) If the sketches show model-slot pressure during sustained peaks, our recommended mitigations will include: prefix caching for recurrent prompts, dynamic quantized model fallback, and a temporary scaled-burst pool. We’ll call out expected cost delta for each option.
+3) Please upload the 50-sample long-session token-lengths (or paste into the Drive doc we shared) before Monday morning so we can include token-throughput in the simulation.
+
+Proposed workshop: Wed 7/21 10:00–11:00 PST — agenda: data walkthrough (10m), capacity sketch review (30m), fallback options & mutual action plan (20m).
+
+If that works I’ll send a calendar invite and a short pre-read. Thanks again — we’ll aim for crisp deliverables so you can take this into procurement review.
+
+Attachments referenced: slo-targets-draft.pdf
+
+—
+Markus Klein
+Enterprise Solutions, Redwood Inference
+markus.klein@redwood.com

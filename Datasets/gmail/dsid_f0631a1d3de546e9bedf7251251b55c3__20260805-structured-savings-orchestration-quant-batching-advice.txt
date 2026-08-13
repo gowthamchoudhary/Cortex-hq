@@ -1,0 +1,147 @@
+OrchardAI - Optimize toolkit savings & technical fit questions
+
+From: Alec Turner <alec.turner@orchardai.com>
+To: Ben Carter <ben.carter@redwood.com>
+Date: Mon, 3 Aug 2026 09:14:00 -0700
+Subject: Optimize toolkit questions + RFP
+
+Hi Ben,
+
+Thanks for taking this — attaching our brief (OrchardAI_RFP_20260803.pdf). We're evaluating Redwood's Optimize toolkit to reduce per-token costs for our customer-facing summarization API. Two quick things we need clarity on before we commit:
+
+1) How do batching and KV/prefix caching interact with our bursty traffic (mostly short summaries, p50 latency 120ms)? Any recommended slab/commit structures for that pattern?
+
+2) Quantization guidance: we run a mix of 7B and 13B open models. Will the Optimize recommendations differ materially by model family? Are there compatibility or quality regressions we should budget for?
+
+Would like to get an initial commercial sketch (credits vs committed slabs) and a short technical note on expected quality delta at different quant levels. Can we set a call to run through?
+
+Best,
+Alec Turner
+Head of Infrastructure, OrchardAI
+ale c.turner@orchardai.com
+
+Attachment: OrchardAI_RFP_20260803.pdf (application/pdf, 410KB)
+From: Ben Carter <ben.carter@redwood.com>
+To: Alec Turner <alec.turner@orchardai.com>
+Cc: Priyom Das <priyom.das@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Mon, 3 Aug 2026 11:02:00 -0700
+Subject: Re: Optimize toolkit questions + RFP
+
+Alec — thanks for the RFP and the clear ask. High level reply below, happy to deep-dive on a call this week.
+
+Quick answers up front:
+- Batching + KV caching: for short, bursty requests we recommend a cache-first approach with a small commit to preserve latency SLOs. That means configuring an aggressive prefix cache (TTL 60s for high-repeat queries) and a small batching window (8-12ms) to avoid added tail latency.
+- Quantization: 7B tends to get Q4_0 safely; 13B often needs Q5_0 or mixed-precision to avoid measurable quality drift on summarization. We'll include our eval delta numbers in the follow-up note.
+
+Commercial sketch: two paths we typically propose — Pilot Credits (short term, lower commit) or Slab Commit (better unit economics at scale). I'll attach a one-pager and cc Priyom for packaging and Karthik for the technical quant note.
+
+Proposed next step: 30-minute call tomorrow between our teams to align on workload samples and target QPS so we can produce a short MAT and a formal proposal. Options: Tue 8/4 10am PT or Wed 8/5 9am PT. Which works?
+
+Ben Carter
+Senior Account Executive, Redwood Inference
+ben.carter@redwood.com | +1 415-555-0189
+
+Attachment: redwood_optimize_sketch_20260804.pdf (application/pdf, 220KB)
+From: Priyom Das <priyom.das@redwood.com>
+To: Ben Carter <ben.carter@redwood.com>, Alec Turner <alec.turner@orchardai.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.com>
+Date: Mon, 3 Aug 2026 13:40:00 -07:00
+Subject: Packaging options + initial slate for MAT
+
+Alec — following Ben's note, a couple of practical packaging options we see fit for OrchardAI's pattern: 
+
+Option A — Pilot Credits (30–90d)
+- 150k token credits prepaid, applies to Optimize Toolkit features (batching advisory, cache rules, quant guidance).
+- No long-term commit; unit price ~1.8x hosted list but includes 1 technical tuning session and 2 eval runs.
+
+Option B — Slab Commit (12 months)
+- Commit bands: 0–500M, 500M–2B, 2B+ tokens per month with stepped discounts (15%, 25%, 35%).
+- Includes quarterly quant evaluation (per-model), 24/7 ops escalation window, and discounted engineering time for integration.
+
+Operational guardrails we recommend:
+- Cache TTLs and eviction policies tuned to your repeat rate (we'll need a 7-day traffic sample).
+- AB test quant levels on a representative prompt set (we can help build the prompt set and run automated evals).
+
+If you prefer, we can build a short MAT (mutual action plan) that maps deliverables, timelines, and acceptance criteria — I'll draft that after the call.
+
+— Priyom Das
+Solutions Architect, Redwood Inference
+priyom.das@redwood.com
+
+Quoted text from previous message:
+> Alec — thanks for taking this — attaching our brief (OrchardAI_RFP_20260803.pdf).
+
+Attachment: packaging_options_orchardai_v1.pdf (application/pdf, 180KB)
+From: Alec Turner <alec.turner@orchardai.com>
+To: Ben Carter <ben.carter@redwood.com>, Priyom Das <priyom.das@redwood.com>
+Cc: Sofia Mendez <sofia.m@orchardai.com>
+Date: Tue, 4 Aug 2026 08:21:00 -0700
+Subject: Re: Optimize toolkit questions + RFP
+
+Thanks Ben/Priyom — helpful start. A few clarifying items before we schedule:
+
+1) On the slab commit discounts: do those discounts apply regardless of whether traffic is served hosted vs Dedicated? OrchardAI plans to use a hybrid model (hosted for public traffic, Dedicated for regulated enterprise customers).
+2) For quantization: can you share a concrete example of expected ROUGE/ROUGE-L delta at Q4_0 vs Q5_0 for a 13B summarization model? We prefer a single-number summary we can present to our data science leadership.
+
+Also — curious whether Redwood has any guidance for CPU fallback for lower-priority batches (we want predictable cost caps even when GPUs are constrained).
+
+Can we do Wed 8/5 9am PT for a sync? That works for our side.
+
+Thanks,
+Alec
+
+On Mon, Aug 3, 2026 at 11:02 AM Ben Carter <ben.carter@redwood.com> wrote:
+> Alec — thanks for the RFP and the clear ask. High level reply below, happy to deep-dive on a call this week.
+
+Attachment: Orchard_followup_questions.txt (text/plain, 2KB)
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Alec Turner <alec.turner@orchardai.com>, Priyom Das <priyom.das@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Wed, 5 Aug 2026 09:04:00 -07:00
+Subject: Quantization & batch-size guidance (brief)
+
+Alec — quick technical note ahead of today's call. TL;DR: 7B -> Q4_0 recommended; 13B -> Q5_0 or Q4_1 hybrid depending on prompt sensitivity. Expected quality deltas (internal averages on our summarization benchmark):
+
+- 7B: Q4_0 mean ROUGE-L delta ~ -0.6 pts vs FP16, latency down ~35% on supported kernels.
+- 13B: Q5_0 mean ROUGE-L delta ~ -1.6 pts vs FP16; Q4_1 (mixed) ~ -0.9 pts. Latency improvements 25–40% with Q5_0 depending on sequence length.
+
+Batching: for short summaries (avg tokens per request ~ 80) we recommend batching targets of 8–16 tokens-per-batch; larger batches add throughput but increase p95 by ~30–70ms.
+
+CPU fallback: feasible for background/low-priority workloads using our Dedicated CPU lanes but expect a 6–10x token-cost increase vs GPU; good for asynchronous batch processing where latency is not critical.
+
+We'll bring representative eval runs to the call and can run a quick AB test if you share ~500 prompts.
+
+— Karthik Iyer
+Applied ML / Inference Optimization, Redwood Inference
+karthik.iyer@redwood.com
+
+Quoted earlier:
+> Priyom — following Ben's note, a couple of practical packaging options we see fit for OrchardAI's pattern:
+
+Attachment: quant_shortnote_20260805.md (text/markdown, 8KB)
+From: Ben Carter <ben.carter@redwood.com>
+To: Alec Turner <alec.turner@orchardai.com>
+Cc: Priyom Das <priyom.das@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: Wed, 5 Aug 2026 16:22:00 -07:00
+Subject: Re: Optimize toolkit questions + RFP
+
+Alec — great to get alignment on the call today. Recap and agreed next steps below: 
+
+1) Pilot: OrchardAI will start with Option A (Pilot Credits) for 60 days to validate batch/cache settings and quantify quality at Q4_0 (7B) and Q5_0 (13B). Redwood will run 2 eval passes and supply a short report.
+2) Data/sample: Please upload 500 prompt/response pairs to the Drive link and grant edit access to priyom.das@redwood.com and karthik.iyer@redwood.com by EOD Fri 8/6.
+3) Commercial: We'll issue a pilot SOW and a draft slab commitment sheet for long-term economics. Ben to send commercial LOI and Priyom will include acceptance criteria in the MAT.
+
+If that matches your read, I'll send the LOI and pilot SOW by tomorrow morning. Thanks again for the time.
+
+Best,
+Ben Carter
+Senior Account Executive, Redwood Inference
+ben.carter@redwood.com | +1 415-555-0189
+
+---
+Forwarded message:
+From: Priyom Das <priyom.das@redwood.com>
+Subject: Packaging options + initial slate for MAT
+Date: Mon, 3 Aug 2026 13:40:00 -0700
+> Alec — following Ben's note, a couple of practical packaging options we see fit for OrchardAI's pattern...
+
+Attachments: redwood_optimize_sketch_20260804.pdf, quant_shortnote_20260805.md

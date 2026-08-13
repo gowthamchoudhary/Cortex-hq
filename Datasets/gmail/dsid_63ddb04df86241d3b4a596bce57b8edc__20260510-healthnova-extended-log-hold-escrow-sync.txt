@@ -1,0 +1,128 @@
+HealthNova: request for extended log hold and escrow attestation
+
+From: Elena Ruiz <elena@healthnova.com>
+To: Jonas Weber <jonas@redwood.com>
+Cc: HealthNova Legal <legal@healthnova.com>
+Date: Sun, 10 May 2026 09:18:00 -0700
+Subject: Request: temporary extended log hold + evidence attestation
+
+Jonas —
+
+Quick context: HealthNova has a regulator-initiated clinical review that requires we preserve full request + debug logs for a specific patient cohort for an additional 90 days beyond our standard TTL. Legal wants an operational attestation that Redwood will not purge relevant backups/snapshots or KV logs for that cohort during the hold, and a list of subprocessors that may see those logs.
+
+Can you confirm whether Redwood can: a) place a one-off 90-day temporary hold on purge for logs matching the attached retention summary (filters included), b) provide an attestation document describing the deletion workflow we will use when the hold expires, and c) share a current subprocessor list and whether any cross-border copies will be affected?
+
+Attachments: HealthNova_Requested_Retention_Summary.xlsx (spreadsheet with data selectors)
+
+We appreciate a quick runbook and an ETA. Not urgent to the minute, but legal would like this before next Wednesday.
+
+Thanks,
+Elena Ruiz
+Head of Compliance
+HealthNova
+
+--
+[Attachment: HealthNova_Requested_Retention_Summary.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+From: Jonas Weber <jonas@redwood.com>
+To: Kimberly Park <kimberly@redwood.com>, Jordan Blake <jordan@redwood.com>
+Date: Sun, 10 May 2026 10:02:00 -07:00
+Subject: Fwd: Request: temporary extended log hold + evidence attestation
+
+Kim / Jordan — forwarding HealthNova's ask. TL;DR: one-off 90-day extension for a filtered set of request/debug logs and backups. They need:
+
+- Confirmation we can stop purge for the identified selectors for 90 days,
+- An attestation doc describing the deletion workflow and safeguards,
+- Current subprocessor list + whether any backups live in eu regions that would be cross-border copies.
+
+My read: possible but we need an ops-safe way to implement the selective hold (by key prefix + tag) and to produce a short attestation for legal. Also need to confirm whether any storage snapshots will be swept by scheduled purge jobs and if an escrow/immutable snapshot is required.
+
+Proposed owners:
+- Kimberly: operational implementation and snapshot gating
+- Jordan: legal/commercial coordination and draft DPA amendment text
+
+Kim — can you outline a minimal implementable plan (steps, timeline, rollback) plus a proposed evidence template? I can own client comms and the DocuSign flow.
+
+Jonas
+
+--
+[Forwarded message included below]
+
+On Sun, 10 May 2026 at 09:18 Elena Ruiz <elena@healthnova.com> wrote: (see above)
+From: Kimberly Park <kimberly@redwood.com>
+To: Jonas Weber <jonas@redwood.com>, Jordan Blake <jordan@redwood.com>
+Cc: Elena Ruiz <elena@healthnova.com>
+Date: Mon, 11 May 2026 08:37:00 -07:00
+Subject: Re: Fwd: Request: temporary extended log hold + evidence attestation
+
+Jonas / Jordan / Elena —
+
+Thanks for the context. I've sketched an ops-safe approach and an evidence template. High level:
+
+1) Scope and selectors: we will implement a selective hold using the selectors in the attached spreadsheet (key prefixes + tag combination). This avoids whole-bucket holds.
+
+2) Snapshots & purge windows: normal nightly snapshot/retention jobs run at 02:00 UTC. For the affected selectors we will:
+   - Create an immutable snapshot (read-only) at T0 and place it into the escrow bucket with 90-day retention.
+   - Apply a temporary suppression flag so the routine purge job skips matching keys for 90 days.
+   - Schedule a post-hold verification job (7 days after expiry) to confirm the purge executed and to produce a deletion evidence package.
+
+3) Subprocessors & cross-border: current list attached. Short answer: primary storage lives in us-west and us-east; a subset of telemetry copies are sent to our analytics subprocessor in eu-central for aggregated metrics. For this cohort we will ensure any eu copies are included in the escrow snapshot or flagged for additional retention to avoid accidental purge.
+
+4) Attestation / evidence doc: I attached a short attestation template that covers: selectors, T0, escrow snapshot id, purge suppression token, expiry timestamp, and the verification report. We'll sign this from Redwood Ops and include the deletion verification report after expiry.
+
+5) Timeline: if we get DocuSign approval within 48 hours we can gate the snapshot + suppression within 24 hours after approval.
+
+6) Rollback / emergency: if HealthNova needs to cancel the hold before expiry we will schedule an expedited purge (48h notice) and provide an intermediate deletion report.
+
+Attachments: HN-DPA-Amendment-draft.docx, HealthNova_Requested_Retention_Summary.xlsx
+
+Action items: Jordan to review DPA language and propose any commercial approvals; Jonas to send client-facing summary + DocuSign link.
+
+Kimberly Park
+Senior Reliability Engineer, Redwood Inference
+
+[Attachment: HN-DPA-Amendment-draft.docx (application/vnd.openxmlformats-officedocument.wordprocessingml.document)]
+[Attachment: HealthNova_Requested_Retention_Summary.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+From: Elena Ruiz <elena@healthnova.com>
+To: Jonas Weber <jonas@redwood.com>, Kimberly Park <kimberly@redwood.com>
+Cc: HealthNova Legal <legal@healthnova.com>, Carlos Mendez <carlos@healthnova.com>
+Date: Tue, 12 May 2026 11:05:00 -07:00
+Subject: Re: HealthNova: request for extended log hold and escrow attestation
+
+Thanks, Kimberly — this looks reasonable. A couple of follow-ups from legal: they'd like the attestation to explicitly reference the subprocessor list and any eu analytics copies, and they also asked for a one-time emergency pause on purge scheduling in case a regulator extends the review.
+
+Can Redwood commit to a one-time emergency pause capability (45 additional days) that HealthNova can trigger via a signed request? If so, legal will accept the DPA amendment language with a one-paragraph addendum capturing the emergency pause process and who signs off.
+
+Also: please confirm the exact format of the deletion verification report so legal can triage it into their records. A CSV with selectors + object IDs + timestamp + operator signature would be fine.
+
+Elena
+
+On Tue, May 11, 2026 at 08:37 Kimberly Park <kimberly@redwood.com> wrote: (see above)
+From: Jonas Weber <jonas@redwood.com>
+To: Elena Ruiz <elena@healthnova.com>, Kimberly Park <kimberly@redwood.com>, Jordan Blake <jordan@redwood.com>
+Cc: HealthNova Legal <legal@healthnova.com>
+Date: Thu, 13 May 2026 14:02:00 -07:00
+Subject: Re: HealthNova: request for extended log hold and escrow attestation
+
+Elena / team —
+
+We can do the emergency pause. Confirmed implementation notes:
+
+- Primary hold: 90 days on selectors via suppression token + immutable escrow snapshot (T0 snapshot id: will be provided after creation).
+- Emergency pause: a single 45-day extension can be triggered by HealthNova with an authorized signatory (we will require the signed request to follow the DocuSign envelope flow to avoid ambiguity).
+- Subprocessors: attached list (see Drive link) — eu analytics copies will be included in the escrow snapshot or flagged for retention as Kimberly noted.
+- Verification report: we will provide a CSV (selector, object_id, deleted_timestamp, operator, signature_hash) and a brief PDF attestation signed by Redwood Ops and Legal.
+
+Next steps:
+1) Jordan: finalize the one-paragraph DPA addendum capturing the emergency pause flow and signatory requirements.
+2) Jonas: send the DocuSign package (HN-DPA-Amendment-draft.docx + addendum) and the drive link for the escrow evidence folder.
+3) Kimberly: stand by to create the T0 snapshot once DocuSign OK is received.
+
+ETA: I'll send DocuSign this afternoon and share the HubSpot deal update. If legal needs to escalate for a faster timeline, loop me and Jordan and we'll prioritize.
+
+Cheers,
+Jonas Weber
+Director, Account Services
+Redwood Inference
+
+[Drive folder link: https://drive.google.com/drive/folders/1HnHealthNova/retention-evidence]
+[HubSpot: https://app.hubspot.com/contacts/12345/deal/HN-2026-042]

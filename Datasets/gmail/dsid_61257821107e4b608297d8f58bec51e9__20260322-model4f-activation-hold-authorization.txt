@@ -1,0 +1,95 @@
+Urgent: model-4f latency variance — activation hold request
+
+From: Ethan Ross <ethan.ross@greenlinepay.com>
+To: karthik_iyer@redwood.ai
+Date: Sun, 22 Mar 2026 09:12:00 -0700
+Subject: Spike in checkout latency — model-4f predictions
+
+Hi Karthik,
+
+We're seeing a sharp increase in checkout latency that correlates with the model-4f rollout you completed yesterday. Starting at ~08:40 PST, our frontend p95 for 'payment-prediction' calls spiked from ~220ms to ~920ms and error rates on the request path have ticked up from 0.1% to 0.8%. This is material for our checkout flow and causing write retries on our side.
+
+I've attached a CSV with a 30-minute sampling window and a short trace (greenline_model4f_latency_20260322.csv). We have not made changes on our end. Can you advise:
+- Can we pause the persistent rollout or flip traffic back to the previous variant?
+- Do you need any additional logs/traces from us?
+
+We'd like an urgent mitigation plan — if you have a fast fallback or activation hold you can apply, please share ETA. Our product/ops teams are on standby.
+
+Thanks,
+Ethan Ross
+Head of Ops, Greenline Payments
+ops@greenlinepay.com
+
+[attachment: greenline_model4f_latency_20260322.csv]
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Ethan Ross <ethan.ross@greenlinepay.com>
+Cc: Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Date: Sun, 22 Mar 2026 09:18:00 -07:00
+Subject: Re: Spike in checkout latency — model-4f predictions
+
+Ethan — thanks for the data and the quick heads-up. I'm looping in Ben (SE) and Laura (CS) to coordinate. Initial read: latency jump aligns with the v4f variant scheduled rollout. We need to contain user impact while we investigate root cause.
+
+Proposed immediate actions (please confirm):
+- Place an activation hold on model-4f traffic for Greenline (prevent further ramp).
+- Switch traffic to the previous stable variant (model-4e-stable) or enable the variant-fallback path.
+- Collect token-level traces and the model serving logs for the 08:30–09:10 window. Ethan, if possible please provision a short trace ID or request ID range — that speeds up triage.
+
+Ben, can you outline the steps to enact a rollback or activation hold and estimate time to apply? Laura, can you confirm whether customer communications should indicate a temporary SLA exception or a change-management notice?
+
+Karthik Iyer
+Account Executive — Redwood Inference
+karthik_iyer@redwood.ai
+
+--- Original message attached below ---
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Karthik Iyer <karthik_iyer@redwood.ai>, Ethan Ross <ethan.ross@greenlinepay.com>
+Cc: Laura Bennett <laura_bennett@redwood.ai>
+Date: Sun, 22 Mar 2026 09:25:00 -07:00
+Subject: Re: Spike in checkout latency — model-4f predictions
+
+Karthik / Ethan — quick technical summary and mitigation options. Quoted your CSV and did a short correlation against our infra metrics.
+
+Findings:
+- 08:36–08:52 window shows a sustained p95 jump coincident with higher matrix-multiplication latency on GPU host pool g-3a.
+- KV cache hit ratio dropped ~18% for the affected prefix set (likely different tokenization behavior in v4f).
+
+Immediate options (ranked by speed):
+1) Activation hold + traffic pin to model-4e-stable: ~8–12 minutes. Low risk, immediate containment.
+2) Soft-fallback to model-4f-alpha (quantized variant with smaller context) with slight quality tradeoff: ~10–15 minutes. Test path first for 5% traffic.
+3) Full rollback of v4f rollout (requires rollback window + deployment stop): ~25–40 minutes, more invasive.
+
+I have a step-by-step runbook and a short checklist in the attached fallback_steps.md (includes CLI commands, guardrails, and required approvals). My recommendation: activation hold + pin to 4e-stable while we gather traces; if latency persists, escalate to rollback.
+
+Risk notes: flipping variants will change inference quality slightly for edge cases — we'll capture those in a post-mitigation eval. Also request permission to pull anonymized token traces from Greenline for the 08:30–09:10 window.
+
+If we have signoff, I can start the activation hold and traffic pin at ~09:35 PST.
+
+Ben Carter
+Senior Sales Engineer, Redwood Inference
+ben_carter@redwood.ai
+[attachment: fallback_steps.md]
+
+> On Sun, Mar 22, 2026 at 09:18, Karthik Iyer wrote:
+> > Ethan — thanks for the data and the quick heads-up. I'm looping in Ben (SE) and Laura (CS) to coordinate.
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>, Ethan Ross <ethan.ross@greenlinepay.com>
+Date: Sun, 22 Mar 2026 09:40:00 -07:00
+Subject: Re: Spike in checkout latency — model-4f predictions
+
+Team — decision and authorization: I am authorizing an activation hold and immediate traffic pin to model-4e-stable for Greenline Payments to contain customer impact. Ben, proceed with option (1) from your runbook and confirm when traffic has been pinned. Please keep the window to a maximum of 30 minutes unless further escalation is needed.
+
+Laura — please send Greenline the communication template indicating we are applying an emergency activation hold; include expected ETA (target 10–12 minutes) and offer a short post-mortem once we have traces. Ethan, appreciate your patience — Ben will confirm start/complete timestamps.
+
+Also noting: we'll treat this as an SLA exception while the activation hold is in place; I'll open a short exception ticket and include a credit estimate if required.
+
+Karthik Iyer
+Account Executive — Redwood Inference
+karthik_iyer@redwood.ai
+
+[attachment: activation_hold_approval.txt]
+
+> On Sun, Mar 22, 2026 at 09:25, Ben Carter wrote:
+> > Karthik / Ethan — quick technical summary and mitigation options.

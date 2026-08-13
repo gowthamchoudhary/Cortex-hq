@@ -1,0 +1,117 @@
+Post-call: multi-hyperscaler delta & unit-econ action plan
+
+From: Sergio Alvarez <sergio.alvarez@redwood.com>
+To: Luke Harper <luke.harper@acme.ai>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Sun, 05 Sep 2027 15:12:00 +0000
+Subject: Post-call: multi-hyperscaler delta & unit-econ action plan
+
+Luke / Lauren — thanks again for the call today. Quick recap and proposed next steps so we stay aligned: 
+
+Summary of notes from today
+- Primary workload: conversational + short embeddings (avg request ~64 tokens, 70/30 split conv/embed).
+- SLOs you called out: p95 latency <= 250ms (interactive), sustained 40–60 QPS at peak.
+- Security: you need VPC/private deployment option for the pilot; procurement will ask for SOC2 artifacts.
+
+Competitive / unit-econ snapshot (ballpark, for discussion)
+- Redwood (quantized + prefix cache): ~$19 per 1M tokens (assumes 40% cache hit, batching size ~8).
+- Hyperscaler A: ~$38 per 1M tokens (no prefix cache for your traffic pattern).
+- Hyperscaler B: ~$27 per 1M tokens (better batching but higher latency tail in our tests).
+
+Key technical differentiators we think matter for Acme
+- Prefix/KV caching reduces token work for repeated prompts (useful for your 70% repeated intents).
+- Continuous batching keeps latency low while improving GPU utilization at your concurrency profile.
+- Model variant pinning + automatic fallbacks to cheaper quantized variants for cost predictability.
+
+Concrete next tests we propose
+1) 1M token run on your sample dataset (mixed conv+embed) to gather real cache-hit and per-token costs.
+2) 30-min stress run at 60 QPS to measure p95 latency and tail behavior with client-like concurrency.
+3) Compare identical model bits on Redwood vs Hyperscaler B with same batching and quantization settings; capture token counts and latency histograms.
+
+Attachments: redwood-multi-hyperscaler-delta.pdf (delta table + quick notes), redwood-unit-econ-assumptions.xlsx (assumptions used for the $/1M numbers).
+
+Requests / asks from Acme
+- Share a small sample (20–50 representative requests) and an S3 link or upload to the Drive link below so we can seed the cache.
+- Confirm whether procurement requires a pre-signed NDA before we run anything on a private endpoint.
+
+I can run the 1M-token job on our side once we have the sample and a short test spec from you (tokenization rules, average prompt length, and target concurrency). If you'd rather, we can give you a short-lived test endpoint and you can run the harness — either works.
+
+Next steps:
+- Luke: confirm sample share and security notes.
+- Acme procurement: confirm NDA / SSO requirements.
+- Redwood: Marissa + Ben to size the lab run and produce a short appendix with assumptions.
+
+Thanks — Sergio
+
+--
+Sergio Alvarez
+Enterprise Sales, Redwood Inference
+sergio.alvarez@redwood.com | +1 (650) 555-0159
+
+From: Luke Harper <luke.harper@acme.ai>
+To: Sergio Alvarez <sergio.alvarez@redwood.com>
+Cc: Lauren Kim <lauren.kim@acme.ai>
+Date: Sun, 05 Sep 2027 19:03:00 +0000
+Subject: Re: Post-call: multi-hyperscaler delta & unit-econ action plan
+
+Thanks, Sergio — this is very helpful and captures the call.
+
+We can share a 40-request sample set (anonymized) and a larger S3 bucket with 10k requests for the 1M-token run. I'll check with procurement on the NDA; they usually ask for a one-page pilot MSA. Security-wise, VPC access is preferred but for the initial econ run we can use a short-lived test endpoint if you provide a secure token.
+
+A couple clarifying questions before we hand off to procurement: 
+- Can you confirm which model variant you used to produce the $19/1M number? (we want to compare apples-to-apples)
+- For the stress run: is there any warmup pattern you recommend to get realistic cache behavior?
+
+I'll get the sample uploaded by EOD tomorrow if procurement doesn't block it.
+
+— Luke
+Luke Harper | Head of ML Systems, Acme AI
+luke.harper@acme.ai | +1 (415) 555-2222
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Sergio Alvarez <sergio.alvarez@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Mon, 06 Sep 2027 13:11:00 +0000
+Subject: Re: Post-call: multi-hyperscaler delta & unit-econ action plan
+
+Sergio — noted. Ben, can you own the lab runs and the unit-econ workbook? I sketched an assumptions tab in redwood-unit-econ-assumptions.xlsx (attached) — please update with real GPU pricing and batching profiles.
+
+Assumptions we should model (placeholders in sheet):
+- Model: redwood-instruct-7b-int8 (quantized path) — call this "7b-q" in the sheet.
+- Avg request tokens: 64 (prompt + response).
+- Cache hit scenarios: 20%, 40%, 60%.
+- Batch sizes to simulate: 1, 4, 8, 16.
+- Concurrency curves: 10, 30, 60 QPS.
+
+Lab schedule suggestion:
+- Wed 09/08 09:00–11:00 PT: run 1M token job + 30-min stress at 60 QPS.
+- Wed 09/08 14:00–15:00 PT: quick sync to review outputs and decide hyperscaler comparison knobs.
+
+Ben — if you can populate the sheet with cost per 1M tokens under the different cache/batch combos by EOD Tue, we can share the numbers with Luke ahead of procurement.
+
+Thanks — Marissa
+
+> On Sun, Sep 5, 2027 at 15:12, Sergio Alvarez <sergio.alvarez@redwood.com> wrote:
+> > Luke / Lauren — thanks again for the call today. Quick recap and proposed next steps so we stay aligned: 
+> > ...
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Sergio Alvarez <sergio.alvarez@redwood.com>
+Date: Tue, 07 Sep 2027 09:02:00 +0000
+Subject: Re: Post-call: multi-hyperscaler delta & unit-econ action plan
+
+Marissa — taking this on. Quick preliminary numbers based on the sheet and our current internal pricing: 
+- Baseline assumptions: 7b-q, avg 64 tokens, 40% cache hit, batch size 8, GPU amortized cost = $1.20 / hour-equivalent per thousand tokens (internal blended).
+- Resulting estimated cost: ~$21 per 1M tokens (internal run, includes infra, networking, and basic cache savings).
+- Sensitivity: with 60% cache hit -> ~$15 / 1M tokens; with 20% cache hit -> ~$28 / 1M tokens.
+
+Bench plan checklist I'm using:
+- Confirm tokenization matches Acme's pipeline (they mentioned custom tokenizer tweaks).
+- Seed cache with 10k representative requests before the 1M run (we get better steady-state numbers).
+- Capture latency histograms (p50/p95/p99) and per-call token counts.
+- Export raw logs (tokenized requests + response token counts) to the Drive link for audit.
+
+I can populate the workbook and upload updated tabbed runs by EOD Tue. Sergio — do you want me to spin the short-lived test endpoint for Acme (they can hit it directly) or run the lab entirely on our side? I recommend we run on our side first to avoid credentials back-and-forth.
+
+Ben Carter
+Solutions Engineer, Redwood Inference
+ben.carter@redwood.com | +1 (650) 555-0175

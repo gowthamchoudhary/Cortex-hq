@@ -1,0 +1,128 @@
+Post-demo: technical qualification checklist & proposed MAP milestones
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Anna Lopez <anna@mediserve.com>, MediServe Tech Eval <tech-eval@mediserve.com>
+Cc: Grace O'Connor <grace@redwood.com>, Monica Patel <monica@redwood.com>
+Date: Mon, 18 Jan 2027 15:12:00 -0800
+Subject: Post-demo: technical qualification checklist & proposed MAP milestones
+
+Anna — great demo earlier. Quick recap and a proposed set of technical milestones for the Mutual Action Plan (MAP) so we can keep the evaluation moving and get you to an internal recommendation by the end of Q1. Please review and flag anything that needs to change.
+
+Summary of ask from today
+- Goal: Validate model + infra for triage and automated clinical-note summarization at production latency/cost targets.
+- Success criteria needed from MediServe: privacy posture confirmation, latency p95 target, per-1k token cost ceiling, and an acceptance-quality threshold on the evaluation prompts you shared.
+
+Proposed MAP milestones (owner — target date — dependency)
+1) Benchmark slate & runner defined — Redwood (Grace) — 2027-01-26 — depends on MediServe providing final evaluation prompt set and sample payloads (from Anna).
+2) Environment & access: test VPC peering + KMS config — MediServe (Anna) / Redwood infra support (Monica) — 2027-01-31 — network diagram + firewall exceptions.
+3) First-run latency/cost pass (baseline) — Redwood (Grace) — 2027-02-07 — requires (1) and (2).
+4) Model shortlist validation + quantization check — Redwood (Grace) & External bench vendor (Jason) — 2027-02-14 — access to models and sample loads.
+5) Acceptance readout & decision point — MediServe stakeholders — 2027-02-21 — consolidated report + playbook.
+
+Immediate asks for you (Anna)
+- Share final 100 evaluation prompts + 5k sample messages (zip) by EOD 2027-01-20.
+- Confirm whether MediServe security needs Soc2 or an in-person audit before we run workloads in your test VPC.
+
+Notes on targets (proposed)
+- Latency: p95 <= 350ms for single-turn summarization at 256-token outputs (batching allowed up to 4).
+- Cost: effective inference cost <= $0.18 per 1k output tokens (including caching/batching savings).
+- Quality: ROUGE-L/semantic score target >= 0.78 on your benchmark set (we’ll define the metric in the benchmark slate doc).
+
+Attachments: MAP_v0.3.xlsx with milestone table, benchmark-slate-params.md with initial param choices, and a Network topology sketch.
+
+If this looks good I’ll update the MAP spreadsheet and push to the shared Drive link below.
+
+Thanks — Rishi
+Rishi Malhotra
+Account Executive | Redwood Inference
+rishi@redwood.com | +1 415-555-0123
+
+
+From: Anna Lopez <anna@mediserve.com>
+To: Rishi Malhotra <rishi@redwood.com>
+Cc: MediServe Tech Eval <tech-eval@mediserve.com>, Grace O'Connor <grace@redwood.com>
+Date: Tue, 19 Jan 2027 09:08:00 -0800
+Subject: Re: Post-demo: technical qualification checklist & proposed MAP milestones
+
+Thanks Rishi — appreciate the clean breakdown. A few clarifications from our side: 
+- We can get you the 100 prompts + samples by 2027-01-20, but note ~30% of samples contain PHI fields that need to be masked unless we use your private deployment.
+- For security: MediServe requires SOC2 evidence and will need to review an architecture/security checklist before we allow peering to our VPC. We can get SOC2 reports to you by 2027-01-22.
+- On the latency target: 350ms p95 seems aggressive given our current on-prem setup. Can you confirm whether that assumes GPU colocated in our region or Redwood hosted? We need both permutations documented.
+
+Also can you add expected token volumes for the baseline run? We typically have 40M inference tokens/month in the triage flow — curious if that changes model recommendation.
+
+Thanks — Anna
+Anna Lopez
+Director, Technical Programs | MediServe Inc
+anna@mediserve.com | +1 212-555-9933
+
+
+From: Grace O'Connor <grace@redwood.com>
+To: Anna Lopez <anna@mediserve.com>, Rishi Malhotra <rishi@redwood.com>
+Cc: Monica Patel <monica@redwood.com>
+Date: Wed, 20 Jan 2027 11:42:00 -0800
+Subject: Re: Post-demo: technical qualification checklist & proposed MAP milestones
+
+Anna — quick follow from our side with concrete bench params and an initial model shortlist so you can see tradeoffs. High-level notes first: if you run in Redwood-hosted shared cluster we can hit p95 350ms for 256-token outputs on an A100-equivalent with continuous batching; on-prem will likely add 50–150ms depending on GPU model and network egress.
+
+Benchmark runner params (what we will measure)
+- Input distribution: 100 prompts, 256-token max response, real sample sizes with average input length ~420 tokens.
+- Throughput modes: single-request (latency SLO) and sustained (100 rps) with batching profiles 1/2/4/8.
+- Metrics captured: p50/p95/p99 latency, tokens/sec, GPU utilization, memory foot-print, 95th percentile KV-cache miss rate, and cost-per-1k-output-tokens (model + infra).
+
+Initial model shortlist (recommend we test these in order)
+- open-llm/xl-7B-quant4 (fast, lower cost; quality baseline)
+- open-llm/xl-13B-8bit (midpoint, better quality at modest cost)
+- redwood/opt-30B-quant4 (higher quality; plan for higher infra cost)
+- vendor-sku/gptx-accelerated (if MediServe allows vendor model access; Jason can run throughput-specific tests)
+
+Proposed acceptance thresholds (draft)
+- Latency: p95 <= 350ms Redwood-hosted; p95 <= 550ms on-prem (GPU dependent).
+- Cost: <= $0.20 per 1k output tokens for shortlisted mid-tier models; allow up to $0.45 for top-tier model if quality delta > 8% (semantic eval).
+- Quality: semantic similarity >= 0.78 and annotated acceptability >= 85% (human review on 30 samples).
+
+Next steps from Redwood (owners)
+- Grace: finalize benchmark runner and share runner repo + params by 2027-01-24 (linked doc in Drive).
+- Monica: coordinate security handoff and SOC2 artifacts ingestion with MediServe by 2027-01-22.
+
+Happy to sync live — I propose a 30-min checkpoint on 2027-01-25 to agree final slate.
+
+— Grace
+Grace O'Connor
+Solutions Engineer | Redwood Inference
+grace@redwood.com
+
+
+From: Rishi Malhotra <rishi@redwood.com>
+To: Anna Lopez <anna@mediserve.com>
+Cc: Grace O'Connor <grace@redwood.com>, Monica Patel <monica@redwood.com>, Jason Kim <jason@srvbench.com>
+Date: Thu, 21 Jan 2027 09:03:00 -0800
+Subject: Re: Post-demo: technical qualification checklist & proposed MAP milestones
+
+Thanks everyone — this is shaping up well. Quick confirmations so we have explicit owners and dates in the MAP spreadsheet (I’ll update and push to Drive after this):
+- Anna: final prompt set + masked/unmasked sample split by 2027-01-20 (if unmasked needed, we will use Private deployment).
+- MediServe security: share SOC2 + checklist by 2027-01-22 — Monica to coordinate and confirm required attestation level.
+- Grace: benchmark runner + repo by 2027-01-24.
+- Jason/SrvBench: optional throughput stress tests (if MediServe approves third-party runs) — tentative 2027-02-02 window.
+
+Checkpoint: 30-min sync Tuesday 2027-01-25 10:00am PT — I’ll send calendar invite once Anna confirms.
+
+Decision point: target acceptance readout 2027-02-21 — at that time MediServe decision on pilot vs proceed-to-production.
+
+If there are no objections I’ll mark the dependencies column in the MAP and attach the updated milestone spreadsheet to the Drive link: https://drive.google.com/open?id=1aB2cC-map-v03
+
+Cheers — Rishi
+Rishi Malhotra
+Account Executive | Redwood Inference
+rishi@redwood.com | +1 415-555-0123
+
+On Wed, Jan 20, 2027 at 11:42 AM Grace O'Connor <grace@redwood.com> wrote:
+> Anna — quick follow from our side with concrete bench params and an initial model shortlist so you can see tradeoffs.
+>
+> Benchmark runner params (what we will measure)
+> - Input distribution: 100 prompts, 256-token max response, real sample sizes with average input length ~420 tokens.
+> - Throughput modes: single-request (latency SLO) and sustained (100 rps) with batching profiles 1/2/4/8.
+> - Metrics captured: p50/p95/p99 latency, tokens/sec, GPU utilization, memory foot-print, 95th percentile KV-cache miss rate, and cost-per-1k-output-tokens (model + infra).
+
+> — Grace
+

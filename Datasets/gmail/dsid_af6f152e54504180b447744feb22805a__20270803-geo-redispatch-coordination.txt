@@ -1,0 +1,116 @@
+Urgent: production latency & error surge in us-west-2 — proposed geo redispatch
+
+From: Sam Turner <sam.turner@starlite.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.com>, Diego Fernandez <diego_fernandez@redwood.com>
+Date: 2027-08-03T09:12:00Z
+Subject: Production latency spike + 5xx errors in us-west-2
+
+Vanessa —
+
+We started seeing elevated latency and a growing 5xx rate from our integration with Redwood around 08:50 PDT. Error rate climbed from ~0.2% to ~6% and median latency went from ~120ms to ~680ms. This is impacting autocomplete and checkout flows for about 18% of our traffic.
+
+Attached are a short span of request traces and a metrics snapshot. Can you confirm whether this is on your side (regional capacity / routing) or something we need to mitigate here? We need an ETA and any proposed temporary mitigations — we can accept traffic steering if that helps.
+
+-Sam Turner
+Head of Integrations, Starlite
+
+Attachments: starlite-usw2-5xx-snapshot-2027-08-03.log, usw2-traffic-metrics-2027-08-03.png
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+To: Sam Turner <sam.turner@starlite.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.com>, Diego Fernandez <diego_fernandez@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: 2027-08-03T09:18:00Z
+Subject: Re: Production latency spike + 5xx errors in us-west-2
+
+Sam — thanks for the quick report and the logs. We're escalating this internally now (cc'd Rishi & Diego).
+
+Immediate plan: we will validate region health and, if confirmed, perform a controlled geo-redispatch of a portion of your traffic off us-west-2 to our warm pools in us-east-1 and eu-west-1 to reduce latency and 5xx amplification while we remediate. That will likely increase cross-region tail latency for routed requests but should restore success rate quickly.
+
+Before we enact: can you confirm you’re okay with temporary cross-region routing (some requests will hit eu-west-1) and a brief token-throttling step if needed? Please reply with OK and any constraints (e.g., data residency restrictions).
+
+We’ll post a timeline within 10–15 minutes once Diego confirms root cause.
+
+— Vanessa Ortiz
+Account Lead, Redwood Inference
+vanessa.ortiz@redwood.com
+
+From: Rishi Malhotra <rishi.malhotra@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Diego Fernandez <diego_fernandez@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: 2027-08-03T09:27:00Z
+Subject: Re: Production latency spike + 5xx errors in us-west-2
+
+Quick summary from infra triage: metrics show sustained 95th percentile token latency rising and GPU utilization in AZ-west3 hitting sustained >98% with queue length growth starting ~08:40 PDT. Error logs indicate request drop/timeout patterns consistent with local KV-cache thrashing and a downstream inference worker restart loop.
+
+Proposed immediate actions (recommendation):
+- Manual redispatch: shift 30% of Starlite traffic off us-west-2 to us-east-1/ eu-west-1 (route by prefix + sticky session preservation).
+- Short token-level throttles for heavy batch customers for 15m if queue clears slowly.
+- Warmed fallback model variant (quantized) for burst handling — small quality delta but lower mem footprint.
+
+I’ve opened a PD incident: PD-8891 and will monitor. Diego — can you confirm whether this looks like a runtime OOM/leak or something else?
+
+-Rishi
+Director, Infrastructure
+
+From: Diego Fernandez <diego_fernandez@redwood.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.com>, Vanessa Ortiz <vanessa.ortiz@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>
+Date: 2027-08-03T09:40:00Z
+Subject: Re: Production latency spike + 5xx errors in us-west-2
+
+On Tue, 2027-08-03 at 09:27, Rishi Malhotra wrote:…
+
+I pulled the runtime stacks for the affected node pool in AZ-west3. Evidence points to a memory growth path in the TVM kernel for a particular attention block under a narrow sequence-length distribution we saw in Starlite traffic. That’s causing repeated worker restarts (OOM) and client-visible 5xx.
+
+Immediate fix is to drain the unhealthy nodes and perform rolling restarts with a patched runtime param that limits per-request KV cache growth (we have the patch ready). Rolling restarts will take ~18–25 minutes for the pool; drain + restart + health checks = ~30–40 minutes.
+
+If we initiate a 30% redispatch now, it should buy time for the restart without increasing global latency much. Logs attached: runtime-stacktrace-oom-az3.txt.
+
+- Diego
+Senior SRE, Serving Runtime
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+To: Sam Turner <sam.turner@starlite.com>
+Cc: Rishi Malhotra <rishi.malhotra@redwood.com>, Diego Fernandez <diego_fernandez@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: 2027-08-03T09:52:00Z
+Subject: Action plan: temporary geo-redispatch + node restarts (needs OK)
+
+Sam — thanks again. Proposed action:
+
+1) At 10:05Z we will enact a controlled redispatch of 30% of your traffic from us-west-2 to our warmed pools in us-east-1 and eu-west-1 (sticky routing preserved where possible).
+2) Concurrently Diego will drain and restart the affected AZ-west3 nodes with the KV-cache limit patch (30–40 minute window).
+3) If success rate does not improve within 15 minutes after redispatch, we’ll expand to 60% and enable a short token-level throttle for the top 5 heavy prefixes.
+
+Expected impact: immediate reduction in 5xx and median latency for diverted requests. Cross-region tail latency will increase slightly for those requests; throughput may drop ~2–4% during restart windows.
+
+Please reply with a quick OK from Starlite (or list any constraints). If no reply by 09:58Z we will proceed under our standard emergency failover policy to protect production.
+
+Attachments: starlite-usw2-5xx-snapshot-2027-08-03.log
+
+— Vanessa Ortiz
+Account Lead, Redwood Inference
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+To: Sam Turner <sam.turner@starlite.com>, Rishi Malhotra <rishi.malhotra@redwood.com>, Diego Fernandez <diego_fernandez@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: 2027-08-03T13:45:00Z
+Subject: Post-action summary: us-west-2 incident (PD-8891) — containment and next steps
+
+Status update / timeline (final):
+- 10:05Z: Executed controlled redispatch of 30% traffic (us-west-2 -> us-east-1 / eu-west-1).
+- 10:12Z: 5xx rate for Starlite dropped from ~6% -> 0.6%. Median latency returned to ~140ms for routed requests.
+- 10:30Z–11:10Z: Diego ran pool drains + rolling restarts with KV-cache cap; nodes stabilized and OOM restarts stopped.
+- 11:35Z: Gradually returned traffic to us-west-2; full traffic by 11:55Z after verifying health.
+
+Current state: incident contained, metrics green. We captured heap profiles and runtime traces for a follow-up root-cause analysis.
+
+Next steps:
+- Post-mortem (technical) scheduled: 2027-08-04 15:00Z (invite to follow).
+- Action items: runtime patch to be backported to stable; better early-detection alert for KV growth; update redispatch playbook to include a warmed-quantized fallback model.
+- Ask: Evelyn — can we approve a one-time goodwill credit for Starlite for the visible impact? Recommend small token credit and an SLA note.
+
+Sam — apologies for the disruption and thank you for rapid coordination. If you'd like a quick post-incident sync before the PM, I can set one up.
+
+Attachments: usw2-traffic-metrics-2027-08-03.png, runtime-stacktrace-oom-az3.txt
+
+— Vanessa Ortiz
+Account Lead, Redwood Inference
+vanessa.ortiz@redwood.com

@@ -1,0 +1,137 @@
+Eval sprint charter + bilingual model selection for checkout assistant
+
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Lucia Gomez <lucia.gomez@globomart.com>, Ahmed Rahman <a.rahman@globomart.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2028-06-20T15:10:00Z
+Subject: Post-call recap + proposed eval sprint charter
+
+Hi Lucia / Ahmed — great conversation earlier, thanks for the time. Quick recap and a proposed lightweight charter so we can get a trial running next week: 
+
+Summary of needs
+- Use-case: checkout assistant (cart recovery, payment flow help, shipping ETA)
+- Languages: English + Spanish primary; potential Portuguese in scope if results look strong
+- Volume target during trial: ~1k simulated queries/day (mix of intents)
+
+Proposed eval sprint (4 weeks) — high level
+- Week 0 (this week): environment access, sample prompt set + data handoff, confirm success metrics
+- Week 1: infra + model provisioning in your region, baseline runs, prompt templating
+- Week 2: prompt tuning and small-scale A/B runs; automated metrics collection
+- Week 3: human review + NPS-style judgment sampling; performance vs SLA review; decision checkpoint
+
+Success criteria (initial)
+- Intent classification accuracy >= 92% (weighted by traffic mix)
+- Response relevance >= 90% on human review (10% random sample)
+- Latency p95 <= 700ms via Redwood Hosted endpoints (region: us-east)
+- No critical hallucinations on payment/shipping instructions on a 200-sample audit
+
+Model suggestion for trial (recommended):
+- Primary: Mistral-7B-Instruct (int8 quantized) — good quality per-token, small memory footprint, stronger L2 performance on instruction style tasks
+- Fallback: Llama-2-13B (low-latency int8 variant) — used only if regional capacity/conformance issues arise
+
+Ops notes
+- We'll enable prefix caching for frequent cart prompts to reduce cost/latency.
+- Data residency: all inference stays in us-east region; logs accessible to you via a shared S3 export for audit.
+
+Attached: POC-charter_v1.pdf, sample-prompt-set.csv
+
+Next steps
+1) Confirm languages scope (English + Spanish; confirm Portuguese?)
+2) Confirm kickoff date — I’m proposing Mon 2028-07-02
+3) Share any procurement constraints (DPAs, PO lead)
+
+I’ll loop Marissa on the onboarding and Vivek for infra questions once we have a kickoff.
+
+Thanks — Jordan
+Jordan Blake
+Enterprise Solutions, Redwood Inference
+jordan.blake@redwood.ai
+
+From: Lucia Gomez <lucia.gomez@globomart.com>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Cc: Ahmed Rahman <a.rahman@globomart.com>, Marissa Cole <marissa.cole@redwood.ai>
+Date: 2028-06-21T09:02:00Z
+Subject: Re: Post-call recap + proposed eval sprint charter
+
+Thanks Jordan — appreciate the clear recap. A few clarifying questions before we lock dates: 
+
+1) Languages: English and Spanish are must-haves. Portuguese is lower priority but we'd like the option to include it if the first two perform well.
+2) Latency: our end-to-end SLA is 800ms p95 (we can accept your 700ms target for the trial), but important we understand how fallback routing to the larger variant impacts that.
+3) Data residency & logs: our security team will need to confirm that logs and any exported audit data remain within us region and that redaction controls exist for PII. Can you confirm the export mechanism and approximate retention?
+4) Prompt sets: can you provide a starter set for our product team to review and a template we can run against our test harness?
+
+Procurement: we have a standard SOW + DPA flow; will ask procurement to push SOW to you if we confirm kickoff.
+
+If all the above looks fine, Monday 2028-07-02 works for our internal kickoff.
+
+—Lucia
+Lucia Gomez
+Head of Product, Globomart
+
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Lucia Gomez <lucia.gomez@globomart.com>, Ahmed Rahman <a.rahman@globomart.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: 2028-06-21T11:40:00Z
+Subject: Re: Post-call recap + proposed eval sprint charter
+
+Lucia — great questions, answers below and an expanded miniature charter attached.
+
+Languages & model handling
+- We'll provision Mistral-7B-Instruct for the trial with tokenization prompts tuned for English/Spanish. Portuguese will be staged as an experiment tier in week 2 if you want us to enable it.
+- Fallthrough: traffic will prefer the primary model; if queue or capacity rules trigger, requests will route to Llama-2-13B fallback. Routing is policy-driven and we can set a strict latency-first policy for checkout flows so fallbacks only occur when throughput exceeds threshold.
+
+Latency/residency/logs
+- p95 budget: we’ll aim for <=700ms with a firm target to not exceed your 800ms SLA in any trial window.
+- Logs: inference traces and minimal request metadata will be exported to a customer-controlled S3 bucket in us-east-1. We support automatic PII redaction pipelines (field-level masks) before export. Retention default is 30 days; can be customized.
+
+Evaluation & metrics collection
+- Automated signals: intent accuracy, token counts, latency p95/p99, failure/error rates, fallback rate
+- Human review: 10% randomized sample each week; template checklist includes correctness, harmful/advice validation, and hallucination flagging
+- We’ll share a CSV template (attached) you can run against your test harness; we’ll also ingest a 200-sample labeled set if you provide it for ground-truth scoring.
+
+Ownership & contacts
+- POC owner (commercial): Jordan Blake — overall charter, acceptance decision, timeline coordination
+- Customer success/ops: Marissa Cole — onboarding, sample ingestion, human review coordination
+- Infra/solutions: Vivek Kulkarni — provisioning, VPC/S3 access, latency tuning
+
+Deliverables (week-by-week)
+- Week 0 (pre-kickoff): credentials + S3 write example, initial prompt set delivery (we already attached a starter CSV)
+- Week 1: baseline runs + initial metrics dashboard
+- Week 2: prompt tuning, Portuguese experiment if enabled
+- Week 3: human review results, decision brief and recommended next steps
+
+Attachments in this message: POC-charter_v1.pdf, sample-prompt-set.csv
+
+If that looks good I’ll ask Legal to prep a short SOW and Marissa will kick off the infra request. Confirming we can target 2028-07-02 for kickoff.
+
+Jordan
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: 2028-06-22T08:05:00Z
+Subject: Internal: addenda / test harness + sample labeling ask
+
+Jordan / Vivek — internal notes before we send the SOW: 
+- Ask Globomart for a 200-row labeled set (intent + expected response flag) to be delivered by Wednesday 2028-06-28; that will let us compute intent accuracy quickly.
+- I recommend we include an optional prompt-cache config: TTL 30s for checkout flows to shave p95. Put that in the POC options section.
+- Vivek: please pre-create an S3 bucket policy template and a short runbook for the customer to attach to their procurement packet (shows retention and redaction defaults).
+
+I’ll draft the SOW blurb for the POC (2-3 page) and loop Legal for DPA/DOCS.
+
+—Marissa
+
+From: Lucia Gomez <lucia.gomez@globomart.com>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Cc: Ahmed Rahman <a.rahman@globomart.com>, Marissa Cole <marissa.cole@redwood.ai>
+Date: 2028-06-22T10:12:00Z
+Subject: Re: Eval sprint charter + bilingual model selection for checkout assistant
+
+Thanks — this is helpful and aligns with our expectations. Two quick items before kickoff: 
+
+1) Procurement will send a short SOW + DPA. Please route DocuSign to procurement@globomart.com when ready.
+2) We can provide the 200-row labeled set by 2028-06-28; I’ll have Ahmed own that and share a Drive link.
+
+We’re good to kick on 2028-07-02. Lucia will lead product acceptance, Ahmed will coordinate labeled data and our test harness.
+
+See you at kickoff — Lucia

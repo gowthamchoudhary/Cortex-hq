@@ -1,0 +1,91 @@
+Mid-cycle token allocation variance — request for usage ledger tie-out
+
+From: Elena Petrova <elena.p@nimbus.ai>
+To: David Kim <david.k@redwood.com>
+Cc: billing@nimbus.ai
+Date: 2026-09-24T09:12:00-07:00
+Subject: Unexpected mid-cycle usage variance on Sept invoice
+
+Hi David,
+
+We've been reconciling September billing and see a ~38% delta between the token count on the invoice you issued on 2026-09-22 and our internal telemetry for the same time window. I've attached a CSV export of our observed requests (nimbus_usage_export.csv).
+
+Specifics: the invoice lists 2,120,480 tokens for the period 2026-09-01 to 2026-09-21; our internal tally (same API keys / org) is 1,532,140 tokens. We're also seeing VAT charged on the differential, which would materially change our month-end accruals.
+
+Can you: 1) share the raw usage ledger (per-request token counts) for our org for that window, 2) confirm whether any automated replays or ingestion retries could have inflated the counts, and 3) advise next steps for an adjustment/credit if the delta looks like an over-count?
+
+We need this reconciled for our finance team by next Tuesday (2026-09-29) to finalize month-end. Appreciate a quick triage so we know whether to move forward with an invoice hold.
+
+Thanks,
+Elena Petrova
+Head of Finance Ops
+Nimbus Labs
+
+Attachment: nimbus_usage_export.csv
+
+From: David Kim <david.k@redwood.com>
+To: Elena Petrova <elena.p@nimbus.ai>
+Cc: Ben Carter <ben.carter@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: 2026-09-24T11:03:00-07:00
+Subject: Re: Unexpected mid-cycle usage variance on Sept invoice
+
+Hi Elena — thanks for the CSV and the heads-up. We're putting a small cross-functional team on this (billing + metering + CS) and will triage immediately. Next steps on our side:
+
+- Ben will pull the per-request ledger and run a token-level diff against your export.
+- Karthik will check for any known connector replays or re-ingest jobs in the timeframe.
+- Marissa will scope the accounting impact (gross tokens -> dollar credit + VAT).
+
+Can you confirm whether the org used a single API key for production or if multiple keys map to the same account? That helps with attribution. Also, we'll avoid any invoice adjustments until we have a clear root cause. If you need an invoice hold, say so and we'll flag collections on our end.
+
+I'll follow up with a succinct findings note by EOD Monday.
+
+Best,
+David
+Director, Billing Platform
+Redwood Inference
+
+Attachment: initial-triage-notes.txt
+
+From: Ben Carter <ben.carter@redwood.com>
+To: David Kim <david.k@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Elena Petrova <elena.p@nimbus.ai>
+Date: 2026-09-25T14:28:00-07:00
+Subject: Findings: duplicate token runs from replayed ingest job (logs + proposal)
+
+Quick update from the metering side. I pulled the per-request ledger for Nimbus Labs for 2026-09-01 -> 2026-09-21 and diffed it against their CSV. Key observations:
+
+- Between 2026-09-18T03:05:12Z and 2026-09-18T04:46:58Z we see a replayed ingestion batch that re-submitted ~420k requests. These requests carry identical request_ids but different request timestamps (retried from an external connector).
+- Our current metering pipeline counts each arrival as a charged event because the upstream retry header (X-Redwood-Idempotency) was not present on the second submission. The connector in question (third-party ETL v2.1) added an extra POST attempt during a transient network error.
+- Using token-per-request averages from the sample window, the replay accounts for ~588,234 excess tokens (this aligns with the customer's reported delta within reasonable sampling variance).
+
+Proposed remediation:
+1) Issue a one-time credit for 588,234 tokens translated at their committed rate = USD 2,352.93 (pre-VAT).
+2) Reverse VAT on the credit line and issue an updated invoice for September with net owed adjusted accordingly.
+3) Add a guard in the metering pipeline: reject duplicates when request_id matches within a 24-hour window unless a specific idempotency header is present. We'll schedule that change for the next sprint and provide release notes.
+
+Attachments: sampling-logs-snippet.txt (snippets showing duplicate request_ids), link to internal trace: https://drive.google.com/drive/folders/1a2b3c-example-usage-logs
+
+CC: David — let me know if you want me to convert the token credit to a dollar credit and issue a credit memo.
+
+-ben
+Ben Carter
+Senior Metering Engineer
+Redwood Inference
+
+From: Elena Petrova <elena.p@nimbus.ai>
+To: David Kim <david.k@redwood.com>, Ben Carter <ben.carter@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2026-09-28T16:45:00-07:00
+Subject: Re: Mid-cycle token allocation variance — request for usage ledger tie-out
+
+Thanks — this is very helpful and appreciated. We confirm the connector team ran a retry on 2026-09-18 (they're seeing the same duplicate request_ids internally).
+
+Nimbus agrees to the proposed remediation steps. Please proceed with: 1) credit memo for USD 2,352.93 pre-VAT, 2) reversal of VAT on that line, and 3) corrected invoice/adjusted statement for September. We will place the original invoice on hold with our AP team pending receipt of the corrected version.
+
+I attached our updated signed PO noting the mid-cycle credit acceptance (signed-PO.pdf) — please apply per your normal credit memos/process. We also need a short confirmation email once the credit memo is posted so our AP can clear the hold.
+
+Best,
+Elena Petrova
+Head of Finance Ops
+Nimbus Labs
+
+Attachment: signed-PO.pdf

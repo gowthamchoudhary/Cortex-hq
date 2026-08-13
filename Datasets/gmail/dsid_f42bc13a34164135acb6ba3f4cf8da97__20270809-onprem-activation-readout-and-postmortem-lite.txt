@@ -1,0 +1,165 @@
+On‑prem activation: owners confirmed and post‑activation validation plan
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Miguel Santos <miguel.s@acme-corp.com>
+Cc: infra-ops@acme-corp.com, acme-cloud-partner@cloudpartner.net
+Date: Mon, 9 Aug 2027 09:12:00 -0700
+Subject: Pre-activation: owners confirmed and runbook attached
+
+Team —
+
+We're green for the on-prem activation this week provided we close the small checklist below. Attaching the activation runbook (runbook_activation_v1.pdf) and the updated allowlist matrix. Please confirm owner assignment inline so we have a single point for post-activation checks.
+
+Critical items (action + owner):
+- Network ACL push and FW exceptions (Vivek) — must be in place 30m before traffic switch.
+- VIP routing + BGP prep (ACME infra team & Vivek) — confirm propagation time.
+- KV cache warmup script + baseline generation (Dev) — run pre-traffic to seed caches.
+- Smoke tests and perf ramp (Ben / Oncall) — run ramp to 20% baseline traffic for 1 hour, validate p95 latency and error rates.
+
+Attaching: runbook_activation_v1.pdf, network_allowlist_20270809.xlsx
+
+Miguel — can you confirm the maintenance window still stands 2027-08-10 02:00–05:00 UTC (your local midnight window) and that infra-ops will push the NAT + FW rules?
+
+Thanks —
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+ben.carter@redwood.ai
++1 (415) 555-0173
+
+Attachment stubs: runbook_activation_v1.pdf (36 pages, checklist + playbooks), network_allowlist_20270809.xlsx (IP ranges + notes)
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Miguel Santos <miguel.s@acme-corp.com>
+Cc: infra-ops@acme-corp.com
+Date: Mon, 9 Aug 2027 10:03:00 -07:00
+Subject: Re: Pre-activation: owners confirmed and runbook attached
+
+Ben —
+
+Confirming owners and status:
+- Network ACL / FW: I will own the Redwood side. I spoke with ACME infra (Miguel) earlier; they will add the public IP ranges and we will add the internal hops. Targeting push at 01:20 UTC on 2027-08-10 to allow 40m propagation.
+- BGP / routing: ACME to confirm next-hop propagation; I'll validate via traceroutes after push.
+- KV warmup: Dev will run the warmup. I will verify cache hit rates post-warmup.
+- Smoke runner: Ben/Oncall to coordinate. I'll stand by for any immediate rollbacks due to connectivity.
+
+Note: I flagged the runbook on page 12 with a minor firewall note — we need to ensure the new SNAT gateway is excluded from the blocklists.
+
+Vivek
+Director, Network Reliability
+Redwood Inference
+
+On Mon, 9 Aug 2027 at 09:12, Ben Carter <ben.carter@redwood.ai> wrote:
+> Team —
+>
+> We're green for the on-prem activation this week provided we close the small checklist below. Attaching the activation runbook...
+>
+> (see attachments)
+From: Miguel Santos <miguel.s@acme-corp.com>
+To: Ben Carter <ben.carter@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Cc: infra-ops@acme-corp.com, acme-cloud-partner@cloudpartner.net
+Date: Mon, 9 Aug 2027 13:40:00 +0000
+Subject: Re: Pre-activation: owners confirmed and runbook attached
+
+Ben/Vivek —
+
+Confirmed: ACME infra will apply the FW + allowlist at 01:20 UTC 2027-08-10 and hold the window until 05:00 UTC. Maintenance window stands.
+
+Two quick notes:
+- We've uploaded a signed maintenance approval to DocuSign; Ben, you'll have the envelope (https://app.docusign.com/ACME-activation-2027).
+- Please ensure the client cert thumbprints match the list in network_allowlist_20270809.xlsx. Our infra team will monitor for any BGP flaps and will revert if traffic exceeds baseline thresholds.
+
+Miguel Santos
+Senior Manager, Infrastructure — Acme Corp
+miguel.s@acme-corp.com
+
+On Mon, Aug 9, 2027 at 10:03 AM PDT Vivek Kulkarni <vivek.kulkarni@redwood.ai> wrote:
+> Ben —
+>
+> Confirming owners and status: ...
+
+From: Olga Petrov <olga.petrov@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Dev Patel <dev.patel@redwood.ai>
+Date: Mon, 9 Aug 2027 15:22:00 -07:00
+Subject: Re: Pre-activation: owners confirmed and runbook attached
+
+Ben — quick operational question: who will run the smoke checklist items that touch the storage tier (S3 gateway + local disk IO) and who owns the rollback cutover if we see >1% 5xx across the cluster?
+
+Proposal:
+- Dev to run storage IO and warmup scripts (dev will attach logs).
+- If 5xx >1% for 10m, Vivek to coordinate immediate partial rollback to hosted read replicas and ACME to remove route advertisement.
+
+Also: I'll add a short handoff note for Oncall in the runbook (page 28) to make clear escalation paths.
+
+Olga
+Lead, Production Safety
+Redwood Inference
+
+On Mon, 9 Aug 2027 at 09:12, Ben Carter <ben.carter@redwood.ai> wrote:
+> Team —
+>
+> We're green for the on-prem activation this week provided we close the small checklist below....
+From: Dev Patel <dev.patel@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Olga Petrov <olga.petrov@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Cc: infra-ops@acme-corp.com
+Date: Tue, 10 Aug 2027 02:58:00 +0000
+Subject: Activation started — initial smoke run results attached
+
+Folks —
+
+Activation window started at 02:00 UTC. Highlights / early results from the scripted smoke run (attached smoke_report_20270810.log):
+- KV warmup: completed, hit-rate 87% after 15m.
+- Storage IO probe: 99.9th percentile within expected baseline. No IO exceptions in first 30m.
+- Connectivity: traceroutes show correct next-hop; no BGP flaps detected so far.
+- API health: 1xx spikes (client retries) observed during first 10m, stabilized after 12m once LB stickiness warmed.
+- Errors: transient 502s from a single gateway host (host-12) between 02:10–02:14 UTC; restarted the process and errors cleared. Host health returning to normal.
+
+Immediate next steps I ran:
+- Recycled host-12 service and validated metrics.
+- Continued KV warmup to target 95% hit-rate.
+
+Attaching: smoke_report_20270810.log (text, 23KB).
+
+If you want me to open a post-incident ticket for host-12 to track root cause, I can do that — let me know.
+
+—Dev
+SRE, Redwood Inference
+
+On Tue, Aug 10, 2027 at 02:00 AM UTC Miguel Santos <miguel.s@acme-corp.com> wrote:
+> Ben/Vivek —
+>
+> Confirmed: ACME infra will apply the FW + allowlist at 01:20 UTC 2027-08-10...
+From: Ben Carter <ben.carter@redwood.ai>
+To: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Dev Patel <dev.patel@redwood.ai>, Olga Petrov <olga.petrov@redwood.ai>
+Cc: infra-ops@acme-corp.com, acme-cloud-partner@cloudpartner.net
+Date: Tue, 10 Aug 2027 14:45:00 -0700
+Subject: Post-activation readout and handoff — OK to close activation window
+
+Team / ACME —
+
+Thanks everyone for the quick execution and responsiveness overnight. Quick summary and handoff:
+
+Summary:
+- Activation: completed during maintenance window. Network allowlist and NAT changes applied at 01:20 UTC and validated.
+- Smoke tests: Dev's report attached — KV warmup and storage IO within expected baselines. Transient 502s tied to host-12 were mitigated by a service recycle; host flagged for follow-up.
+- Traffic ramp: we ramped to ~18% of baseline traffic for 1 hour with p95 latency within target and error rate <0.7% overall.
+
+Open items / next steps:
+- Dev to file a follow-up ticket for host-12 (DEV-PRIO) and add postmortem notes if recurring.
+- Vivek to validate that the SNAT exclusion is permanent (runbook page 12 edit).
+- Olga to update the runbook with oncall escalation bullets (page 28).
+- Miguel / ACME infra: please confirm once you remove maintenance alarms and return monitoring to normal thresholds.
+
+Given the metrics we saw and the mitigations applied, I'm going to close the activation window and hand the environment to Oncall for 72h observation. If any of you see sustained >1% 5xx over a 10m window, escalate to the oncall channel and we'll roll traffic back per the runbook.
+
+Thanks — great job.
+
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+ben.carter@redwood.ai
+
+Attachment stubs: smoke_report_20270810.log (see attached)
+
+On Tue, Aug 10, 2027 at 02:58 AM UTC Dev Patel <dev.patel@redwood.ai> wrote:
+> Folks —
+>
+> Activation window started at 02:00 UTC. Highlights / early results from the scripted smoke run (attached smoke_report_20270810.log):
+> - KV warmup: completed, hit-rate 87% after 15m....

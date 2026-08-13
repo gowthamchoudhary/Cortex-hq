@@ -1,0 +1,132 @@
+Post-call: MediSolve eval spec & scoring — next steps
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Asha Patel <asha.patel@medisolve.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: Fri, 20 Feb 2026 15:12:00 -0800
+Subject: Post-call: MediSolve eval spec & scoring — next steps
+
+Hi Asha — great to meet this morning. Quick recap and a recommended path to run a focused, customer-specific eval on Redwood so we can validate model fit for your triage / routing use case.
+
+Recap (1-line): your goals are 1) high recall for routing intents, 2) preserve precision on high-priority categories, and 3) latency under 250ms p50 for 256-token responses.
+
+Recommended approach:
+- Models to evaluate: Redwood-curated quantized variants (Llama-3-70B-q4f16 for quality baseline), Mistral-Instruct-8x (fast throughput baseline), and a compact 13B quantized option for cost-constrained paths. We’ll run both greedy and sampling decoding profiles.
+- Dataset format: CSV (header: id,input,expected_label,metadata_json). See attached medisolve_eval_dataset_spec_v1.csv for the exact schema and example rows.
+- Prompt sets: include both short-form system prompts (routing intent templates) and longer context-based prompts (previous message + metadata). See attached prompt samples (medisolve_prompt_samples_v1.txt).
+- Scoring criteria: primary metric = macro recall@top-1 for critical intents; secondary = precision@top-1, and a QA-style mismatch rate for ambiguous examples. We’ll also include latency and token-cost per request.
+
+Dry-run / timeline:
+- Small dry-run (500 rows) to validate formatting and scoring: 2 business days after we get the dataset.
+- Full evaluation (5–10k rows): estimate 4–7 business days + reporting.
+
+Ask / next steps:
+1) Can you confirm the dataset owner and a target sample (500 rows) to start?
+2) OK with the three model families above? If you prefer different open models we can swap.
+3) Please confirm we can share an S3 link for the dataset; we’ll provision a temporary private eval workspace in your region.
+
+I attached the dataset spec and prompt examples. I’ll follow up with a cost estimate and a short runbook once you confirm.
+
+Thanks — Jonas
+Jonas Weber
+Senior Solutions Engineer, Redwood Inference
+jonas_weber@redwood.com
+Mobile: +1 (415) 555-0142
+
+Attachments: medisolve_eval_dataset_spec_v1.csv (schema + example rows), medisolve_prompt_samples_v1.txt (10 prompt templates)
+From: Asha Patel <asha.patel@medisolve.com>
+To: Jonas Weber <jonas_weber@redwood.com>
+Date: Mon, 23 Feb 2026 09:08:00 -0800
+Subject: Re: Post-call: MediSolve eval spec & scoring — next steps
+
+Thanks Jonas — this looks good and aligns with what we discussed. A couple quick clarifications before we hand over the sample set:
+
+1) For the 500-row dry-run, should we include a mix of historical tickets and synthetic edge cases? We can provide a 70/30 split historical/synthetic.
+2) Our compliance team requires that IDs be hashed—will your eval pipeline accept hashed IDs in the id column?
+3) Who should we share the S3 write link with? I can create a pre-signed put for an internal data-ops account (data-ops@medisolve.com).
+
+High-level timing: we can produce the 500-row sample by EOD Wed (25 Feb).
+
+—Asha
+Asha Patel
+Product Lead, Clinical Routing
+MediSolve Health
+asha.patel@medisolve.com
+
+----Original message----
+On Fri, Feb 20, 2026 at 3:12 PM Jonas Weber <jonas_weber@redwood.com> wrote:
+> Hi Asha — great to meet this morning. Quick recap and a recommended path...
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Asha Patel <asha.patel@medisolve.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Mon, 23 Feb 2026 10:05:00 -0800
+Subject: Re: Post-call: MediSolve eval spec & scoring — next steps
+
+Thanks, Asha — yes to all three. Short answers:
+- 70/30 historical/synthetic is perfect for the dry-run.
+- Hashed IDs are fine; we only need stable unique keys (no PII).
+- Share the pre-signed put with data-ops@medisolve.com and cc me; we’ll pick it up and stage it to the eval workspace.
+
+Operational notes / what we’ll do once we have the sample:
+1) Validate CSV schema and run a quick sanity pass (schema errors, label mismatches).
+2) Run the dry-run across the three model families using the prompt templates attached earlier.
+3) Produce a one-page quick summary (confusion by intent, recall/precision table, latency percentiles) and a short action list (model recommendations + prompt tweaks).
+
+Permissions & security: we will provision a private eval run in your requested region; data access is ephemeral and logs are retained per your preference. If your security team needs an SDS or evidence of S3 workflow, we can loop them in.
+
+Estimated cost for the dry-run: I’ll have a preliminary number by EOD; Ben will share a detailed estimate in a follow-up.
+
+If you’re good, we’ll schedule the dry-run start for Thu (26 Feb) morning — we can shift earlier if you deliver the sample by Wed EOD.
+
+—Jonas
+
+> On Mon, 23 Feb 2026 at 9:08 AM Asha Patel <asha.patel@medisolve.com> wrote:
+> > Thanks Jonas — this looks good and aligns with what we discussed...
+From: Ben Carter <ben_carter@redwood.com>
+To: Jonas Weber <jonas_weber@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Asha Patel <asha.patel@medisolve.com>
+Date: Tue, 24 Feb 2026 11:22:00 -0800
+Subject: Re: Post-call: MediSolve eval spec & scoring — next steps
+
+Adding ballpark cost context from Redwood Optimize for the proposed dry-run and a full eval. High-level:
+- Dry-run (500 rows, 3 models, ~10k tokens total): approx $120–$180 (includes compute + transient infra).
+- Full eval (5k rows, same config): approx $1,800–$2,500 depending on run parallelism.
+
+We recommend the following to reduce unit costs without compromising signals:
+- Use prefix KV caching for repeated intents during the dry-run to reduce repeated token cost on system prompts.
+- Run the compact 13B quantized variant for a lower-cost baseline; use the 70B q variant only for quality confirmation on a smaller random subset (1k rows).
+
+Attached a nominal cost worksheet (redwood_cost_estimate_q1.xlsx). If MediSolve prefers a fixed quote we can propose a committed reserved slot for the full eval.
+
+Ben Carter
+Solutions Engineering Manager, Redwood Inference
+ben_carter@redwood.com
+
+> On Mon, Feb 23, 2026 at 10:05 AM Jonas Weber <jonas_weber@redwood.com> wrote:
+> > Thanks, Asha — yes to all three...
+From: Asha Patel <asha.patel@medisolve.com>
+To: Jonas Weber <jonas_weber@redwood.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Ben Carter <ben_carter@redwood.com>, MediSolve DataOps <data-ops@medisolve.com>
+Date: Wed, 25 Feb 2026 09:03:00 -0800
+Subject: Re: Post-call: MediSolve eval spec & scoring — next steps
+
+Thanks everyone — that timeline works. We’ve uploaded the 500-row sample to the S3 location (presigned link sent to data-ops@medisolve.com and cc’d Jonas).
+
+Next steps from our side:
+- DataOps will keep IDs hashed and include metadata flags per the spec.
+- We approve the three-model family dry-run and the use of a staging private eval workspace.
+- Please send the dry-run start time and the one-page summary template so our product team knows what to expect.
+
+Thanks — looking forward to the results.
+
+Asha
+
+----Forwarded message----
+From: MediSolve DataOps <data-ops@medisolve.com>
+Date: Wed, 25 Feb 2026 08:58:00 -0800
+Subject: Re: S3 upload for MediSolve eval sample
+To: Jonas Weber <jonas_weber@redwood.com>, Asha Patel <asha.patel@medisolve.com>
+
+Pre-signed put link: https://s3.amazonaws.com/medisolve-private/evals/medisolve_sample_20260225.csv?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=... (expired after 24h)
+
+-- End of thread --

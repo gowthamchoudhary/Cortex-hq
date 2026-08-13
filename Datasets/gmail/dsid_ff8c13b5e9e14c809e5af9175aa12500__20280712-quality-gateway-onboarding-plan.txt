@@ -1,0 +1,158 @@
+Activation: Quality Gateway onboarding for Medicore - next steps
+
+From: lauren_bishop@redwood.ai
+To: Elena Ruiz <elena@medicore.com>, Samir Patel <samir@medicore.com>
+Cc: marissa_cole@redwood.ai, ben_carter@redwood.ai
+Date: 2028-07-12T09:12:00-07:00
+Subject: Activation: Quality Gateway onboarding for Medicore - next steps
+
+Hi Elena / Samir —
+
+Thanks again for the productive session yesterday. Per our agreement, this thread will track the initial Quality Monitoring ("Quality Gateway") onboarding: prompt-set ingestion, eval-harness integration, and the canary / rollback policy we’ll run during activation. I attached a starter prompt set and the eval harness README so your engineering team can scan them in advance.
+
+Proposed immediate timeline:
+- 2028-07-14: 30-min kickoff (technical + CS) to align mapping and roles
+- 2028-07-21: initial eval-harness smoke run against a sample of 5k requests
+- 2028-07-28: canary week (staged traffic ramp, see draft policy below)
+
+Draft canary/rollback summary (high level):
+- Canary ramp: 1% -> 10% -> 50% -> 100% over a week
+- Auto-rollback triggers: regression > 2.5% absolute on primary accuracy metric for 3 consecutive evaluation windows OR error rate > 1.5% sustained for 2 hours
+- Human gate: Marissa (CS) + Karthik (ENG) to sign off between ramps
+
+Attachments: promptset_medicore_v1.csv (label examples), eval_harness_readme.md
+
+Can you confirm the 7/14 kickoff (preferred window: 10–11am PT) and whether your team needs a separate pre-kickoff for data classification?
+
+Cheers,
+Lauren Bishop
+Senior Manager, Customer Success
+Redwood Inference
+
+---
+Attachment stubs: promptset_medicore_v1.csv (CSV, 24 rows), eval_harness_readme.md (text, 1.2KB)
+From: Elena Ruiz <elena@medicore.com>
+To: lauren_bishop@redwood.ai
+Cc: Samir Patel <samir@medicore.com>, marissa_cole@redwood.ai, ben_carter@redwood.ai
+Date: 2028-07-12T11:04:00-07:00
+Subject: Re: Activation: Quality Gateway onboarding for Medicore - next steps
+
+Thanks Lauren — 7/14 10:30am PT works for us (Samir and I will join). A couple quick clarifications before the kickoff so we can prep the right folks: 
+
+1) Primary evaluation metric: we want the harness to report both top-level accuracy (binary label agreement) and a task-specific U-Score that weights false-positives higher. Can you confirm the harness supports a custom metric config?
+2) Regression alerts cadence: we’d like daily summary + immediate alerts for major regressions. Can you outline which channels (PagerDuty / Slack) will be used?
+3) Compliance: our security/compliance team will ask for SOC 2 evidence related to logging/retention for the prompt payloads that will be used during the canary. If you can surface the relevant audit artifacts or a pointer to the privacy/data retention short doc, that will speed reviews.
+
+We’ll review the promptset CSV and flag any PII rows — Samir will follow up on that.
+
+—Elena
+Director of ML Ops
+Medicore Health
+
+On 2028-07-12T09:12:00-07:00 lauren_bishop@redwood.ai wrote:
+> Hi Elena / Samir —
+> 
+> Thanks again for the productive session yesterday. Per our agreement, this thread will track the initial Quality Monitoring ("Quality Gateway") onboarding: prompt-set ingestion, eval-harness integration, and the canary / rollback policy we’ll run during activation. I attached a starter prompt set and the eval harness README so your engineering team can scan them in advance.
+>
+From: marissa_cole@redwood.ai
+To: Elena Ruiz <elena@medicore.com>, Samir Patel <samir@medicore.com>
+Cc: lauren_bishop@redwood.ai, ben_carter@redwood.ai, karthik_iyer@redwood.ai
+Date: 2028-07-13T08:22:00-07:00
+Subject: Re: Activation: Quality Gateway onboarding for Medicore - next steps
+
+Hi Elena / Samir —
+
+I’ll lead the onboarding and be the primary CS contact for the canary run. Quick alignment items and concrete asks for the kickoff: 
+
+Pre-kickoff deliverables (we’ll share):
+- Prompt labeling guide (short doc) — how to tag intent/critical outputs for Medicore use cases
+- Baseline sample mapping — matching your label taxonomy to the harness schema
+- Canary checklist (engineering + oncall steps, rollback playbook)
+
+From your side, please bring to the kickoff:
+- A technical contact who can grant short-lived access to the sample data bucket
+- Confirmation of the primary metric (Elena mentioned a U-Score) and any thresholds you want enforced
+- Any legal constraints on retention or PII redaction
+
+Canary matrix (proposed, will finalize in kickoff):
+- Phase 0: smoke in staging (internal only) — run eval harness against 5k requests, baseline comparison
+- Phase 1: 1% production routing (24h) — monitor primary metric and latency
+- Phase 2: 10% routing (48h) — automated checks; if stable, move to Phase 3
+- Phase 3: 50% (48h) -> Full.
+
+Rollback / alerting triggers (examples):
+- Auto rollback: >2.5% absolute decline vs baseline on primary metric for 3 windows (1 window = 4h)
+- Manual rollback: sustained error spikes (>1.5% 5xx) or privacy incident
+- Alerts: Slack channel + PagerDuty for SEV1; daily digest to CS and Medicore product owners
+
+Attachments: eval-harness-config.yaml (template for Medicore)
+
+I’ve attached a config stub with recommended evaluation windows and the telemetry tags we’ll want in the harness (eval_run_id, prompt_id, model_variant). We’ll walk through this at the kickoff and update it to match your infra.
+
+—Marissa
+Customer Success Lead
+Redwood Inference
+
+On 2028-07-12T11:04:00-07:00 Elena Ruiz <elena@medicore.com> wrote:
+> Thanks Lauren — 7/14 10:30am PT works for us ...
+
+From: karthik_iyer@redwood.ai
+To: marissa_cole@redwood.ai, lauren_bishop@redwood.ai, Elena Ruiz <elena@medicore.com>, Samir Patel <samir@medicore.com>
+Cc: ben_carter@redwood.ai
+Date: 2028-07-13T10:45:00-07:00
+Subject: Re: Activation: Quality Gateway onboarding for Medicore - next steps
+
+Quick technical notes before the kickoff — a few items I want Medicore to be aware of so we can speed the integration: 
+
+1) Eval harness config: use the attached eval-harness-config.yaml as a starting point. Key settings: evaluation_window: 4h, bootstrap_samples: 5000, concurrency_bucket: 128, metric_backfill_days: 7.
+
+2) Telemetry tags: please ensure your request router adds the fields eval_run_id, prompt_id, and model_variant. These are critical for per-prompt regression slicing and for fast rollbacks by variant.
+
+3) Tokenization differences: the harness uses our reference tokenizer for baseline comparisons. If you’re using a different tokenization step upstream, include a mapping script so the token counts align for latency and cost baselines.
+
+4) Staging path & sample ingestion: we have a dedicated staging GCS path (gs://redwood-medicore/staging/samples/2028-07). Please upload the redacted sample there and share ACLs for redwood-eval-service@redwood-infra.
+
+5) Script to run a local smoke: (paste below — run from repo root)
+
+# ---- begin snippet ----
+# python3 tooling/run_eval_smoke.py --config configs/eval-medicore.yaml --samples samples/medicore_5k.json
+# ---- end snippet ----
+
+I’ll be available on the 7/14 kickoff to walk through the config and the smoke-run logs.
+
+—Karthik
+Principal Engineer, Serving Runtime
+Redwood Inference
+
+On 2028-07-13T08:22:00-07:00 marissa_cole@redwood.ai wrote:
+> Hi Elena / Samir —
+> 
+> I’ll lead the onboarding and be the primary CS contact for the canary run...
+
+From: lauren_bishop@redwood.ai
+To: Elena Ruiz <elena@medicore.com>, Samir Patel <samir@medicore.com>
+Cc: marissa_cole@redwood.ai, karthik_iyer@redwood.ai, ben_carter@redwood.ai
+Date: 2028-07-14T16:03:00-07:00
+Subject: Re: Activation: Quality Gateway onboarding for Medicore - next steps
+
+Great — thanks everyone for the quick alignment. Confirmed notes and next steps: 
+
+- Kickoff: 2028-07-14 10:30am PT (calendar invite sent)
+- Actions assigned: 
+  - Marissa: run kickoff, deliver prompt labeling guide + updated canary checklist by 7/16
+  - Karthik: validate eval-harness-config.yaml against your staging environment and run smoke by 7/21
+  - Ben: prepare contract addendum with the monitoring clause and provisional SLA language (ready by 7/20)
+  - Elena / Medicore: confirm retention window and provide sample data in gs://redwood-medicore/staging/samples/2028-07 by 7/16
+
+Channels: we’ll post SEV alerts to #medicore-quality-gateway (Cross-team Slack) and wire PagerDuty for SEV1. Marissa will send an invite to that Slack channel.
+
+Closing note on rollback policy: the draft in my initial note is conservative; we’ll finalize thresholds in the kickoff once we see your baseline. The primary goal is to catch regressions early without blocking useful traffic.
+
+See you Thursday.
+
+—Lauren
+Senior Manager, Customer Success
+Redwood Inference
+
+On 2028-07-13T10:45:00-07:00 karthik_iyer@redwood.ai wrote:
+> Quick technical notes before the kickoff — a few items I want Medicore to be aware of so we can speed the integration...

@@ -1,0 +1,115 @@
+Clarify audit streaming / short-term KMS exception for Plexa Health
+
+From: Sam Park <sam.park@plexahealth.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Plexa Health Security <security@plexahealth.com>
+Date: Mon, 09 Feb 2026 09:12:00 -0800
+Subject: Audit log streaming + short-term KMS exception request
+
+Karthik —
+
+Thanks for taking this. Plexa Health is ramping a pilot that needs near-real-time audit events (token-level: request id, model id, timestamps, and redaction markers) forwarded into our SIEM. Our security team also needs host evidence that keys are customer-controlled for certain models while we finish procurement of our own KMS.
+
+As discussed with your SDR, we're hoping for:
+- A short-term exception to Redwood's BYOK requirement for this pilot (30 days) where Redwood will hold keys for the pilot models.
+- A streaming export of audit events (webhook or S3 push) to our ingestion endpoint.
+- A retention guarantee of 90 days of raw audit events accessible to our SOC.
+
+I've attached a short spreadsheet with required events and field mappings. Let me know if this is something Redwood can support and what the gating questions are.
+
+Regards,
+Sam Park
+Director, Cloud Security — Plexa Health
+Attachment: plexa_audit_requirements.xlsx (spreadsheet)
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Sam Park <sam.park@plexahealth.com>
+Cc: Neha Kapoor <neha.kapoor@redwood.com>
+Date: Mon, 09 Feb 2026 11:02:00 -0800
+Subject: Re: Audit log streaming + short-term KMS exception request
+
+Sam —
+
+Appreciate the detail and the spreadsheet. Looping in Neha from Security to triage the compliance/KMS side. A couple quick clarifying questions while we scope:
+
+1) Which models are in scope for the pilot (open models vs. licensed)?
+2) Do you need event payloads with prompt/response content or only metadata + redaction markers?
+3) Is Plexa comfortable with S3 push (signed, VPC endpoint) as the initial delivery mechanism, or do you require a webhook for immediate streaming?
+
+For the short-term key arrangement: we can evaluate a limited exception window but will need an internal change control ticket, explicit scope of models, and a signed amendment that describes key custody and deletion timelines. Neha — any immediate blockers?
+
+I'll coordinate product and legal after we get answers.
+
+Thanks,
+Karthik Iyer
+Head of Sales Engineering — Redwood Inference
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>, Sam Park <sam.park@plexahealth.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Tue, 10 Feb 2026 08:19:00 -0800
+Subject: Re: Audit log streaming + short-term KMS exception request
+
+Sam / Karthik —
+
+Thanks, prioritizing this. Security concerns and proposed short-term controls:
+
+- KMS exception: we can approve a 30-day custodial holding for a defined set of pilot model IDs, provided Plexa signs an amendment that includes explicit deletion instructions and accepts limited audit access to key rotation events.
+- Event contents: redaction markers only are acceptable for shared audit streams; if you need full prompt/response payloads we require documented lawful use justification and DPA addendum.
+- Delivery: S3 push (encrypted, managed prefix, restricted IAM) is our recommended low-risk option for the pilot. We can add a near-real-time webhook later, but webhooks will require additional rate/ordering guarantees work.
+
+Questions for Plexa to confirm:
+1) Final list of model IDs for the pilot (please provide namespace + versions).
+2) Retention: you asked for 90 days — that's fine for the pilot but will need pricing/contracting approval.
+3) Access model: who at Plexa will have read access, and do you require cross-account IAM read role?
+
+Marcus — can you confirm whether product can arrange S3 export and whether we can support 90-day retention as a configurable option (paid addon)? Marissa — will need deal-side implications so we can scope an amendment.
+
+Attachment: audit_export_options.pdf (summary of delivery options)
+
+Neha Kapoor
+Director, Security Engineering — Redwood Inference
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Sam Park <sam.park@plexahealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Thu, 12 Feb 2026 09:30:00 -0800
+Subject: Re: Audit log streaming + short-term KMS exception request
+
+Team / Sam —
+
+Quick product summary and feasibility:
+
+- S3 push: we can deliver an initial S3 export pipeline within 7 business days for pilot models. We'll write events in newline-delimited JSON with the fields in your spreadsheet. Delivery will be encrypted at rest; we will push to a customer-owned bucket OR to our staging bucket with restricted read roles if Plexa can't provision a bucket immediately.
+- Webhook: requires ~4 weeks for robust retry/ordering guarantees and rate limiting. Recommend S3 first.
+- Retention: platform default is 30 days. We can support configurable retention up to 365 days as a paid add-on. For pilot: we can open a temporary 90-day retention flag with an understanding that it moves to contract pricing if continued.
+- KMS exception: product side can mark model variants as "exception-scoped" for key custody and rotation tracking; operations will require a ticket and legal amendment.
+
+Laura — can Legal draft a short amendment (pilot scope, key custody, deletion schedule, acceptance criteria)? Marissa — we need a pricing note for 90-day retention and any engineering effort estimates to include in the amendment.
+
+Sam — if this plan sounds OK I can kick off an ops ticket and we can target a staged push by next Wednesday.
+
+Marcus Lin
+Principal Product Manager, Serving Runtime — Redwood Inference
+
+From: Sam Park <sam.park@plexahealth.com>
+To: Marcus Lin <marcus.lin@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Thu, 12 Feb 2026 15:05:00 -0800
+Subject: Re: Audit log streaming + short-term KMS exception request
+
+Thanks, all —
+
+That plan works for Plexa. Confirming:
+- We'll accept S3 push to our bucket (we can create one and give limited cross-account role access).
+- 90-day retention for pilot is acceptable; Plexa understands this will be revisited for production.
+- KMS exception for the pilot models is acceptable for 30 days with the amendment.
+
+Next steps from our side: we will provision the S3 bucket and share IAM role details by EOD Monday. Please send the amendment and ops ticket. We're ready to run a canary as soon as you have a push destination.
+
+I'll also route the DocuSign amendment link to our legal once you share it.
+
+Thanks,
+Sam Park
+Director, Cloud Security — Plexa Health
+Attachment: pleaxa_signed_amendment.docx (placeholder)

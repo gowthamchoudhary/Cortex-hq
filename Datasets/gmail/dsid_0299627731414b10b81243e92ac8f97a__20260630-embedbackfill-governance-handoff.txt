@@ -1,0 +1,88 @@
+Embeddings backfill governance & staged cutover plan
+
+From: Sophia Hu <sophia.hu@acme-search.com>
+To: jonas_weber <jonas.weber@redwood.ai>
+Cc: ops-team@acme-search.com
+Date: Tue, 30 Jun 2026 09:12:00 -0700
+Subject: Re: Embeddings migration - backfill window and governance questions
+
+Jonas — thanks for the call this morning. A few follow-ups from our side as we try to lock the go-live window: 
+
+1) Backfill approach: we need guidance on a low-risk path for hydrating historical rows (roughly 120M documents). Can Redwood provide a staged backfill pattern that avoids saturating our vector DB? We run Milvus (managed) and want to avoid large compaction events during business hours.
+
+2) Multi-tenant concerns: we host multiple internal customers; we cannot have partial results visible. Need a toggle-based cutover and a rollback plan if rerank quality drops.
+
+3) Eval plan: we'll provide a seed prompt set but would like Redwood to run a rerank smoke suite and share metrics (MRR, P@5) before enabling on prod queries.
+
+Attached: embed_schema_v2.json (fields & id mapping). Can you confirm preferred maintenance windows (we're UTC-7) and what log artifacts Redwood will provide for auditing?
+
+— Sophia
+Product Ops, Acme Search
+
+From: jonas_weber <jonas.weber@redwood.ai>
+To: Sophia Hu <sophia.hu@acme-search.com>
+Cc: naomi_feldman <naomi.feldman@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Tue, 30 Jun 2026 10:05:00 -07:00
+Subject: Re: Embeddings migration - backfill window and governance questions
+
+Sophia — thanks for the clear list. High-level proposal below; attaching a concise backfill runbook (backfill-runbook-v1.pdf) and a link to the drive plan. Long answer short: we recommend a staged, shard-aware backfill with sampling-based quality gates + a feature-flagged cutover.
+
+Planned sequence (summary):
+- Prep: schema validation + small sample run (2k docs) to validate tokenization/embedding mapping.
+- Stage 1 (off-peak): incremental backfill by shard / time window at 10% concurrency to warm caches and populate vector DB without heavy compactions. Monitor DB compaction lag and QPS.
+- Stage 2 (scale up): increase to 40% concurrency after passing DB health gates for 24h. Run rerank smoke tests after each batch.
+- Stage 3 (read-only verification): mirror queries to new embeddings + reranker; compare top-K outputs and MRR.
+- Cutover: enable feature flag for a 10% traffic canary, monitor errors and quality metrics for 2 hours, then progressive rollout.
+- Rollback: instant disable of feature flag + re-route to legacy embeddings. We also snapshot vector DB before Stage 3.
+
+What Redwood will provide:
+- Per-batch metrics: documents processed, per-batch token cost estimate, vector DB compaction/flush events, and top-K comparison diffs (sampled).
+- Full audit logs (S3 path) of requests used during smoke runs and a CSV summary of evaluation metrics.
+- A JIRA link (INF-1294) with runbook checkpoints and automated alerting.
+
+Questions for you:
+- Which days/times are acceptable for the off-peak windows (we suggest weekdays 01:00–05:00 UTC-7)?
+- Can you share an initial seed set (we'll need anonymized IDs for the sample evaluation)?
+
+I'll loop Naomi and Marissa for technical details and the QA acceptance criteria. If that plan looks good we'll book a 30-min pre-cutover sync next week.
+
+Thanks,
+Jonas Weber
+Customer Success Manager, Redwood Inference
+
+From: naomi_feldman <naomi_feldman@redwood.ai>
+To: jonas_weber <jonas_weber@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Cc: Sophia Hu <sophia.hu@acme-search.com>, kevin.liu <kevin.liu@acme-search.com>
+Date: Tue, 30 Jun 2026 13:22:00 -07:00
+Subject: Re: Embeddings migration - backfill window and governance questions
+
+Adding technical constraints and recommendations from infra: 
+
+1) Vector DB compatibility: Milvus has predictable compaction when writes exceed the memory threshold; we recommend writing with batch_size=5k docs and a 15s pause between batches to avoid triggering large compactions. If you can expose a write-throttle endpoint on your side, we'll coordinate to dynamically slow the backfill when compaction rate climbs.
+
+2) KV cache / prefixing: for rerank we expect to preserve original query prefixes for 48 hours during cutover to avoid cache warmup regressions. We'll instrument TTLs for cached keys and include a 48h warm window in the runbook.
+
+3) Sampling & eval: propose three sampling buckets — smoke (1k queries), regression (5k queries seeded from production slices), and acceptance (10k queries covering high-frequency user segments). For each bucket we'll compute MRR, Recall@K, and a simple semantic-drift score. Acceptance threshold: MRR improvement >= 0 or delta within ±2% for P@5.
+
+4) Data isolation (multi-tenant): to guarantee no cross-tenant leakage, we'll namespace vectors with tenant-id as a prefix in the vector key and keep tenant-scoped snapshots. This requires a one-line change in your ingestion mapping (see attached embed_schema_v2.json).
+
+Operational notes: we'll provide an S3 audit bundle and a CloudWatch-compatible metrics stream. Please confirm any compliance requirements for log retention.
+
+— Naomi
+Applied ML / Inference Reliability, Redwood Inference
+
+From: Kevin Liu <kevin.liu@acme-search.com>
+To: jonas_weber <jonas_weber@redwood.ai>
+Cc: Sophia Hu <sophia.hu@acme-search.com>, naomi_feldman <naomi.feldman@redwood.ai>
+Date: Tue, 30 Jun 2026 16:40:00 -07:00
+Subject: Re: Embeddings migration - backfill window and governance questions
+
+Thanks — this looks good and thorough. A few confirmation items: 
+
+- Off-peak window: 01:00–05:00 UTC-7 is acceptable for us on Tue/Wed/Thu. Please plan initial Stage 1 for Tue night 2026-07-07.
+- Seed sets: we'll upload anonymized CSVs to the Drive link by EOD Friday (2026-07-03).
+- Snapshot & rollback: agreed; please confirm how long the snapshot process will take for a 120M doc index (ballpark).
+- Compliance: we need log retention for 12 months as part of our audit. Is this configurable?
+
+We'll schedule the pre-cutover 30-min sync. Thanks for the quick turnaround — Kevin
+Engineering Manager, Acme Search

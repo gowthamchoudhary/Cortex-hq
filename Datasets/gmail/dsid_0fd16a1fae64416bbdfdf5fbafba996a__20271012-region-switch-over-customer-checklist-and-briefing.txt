@@ -1,0 +1,161 @@
+Regional switch-over instructions and customer checklist (US/EU/APAC impact)
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: ops@marigoldhealth.com, sre@acme-corp.com, eng-contacts@bluecloud.io
+Cc: lauren_bishop@redwood.ai, jonas_weber@redwood.ai
+Date: 2027-10-12 08:14 PDT
+Subject: NOTICE: Targeted regional availability impact — immediate failover checklist
+
+Hi all,
+
+Short update and immediate actions — we observed a provider control-plane degradation that caused elevated request timeouts for instances scheduled in EU-West and APAC regions between ~07:30-08:05 UTC. The Redwood runtime detected increased end-to-end latencies and initiated our automatic regional failover policy for affected customers.
+
+What you need to know now (high level):
+- Impacted regions: EU-West (eu-west-1) and APAC-Southeast (ap-southeast-1). US regions are currently stable.
+- For most customers we automatically routed traffic to fallback instances in US-West where capacity was available.
+- If you run strict region-only routing, you may see errors/timeouts; please follow the manual failover steps below.
+
+Immediate customer checklist (attaching a one-page checklist): region-switch-checklist.pdf
+1) Confirm you can reach the failover endpoint: https://api.redwood.ai/v1/fallback/<your-tenant-id>
+2) Update your routing rule for the next 30–60 mins to prefer us-west endpoints (sample curl and k8s snippets attached).
+3) If you require data residency constraints, notify us immediately — we can enable a controlled queueing mode rather than cross-region spillover.
+4) We will push a status update at 08:45 PDT and when the control plane is restored.
+
+Attachments: region-switch-checklist.pdf, traffic-shift-commands.txt
+
+Thanks — I’ll follow up with an internal postmortem and a customer-safe remediation timeline.
+
+Regards,
+Vanessa Ortiz
+Sr. Strategic Account Manager | Redwood Inference
+vanessa.ortiz@redwood.ai
++1 (415) 555-0192
+
+---
+Redwood Inference — Production-first inference platform
+
+From: Alex Grant <ops@marigoldhealth.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Cc: lauren_bishop@redwood.ai, jonas_weber@redwood.ai
+Date: 2027-10-12 08:22 PDT
+Subject: Re: NOTICE: Targeted regional availability impact — immediate failover checklist
+
+Thanks Vanessa — we see the increased 5xx rates starting ~07:28 UTC and a spike in token-generation latency. A couple quick questions:
+
+1) Can you confirm whether model KV caches were warm on the fallback instances? We saw longer tails on first requests.
+2) ETA on when eu-west/apac will accept traffic again so we can revert without disrupting customers?
+
+We’ll apply the failover curl right now and report back.
+
+On Tue, Oct 12, 2027 at 08:14 AM Vanessa Ortiz <vanessa.ortiz@redwood.ai> wrote:
+> Short update and immediate actions — we observed a provider control-plane degradation that caused elevated request timeouts for instances scheduled in EU-West and APAC regions between ~07:30-08:05 UTC.
+> 
+> (See attached checklist)
+
+--
+Alex Grant
+Director of Platform Ops | Marigold Health
+ops@marigoldhealth.com
+
+From: Lauren Bishop <lauren_bishop@redwood.ai>
+To: vanessa.ortiz@redwood.ai, jonas_weber@redwood.ai, marissa_cole@redwood.ai
+Date: 2027-10-12 08:34 PDT
+Subject: Internal: quick containment notes + postmortem draft
+
+Team — quick internal status.
+
+Observed behaviour:
+- Root trigger: upstream provider control-plane API returned intermittent 503s during our instance placement checks (eu/apac control plane only).
+- Impact surface: requests to short-lived workers that required new placement (cold-start paths) saw the highest failure rates; steady-state cached sessions were mostly fine after initial retry.
+
+Immediate actions taken:
+- Enabled automatic spillover routing to us-west for customers opt-in to cross-region routing.
+- Increased KV-cache pre-warm for active sessions in the fallback pool (manual pre-warm triggered).
+- Throttled non-critical background batch workloads to free capacity for synchronous traffic.
+
+Notes for customer-facing comms:
+- Tell customers that warm-cache backfill may add ~200–400ms to first requests after switch.
+- Provide the curl/k8s snippets from traffic-shift-commands.txt and the one-pager checklist.
+
+Uploading a postmortem draft to the shared drive — postmortem-draft.docx. I’ll merge logs and telemetry into the draft; Jonas, can you pull the service routing traces and timeline (JIRA-RI-1298)?
+
+-Lauren
+Lauren Bishop
+Head of Platform Reliability | Redwood Inference
+lauren_bishop@redwood.ai
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: ops@marigoldhealth.com, sre@acme-corp.com, eng-contacts@bluecloud.io
+Cc: lauren_bishop@redwood.ai, jonas_weber@redwood.ai, marissa_cole@redwood.ai
+Date: 2027-10-12 09:05 PDT
+Subject: Re: NOTICE: Targeted regional availability impact — immediate failover checklist
+
+Hi Alex / all — quick answers and explicit steps we ran for verification.
+
+Answers:
+- Cache warmness: We pre-warmed the KV cache in the US fallback pool for the highest-traffic tenants; you should see the worst latency on the very first request during the switch. Subsequent requests will be much faster.
+- Reversion ETA: We’re watching the provider control-plane (internal escalations open). Our current estimate to allow safe re-ingress to EU/APAC is ~2 hours, but we’ll confirm earlier if we see stability (next update 08:45 PDT).
+
+Concrete failover commands (already applied for your tenant):
+- CURL (short test):
+  curl -X POST https://api.redwood.ai/v1/generate \
+    -H "Authorization: Bearer <TOKEN>" \
+    -H "X-Region-Override: us-west-1" \
+    -d '{"model":"gpt-open-7b","input":"hello"}'
+
+- Kubernetes example (patch service to prefer fallback):
+  kubectl patch svc redwood-client -p '{"spec":{"externalTrafficPolicy":"Cluster","annotations":{"redwood/region-preference":"us-west-1"}}}'
+
+If you hit persistent errors after these commands, send us request IDs and we’ll escalate to on-call SRE.
+
+Attachment: traffic-shift-commands.txt
+
+We appreciate the quick coordination — please confirm once you see normal traffic on your end.
+
+Best,
+Vanessa Ortiz
+
+From: Alex Grant <ops@marigoldhealth.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, lauren_bishop@redwood.ai
+Date: 2027-10-12 09:26 PDT
+Subject: Re: NOTICE: Targeted regional availability impact — immediate failover checklist
+
+Vanessa — confirmed. We ran the curl test and saw expected responses; first-request latency was ~450ms, subsequent <120ms. We rolled a temporary routing change and our ingest is stable. Please keep us posted on the revert path.
+
+On Tue, Oct 12, 2027 at 09:05 AM Vanessa Ortiz <vanessa.ortiz@redwood.ai> wrote:
+> If you hit persistent errors after these commands, send us request IDs and we’ll escalate to on-call SRE.
+
+Thanks — Alex
+
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: lauren_bishop@redwood.ai, vanessa.ortiz@redwood.ai, marissa_cole@redwood.ai
+Date: 2027-10-13 11:02 PDT
+Subject: Internal: post-incident summary & next steps (RI-1298)
+
+Team — final internal summary from the incident review. Posting a short list before I merge into the formal postmortem doc (drive link below).
+
+Timeline highlights:
+- 07:28 UTC — provider control-plane started returning intermittent 503s for placement checks in eu/apac.
+- 07:32 UTC — Redwood runtime detected >5% token error-rate and triggered auto-spillover policy.
+- 07:36 UTC — automatic routing to US fallback pool observed for affected tenants.
+- 08:05 UTC — provider reported partial recovery; we kept failover enabled until safety checks passed.
+
+Root cause (summary): Upstream control-plane API instability caused delays in instance placement and cold-start paths; the manifestation was mainly on new placement requests which increased first-request latency.
+
+Remediations completed:
+- Improved pre-warm logic in the fallback pool to reduce cold-start tail latency.
+- Added an extra health-probe gate for control-plane placement success to reduce unnecessary re-placements.
+- Drafting a small runbook to guide customers through manual region-preference switches (lauren: please finalise the runbook text in postmortem-draft.docx).
+
+Action items (owners):
+- Jonas: attach trace slices to JIRA-RI-1298 and finalize RPC-level instrumentation (due 2027-10-20).
+- Lauren: finalize customer-facing runbook and one-pager (due 2027-10-14).
+- Vanessa: customer follow-ups to confirm revert completion and offer any credits/assistance for sensitive tenants (ongoing).
+
+Drive: https://drive.redwood.ai/shared/incident-2027-10-12
+JIRA: JIRA-RI-1298
+
+Thanks,
+Jonas Weber
+Staff SRE | Redwood Inference
+jonas_weber@redwood.ai

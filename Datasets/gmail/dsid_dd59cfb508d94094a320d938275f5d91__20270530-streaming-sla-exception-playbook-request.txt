@@ -1,0 +1,123 @@
+Request: streaming vs non-streaming SLA carve-out for Aurelia POC
+
+From: Carol Lewis <carol.lewis@aurelia.com>
+To: Aditya Rao <aditya.rao@redwoodinference.com>
+Cc: procurement@aurelia.com
+Date: Tue, 25 May 2027 10:15:00 -0700
+Subject: Initial: streaming vs sync SLA needs for POC
+
+Hi Aditya,
+
+Thanks again for the demo last week. Our engineering & procurement teams are aligning on an SLA profile for the upcoming POC and we ran into a gap: we need different commitments for streaming endpoints (time-to-first-token, sustained tokens/sec) versus non-streaming (complete response latency).
+
+High level requirements:
+- Time-to-first-token (TTFT) for streaming must be <= 200ms for payloads under 1k tokens for 95th percentile.
+- Sustained tokens/sec during steady-state inference: ~800 tokens/sec for our throughput tests (burst up to 3k tokens/sec for short windows).
+- For very large models / quantized variants, we accept longer complete-response latencies if TTFT is met; but we need clear fallback behavior and crediting policy if token-rate falls below threshold.
+
+We attached a spreadsheet with our expectations and a few sample traces. Can Redwood propose a carve-out/exception path (operational playbook) that documents: measurement points, how SLOs map to billing/credits, and recommended fallback routing (e.g., sync endpoint fallback when streaming sustained rate slips below X)?
+
+We'd like to finalize this before contract signature.
+
+Thanks,
+Carol
+---
+Carol Lewis
+VP Engineering, Aurelia Systems
+carol.lewis@aurelia.com
+[attachment: aurelia_sla_requirements.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+
+From: Aditya Rao <aditya.rao@redwoodinference.com>
+To: Carol Lewis <carol.lewis@aurelia.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>
+Date: Tue, 25 May 2027 11:03:00 -0700
+Subject: Re: Initial: streaming vs sync SLA needs for POC
+
+Carol —
+
+Appreciate the clear outline. We're able to support differentiated commitments; the ask is sensible and familiar from other enterprise POCs.
+
+Quick summary of how we'd like to approach an exception/carve-out:
+1) Define two observable SLO buckets: streaming TTFT (observed at edge) and sustained token-rate (observed at inference layer over 60s windows).
+2) Map acceptable deltas by model class: e.g., small Llama-family variants (fast path) vs larger fp16/quantized variants (slow path).
+3) Provide fallback routing: when token/sec drops below agreed threshold for two consecutive 60s windows, requests will be routed to the non-streaming (sync) endpoint or a cached shorter-response path.
+4) Credit policy: provide prorated service credits for SLO violations measured at the edge (we propose a sliding scale tied to minutes impacted).
+
+We put together an internal draft playbook (attached) that covers measurement points, how we compute token/sec, and the failover triggers. Marissa, Marcus — could you review and tighten the operational language (monitoring hooks + alert thresholds) so we can send a version back to Carol with explicit RL/ops runbook items? Carol, proposed time for a short call to walk the final playbook: Thu 27 May 09:00 PT / 12:00 ET — does that work?
+
+Best,
+Aditya
+
+--
+Aditya Rao
+Sr. Solutions Manager, Redwood Inference
+aditya.rao@redwoodinference.com
+[attachment: internal_draft_playbook.md]
+
+On Tue, May 25, 2027 at 10:15 AM Carol Lewis <carol.lewis@aurelia.com> wrote:
+> Hi Aditya,
+> 
+> Thanks again for the demo last week...
+
+From: Marissa Cole <marissa.cole@redwoodinference.com>
+To: Carol Lewis <carol.lewis@aurelia.com>, Aditya Rao <aditya.rao@redwoodinference.com>, Marcus Lin <marcus.lin@redwoodinference.com>
+Date: Thu, 27 May 2027 09:22:00 -0700
+Subject: Re: Initial: streaming vs sync SLA needs for POC
+
+Carol / team —
+
+Thanks for the clear ask, Carol. I reviewed Aditya's draft and created a more prescriptive playbook that we can include in the SOW / appendix. Key changes and operational definitions below; please see the attached PDF for the full proposal.
+
+Executive summary (proposed carve-out):
+- Measurement points: TTFT measured at the edge (first byte emitted to client) at 95th percentile over rolling 7-day windows; sustained token-rate measured at the inference layer over rolling 60s windows, aggregated at 99th/95th percentiles for slowness detection.
+- Thresholds (proposal):
+  * TTFT streaming SLO: <= 200ms (95th) for model classes A/B; 350ms (95th) for model class C (large quantized models).
+  * Sustained token-rate: >= 600 tokens/sec (95th) for production baseline; allow short bursts up to 3k tokens/sec for <= 30s without penalty.
+- Fallback behavior: if token-rate < 600 tokens/sec for two consecutive 60s windows -> automatically route subsequent requests to sync endpoint variant until token-rate stabilizes for a 5-minute window.
+- Credits/penalties: tiered credit schedule tied to total impacted minutes during the billing period; immediate SLA incident created in Redwood Console and exported to shared Drive.
+- Monitoring/alerts: recommended Grafana alerts + a Redwood Console route-level metric dashboard with alerting to Aurelia on-call (we propose integration via PagerDuty)
+
+Open items for Aurelia:
+1) Confirm whether model-class granularity (A/B/C) is acceptable or you'd prefer per-model thresholds.
+2) Confirm crediting floor (we propose 1 hour aggregate impact before credits apply for POC).
+3) Approve the draft call time — Thu 27 May 09:00 PT / 12:00 ET — or propose an alternative.
+
+If the call is good, I'll bring a short runbook artifact that shows exact measurement queries, log fields, and a sample post-incident credit calculation.
+
+Marissa
+
+--
+Marissa Cole
+Director, Solutions Engineering, Redwood Inference
+marissa.cole@redwoodinference.com
+[attachment: redwood_streaming_carveout_playbook.pdf]
+
+> On Tue, May 25, 2027 at 11:03 AM Aditya Rao <aditya.rao@redwoodinference.com> wrote:
+> > Carol —
+> > 
+> > Appreciate the clear outline...
+
+From: Carol Lewis <carol.lewis@aurelia.com>
+To: Marissa Cole <marissa.cole@redwoodinference.com>, Aditya Rao <aditya.rao@redwoodinference.com>
+Cc: procurement@aurelia.com
+Date: Sun, 30 May 2027 16:20:00 -0700
+Subject: Re: Initial: streaming vs sync SLA needs for POC
+
+Marissa / Aditya —
+
+Thanks, this is exactly the level of detail we needed. A few quick responses:
+- Model-class granularity is fine for the POC; we'll map our internal variants to A/B/C for the evaluation.
+- The 1 hour credit floor is acceptable for this stage.
+- Thu at 09:00 PT works for the meeting; I invited our on-call and procurement.
+
+Please include the monitoring queries in the shared Drive before the call and we'll review. If the playbook file you attached includes the sample post-incident credit calculation, send that version to procurement as well so we can bake the terms into the SOW.
+
+Looking forward to the call.
+
+Best,
+Carol
+
+---
+Carol Lewis
+VP Engineering, Aurelia Systems
+[attachment: aurelia_sla_requirements.xlsx]

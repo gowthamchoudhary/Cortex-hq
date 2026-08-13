@@ -1,0 +1,104 @@
+Helix Systems: on-prem embedded interop gating / telemetry asks
+
+From: Rafael Mendes <rafael_mendes@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Aditya Rao <aditya_rao@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 8 Sep 2026 09:12:00 -0700
+Subject: Helix Systems: on-prem embedded interop gating / telemetry asks
+
+Team — forwarding Helix's initial integration requirements (attached). They want to embed our runtime inside their appliance for their enterprise customers; two ask areas that will impact product/ops:
+
+1) Telemetry and audit: Helix requires event-level request IDs and delivery of a weekly compressed events dump (S3-compatible) or on-demand export via secure endpoint. They will not accept any telemetry that contains raw PII.
+
+2) Marketplace & entitlements: they want the Redwood runtime packaged as a vendor-managed listing in their channel, but need a SKU map and entitlement token flow that works without Redwood-managed cloud.
+
+High level asks for this thread:
+- Can we commit to an exportable telemetry artifact (per-tenant, scrubbed) by end of Q4? What engineering effort?
+- What minimal entitlement flow do we need to support embedding in their appliance while preserving metering?
+- Any legal / procurement blockers for reseller packaging or on-prem distribution?
+
+Attachments: helix_integration_requirements_v1.pdf, SOW-draft-Helix-v1.docx
+
+Thanks — Rafael
+Rafael Mendes
+Senior Partner Manager, Redwood Inference
+rafael_mendes@redwood.com
+
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Rafael Mendes <rafael_mendes@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Aditya Rao <aditya_rao@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Tue, 8 Sep 2026 11:03:00 -0700
+Subject: Re: Helix Systems: on-prem embedded interop gating / telemetry asks
+
+Rafael — thanks for the summary and the attachments. Quick technical read:
+
+- Telemetry: we have per-tenant KV cache and request tracing already, but the export pipeline will need a new sanitization stage that strips any user-provided prompts and masks probable PII tokens. I estimate 3-4 engineer-weeks to build an exportable, configurable sanitizer + S3-compatible dump job; add another 1-2 weeks to make it configurable per-deployment (Helix will want toggles).
+
+- Entitlement for on-prem: we can support a signed entitlement token (JWT) that the appliance validates locally and pings our entitlement service periodically (offline-first with 30-day grace). That will require a small auth shim and a lightweight licensing daemon for the appliance. 2-3 engineer-weeks.
+
+Caveats: we must be explicit about data residency and KMS — if Helix requires customer-managed keys on-prem we'll need support from the Private deployment team and possibly new docs. Also curious if they expect us to support upgrades/patching of the runtime inside their appliance or they manage it entirely.
+
+I can draft an engineering scoping note by EOD tomorrow.
+
+— Karthik
+Karthik Iyer
+Principal Engineer, Serving Runtime
+
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Rafael Mendes <rafael_mendes@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Aditya Rao <aditya_rao@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Wed, 9 Sep 2026 08:27:00 -0700
+Subject: Re: Helix Systems: on-prem embedded interop gating / telemetry asks
+
+Thanks — a couple of product / roadmap items to surface:
+
+- Q4 roadmap already has a "private export" feature for SRE customers (smaller scope). Helix's requirement is heavier (configurable sanitization + per-tenant archives). If Karthik's estimate is accurate, we could include the sanitizer as an extension to that work but we should lock scope now so we don't slip other deliverables.
+
+- Rollout plan: we should propose a staged approach to Helix — POC on a single enterprise, then a limited partner release, then GA. That reduces risk and gives us time to instrument costs.
+
+- Marketplace packaging: product prefers we avoid vendor-managed SKUs initially. Instead propose an "appliance connector" mode where Helix calls our entitlement API and we track usage per-tenant; this keeps listing in Redwood's catalog and preserves metering transparency. We need revenue ops input on how to accept commitments and reconcile usage for payouts.
+
+Can someone from finance/revops own the entitlement reconciliation flow? Aditya?
+
+— Marissa
+Sr. Product Manager, Partner Integrations
+
+
+From: Aditya Rao <aditya_rao@redwood.com>
+To: Rafael Mendes <rafael_mendes@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Thu, 10 Sep 2026 09:56:00 -0700
+Subject: Re: Helix Systems: on-prem embedded interop gating / telemetry asks
+
+I can take revops work on reconciliation and pricing. Quick notes:
+- Pricing: recommend a two-part model for Helix: base partner fee for the appliance SKU + per-tenant metered usage that we invoice monthly. This mirrors Dedicated model but with a partner share calculation.
+- Reconciliation: we'll need usage records (tokenized, non-PII) from the entitlement daemon or periodic metering exports. Revenue ops will need a stable schema (CSV/JSON) and a signed proof-of-usage mechanism.
+- Contract: we'll need a clause for audit rights and a data handling annex (SOC2 scope) if Helix will surface telemetry to their customers. Laura — can legal draft a short addendum for partner-deployed appliances?
+
+I'll start a HubSpot deal entry this afternoon and attach a sample invoice template.
+
+— Aditya
+Director, Revenue Operations
+
+
+From: Joe Chen <joe.chen@helixsys.com>
+To: Rafael Mendes <rafael_mendes@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Aditya Rao <aditya_rao@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Sat, 12 Sep 2026 16:22:00 -0700
+Subject: Re: Helix Systems: on-prem embedded interop gating / telemetry asks
+
+Rafael / team — thanks for the quick replies and clarity. Couple items from our side:
+
+- We prefer the offline-first JWT approach with a 30-day grace. We can build the licensing daemon on our appliance side; will Redwood provide the validation library and entitlement API?
+- Telemetry: Helix will accept scrubbed exports. We'll provide a sample dataset to help surface PII heuristics.
+- Marketplace: we are flexible. If Redwood prefers an "appliance connector" cadence for the first phase, we can accept that while we evaluate vendor-listed packaging.
+
+Next steps: can we get the scoping note and rough timeline by next Tuesday (2026-09-15)? We want to coordinate an internal engineering sprint so we can start a single-customer POC in Oct.
+
+Regards —
+Joe Chen
+Head of Integrations, Helix Systems
+joe.chen@helixsys.com
+Helix Systems Partner Ops <partner-ops@helixsys.com>
+
+On Thu, Sep 10, 2026 at 09:56 AM Aditya Rao <aditya_rao@redwood.com> wrote:
+> I can take revops work on reconciliation and pricing. Quick notes:
+> ...
+

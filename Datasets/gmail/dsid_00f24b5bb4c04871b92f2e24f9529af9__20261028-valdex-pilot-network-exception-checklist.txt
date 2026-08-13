@@ -1,0 +1,109 @@
+Pilot: Valdex VPC/on-prem feasibility and exception request
+
+From: Mike Tan <mike.tan@valdextech.com>
+To: jonas_weber@redwood.ai
+Date: Wed, 28 Oct 2026 10:12:00 +0000
+Subject: Initial ask: Valdex on-prem pilot constraints and timeline
+
+Hi Jonas,
+
+Thanks again for the demo last week. We’re keen to move forward with a small pilot to validate Redwood in our on-prem environment in Singapore, but there are a couple of nonstandard constraints I need to surface up-front so we can align expectations: 
+
+- Hardware: target cluster will be older 16GB GPUs (T4-equivalent) + 2U chassis with limited PCIe lanes. No NVLink.
+- Network: air-gapped segments between control plane and runtime; SFTP-only egress for telemetry; customer policy prohibits direct outbound telemetry.
+- Crypto: existing HSM is HSM-v1 (LUKS-backed) with limited cipher support — they cannot accept newer cipher suites without an extended procurement window.
+- Compliance: customer requires SOC2 evidence, audit log export, and an MAM (mutual action plan) / runbook before we start.
+
+Can Redwood run a minimal runtime on these GPUs with quantized models? If not, what exception path and mitigations would you suggest? We have a modest pilot budget and want a 6–8 week validation window.
+
+Attached: valdex-infra-requirements.pdf
+
+Best,
+Mike
+CTO, Valdex Technologies
+
+
+
+From: jonas_weber@redwood.ai
+To: karthik_iyer@redwood.ai, kimberly_park@redwood.ai, stephanie_nguyen@redwood.ai
+Cc: mike.tan@valdextech.com
+Date: Wed, 28 Oct 2026 16:05:00 +0000
+Subject: Re: Initial ask: Valdex on-prem pilot constraints and timeline
+
+Looping you all in — Valdex is asking for a constrained on-prem pilot (APAC) with older GPUs and an air-gapped control plane. Key asks:
+
+- Confirm feasibility of runtime on 16GB-class GPUs with quantized models and limited PCIe.
+- Security: what exception process is required if we cannot use the standard crypto stack?
+- Product: what features need to be reduced (e.g., real-time streaming, prefix caching) and what does that mean for SLOs and cost?
+
+I sketched a quick MAM and timeline (attached) — please review and respond with a short decision lane so I can revert to Mike. We should treat this as a pilot -> exception path: pilot operates under restricted mitigations while we pursue a permanent approval.
+
+Attachment: mutual-action-plan-draft.docx
+
+Thanks,
+Jonas
+Head of Partnerships, Redwood Inference
+
+On Wed, 28 Oct 2026 at 10:12 AM Mike Tan <mike.tan@valdextech.com> wrote:
+> Hi Jonas,
+> 
+> Thanks again for the demo last week....
+
+From: karthik_iyer@redwood.ai
+To: jonas_weber@redwood.ai, stephanie_nguyen@redwood.ai, kimberly_park@redwood.ai
+Cc: mike.tan@valdextech.com
+Date: Fri, 30 Oct 2026 09:34:00 +0000
+Subject: Re: Initial ask: Valdex on-prem pilot constraints and timeline
+
+Thanks for the context. Quick technical assessment below (high level):
+
+- Runtime: We can run a reduced-capability runtime on T4-class cards using int8 quantization (per-model validation required). Expect ~55–70% throughput of our standard runtime for comparable token sizes. Memory-constrained KV cache will force more frequent recompute and increase latency.
+- Networking: We can support an air-gapped model if the control plane is deployed in the customer VPC and we rely on pull-based artifact sync (customer-initiated SFTP pulls) for model updates. Telemetry can be batched and pushed via SFTP gateway during maintenance windows.
+- Crypto exception: The HSM limitations mean we cannot use the default TLS cipher profile for mutual TLS termination. Security exception required. Possible mitigations: endpoint-level VPN to isolate control traffic, HSM-backed key wrapping for local disk encryption, and HSM rotation scripts.
+- Pilot footprint: Recommend 3–5 worker nodes (16GB GPUs), 1 control-plane appliance in customer VPC, and a staging jump host for maintenance. Staffing: 0.5 FTE infra eng (4–6 weeks), 0.2 FTE release engineer for packaging, and on-call rotation for pilot (1:6) for 8 weeks.
+
+I've attached a compliance-gap-matrix with items that map to our exception checklist and a runbook draft for pilot ops.
+
+Attachments: compliance-gap-matrix.xlsx, runbook-pilot-draft.pdf
+
+Next steps I propose:
+- Kimberly: security assessment and list of absolute blockers.
+- Product (Steph): confirm which features we must disable for pilot (streaming, prefix/KV cache behavior).
+- Partnerships (Jonas): confirm commercial language for a constrained pilot and target dates.
+
+-Karthik
+Sr. Infra Engineer, Redwood Inference
+
+> On Wed, 28 Oct 2026 at 16:05 Jonas Weber <jonas_weber@redwood.ai> wrote:
+> > Looping you all in — Valdex is asking for a constrained on-prem pilot...
+
+From: kimberly_park@redwood.ai
+To: jonas_weber@redwood.ai, karthik_iyer@redwood.ai, stephanie_nguyen@redwood.ai
+Cc: mike.tan@valdextech.com
+Date: Tue, 03 Nov 2026 16:27:00 +0000
+Subject: Re: Initial ask: Valdex on-prem pilot constraints and timeline
+
+Short security position and required gating items before any pilot goes live:
+
+1) Exception approval: Because the customer HSM and cipher limitations force deviation from our standard crypto posture, this must go through the Security Exceptions Board. Please file a formal exception request (DocuSign link below). The request should include: threat model, compensating controls, rollback criteria, and retention windows for audit logs.
+
+2) Mandatory mitigations for pilot (minimum):
+- HSM-backed disk encryption with keys wrapped through our KMS bridge.
+- Encrypted SFTP gateway with strict IP allowlist and signed artifacts only.
+- Full audit log export (write-once) to the customer's SIEM via SFTP; we must retain a copy for 30 days internally.
+- Automated KV cache purge on idle and on restart to prevent residual data exposure.
+
+3) Feature restrictions for pilot: no externally-exposed streaming endpoints; all model inference requests must go through a validated gateway with token-level tracing disabled for the pilot (to reduce telemetry surface).
+
+4) Timeline: if the exception request is filed this week and we get an engineering sign-off, Security Board meets next Thu (2026-11-11). We need a consolidated MAM + technical/mitigation evidence by 2026-11-09 to be considered.
+
+Please confirm whether Partnerships will accept the mitigation list and whether Product can create a ‘pilot mode’ build that disables streaming and reduces KV caching. If so, I’ll start the exception packet.
+
+DocuSign (exception request): https://app.docusign.com/exception-request/HV-38421
+HubSpot deal: https://hubspot.company/deal/HV-38421
+
+-Kimberly Park
+Head of Security, Redwood Inference
+
+> On Fri, 30 Oct 2026 at 09:34 Karthik Iyer <karthik_iyer@redwood.ai> wrote:
+> > Thanks for the context. Quick technical assessment below...

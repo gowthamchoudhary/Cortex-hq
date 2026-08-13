@@ -1,0 +1,161 @@
+KEK policy and wrapped-transit review with BrightBridge
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Alice Moreno <alice.moreno@brightbridge.com>, hsm-sales@secureHSM.co
+Date: Mon, 27 Sep 2026 08:12:00 -0700
+Subject: KEK policy and wrapped-transit review with BrightBridge
+
+Team / Alice / SecureHSM,
+
+Attaching a first-pass KEK (key-encryption-key) policy and a second-draft keyflow diagram for the BrightBridge private deployment. This thread is to consolidate the outstanding design questions before the architecture review on Thursday. High-level asks:
+
+- Can SecureHSM confirm PKCS#11 + KMIP interoperability for the proposed wrap/unwrap flow?
+- Kimberly: please flag any audit/logging gaps or policy changes we need for SOC2 evidence.
+- Marissa/Vanessa: ops concerns on rotation windows and zero-downtime rewrap procedure.
+- Alice: confirm BrightBridge requirements for escrow and legal notification windows.
+
+Attachments: kb-kek-policy-draft-20260927.pdf, keyflow-diagram-v2.vsdx
+
+Summary of proposed pattern (very short):
+- Customer BYOK: BrightBridge uploads an initially-wrapped KEK (HSM-wrapped) into their VPC-backed KMS instance.
+- Transit: KEKs never leave VPC in plaintext; we use a key-wrap proxy in a restricted egress bastion that performs wrap/unwrap calls to an HSM over mutual-TLS + KMIP.
+- Rotation: automated rewrap with staged prefixes and re-encryption during a traffic-sliced window; operator-only fallback to manual unrecoverable-zeroize.
+
+Please reply with annotated comments. If you prefer a quick sync, I can schedule a 30-min call and include the BrightBridge security team.
+
+Thanks,
+Jordan
+Jordan Blake
+Lead Solutions Architect, Redwood Inference
+
+--
+(attachment: kb-kek-policy-draft-20260927.pdf / application/pdf)
+(attachment: keyflow-diagram-v2.vsdx / application/vnd.ms-visio)
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Vanessa Ortiz <vanessa.ortiz@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Alice Moreno <alice.moreno@brightbridge.com>, hsm-sales@secureHSM.co
+Date: Mon, 27 Sep 2026 09:01:00 -0700
+Subject: Re: KEK policy and wrapped-transit review with BrightBridge
+
+Jordan — thanks for the draft. Quick initial notes (high-level):
+
+1) Operator access: we MUST require sessioned, auditable bastion access (TACACS/SSO) for any operator commands that can unwrap or import KEKs. Add MFA + stepped approval for manual unwrapping.
+
+2) KMIP vs REST: prefer KMIP over vendor REST for HSM interactions if available — KMIP gives clearer key lifecycle primitives for our audit tooling. If SecureHSM only exposes PKCS#11, we need a thin KMIP translation layer.
+
+3) Audit events: policy needs explicit events for wrap/unwrap, key-create, key-rotate, key-delete and include operator id + justification token. Include retention policy (minimum 7 years for BrightBridge per the questionnaire).
+
+4) Escrow: if BrightBridge requires offsite escrow, add a procedure for split custody (multisig escrow) and an attestable ceremony. Legal needs to sign off on chain-of-custody steps.
+
+I attached a short checklist I use for KMS hardening. I will iterate on the policy doc inline tomorrow.
+
+Kim
+Kimberly Park
+Senior Security Engineer, Redwood Inference
+
+--
+(attachment: kms-hardening-checklist.xlsx / application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+
+> On Mon, 27 Sep 2026 08:12:00 -0700 Jordan Blake wrote:
+> > Team / Alice / SecureHSM,
+> > 
+> > Attaching a first-pass KEK (key-encryption-key) policy and a second-draft keyflow diagram for the BrightBridge private deployment. This thread is to consolidate the outstanding design questions before the architecture review on Thursday. High-level asks:
+
+From: Alice Moreno <alice.moreno@brightbridge.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Vanessa Ortiz <vanessa.ortiz@redwood.com>
+Cc: hsm-sales@secureHSM.co
+Date: Mon, 27 Sep 2026 11:10:00 -07:00
+Subject: Re: KEK policy and wrapped-transit review with BrightBridge
+
+Jordan / all — thanks, this looks like a helpful start. A few items from BrightBridge Security and Legal: 
+
+- Escrow: BrightBridge requires an offline escrow option but prefers split custody with a third-party escrow vendor. Can Redwood support a workflow where the KEK is rewrapped with an escrow-wrapped copy that is stored offsite (encrypted) and only recoverable with 2-of-3 keys? Outline required artifacts for the ceremony.
+
+- Rotation windows: we prefer rotation every 90 days but need a 14-day notification window before a forced rotation to allow internal change control. Is 90d automation compatible with zero-downtime rewrap?
+
+- Audit logs: we need signed audit proofs (tamper-evident) for any wrap/unwrap event that touches the KEK. Can SecureHSM provide signed attestations tied to KMIP operations?
+
+Also — we will need a BAA amendment for this deployment; legal will send a DocuSign in the coming days.
+
+Thanks,
+Alice
+Alice Moreno
+CISO, BrightBridge Health
+
+> On Mon, Sep 27, 2026 at 09:01 AM Kimberly Park <kimberly.park@redwood.com> wrote:
+> > Jordan — thanks for the draft. Quick initial notes (high-level):
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Jordan Blake <jordan.blake@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, Vanessa Ortiz <vanessa.ortiz@redwood.com>
+Cc: Alice Moreno <alice.moreno@brightbridge.com>, hsm-sales@secureHSM.co
+Date: Mon, 27 Sep 2026 12:03:00 -07:00
+Subject: Re: KEK policy and wrapped-transit review with BrightBridge
+
+Adding operational detail from the ops side — pasted notes: 
+
+- Rotation cadence: automation for 90d rotation is fine, but for zero-downtime we need a staged rewrap: 
+  * Stage A: new KEK created and wrapped by HSM (kept with a prefix).
+  * Stage B: live keys rewrapped to new KEK asynchronously with traffic slicing (~5–10% at a time).
+  * Stage C: full cutover once rewrap hit rate > 99.9% and no active sessions using old KEK.
+
+- Fallback: If rewrap fails, we revert to old KEK using a signed manual unwrapping procedure — must require 2-person approval and operator justification token.
+
+- Egress: the key-wrap proxy must be hosted in a dedicated private subnet with egress only to the HSM IPs and to SecureHSM’s KMIP ports. No public internet egress otherwise.
+
+- Telemetry: add token-level traces for rewrap progress and ops-runbooks for failure modes (timeouts on KMIP, partial rewrap, missing audit attestations).
+
+See ticket: PRODNET-4567 for the deployment checklist and preflight tests.
+
+Marissa
+Sr. Platform Engineer, Redwood Inference
+
+> On Mon, Sep 27, 2026 at 11:10 AM Alice Moreno <alice.moreno@brightbridge.com> wrote:
+> > Jordan / all — thanks, this looks like a helpful start. A few items from BrightBridge Security and Legal: 
+
+From: SecureHSM Sales <hsm-sales@secureHSM.co>
+To: Jordan Blake <jordan.blake@redwood.com>, Alice Moreno <alice.moreno@brightbridge.com>, Kimberly Park <kimberly.park@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 27 Sep 2026 13:50:00 -07:00
+Subject: Re: KEK policy and wrapped-transit review with BrightBridge
+
+Hi Jordan / team — thanks for including SecureHSM. A few clarifications on our side: 
+
+- We support PKCS#11 and a KMIP front-end; both can emit signed KMIP audit records (we call them attestations). The attestations include HSM-signed hashes of the KMIP command and timestamp — good for tamper-evidence.
+
+- Our KMIP supports wrap/unwrap and key-derive with AES-KW and RSA-OAEP. For high-volume rewraps the recommended pattern is AES-KW with ephemeral session keys and a persistent KEK wrapped by an HSM asymmetric key.
+
+- PKCS#11 module: provided as a signed binary; we recommend running it in an isolated container with PID namespaces and fallback kill-switch for emergency zeroize.
+
+Attaching our KMIP integration guide and a short whitepaper on signed attestations. Let us know if you want a short tech call/demo.
+
+Best,
+SecureHSM Integrations Team
+(attachment: securehsm-kmip-guide.pdf / application/pdf)
+
+> On Mon, Sep 27, 2026 at 12:03 PM Marissa Cole <marissa.cole@redwood.com> wrote:
+> > Adding operational detail from the ops side — pasted notes: 
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Alice Moreno <alice.moreno@brightbridge.com>, hsm-sales@secureHSM.co
+Date: Mon, 27 Sep 2026 15:45:00 -07:00
+Subject: Re: KEK policy and wrapped-transit review with BrightBridge
+
+Thanks everyone — consolidating decisions and next steps below.
+
+Decisions (agreed):
+- Use SecureHSM KMIP front-end + PKCS#11 module as primary HSM integration. SecureHSM will provide signed attestations for wrap/unwrap events.
+- Rotation cadence: implement BrightBridge default 90-day rotation with a 14-day pre-notification window and staged, zero-downtime rewrap as described by Marissa.
+- Operator access: require SSO + MFA + sessioned bastion + 2-person approval for any manual unwrapping.
+- Escrow: support split-custody escrow; legal to coordinate ceremony details (BrightBridge legal to send DocuSign).
+
+Action items:
+1) SecureHSM: provide PKCS#11 signed binary and confirm KMIP attestation format (owner: hsm-sales@secureHSM.co) — target 2026-10-04.
+2) Redwood Security (Kim): update policy doc with explicit audit event list and retention clause (owner: kimberly.park) — target 2026-10-01.
+3) Redwood Ops (Marissa): draft runbook for staged rewrap and failure modes; add preflight checks in PRODNET-4567 (owner: marissa.cole) — target 2026-10-05.
+4) BrightBridge (Alice): confirm escrow vendor and sign BAA amendment (owner: alice.moreno@brightbridge.com) — target 2026-10-08.
+
+I'll schedule a 30-min sync for Wednesday to walk through the runbook and confirm the attestation fields. Please approve if this matches your expectation.
+
+Jordan
+Lead Solutions Architect, Redwood Inference
+
+(related link: https://jira.redwood.com/browse/PRODNET-4567)

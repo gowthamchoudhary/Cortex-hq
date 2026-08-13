@@ -1,0 +1,105 @@
+VPC GPU probabilistic sizing & demand projections
+
+From: Lara Finch <lara.finch@northstar.health>
+To: Mateo Alvarez <mateo_alvarez@redwood.com>
+Cc: engops@northstar.health
+Date: Mon, 30 Nov 2026 10:12:00 -0800
+Subject: VPC GPU demand scenarios & next steps
+
+Hi Mateo —
+
+Thanks again for the call this morning. Northstar is starting to formalize our private deployment footprint and we need a defensible capacity plan for the VPC/on‑prem GPU pool that will back our production inference. High level asks:
+
+- We want a probabilistic sizing (p50/p90/p99) across three demand scenarios (baseline, growth, seasonal spike).
+- An initial throughput target to validate against our SLAs (we're aiming for 99.9% availability + 95th latency under 300ms for short chat loads).
+- Runbook items for warm pool, cache pre‑warming, and a recommended burst policy.
+
+I've attached a small snapshot of our current usage and a CSV with hourly QPS samples (initial-usage-snapshot.csv). Can you sketch out an approach and a short forecast by mid‑week? Also, any immediate constraints we should surface early (egress, NIC limits, multi‑tenant isolation)?
+
+Appreciate it — would like to line up a short readout on Thursday if possible.
+
+—Lara
+Lara Finch
+Director, Platform Engineering | Northstar Health
+
+From: Mateo Alvarez <mateo_alvarez@redwood.com>
+To: Lara Finch <lara.finch@northstar.health>
+Cc: Jonas Weber <jonas_weber@redwood.com>, Irene Choi <irene_choi@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Mon, 30 Nov 2026 13:04:00 -0800
+Subject: Re: VPC GPU demand scenarios & next steps
+
+Lara — thanks for the clear ask and the snapshot. High level plan (quick summary here; attached is a short technical note with the modeling assumptions):
+
+1) Probabilistic model: we run a bootstrap of your hourly samples to generate p50/p90/p99 demand curves and translate into sustained tokens/sec and concurrent requests. For each quantile we model three config axes: dense GPU (A100/80GB equiv), int8-quantized variant, and a mixed multiplexed instance profile.
+
+2) Headroom rules: recommend +30% warm-headroom on p90 sustained to allow for prefix cache misses and short ramp spikes; +60% for p99 if you require hard latency gates. We'll provide a matrix that maps pX -> required GPUs for each model fidelity.
+
+3) Networking/egress: initial pass assumes 25 Gbps per host baseline with 2:1 NIC oversubscription at peak. If your on‑prem racks have lower NICs (10G), effective throughput and batching economics change materially — we'll flag that in the spreadsheet.
+
+4) Operational controls: canary rollout topology, warm pool of preloaded KV caches, cross‑region fallback if applicable. We'll include autoscale thresholds (queue depth + KV hit rate triggers).
+
+I've attached: demand-scenarios.csv (synthetic resamples used for modeling) and prob-sizing-notes.pdf (assumptions & quick math). We'll turn this into a readout slide deck if you'd like.
+
+Proposed next steps: internal sizing run tomorrow; readout Thurs 11:00 PT. Does that work for your team?
+
+—Mateo
+Mateo Alvarez
+Solution Architect, Redwood Inference
+attachment: demand-scenarios.csv (text/csv)
+attachment: prob-sizing-notes.pdf (application/pdf)
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Mateo Alvarez <mateo_alvarez@redwood.com>
+Cc: Irene Choi <irene_choi@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>, Lara Finch <lara.finch@northstar.health>
+Date: Tue, 1 Dec 2026 09:18:00 -0800
+Subject: Re: VPC GPU demand scenarios & next steps
+
+Looks good — a couple quick items/questions for the model:
+
+- Can you add egress cost sensitivity per TB (Northstar cares about egress billing vs on‑prem peering)? Recommend a small table: p50/p90/p99 x TB/month x $/TB.
+- For NIC assumptions: please show numbers for 10G, 25G, 100G host NICs. Multiplexing behavior differs a lot when you saturate NICs.
+- Eviction policy caveat: when the warm pool size is > 50% of cache working set we should prefer cache pinning on the warmers vs frequent eviction.
+
+Quick thumbs — love the probabilistic framing.
+
+—Jonas
+
+From: Lara Finch <lara.finch@northstar.health>
+To: Mateo Alvarez <mateo_alvarez@redwood.com>
+Cc: engops@northstar.health
+Date: Wed, 2 Dec 2026 11:02:00 -0800
+Subject: Re: VPC GPU demand scenarios & next steps
+
+Thanks team — this is exactly the framing we need. A few clarifications from the product side:
+
+- SLA target: 99.9% availability, latency SLOs for short chat paths at p95 < 300ms. Please prioritize models that meet p95 latency under the p90 demand profile at minimum.
+- Procurement timeline: we'd like the sizing justification (spreadsheet + 1‑page summary) by Friday EOD so we can include it in our vendor packet for the infrastructure RFP.
+- Attachments: I've added a small sample of anonymized traces to the shared drive (linked). Also, egress constraints: our datacenter policy limits egress to 120 TB/mo without elevated approval.
+
+We'll be ready for the Thursday readout at 11:00 PT. Can you include a short runbook page on pre‑warming and a recommended measurable gating for canary (perf regressions and token-accuracy checks)?
+
+—Lara
+
+From: Mateo Alvarez <mateo_alvarez@redwood.com>
+To: Lara Finch <lara.finch@northstar.health>
+Cc: Jonas Weber <jonas_weber@redwood.com>, Irene Choi <irene_choi@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Fri, 3 Dec 2026 16:44:00 -0800
+Subject: Re: VPC GPU demand scenarios & next steps
+
+Lara / team —
+
+Attached is the Friday drop: egress-budget-estimate.xlsx (TB sensitivity table), and the final demand-scenarios.csv we used for the run. Summary highlights (one line each):
+
+- p50: 12 GPUs (A100 equiv) baseline for sustained load; p90: 18 GPUs; p99: 28 GPUs — numbers assume 25 G NICs and +30% warm headroom for p90.
+- With 10G NICs the p90 GPU count increases ~1.6x (network becomes the bottleneck for batching efficiency).
+- Egress sensitivity: 10 TB/month at current traffic mix has negligible cost; at 120 TB/mo we recommend an ingress/egress peering conversation for long‑term economics — included in the sheet.
+- Runbook: included 3 gating checks for canary: p95 latency delta < 10%, token‑accuracy pass rate > 99.2% on the eval set, and KV hit rate > 85% within the warm pool.
+
+Links: Readout slides + spreadsheet are in the shared folder: https://drive.google.com/drive/folders/1X9qExampleSharedDrive
+JIRA ticket created: INFRA-1287 (private deployment sizing).
+
+We'll be on the readout Thurs 11:00 PT. If you want, we can also run a quick in‑lab microbenchmark against your anonymized traces before the call.
+
+—Mateo
+attachment: egress-budget-estimate.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+attachment: demand-scenarios.csv (text/csv)

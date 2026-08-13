@@ -1,0 +1,117 @@
+Atlas Retail POC: integration checklist + model plan
+
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Tom Anders <tom.anders@atlasretail.com>
+Cc: Marcus Lin <marcus_lin@redwood.com>, Dev Patel <dev_patel@redwood.com>
+Date: 2026-11-18T09:02:00-08:00
+Subject: Atlas Retail POC: integration checklist + model plan
+
+Hi Tom — thanks again for the call this morning. Recap below and proposed next steps so we can get your trial started next week.
+
+High-level POC scope (4 weeks):
+- Week 0 (this week): kickoff, credentials + sample data exchange
+- Week 1: API integration and baseline functional checks (endpoints, auth, schema)
+- Week 2: baseline eval across candidate models (accuracy/intent, hallucination rate)
+- Week 3: performance tuning (batching, quantization profiles)
+- Week 4: acceptance tests and handoff (business KPIs + final report)
+
+Success criteria (attached spreadsheet):
+- Intent classification F1 >= 0.88 on your annotated test set
+- Response hallucination <= 2% measured on 200 sampled prompts
+- P75 generation latency <= 250ms for <512 token responses in our hosted region
+- End-to-end error rate < 0.5% during a 24h throughput run at 20 req/s
+
+Model plan (initial recommendation):
+- Primary: Mistral-Instruct-7B (open, instruction-tuned) — chosen for instruction-following quality and lower-cost inference profile.
+- Fallback: Llama2-13B-Quant (8-bit Q8) — for higher-context queries and multilingual robustness (English, Spanish, French).
+- Low-latency edge fallback: GPT-J-6B (quantized) on Dedicated if you need sub-120ms tail latency.
+
+Notes on multilingual needs: you flagged English + Spanish + French. We'll run separate language slices during Week 2 evaluation and report per-language metrics in the success criteria sheet.
+
+Next actions:
+1) Can you confirm the kickoff time on Monday 2026-11-23 at 10:00 AM PT?
+2) Please upload a 200-record annotated sample (CSV) to the shared Drive link (attached) before EOD Friday.
+3) Procurement contact copied above — if there are contract or PO steps, please loop them in.
+
+Attachments: POC_Success_Criteria.xlsx, Atlas_API_Specs.pdf, redwood-poc-kickoff-agenda.docx
+
+Thanks — I will follow up with a brief tech kickoff invite and a prefilled runbook for Marcus and Dev.
+
+Best,
+Kimberly Park
+Enterprise Sales Lead | Redwood Inference
+kimberly_park@redwood.com
+https://redwood.ai
+
+From: Tom Anders <tom.anders@atlasretail.com>
+To: Kimberly Park <kimberly_park@redwood.com>
+Cc: Procurement <procurement@atlasretail.com>, Samantha Lee <samantha.lee@atlasretail.com>
+Date: 2026-11-18T11:17:00-08:00
+Subject: Re: Atlas Retail POC: integration checklist + model plan
+
+Kimberly — thanks, this looks great and aligned with our expectations. We can do the Monday 10:00 AM PT kickoff. I'll have Samantha (product) and Procurement loop in the artifacts.
+
+A few quick questions:
+- We need SOC 2 Type II evidence for our procurement team — can you share the attestation or point us to where to download it?
+- For data handling: are you able to restrict logs for our dataset to a 30-day retention window? That is a hard requirement for our data security policy.
+- Regarding models: we prefer an approach where the fallback is only used for requests that fail a quality gate (not as a blind ensemble). Is that how Redwood would route?
+
+I'll upload the annotated sample by Friday. Procurement (procurement@atlasretail.com) will follow up on contract language; they may ask for a standard PO + NDAs.
+
+Thanks,
+Tom
+Head of Product | Atlas Retail
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Kimberly Park <kimberly_park@redwood.com>, Dev Patel <dev_patel@redwood.com>
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: 2026-11-18T14:03:00-08:00
+Subject: Internal: Atlas POC - implementation notes and model tuning suggestions
+
+Kim / Dev — quick internal notes following Tom's email and our prep: please treat this as the technical checklist we'll action in Week 1/2.
+
+Integration checklist (Marcus owner):
+- Add Atlas API key as scoped service account; enable request-level logging but configure 30-day retention for their dataset. (Action: Dev)
+- Provide example request/response templates and OpenAPI snippet (I'll prepare).
+- Add per-tenant model routing policy: primary=Mistral-Instruct-7B, fallback=Llama2-13B-Q8. Only call fallback when the "quality gate" fails (low confidence, or hallucination predictor > threshold).
+
+Model/eval notes:
+- Mistral-Instruct-7B: expected fast tokens/sec in hosted; good zero-shot instruction following. We'll run a small calibration sweep (temperature, top_p) during Week 2 to match Atlas tone.
+- Llama2-13B-Q8: quantized 8-bit should give parity in many cases; test memory/kv-cache behavior for long-context prompts. Good for Spanish/French edge cases where Mistral may degrade.
+- GPT-J-6B on Dedicated: propose as optional low-latency fallback on Dedicated capacity if Atlas wants <120ms p75. That requires reserved capacity and a short procurement ask.
+
+Evaluation plan (Marcus lead):
+- Week 2 baseline: run A/B comparisons across the three models on Atlas sample set. Metrics: F1, precision, hallucination-rate (annotator), and token-cost per completed prompt.
+- Week 3 tuning: test batching and QAT/quantization profiles to find best cost/latency tradeoff.
+
+Risks & mitigations:
+- Procurement pushback on dedicated capacity: demo hosted latency first and add Dedicated later if SLA needed.
+- Multilingual drift: include focused Spanish/French test slices early and consider small instruction prompts to boost non-English outputs.
+
+I'll draft a short runbook and share prior to the kickoff. Dev — can you confirm the 30-day retention setting in our console and whether we need a Data Processing Addendum to be signed?
+
+— Marcus
+Senior Solutions Architect | Redwood Inference
+
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Dev Patel <dev_patel@redwood.com>, Tom Anders <tom.anders@atlasretail.com>
+Cc: Procurement <procurement@atlasretail.com>
+Date: 2026-11-19T16:47:00-08:00
+Subject: Re: Atlas Retail POC: integration checklist + model plan
+
+Thanks everyone — quick updates:
+
+- Tom: SOC 2 Type II attestation and our Data Processing Addendum link sent to Procurement via separate email (Procurement should expect the link and a short checklist from Legal). We can enforce 30-day retention via tenant policy; Marcus/Dev will enable that before any sample data is accepted.
+- Marcus/Dev: please prioritize the runbook and the OpenAPI snippet so Atlas can start integration without waiting for the kickoff call.
+- DocuSign: procurement asked for a minimal SOW + PO path; I've initiated a DocuSign envelope (link above). Please review the SOW draft (I added the 4-week timeline and success criteria).
+
+I will run the kickoff invite once Marcus shares the runbook slot availability. Tom — appreciate you confirming the upload timeline; we will aim to have the Week 1 baseline tests queued before the Monday meeting completes.
+
+Next steps (action owners):
+- Marcus: runbook + OpenAPI (Due: 2026-11-20)
+- Dev: confirm retention setting + sample ingestion endpoint (Due: 2026-11-20)
+- Kimberly: finalize SOW & DocuSign (In progress)
+
+Cheers,
+Kim
+Enterprise Sales Lead | Redwood Inference

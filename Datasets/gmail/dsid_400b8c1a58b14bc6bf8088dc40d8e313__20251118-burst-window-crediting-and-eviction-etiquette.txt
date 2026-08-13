@@ -1,0 +1,101 @@
+Dedicated capacity: burst window crediting and preemptible eviction etiquette
+
+From: Sam Wu <sam.wu@helioanalytics.com>
+To: olga_petrov@redwood.com
+Cc: Contracts Team <contracts@helioanalytics.com>
+Date: Wed, 12 Nov 2025 09:12:00 -0800
+Subject: Dedicated capacity question: burst behaviour and credits
+
+Hi Olga,
+
+Quick question as we're finalizing the SOW for HEL-4521 — can you clarify how Redwood handles burst usage when we hit preemptible eviction windows? Specifically:
+
+- If our workload bursts into the ephemeral pool and we get evicted mid-run, how are tokens billed?
+- Is there any pro-rated crediting or reimbursement for work that was interrupted?
+- What does the escalation path look like if our critical batch runs are impacted during a scheduled burst?
+
+We want to avoid surprises in our cost projections and make sure the on-call/resumption behavior is documented before signing.
+
+Thanks,
+Sam
+VP Product, Helio Analytics
+
+---
+Attachment: workload-sla-notes.txt (text stub)
+From: olga_petrov@redwood.com
+To: Sam Wu <sam.wu@helioanalytics.com>
+Cc: camila_reyes@redwood.com, ben_carter@redwood.com, rishi_malhotra@redwood.com
+Date: Fri, 14 Nov 2025 10:03:00 -0800
+Subject: Re: Dedicated capacity question: burst behaviour and credits
+
+Thanks Sam — great questions. High level answers up front, followed by the operational details and a small proposed canary we can run with you next week.
+
+High-level:
+- Billing: We bill for tokens consumed up to the point of eviction. For interrupted work we provide two remedies depending on root cause: (1) automatic retry routing (free for first retry within 2 hours) when eviction is due to transient spot reclaim; (2) pro-rated credit in cases where eviction was caused by Redwood-side scheduling misalignment (rare, escalated).
+- Credit windows: We have a 24-hour reconciliation window for transient preemptions — during reconciliation we identify eligible interrupted workloads and apply credits to your next invoice as line-item adjustments.
+- Escalation: For priority batch jobs we recommend a canary route with pinned shoulder capacity and a documented fallback to a cheaper model variant. If a customer experiences repeated >3% job failure due to preemption in a rolling 7-day window, we trigger an operations review and potential credit.
+
+Operational detail (ops folks cc'd):
+- Eviction etiquette: Ephemeral pool nodes are best-effort; we expose an eviction signal (SIGUSR1) and also provide a 30s drain window where possible. Customers should checkpoint at that boundary where possible.
+- Burst admission: Burst requests are admitted into an ephemeral pool in FIFO order. We reserve a small headroom buffer for pinned shoulder commitments to avoid cold-start evictions for critical runs.
+- Retry routing: The first retry is replayed to the same region and, where feasible, to an identical model/quantization profile. That retry is not billed. Subsequent retries follow standard billing.
+
+Attachments:
+- redwood-dedicated-burst-ops-v1.pdf — details on eviction signals, billing reconciliation flow, and recommended checkpoint patterns.
+- proposed-canary-runbook-helio.xlsx — a short plan for a 72-hour canary that pins a minimal shoulder slab during peak windows.
+
+Next steps: Camila, can your team sketch the pin+fallback config (slots / preemption window) we'd propose for Helio? Ben — adding suggested billing language for the SOW so Contracts can bake it in. Sam — if you can share the cron schedule for the heavy nightly batches I can line up a 30-minute call to finalize the canary.
+
+Best,
+Olga Petrov
+Senior Customer Solutions Manager
+Redwood Inference
+
+--
+Redwood Inference | Production-grade LLM inference
+Phone: +1 (415) 555-0134
+From: camila_reyes@redwood.com
+To: olga_petrov@redwood.com
+Cc: Sam Wu <sam.wu@helioanalytics.com>, ben_carter@redwood.com, rishi_malhotra@redwood.com, marcus_lin@redwood.com
+Date: Mon, 17 Nov 2025 08:27:00 -0800
+Subject: Re: Dedicated capacity question: burst behaviour and credits
+
+Adding ops specifics and a conservative sizing suggestion.
+
+Camila (ops) notes:
+- Recommended config for Helio's anticipated peak pattern (from Sam's cron notes):
+  - Pinned shoulder slab: 4 x A10-equivalent GPUs as a hot buffer during 00:00-06:00 PST
+  - Ephemeral burst pool: capped at additional 12 GPUs; eviction TTL policy set to 15m for that pool
+  - Preemption windows: staggered evictions in 30s waves to allow graceful checkpointing; we only do full node reclaim outside 03:00-04:00 PST where Helio runs critical nightly summarize.
+- Autoscale policy: continuous batching enabled; scale-up threshold at 75% queue depth, scale-down cooldown of 90s. This limits thrash while still admitting bursts quickly.
+- Headroom math: For Helio's 200 concurrent streams peak, the above config yields ~1.2x headroom on median token latency. We recommend starting there for the first 30 days and measuring actual tail latency for SLO adjustments.
+
+Operational caveats:
+- If bursts systematically fill >80% of ephemeral pool during scheduled maintenance windows, we will look to negotiate temporary shoulder increases (timeboxed) rather than frequent credits.
+- Credits are intended as a safety-net, not a substitute for pinning in contract language for truly critical runs.
+
+I'll attach a simple schedule and the runbook worksheet — see the attached spreadsheet for the exact timeslots and test steps.
+
+Camila Reyes
+Head of Dedicated Operations, Redwood Inference
+
+---
+Attachment: proposed-canary-runbook-helio.xlsx (spreadsheet stub)
+From: ben_carter@redwood.com
+To: Sam Wu <sam.wu@helioanalytics.com>, olga_petrov@redwood.com
+Cc: Contracts Team <contracts@helioanalytics.com>, rishi_malhotra@redwood.com
+Date: Tue, 18 Nov 2025 15:42:00 -0800
+Subject: Re: Dedicated capacity question: burst behaviour and credits
+
+Thanks all — quick note from pricing/legal side to lock language we'll include in the SOW and billing appendix.
+
+- Billing line: "Bursted usage consumed on ephemeral nodes is billed to the hour at the agreed per-GPU token rate for work completed up to the point of eviction. A single automatic retry within 2 hours following a transient preemption will not be billed and will be recorded as an operational credit if the retry fails due to Redwood scheduling."
+- Credit trigger: "Redwood will consider pro-rated invoice credits when an internal scheduling misconfiguration (as determined by Redwood's incident review) directly causes task interruption for customer workloads and where rerun is not successful within the 24-hour reconciliation window."
+- Limits: Credits limited to 5% of monthly committed spend unless otherwise escalated to leadership.
+
+Sam — if that caps with you, I'll ask Contracts to include the appendix. Also happy to surface a short SLA table for the appendix: headroom targets, eviction TTLs, and credit thresholds.
+
+-ben
+Ben Carter
+Director, Revenue Operations
+Redwood Inference

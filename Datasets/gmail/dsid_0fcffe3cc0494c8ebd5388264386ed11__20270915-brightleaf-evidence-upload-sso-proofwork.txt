@@ -1,0 +1,98 @@
+Whistic / OneTrust evidence upload + SSO proof (BrightLeaf)
+
+From: Sam Patel <sam.patel@brightleaf.com>
+To: Rishi Malhotra <rishi@redwoodinference.com>
+Cc: BrightLeaf Security <security@brightleaf.com>
+Date: Mon, 13 Sep 2027 14:22:00 -0700
+Subject: Whistic/OneTrust upload window + CAIQ delta
+
+Hi Rishi,
+
+Thanks again for the walkthrough earlier. We finished our internal QA and are ready to push the CAIQ delta and a handful of SOC2 artifacts to your portal. Quick list of what we intend to upload:
+
+- CAIQ delta (answers changed since last submission) — brightleaf-caiq-delta.csv (attached)
+- SOC2 bridge letter (PDF)
+- Syslog/TLS config snippets (tar.gz)
+
+Before we proceed we need to confirm:
+1) preferred upload method (OneTrust upload vs pre-signed S3)
+2) an upload window that avoids rate-limit throttles on your side
+3) whether you need a SAML metadata file or a service-account/role to validate SSO-based portal access
+
+We can provide either SAML metadata (IdP) or an OIDC client plus a short-lived service account if that’s easier for your automation. If you prefer the service account, we will need a template for the minimal permissions and the KMS thumbprint to encrypt signed artifacts.
+
+I attached the CAIQ delta CSV to this message. Can you confirm the contact for ingestion and a target window?
+
+Thanks,
+Sam
+Sam Patel
+Security Engineering
+BrightLeaf Health
+Attachments: brightleaf-caiq-delta.csv (text/csv)
+
+From: Rishi Malhotra <rishi@redwoodinference.com>
+To: Sam Patel <sam.patel@brightleaf.com>
+Cc: Olga Petrov <olga.petrov@redwoodinference.com>, Laura Bennett <laura.bennett@redwoodinference.com>
+Date: Tue, 14 Sep 2027 09:30:00 -0700
+Subject: Re: Whistic/OneTrust upload window + CAIQ delta
+
+Sam — thanks for the file and the clear list. Confirming receipt of brightleaf-caiq-delta.csv. Quick proposal from our side to keep this low-friction:
+
+- Upload method: preferrable is pre-signed S3 for bulk artifacts (we support OneTrust/Whistic UI uploads but presigned S3 avoids UI timeouts for large bundles).
+- Proposed upload window: 2027-09-20 02:00 - 06:00 UTC (we can open a temporary bucket with TTL and scoped IAM creds).
+- Access / SSO: we can accept either SAML metadata or an OIDC service-account flow. For automation, S3 + a short-lived service account is easiest.
+
+Olga — can you confirm the exact minimal IAM policy and any KMS constraints (rotation/tasking) we need to provide the customer? Laura — can you pick up mapping the CAIQ delta against our existing Whistic profile so we can avoid duplicate Q&A uploads? I’ve put a short playbook here: https://drive.google.com/open?id=1a2b3c-evidence-playbook (see section 2 for presign manifest). I’m attaching a short evidence-upload-playbook.pdf that summarizes our steps.
+
+Sam — if the proposed window works we’ll spin the bucket and post the presign manifest 24 hours ahead. Also share the preferred name convention for files so our QC script can auto-classify.
+
+Thanks,
+Rishi
+Director, Customer Security Operations
+Redwood Inference
+Attachments: evidence-upload-playbook.pdf (application/pdf)
+
+From: Olga Petrov <olga.petrov@redwoodinference.com>
+To: Rishi Malhotra <rishi@redwoodinference.com>, Sam Patel <sam.patel@brightleaf.com>
+Cc: Laura Bennett <laura.bennett@redwoodinference.com>
+Date: Tue, 14 Sep 2027 10:10:00 -0700
+Subject: Re: Whistic/OneTrust upload window + CAIQ delta
+
+Hi all — technical notes from infra side:
+
+1) IAM policy (minimal):
+- s3:PutObject on arn:aws:s3:::redwood-evidence-temp/brightleaf/*
+- kms:Encrypt, kms:Decrypt for the specific KMS key we’ll dedicate to this upload (we require envelope encryption for any private keys or signed artifacts)
+
+2) Service account vs SAML: if BrightLeaf can produce OIDC metadata + jwks URI we’ll accept an OIDC client with a single allowed redirect and short-lived tokens (recommended). If you must share a service account, use the attached template for scope and rotation cadence.
+
+3) KMS thumbprint: we need the public key thumbprint for your KMS signing key if you plan to submit signed attestations. Please send kms-key-thumbprint.pdf or paste the SHA256 hex in the thread.
+
+Operational checklist I’ll run before the window: create bucket (TTL 48h), create presign manifest with filenames, validate ACLs, run a smoke ingest with a 10MB dummy file.
+
+Attaching: sso-service-account-template.txt (minimal IAM JSON plus rotation notes).
+
+—Olga
+Olga Petrov
+Principal Infra Engineer, Redwood Inference
+
+From: Sam Patel <sam.patel@brightleaf.com>
+To: Rishi Malhotra <rishi@redwoodinference.com>, Olga Petrov <olga.petrov@redwoodinference.com>
+Date: Wed, 15 Sep 2027 16:05:00 -0700
+Subject: Re: Whistic/OneTrust upload window + CAIQ delta
+
+Rishi / Olga — thanks, that all sounds good. Confirming the proposed upload window (2027-09-20 02:00-06:00 UTC) works for our ops team. Next steps on our side:
+
+- We will provide OIDC metadata + JWKS URL by EOD 2027-09-16.
+- We’ll stage the CAIQ delta and SOC2 bridge letter into a timestamped folder and follow the filename convention: brightleaf/20270920/
+- We’ll upload the KMS public key thumbprint (attached kms-key-thumbprint.pdf) and deliver the signed attestations as recommended.
+
+Links: Whistic profile: https://whistic.com/profile/brightleaf-health
+HubSpot: https://app.hubspot.com/contacts/12345/ticket/BL-9721
+
+We’ll wait for the presign manifest 24 hours before the window. If you want a pre-ingest validation, we can run a 10MB test file earlier in the day.
+
+Appreciate the help — Sam
+Sam Patel
+Security Engineering, BrightLeaf Health
+Attachments: kms-key-thumbprint.pdf (application/pdf)

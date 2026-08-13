@@ -1,0 +1,148 @@
+Integrations: SDK rollout & production fallback strategy
+
+From: Alex Turner <alex.turner@finapps.com>
+To: Marcus Lin <marcus.lin@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Procurement <procurement@finapps.com>
+Date: Thu, 10 Jun 2027 08:22:00 -0700
+Subject: Integrations: SDK rollout & production fallback strategy
+
+Hey Marcus / Monica,
+
+Thanks again for the demo last week — the live demo of per-route cost breakdowns sold the team. We’re hoping to finalize an onboarding plan and would like a short, practical checklist: SDK setup, endpoint migration from our existing vendor, and a fallback strategy for token spikes / rate-limit events.
+
+High-level constraints:
+- Go-live target: July 8 (prod traffic staged over 48h)
+- Initial traffic: ~12 rps average, 60 peak rps bursts
+- Compliance: need SOC2 evidence (we'll send the questionnaire)
+
+Can you share a concise implementation playbook with sample SDK code we can hand to our backend engineers? PM here is copying in procurement for timing/contract questions.
+
+Appreciate it,
+Alex
+Alex Turner
+Head of Integrations, FinApps
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Alex Turner <alex.turner@finapps.com>
+Cc: Monica Patel <monica.patel@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: Thu, 10 Jun 2027 11:04:00 -0700
+Subject: Re: Integrations: SDK rollout & production fallback strategy
+
+Alex — thanks for the clear constraints. I put together a short, ordered 'implementation cookbook' you can hand to engineers. Attaching a quick checklist and an accompanying PDF with deeper guidance. Summary below; full samples are in the PDF (attached).
+
+1) SDK setup (1-2 hours)
+- Install official Redwood SDK (npm / pip). Example (Node):
+  const { RedwoodClient } = require('@redwood/inference');
+  const client = new RedwoodClient({ apiKey: process.env.REDWOOD_API_KEY, region: 'us-west-2' });
+
+- Recommended runtime flags for initial rollout:
+  - streaming: enabled for UX paths
+  - default max_tokens: 512 (adjust per endpoint)
+
+2) Endpoint migration (cutover strategy)
+- Start with a 10% shadow traffic test sending mirrored requests to Redwood while responses are compared offline.
+- After 24-48h of parity, switch 25% live traffic and monitor latency & cost for another 24h.
+- Full cutover after two green windows and one canary rollback test.
+
+3) Retries & timeouts (resilience pattern)
+- Client timeout: set to 30s for generation endpoints, 10s for embeddings.
+- Retry policy (idempotent wrapper for generation tokens):
+  - On 429: exponential backoff with jitter — retries up to 3 times (100ms, 400ms, 1s)
+  - On 5xx: single retry after 500ms, then failover to latency-tiered fallback (see below)
+
+4) Rate limit handling & graceful degradation
+- Use server-side rate-limit token bucket per route. When close to limit, return cached prefix or lower-cost model variant.
+- Fallback tiers:
+  - Tier A: configured production model (best quality)
+  - Tier B: quantized variant for cost-sensitive bursts
+  - Tier C: minimal guidance model (shorter outputs)
+
+5) Observability hooks
+- Attach request_id headers and log per-request token usage and latency.
+- Set alerts on 95th percentile latency > 700ms or token spend > baseline + 30%
+
+Next steps: I’ll share the PDF and an annotated code gist for your engs. Monica — can you attach the SOC2 artifact and the sample config map for their k8s deployment?
+
+—Marcus
+Marcus Lin
+Senior Solutions Engineer, Redwood Inference
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Alex Turner <alex.turner@finapps.com>, Marcus Lin <marcus.lin@redwood.com>
+Cc: Grace O'Connor <grace.oconnor@redwood.com>
+Date: Thu, 10 Jun 2027 13:18:00 -0700
+Subject: Re: Integrations: SDK rollout & production fallback strategy
+
+Alex — attaching the migration PDF (redwood-sdk-migration-guide.pdf) and a sample k8s config (finapps-deployment-map.yaml). Quick pointers from the doc: 
+
+- Secrets: use your KMS-backed secret store and mount REDWOOD_API_KEY to the runtime; rotate monthly.
+- Prefetch/Caching: enable prefix KV cache on warm routes; this reduces token usage up to ~30% for predictable prompts.
+- Model pinning: pin to a fixed model hash for canary windows; automatic updates only after vetted rollouts.
+
+Sample retry wrapper (Python):
+import time
+import random
+
+def call_with_retries(client_call, max_retries=3):
+    delay = 0.1
+    for i in range(max_retries):
+        try:
+            return client_call()
+        except RateLimitError:
+            time.sleep(delay + random.uniform(0, delay))
+            delay *= 4
+    raise
+
+Notes on rate-limits: we surface remaining_quota headers in responses — use them to throttle client-side.
+
+Attachments included: redwood-sdk-migration-guide.pdf, finapps-deployment-map.yaml, finapps-security-questionnaire.xlsx
+
+Monica Patel
+Customer Success Manager, Redwood Inference
+
+From: Alex Turner <alex.turner@finapps.com>
+To: Marcus Lin <marcus.lin@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Mon, 14 Jun 2027 09:10:00 -07:00
+Subject: Re: Integrations: SDK rollout & production fallback strategy
+
+Thanks Marcus / Monica — received the doc and config. A couple quick clarifications from our engs: 
+- For the shadow traffic test, can you share the exact header we should include to mark requests as 'mirror' (so we can filter logs)?
+- For fallback model tiers, what are the recommended quantization levels and estimated per-token cost reductions?
+
+Also attaching the signed SOC2 questionnaire and a short procurement note. Procurement is aiming to finalize contracts by June 24.
+
+Best,
+Alex
+
+From: Grace O'Connor <grace.oconnor@redwood.com>
+To: Alex Turner <alex.turner@finapps.com>
+Cc: Marcus Lin <marcus.lin@redwood.com>, Monica Patel <monica.patel@redwood.com>, Procurement <procurement@finapps.com>
+Date: Mon, 14 Jun 2027 16:05:00 -07:00
+Subject: Re: Integrations: SDK rollout & production fallback strategy
+
+Alex — quick answers inline:
+
+- Shadow header: include `X-Redwood-Mirror: true` and `X-Request-ID` (UUID). We log both and expose mirror traffic in the debug bucket in the console.
+
+- Quantization recommendations:
+  - fp16 -> baseline quality (no quantization)
+  - int8 (symmetric) -> ~20-30% cost reduction, small latency improvement, recommended for Tier B
+  - int4 (8-bit group quant) -> ~45-55% cost reduction, use for Tier C only; expect reduced fidelity on complex prompts
+
+Estimated per-token reductions (very rough):
+  - Tier A (fp16): $0.0009/token
+  - Tier B (int8): $0.0007/token
+  - Tier C (int4): $0.0005/token
+
+I’ll add these numbers to the PDF and drop a small snippet to programmatically switch tiers when remaining_quota < 10%:
+
+if response.headers.get('x-remaining-quota') and int(response.headers.get('x-remaining-quota')) < 10:
+    switch_model_variant('tier-b')
+
+Procurement: we see the note and are ready for a standard reserved-capacity SOW. Marcus / Monica will loop in legal for the DocuSign.
+
+Next: Marcus will schedule a 30-min tech sync with your backend leads this week to walk the sample code and the mirror test.
+
+Cheers,
+Grace O'Connor
+Director, Customer Success Operations, Redwood Inference

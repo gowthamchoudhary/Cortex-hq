@@ -1,0 +1,102 @@
+Post-call: inference profile & throughput/latency deliverables for BrightDocs
+
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Emma Vargas <emma@brightdocs.ai>, Sam Cho <sam.cho@brightdocs.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: Fri, 9 Apr 2027 10:12:00 -0700
+Subject: Post-call: inference profile & throughput/latency deliverables for BrightDocs
+
+Hi Emma / Sam —
+
+Thanks again for taking time today. Quick recap from our discovery and the concrete next steps we discussed: 
+
+- Goal: integrate an on-demand summarization pipeline into BrightDocs’ ingestion flow with sub-250ms p95 on user-facing requests and bulk batch conversions for archive jobs.
+- Data shape: mixed-length docs (300–6k tokens), typical user prompt + 1–4k context.
+- Quality constraint: you flagged preference for <3% semantic drift vs current in-house model on legal doc summaries; we’ll monitor regression with the prompt set you shared.
+
+What I’m attaching / linking here:
+1) Redwood-verified performance profiles (attached CSV) — per-model TPS baselines, p50/p90/p95 latency percentiles at the token/window sizes we discussed. Key candidates we recommend for evaluation: redwood-7b-q4_0 (best cost/latency balance for low-latency interactive), redwood-13b-fp16 (higher quality for longer contexts, recommended for batch/archival jobs), and an experimental 33B quantized variant for edge-case legal reasoning.
+2) Prompt set & eval harness (attached JSONL + Drive link) — includes 120 prompt-document pairs keyed to your legal templates and a rubric for automated semantic-similarity checks.
+3) Benchmark artifacts (Drive link) — raw traces and run configs we used to generate the CSV so your infra team can reproduce.
+
+Quality/regression plan (short):
+- Baseline: run the provided prompt set on your sample corpus and our recommended models; compute semantic-similarity and hallucination flags.
+- Guardrails: we’ll add a lightweight reranker and thresholded fallback to redwood-13b-fp16 if the 7b quantized output drops below your 97% similarity bar.
+- Monitoring: per-deploy regression alerts tied to prompt-set evaluation + token-level cost deltas in Redwood Console.
+
+Proposed next steps (mutual action plan):
+- (Action: BrightDocs) Share a 500–1,000 doc sample export for a quick POC run — target: Tue 2027-04-13.
+- (Action: Redwood) We’ll run the POC across the three candidate profiles, produce a 1‑page recommendation (cost/latency/quality) and a reproducible benchmark folder by Fri 2027-04-16.
+- (Action: both) Quick sync after POC results to pick the deploy variant.
+
+Notes about the attached CSV: each model row includes TPS at 1, 4, 8 concurrent connections (simulated request mix), and p50/p90/p95 latencies at the token window sizes we used. The CSV is labeled with the run-id so you can map back to the raw traces in Drive.
+
+I’m looping Marissa (CS) and Marcus (inference eng) to own parts of the POC and the reproduction run. Marcus — can your team prioritize a 24–36 hour run once BrightDocs drops the sample?
+
+Thanks —
+Jordan Blake
+Enterprise Sales
+Redwood Inference
+jordan.blake@redwood.ai
+(415) 555-0198
+
+-----Original Message-----
+From: Emma Vargas <emma@brightdocs.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Cc: Sam Cho <sam.cho@brightdocs.ai>
+Date: Fri, 9 Apr 2027 12:04:00 -04:00
+Subject: Re: Post-call: inference profile & throughput/latency deliverables for BrightDocs
+
+Thanks Jordan — this is super helpful. A couple quick clarifying items from our side before we send the sample: 
+
+1) For the 7b quantized candidate, do you have p95 numbers for the 4k context specifically? Our interactive editor often runs with 3–4k.
+2) For the fallback concept, is that an automatic switch in your routing layer or something we’ll orchestrate from our side? We prefer automated fallback for availability.
+
+We’ll aim to share a redacted 800-doc sample by Tues morning.
+
+—Emma
+Director of NLP, BrightDocs
+emma@brightdocs.ai
+
+On Fri, Apr 9, 2027 at 12:30 PM Jordan Blake <jordan.blake@redwood.ai> wrote:
+> Great questions — answering inline and looping Marcus.
+>
+> On Fri, Apr 9, 2027 at 12:47 PM Marcus Lin <marcus.lin@redwood.ai> wrote:
+> > Jordan/Emma — I attached a short notes PDF with run configs and the 4k-specific latency slices. For the redwood-7b-q4_0 candidate at 4k: p50 ~ 38ms, p90 ~ 140ms, p95 ~ 260ms at 4 concurrent connections for the request mix you described (50% interactive short prompts, 50% longer context calls). Those numbers were measured on A100s with our batching settings tuned to preserve sub-300ms p95 for interactive loads.
+> >
+> > Automatic fallback: yes — our smart routing can promote fallbacks by policy (latency or quality thresholds). We can configure a route so that if semantic-similarity score < 0.97 the request is routed to the higher-quality variant. If you want full control we can expose that decision hook via a simple API call from your side as well.
+> >
+> > Attached: inference_profile_notes.pdf (run configs), and I uploaded the raw traces to the Drive link Jordan shared.
+> >
+> > —Marcus
+> > Principal Inference Engineer
+> > marcus.lin@redwood.ai
+>
+> Jordan Blake
+> Enterprise Sales, Redwood Inference
+>
+
+From: Sam Cho <sam.cho@brightdocs.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Cc: Emma Vargas <emma@brightdocs.ai>
+Date: Mon, 12 Apr 2027 15:23:00 -04:00
+Subject: Re: Post-call: inference profile & throughput/latency deliverables for BrightDocs
+
+Jordan — appreciate the detail. The sample is uploading now. Emma and I reviewed Marcus’s notes and we’re good with the POC plan. Can you confirm whether the CSV shows cold-start effects or are those warm-only runs? We need to estimate first-request latencies for our editor webhooks.
+
+Thanks,
+Sam
+Infrastructure Lead, BrightDocs
+sam.cho@brightdocs.ai
+
+On Mon, Apr 12, 2027 at 12:58 PM Marcus Lin <marcus.lin@redwood.ai> wrote:
+> Sam — good question: the attached CSV and Drive runs are warm-only (steady-state). We do have cold-start traces for single-node spin-up in the Drive folder; see run-id coldstart-20270401. Expect ~600–900ms first-token for a cold A100 start with the larger 13B variant; the 7B quantized warm-up is closer to 240–350ms depending on KV cache hits. We’ll flag the coldstart traces in the POC deliverable so you can simulate your webhook flow.
+>
+> —Marcus
+>
+>--
+>Marcus Lin
+>Principal Inference Engineer
+>marcus.lin@redwood.ai
+>
+

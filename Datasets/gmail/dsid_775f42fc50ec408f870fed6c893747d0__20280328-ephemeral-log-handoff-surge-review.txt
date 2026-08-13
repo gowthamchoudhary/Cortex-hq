@@ -1,0 +1,143 @@
+[ArcadiaPay] Surge: ephemeral logs, data handling, and exec evidence
+
+From: Anna Lopez <anna@arcadiapay.com>
+To: irene@redwood.com
+Cc: suresh.ops@arcadiapay.com
+Date: 2028-03-28T09:07:00-07:00
+Subject: High error-rate / retries during 03/28 window — need logs for exec review
+
+Hi Irene,
+
+We saw a big spike in 03/28 09:00–09:40 PDT where our payment flows saw ~18% transient errors and elevated latency. Our security and compliance teams are asking for a sealed set of logs and traces for an upcoming exec review and SOC audit. Specifically we need:
+- All request/response traces for our account (ArcadiaPay) between 2028-03-28T08:50:00Z and 2028-03-28T10:00:00Z (trace ids: the UI shows some starting with t-5a7c)
+- Any kv-cache eviction/replication events involving our sessions
+- Evidence that no customer PII persisted in long-term storage (if any ephemeral artifacts existed, mark for redaction)
+
+Can you confirm what you can provide and the expected delivery ETA? Execs want a 1‑page summary for their 11:00 AM PT briefing.
+
+Thanks,
+Anna Lopez
+Head of Platform, ArcadiaPay
+
+
+From: irene@redwood.com <irene@redwood.com>
+To: monica@redwood.com, marcus@redwood.com, soojin@redwood.com, tessa@redwood.com
+Cc: anna@arcadiapay.com
+Date: 2028-03-28T09:21:00-07:00
+Subject: Re: High error-rate / retries during 03/28 window — need logs for exec review
+
+Monica / Marcus / Soojin / Tessa —
+
+Alert from ArcadiaPay (Anna) about the 09:00 PDT throughput/error spike. They specifically requested a sealed evidence package for an exec briefing + SOC audit scope. Initial notes from prod: transient retry storm correlated with an autoscaling event and an accelerated eviction of in-memory prefix caches.
+
+Questions:
+- Marcus / Soojin: can you snapshot ephemeral KV/cache state and session traces immediately (do not purge). We need chain-of-custody metadata: who pulled the data, command timestamps, and checksums.
+- Tessa: collect runtime metrics (throughput, qps, error-rate) per-pool and attach the kernel selection logs for the window.
+- Monica: coordinate messaging with ArcadiaPay and keep them to the minimum ask so we don't over-share. They asked for a 1‑pager by 11:00 PT. Can we get a redacted executive brief and a sealed archive by EOD tomorrow?
+
+I will loop in Legal if PII questions come up.
+
+Irene Choi
+VP, Platform Operations
+Redwood Inference
+
+
+From: marcus@redwood.com <marcus@redwood.com>
+To: irene@redwood.com, monica@redwood.com, soojin@redwood.com
+Cc: anna@arcadiapay.com
+Date: 2028-03-28T09:33:00-07:00
+Subject: Re: High error-rate / retries during 03/28 window — need logs for exec review
+
+Irene —
+
+We can capture the following artifacts now:
+1) session-traces-arcadiapay-20280328.jsonl: request/response traces (streamed, includes trace ids and timing; redaction pending)
+2) runtime-ephemeral-kv-snap-20280328.tar.gz: memory-backed cache snapshot (contains keys hashed; we will produce a redaction map)
+3) kernel-selection-log.txt: kernel decisions per model shard for the 08:50–10:00Z window
+4) metrics-coldstart.csv and qps-errors-per-pool.csv
+
+Notes on PII: the runtime does not persist request bodies to long-term blob storage by default for hosted accounts; ephemeral caches may contain tokens/prefix fragments. We will not ship any archive until legal signs off on the redaction map.
+
+Actions in flight:
+- Soojin is preparing a write-once sealed archive (tar + sha256) and will capture a digital signature timestamp.
+- I am snapshotting the cache and marking the instance IDs.
+
+ETA: initial exec-brief draft: 10:30 AM PT. Sealed archive (redacted) targeted by 2028-03-29 EOD.
+
+Marcus Lin
+Security & Forensics Lead
+Redwood Inference
+
+Attachments: kernel-selection-log.txt (stub), metrics-coldstart.csv (stub)
+
+
+From: soojin@redwood.com <soojin@redwood.com>
+To: irene@redwood.com, marcus@redwood.com, monica@redwood.com
+Cc: anna@arcadiapay.com, katie@counselfirm.com
+Date: 2028-03-28T10:02:00-07:00
+Subject: Re: High error-rate / retries during 03/28 window — need logs for exec review
+
+Irene / team / Anna / Katie —
+
+Legal (Katie) — can you confirm the redaction requirements for the SOC scope and whether we should preserve raw traces offline for 30 days under legal hold before producing the customer-facing archive? Typical options:
+- Option A: produce customer-facing archive with full redaction of any tokens/PII now + provide a separate sealed raw archive accessible only under subpoena/legal request (store in cold vault for 30d)
+- Option B: produce sealed raw archive to customer immediately with redaction map and chain-of-custody meta (requires signed NDA and retention agreement)
+
+Technical note: kernel traces and scheduler events do not contain customer payloads but include hashed session ids. The ephemeral KV snapshot will include hashed keys and truncated values (we can zero-pad values > 64 bytes). We'll publish a redaction-map-arcadiapay-20280328.csv that lists transformations.
+
+I will create a write-once tar, compute sha256: <pending>, and upload to the internal forensics Drive (link to follow).
+
+Soojin Lee
+Incident Forensics Engineer
+Redwood Inference
+
+Attachments: redaction-map-arcadiapay-20280328.csv (stub)
+
+
+From: katie@counselfirm.com <katie@counselfirm.com>
+To: soojin@redwood.com, irene@redwood.com, marcus@redwood.com
+Cc: anna@arcadiapay.com
+Date: 2028-03-28T11:18:00-07:00
+Subject: Re: High error-rate / retries during 03/28 window — need logs for exec review
+
+Soojin / Irene —
+
+For SOC/executive purposes we recommend Option A: provide ArcadiaPay a redacted customer-facing archive now (they will use this in their exec and internal audit), and retain a sealed raw archive in our cold vault for 90 days. This balances customer needs and our legal exposure. Please ensure:
+- Redaction map included and verified by security/legal
+- Chain-of-custody file present (who accessed/pulled and timestamps)
+- SHA256 of the sealed raw archive and the redacted archive
+
+If ArcadiaPay wants raw artifacts earlier, require a signed Data Transfer Addendum and explicit retention/usage terms.
+
+Katie Morales
+Counsel (external retained for ArcadiaPay SOC)
+
+
+From: irene@redwood.com <irene@redwood.com>
+To: anna@arcadiapay.com, suresh.ops@arcadiapay.com
+Cc: monica@redwood.com, marcus@redwood.com, soojin@redwood.com, tessa@redwood.com, evelyn@redwood.com
+Date: 2028-03-30T17:45:00-07:00
+Subject: Re: High error-rate / retries during 03/28 window — evidence delivery and next steps
+
+Anna / Suresh —
+
+Summary and delivery: per counsel recommendation we prepared a redacted customer-facing forensics packet and retained a sealed raw archive in our cold vault. Items delivered to ArcadiaPay:
+- exec-brief-arcadiapay-20280330.pdf (1-page summary + timeline + mitigation steps)
+- session-traces-arcadiapay-20280328.jsonl (redacted)
+- redaction-map-arcadiapay-20280328.csv
+- kernel-selection-log.txt (non-PII)
+
+Sealed archive (raw, write-once) stored in Redwood cold vault: runtime-ephemeral-kv-snap-20280328.tar.gz (sha256: 3f7a...b2c1). Access is restricted; any retrieval requires Legal approval and a documented request (ticket RINF-4529).
+
+ETA and follow-ups:
+- We can provide a deeper forensic if ArcadiaPay wants raw artifacts under a DTAA and retention agreement; contact Monica to start that process.
+- Internal RCA is underway; initial mitigation: tweak autoscaler hysteresis and strengthen backpressure on the worker pool.
+
+Thanks for the fast coordination. Evelyn (cc'd) — we prepared an exec‑friendly one pager if you want to forward to the board.
+
+Irene Choi
+VP, Platform Operations
+Redwood Inference
+
+Attachments: exec-brief-arcadiapay-20280330.pdf (stub), session-traces-arcadiapay-20280328.jsonl (redacted stub)
+

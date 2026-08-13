@@ -1,0 +1,152 @@
+On‑site preflight: HarborTech server‑room K8s preflight, node fleet & disk playbook
+
+From: Tim Barnes <tim.barnes@harbortech.com>
+To: Jordan Blake <jordan_blake@redwood.com>
+Date: 2028-04-18T09:12:00-07:00
+Subject: On‑site preflight for private deploy (HarborTech)
+
+Hi Jordan,
+
+Thanks for the quick sync yesterday. We want to move forward with an on‑prem/private deployment of Redwood in our primary datacenter (Building 3, rack rooms A/B). Before we schedule the workshop, we need a concrete preflight checklist and an initial node/storage architecture we can review with our security and procurement teams. Important constraints:
+
+- Air‑gapped policy except for an outbound bastion (no direct internet egress from nodes).
+- On‑prem infra is NetApp ONTAP over the SAN/NFSv4 export for long‑term storage; we also have local NVMe on nodes for high‑io cache.
+- IPMI/BMC access is physically available but cannot be exposed offsite; remote hands through our colo provider preferred.
+- Initial capacity target: 200 steady concurrent inference streams with peaks up to 450 QPS; typical sequence lengths are 256 tokens.
+- GPUs available: 3 racks with 8x A100 (80GB) servers total — we expect to dedicate some nodes to inference but need sizing guidance.
+- Compliance: all audit logs and access trails retained for 365 days; we will share SOC2 docs later.
+- Timeline goal: on‑site workshop + preflight within 6 weeks.
+
+Can you produce a short preflight plan (network, node classes, storage classes, and a remote‑hands playbook) we can review with our security team? I attached a rough server‑room diagram.
+
+Thanks,
+Tim
+
+Attachments: harbortech-serverroom-diagram-v1.png (image)
+
+From: Jordan Blake <jordan_blake@redwood.com>
+To: Tim Barnes <tim.barnes@harbortech.com>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>
+Date: 2028-04-18T11:00:00-07:00
+Subject: Re: On‑site preflight for private deploy (HarborTech)
+
+Tim — thanks, this is great context and the diagram helps. High level response below; Lauren and Kim will follow up with sizing and storage ops detail. I also attached our standard on‑prem preflight checklist (PDF) to use as a starting point.
+
+Quick summary / proposed starting architecture:
+
+- Control plane: 3 dedicated non‑GPU master nodes in a separate rack (or spread across both racks A/B) with redundant networking. Keep control plane off the inference VLAN and behind a management bastion.
+
+- Node pools:
+  - inference‑gpu: 3 nodes (A100 80GB), dedicated, tainted gpu=true:NoSchedule; use pod‑level resource requests & limits to isolate models.
+  - cache‑local: 3 nodes (NVMe + moderate CPU), non‑GPU, used for hungry KV caches (local SSD writes, fast eviction).
+  - batch‑cpu: 4‑6 CPU workers for background batch jobs and conversions.
+  - infra‑edge: 2 nodes for logging/prometheus/ingress (non‑GPU), with persistent storage backed by NetApp NFS.
+
+- Storage plan:
+  - Local NVMe for ephemeral KV cache (k8s local persistent volumes), high IOPS, short retention — configured with reclaimPolicy=Delete.
+  - NetApp NFS for RWX long‑term artifacts (model artifacts, logs, snapshots) via the NetApp CSI driver and Kerberos if you require it.
+  - Object backup gateway (S3 compatible) for snapshots/backups; can be air‑gapped to a local Ceph or MinIO if needed.
+
+- Network / security:
+  - Private VLAN per node class. Strict egress via bastion jump host/proxy; only management plane can reach external endpoints.
+  - MTU: 9000 where possible for GPU traffic; validate NIC/TOE and switch support.
+  - CNI: recommended Calico in eBPF mode for performance (we can fallback to IPIP where eBPF not supported).
+
+Action items I can own: produce a one‑page preflight checklist and a node‑pool/taint/snippet YAML for review. Lauren: can you add recommended CPU/memory/gpu sizing and runtime flags? Kim: can you add NetApp CSI/retention guidance?
+
+Next steps: propose an on‑site workshop week of May 22 or May 29 (workable for you?), and we'll bring a remote‑hands runbook.
+
+Cheers,
+Jordan Blake
+Principal Solutions Engineer
+Redwood Inference
+
+Attachments: redwood-onprem-preflight-checklist.pdf (PDF)
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: Jordan Blake <jordan_blake@redwood.com>, Tim Barnes <tim.barnes@harbortech.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>
+Date: 2028-04-19T08:23:00-07:00
+Subject: Re: On‑site preflight for private deploy (HarborTech)
+
+Following up with node sizing and scheduler controls. I'll keep this focused and actionable for your ops/security reviewers.
+
+Node sizing (initial recommended profiles):
+- control‑plane.medium: 3x m64‑large equivalent (8 vCPU, 32GB RAM, 1Gbps mgmt NIC) — no GPUs, high‑io for etcd (use local SSD for etcd if possible).
+- inference.gpu.large: 3x nodes, each with 8 vCPU, 256GB RAM, 2x A100 (80GB) or single 4x A100 depending on your server SKUs. Use hugepages disabled for model serving; tune per‑model.
+- cache.local.highio: 3x nodes, 16 vCPU, 64GB RAM, local NVMe 3.2TB, recommended for KV cache (LSM workloads).
+- batch.cpu.small: 4x nodes, 12 vCPU, 48GB RAM, no GPU (for conversions, offline evals).
+
+Kube flags / policies:
+- kubelet eviction thresholds: memory.available < 8% and imagefs.available < 10% to trigger eviction on GPU nodes.
+- pod disruption budgets: set for inference deployments (minAvailable: 2) to keep serving SLO.
+- scheduler: use nodeAffinity + taints (taint: gpu=true:NoSchedule for inference). Use topologySpreadConstraints to distribute pods across racks.
+- runtime: containerd (1.8+), cgroup v2 if your OS/kernel stack supports it; restrict swap to 0.
+
+Networking specifics:
+- Validate eBPF datapath compatibility across all ToR switches; if not available, configure Calico IPIP with BGP peering to your edge router.
+- Recommend dedicating a 10G interface for GPU traffic; enable jumbo frames end‑to‑end.
+
+I'll upload a short YAML snippet for the node pools and taints to the drive link and include an example PDB + HPA config for inference deployments.
+
+- Lauren
+Engineering Manager, Production Platforms
+Redwood Inference
+
+Related link: https://drive.google.com/open?id=1abcPreflightDiagram (node pool YAML will be there)
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Jordan Blake <jordan_blake@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>, Tim Barnes <tim.barnes@harbortech.com>
+Date: 2028-04-19T10:15:00-07:00
+Subject: Re: On‑site preflight for private deploy (HarborTech)
+
+Storage and data retention notes (NetApp + local NVMe):
+
+1) Architecture pattern (three tiers):
+   - Tier 0: Local NVMe on inference/caches — used for ephemeral KV caches and model runtime scratch. Use local PVs (PersistentVolume with local volume CSI) and enforce ReclaimPolicy=Delete. Short retention (< 24h).
+   - Tier 1: NetApp NFS exports for model artifacts, logs, and shared RWX volumes — use NetApp Trident/CSI driver v21+ with Kerberos mount if your security policy requires. Ensure NFS mount options include noexec,nodev where appropriate and set fsync semantics per workload.
+   - Tier 2: Backup object store (S3 compatible) for daily snapshots and long‑term retention (365d). If no external S3 allowed, run MinIO behind your bastion in the same VLAN and schedule replication to tape/backup appliances as per your policy.
+
+2) CSI & performance:
+   - Use NetApp CSI driver with async snapshot support; set storageClass parameters for dedupe/compression where ONTAP supports it.
+   - For high‑IO workloads, avoid NFS for hot writes; prefer local NVMe or a dual‑write pattern (write to NVMe then async copy to NetApp).
+
+3) Snapshots & retention:
+   - Models/artifacts: hourly snapshot (rolling 24h), daily snapshot (30 days) and weekly archived snapshot (365 days).
+   - Logs/metrics: retain node /audit logs 365 days; rotate compressed per week.
+
+4) Security notes:
+   - Kerberos + CIFS/NFS for privileged mounts; mount over dedicated management network.
+   - Limit NFS exports to k8s master and infra nodes via ACLs.
+
+I'll attach a recommended NetApp CSI config and a short example of a StorageClass we often template.
+
+Kimberly Park
+Platform Reliability Lead
+Redwood Inference
+
+Attachments: netapp-csi-recommendation.yaml (YAML)
+
+From: Tim Barnes <tim.barnes@harbortech.com>
+To: Jordan Blake <jordan_blake@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>, Kimberly Park <kimberly_park@redwood.com>
+Date: 2028-04-19T15:40:00-07:00
+Subject: Re: On‑site preflight for private deploy (HarborTech)
+
+Jordan / team — this looks good and aligned with our internal expectations. A few points / clarifications before we lock workshop dates:
+
+- IPMI: we cannot provide remote IPMI to external parties. We'll offer remote hands through our colo provider — please include a remote‑hands checklist with exact commands and times for hardware reboots.
+- Network: we'll confirm MTU 9000 across ToR but will run an initial test next week.
+- Backups: we will use a local object gateway (MinIO) behind the bastion — confirmed.
+
+Please send the remote‑hands playbook and your available dates. May 22 is tight for us; May 29 looks realistic. We are ready to sign an SOW for the preflight/3‑day workshop. If you can send a DocuSign link for the SOW, I will route it to procurement.
+
+Thanks all — appreciate the clear guidance.
+
+Tim
+HarborTech — Director, Infrastructure
+
+---
+On Thu, Apr 18, 2028 at 11:00 AM Jordan Blake <jordan_blake@redwood.com> wrote:
+> Tim — thanks, this is great context and the diagram helps. High level response below; Lauren and Kim will follow up with sizing and storage ops detail. I also attached our standard on‑prem preflight checklist (PDF) to use as a starting point.
+>
+> (quoted earlier message omitted)
+
+Related links: DocuSign: https://app.docusign.com/sandbox/launch?envelopeId=0d9a-ht-sow

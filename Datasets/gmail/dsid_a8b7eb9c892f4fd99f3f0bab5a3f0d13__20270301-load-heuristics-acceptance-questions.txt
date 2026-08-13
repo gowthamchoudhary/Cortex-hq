@@ -1,0 +1,127 @@
+Atlas AI — evaluation load heuristics & POC acceptance questions
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Claire Huang <claire@atlasai.com>
+Cc: Soojin Lee <soojin.lee@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: 2027-03-01T15:12:00-07:00
+Subject: Follow-up: POC load & acceptance questions (next steps)
+
+Hi Claire — thanks again for the call this morning. Quick recap and a couple of clarifying asks so we can lock the POC plan: 
+
+Summary of what we heard from Atlas AI:
+- Primary workload: conversational assistant + short-document summarization for enterprise customers (queries coming from web and mobile clients).
+- Goal for POC: validate cost/latency profile at expected traffic shape and confirm quality parity with your current hosted vendor for 90% of intents.
+
+Immediate asks (traffic intake):
+1) Steady-state RPS target (avg over 10m windows): your team mentioned ~120 RPS. Can you confirm whether that’s per-region or global?
+2) Typical prompt/response token lengths: please provide median and 95th percentile for prompt and response tokens (ballpark OK).
+3) Concurrency/burst patterns: examples of observed spikes (e.g., 5x baseline for 30s every hour, or daily spikes after 9am).
+4) Authored sample queries (10–20) and a small anonymized sample payload so we can sanity-check tokenization and batching.
+
+Proposed POC timeline (target):
+- Kickoff + data exchange: week of Mar 8
+- Baseline run & calibration: Mar 15–19
+- Load evaluation window: Mar 22–26
+- Readout & next steps: week of Mar 29
+
+Proposed success criteria (draft):
+- p95 latency at your evaluation QPS: <200–300ms depending on model family
+- 99th percentile tail: <500ms
+- Output fidelity: match or exceed current provider on key intents (TBD prompt set)
+- Cost: 15–30% reduction / per-token saved vs current vendor (TBD)
+
+Owners: Jordan (commercial), Soojin (SE lead), Marissa (CS Ops) from our side — who should we loop from Atlas AI for procurement and an engineering contact for sample logs?
+
+I attached a short POC handshake doc and a sample traffic schema to speed data exchange. If these timings look good, I’ll send a calendar invite for a 30-minute kickoff and Soojin will follow with the telemetry checklist.
+
+Cheers,
+Jordan
+Jordan Blake
+Account Executive | Redwood Inference
+Attachments: jb_poc_handshake_v2.pdf
+
+
+From: Claire Huang <claire@atlasai.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: procurement@atlasai.com
+Date: 2027-03-02T10:01:00-07:00
+Subject: Re: Follow-up: POC load & acceptance questions (next steps)
+
+Thanks Jordan — appreciate the recap. Quick answers below and a few clarifying points.
+
+Traffic outline (rough):
+- Steady-state: 110–130 RPS (global). We expect most traffic to hit the US region during this POC; EU not in scope initially.
+- Token lengths: prompt median ~40 tokens, prompt 95th ~220 tokens. Response median ~120 tokens, response 95th ~650 tokens.
+- Concurrency: typically ~20–35 concurrent sessions, but worker-level concurrency can spike to ~120 during product release events.
+- Burst profile: we see 4–6x short spikes (10–60s) during notification windows; sustained 2x increases for 3–6 minutes after business-hour pushes.
+
+Contacts:
+- Eng lead: Daniel Park (daniel.park@atlasai.com) — he’ll provide anonymized samples and access to sanitized logs.
+- Procurement: procurement@atlasai.com (cc’d) for commercial/contract questions.
+
+Important compliance note: we cannot share raw PII in samples — Daniel will scrub data. Also, we need to confirm SOC2 evidence and that audit logs are available for the trial window.
+
+Timeline: the proposed kickoff week of Mar 8 works for us. We’d like the load evaluation window to include at least two business days and one simulated release spike test.
+
+Pricing: procurement wants a baseline estimate for expected consumption during the POC (per-token + any burst surcharge), even if provisional. Can your team provide a POC quote by EOD Tue (Mar 3)?
+
+—Claire
+From: Soojin Lee <soojin.lee@redwood.com>
+To: Claire Huang <claire@atlasai.com>, Jordan Blake <jordan.blake@redwood.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>
+Date: 2027-03-02T17:35:00-07:00
+Subject: Re: Follow-up: POC load & acceptance questions (next steps)
+
+Hi Claire — thanks for the details, that’s helpful. A few technical clarifications and a draft evaluation plan so we align on telemetry and gating criteria.
+
+Clarifications we need before kickoff:
+- When you say "worker-level concurrency", is that number of parallel model requests from a worker process, or total requests across all workers? If the former, please provide avg workers per host.
+- For the simulated release spike test: do you want us to replay staged traffic from your sanitized log (preferred) or run synthetic load scripts generated from the traffic profile? Both are doable but replay gives better fidelity.
+
+Draft evaluation plan (SE proposal):
+1) Baseline calibration (2 days): run your sample queries against the candidate model family and measure tokenization delta, average token counts, and per-call overhead.
+2) Throughput sweep (1 day): increment RPS to target steady-state (120 RPS) and validate sustained throughput; identify any queueing/backpressure.
+3) Burst simulation (1 day): execute 3–5 representative spike profiles (4x 30s blasts; 6x 10s microbursts; 2x sustained 2x for 5 mins) and capture tail latency and error rates.
+4) Business-case readout (1 day): joint runbook review and pass/fail on success criteria.
+
+Pass/fail criteria (suggestions):
+- Functional: >90% of the evaluation prompt set must meet quality gates (per-intent F1/Human-rated thresholds — we will collaborate on exact metrics).
+- Latency: p95 <= 300ms at steady-state; p99 <= 600ms during bursts (these bounds are negotiable depending on model choice).
+- Reliability: error rate (5xx or timeouts) <0.5% during the evaluation window.
+- Observability: request-level logs with unique request IDs and KV cache hit rates (we need your team to include a trace_id in sample payloads).
+
+Artifacts we’ll need before kickoff:
+- Sanitized sample payloads (10k rows or a representative subset) — traffic_sample_schema.csv describes the fields we expect.
+- A short list of 20 golden queries for fidelity checks.
+
+Attachments: traffic_sample_schema.csv
+
+I’ll prepare a test harness and a lightweight runbook for the spike tests; Marissa will coordinate ops and calendar invites. Jordan — we can also produce a provisional POC estimate for procurement by EOD Tue.
+
+Best,
+Soojin
+Soojin Lee
+Solutions Engineer | Redwood Inference
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Claire Huang <claire@atlasai.com>, Daniel Park <daniel.park@atlasai.com>
+Cc: Soojin Lee <soojin.lee@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, procurement@atlasai.com
+Date: 2027-03-03T09:04:00-07:00
+Subject: Re: Follow-up: POC load & acceptance questions (next steps)
+
+Claire / Daniel — thanks for the fast turn. Quick confirmation and next steps from our side: 
+
+1) Procurement: we will send a provisional POC quote by EOD Tue (Mar 3) with a simple consumption estimate for the planned window; it will include a note about burst handling and any one-time onboarding credits.
+2) Eng/data exchange: Daniel, if you can share the sanitized sample and the 20 golden queries into the Drive folder (link below) we’ll pick that up right away.
+3) Kickoff: I’ll schedule a 30-minute kickoff for Mon Mar 8 10:30am PT (invite sent) — agenda: introductions, data handoff, runbook review, and timeline.
+4) Owners: Jordan (AE) — commercial & scheduling; Soojin (SE lead) — test harness & telemetry; Marissa (CS Ops) — runbook execution & ops coordination; Daniel (Atlas) — sanitized samples & eng point.
+
+Drive (share): https://drive.google.com/drive/folders/1a2b3cPOC-handshake
+POC runbook attached: jb_poc_handshake_v2.pdf
+
+If anything changes on your end please flag; otherwise we’ll proceed with the timeline above. Looking forward to running this with your team.
+
+Cheers,
+Jordan
+Account Executive | Redwood Inference
+Attachments: jb_poc_handshake_v2.pdf

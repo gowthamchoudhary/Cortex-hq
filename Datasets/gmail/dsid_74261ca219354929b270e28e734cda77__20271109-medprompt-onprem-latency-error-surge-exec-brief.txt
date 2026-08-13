@@ -1,0 +1,115 @@
+MedPrompt on‑prem: sudden p99 latency & 5xx surge — Exec briefing + tuning ask
+
+From: Elena Rossi <elena.rossi@medprompt.ai>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>
+Date: Fri, 06 Nov 2027 09:12:00 -0700
+Subject: Re: production — elevated p99 & 502s on our private cluster
+
+Hi Hannah,
+
+We're seeing a sharp jump in p99 latency (from ~420ms to >2.8s) and a wave of 502s on our on‑prem Redwood mesh starting ~03:00 PT. This started after an overnight batch job; we rolled back a config but the error rate stayed high.
+
+Attached a short export of the service metrics and a small KV snapshot from the node that appeared most noisy. Can you confirm who at Redwood can triage kernel/caching paths and whether you can force a fallback to the stable quantized variant until we stabilize? Our clinical workflows are hitting timeouts.
+
+Thanks,
+Elena
+Elena Rossi
+Head of Platform
+MedPrompt AI
+attachments: svc_metrics_nov6-9.csv (csv), hotpath_kv_snapshot.txt (text)
+
+From: Hannah Schmitt <hannah.schmitt@redwood.ai>
+To: Jonas Weber <jonas.weber@redwood.ai>, Irene Choi <irene.choi@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Cc: Elena Rossi <elena.rossi@medprompt.ai>
+Date: Fri, 06 Nov 2027 09:35:00 -07:00
+Subject: Fwd: production — elevated p99 & 502s on our private cluster
+
+Folks — forwarding an urgent report from MedPrompt (attached). Key symptoms: sudden p99 jump to ~2.8s, spike in 502s after an overnight batch, KV cache misses appear correlated with latency spikes per Elena's snapshot. MedPrompt is requesting: (1) immediate fallback to a more stable model/variant (quantized), (2) kernel/caching investigation, (3) an exec‑level readout if this can't be stabilized in the next 8 hours.
+
+Jonas — can SRE/serving ops confirm whether we can flip routing to their pinned stable variant and, if not, what blockers exist? Irene — please pull the hot path traces and KV cache hit rates. Laura — FYI on customer impact; they indicated clinical workflows time out.
+
+I will join on a call in 20m.
+
+Thanks,
+Hannah
+Hannah Schmitt
+Principal Customer Reliability Manager
+Redwood Inference
+
+From: Jonas Weber <jonas.weber@redwood.ai>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>, Irene Choi <irene.choi@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Cc: Elena Rossi <elena.rossi@medprompt.ai>
+Date: Fri, 06 Nov 2027 09:48:00 -07:00
+Subject: Re: Fwd: production — elevated p99 & 502s on our private cluster
+
+On Fri, Nov 6, 2027 at 09:35, Hannah Schmitt <hannah.schmitt@redwood.ai> wrote:
+> Jon as above — can SRE/serving ops confirm whether we can flip routing to their pinned stable variant and, if not, what blockers exist?
+
+We can force fallback to the customer’s pinned quantized variant at the traffic‑router level. I have queues open with ops to prepend a routing rule — will apply within 10m, TTL 2h, and monitor.
+
+Preliminary root look: the batch job appears to have triggered a spike in concurrent KV writes during warmup; our node-side continuous batching combined with a misaligned kernel path caused a transient cache‑miss storm and downstream decoder stalls (manifested as 502s). The KV snapshot aligns with eviction activity.
+
+Immediate actions I'm taking:
+- Push routing fallback (in progress).
+- Increase per‑node KV cache size by +15% as a hotfix where we have allowed headroom.
+- Capture kernel logs for the specific worker; sending trace bundle to Irene.
+
+Will update in the next 30m with status.
+
+— Jonas
+Jonas Weber
+Head of Serving Infrastructure
+Redwood Inference
+
+From: Irene Choi <irene.choi@redwood.ai>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Cc: Elena Rossi <elena.rossi@medprompt.ai>
+Date: Fri, 06 Nov 2027 10:27:00 -07:00
+Subject: Re: Fwd: production — elevated p99 & 502s on our private cluster
+
+Quick findings from the traces:
+- KV cache miss rate jumped from 3.2% → 27% during the incident windows (03:05–04:40 PT).
+- Decoder queue lengths show backpressure spikes correlated with high concurrent decode tasks; some worker processes experienced OOMs and were restarted by the supervisor (these restarts are likely the 502s).
+- Kernel selection logs show a fallback to a less optimal attention kernel when sequence length exceeded the warmup profile — that path amplifies latency under concurrent pressure.
+
+Next proposed steps (short term):
+1) Keep the routing fallback active until we confirm sustained p99 <700ms.
+2) Apply a conservative kernel selector override for their cluster to prefer the stable attention kernel for the next 24h.
+3) Schedule a capacity bump on their hot nodes and raise KV cache reserve + persistent eviction thresholds.
+
+Jonas — I uploaded the trace bundle and a short remediation runbook to the shared drive link in the metadata. Laura — this is customer outage territory; we should prepare a consolidated exec update for MedPrompt's CTO and our CRO.
+
+Irene
+Irene Choi
+Sr. Reliability Engineer — Serving
+Redwood Inference
+
+From: Hannah Schmitt <hannah.schmitt@redwood.ai>
+To: Elena Rossi <elena.rossi@medprompt.ai>
+Cc: Jonas Weber <jonas.weber@redwood.ai>, Irene Choi <irene.choi@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: Tue, 09 Nov 2027 17:38:00 -07:00
+Subject: RE: MedPrompt on‑prem: sudden p99 latency & 5xx surge — Exec briefing + tuning ask
+
+Elena — quick update and exec next steps. Thanks for patience.
+
+What we did (hours 0–48):
+- Forced routing to your pinned quantized variant (applied Fri 09:58 PT) — immediate p99 improvement from ~2.8s → ~650ms on steady traffic.
+- Raised KV cache reserve on hot nodes (+15%) and altered eviction thresholds to reduce churn.
+- Applied kernel selector override to prefer the stable attention kernel for sequences above your observed warmup threshold.
+- We identified two worker restarts tied to OOMs; we increased process memory caps and rolled a patched supervisor restart policy.
+
+Current status (as of 17:30 PT today): p50 ~85ms, p95 ~240ms, p99 ~580–720ms (variance on peak queries). 502s have dropped to baseline. We still see occasional p99 spikes under concurrent batch launches.
+
+Immediate asks from Redwood:
+- Allow us a scheduled window (2h) to perform a targeted node capacity bump and persist the kernel selector override (we need your okay to restart 6 nodes in your private cluster for the change to be fully stable). Proposed window: Wed 11/10 02:00–04:00 PT.
+- Confirm whether the overnight batch job will be deferred or rate‑limited during our window — this reduces warmup concurrency and makes the kernel tuning effective.
+
+If we can't get the maintenance window, we will keep fallback routing but propose a short term service credit for the impact window. Laura will coordinate the commercial touch.
+
+We will produce an exec one‑pager for your CTO and our CRO summarizing root cause, actions, and SLA remediation options by tomorrow noon PT.
+
+Best,
+Hannah Schmitt
+Principal Customer Reliability Manager
+Redwood Inference
+attachments: remediation_summary_notes.txt (text)

@@ -1,0 +1,92 @@
+Parallel request profile + connection pooling — post-call summary & next steps
+
+From: Jordan Blake <jordan.blake@redwood.com>
+To: Tom Harris <tom.harris@fintegrate.com>, sre@fintegrate.com
+Cc: Laura Bennett <laura.bennett@redwood.com>, Neha Kapoor <neha.kapoor@redwood.com>
+Date: Tue, 19 Aug 2025 09:12:00 -0700
+Subject: Parallel request profile + connection pooling — post-call summary & next steps
+
+Tom / Fintegrate team — thanks again for the call this morning. Quick recap and concrete next steps so we have alignment on the performance profile you described and what Redwood can commit for the pilot.
+
+Call highlights (what we heard):
+- Latency target: p95 ≤ 300ms for request->first-token on 512-token responses (non-streaming) and p95 ≤ 450ms for streaming-first-token scenarios.
+- Throughput: average sustained ~500 req/s during peak windows, burst to ~900 req/s for short spikes (~3–5 minutes).
+- Concurrency: roughly 1,000 parallel flows (parallel requests) across your fleet; many short-lived (100–600ms) and some long-lived streaming sessions (~30–90s).
+- Streaming: you need partial token streaming to the client (Chunked responses) for chat experiences; important that we don't block later tokens behind slow upstreams.
+
+Redwood pilot proposal (summary):
+- Connection pooling: recommend up to 200 pooled persistent connections from your proxy/edge to our endpoints (keeps per-connection QPS reasonable and reduces TLS churn).
+- Per-connection QPS: we suggest initial target 4–6 req/s/connection for steady-state, allow bursts to 12 req/s/connection with token-based throttling.
+- Token throughput: we will size the pilot to support ~60k tokens/s aggregate with autoscaling headroom to 90k tokens/s during bursts.
+- Fallbacks: when concurrency approaches limits we can route lower-cost quantized variants or increase batching to preserve latency SLOs.
+
+Action items / next steps:
+1) Tom: confirm whether the 1,000 parallel flows estimate is per region or global (you mentioned multi-region, please specify exact split).
+2) Fintegrate SRE: share a short sample traffic trace (5–10 minutes, anonymized) showing request interarrival and response length distribution — this will let us finalize pooling recommendations.
+3) Redwood (Laura): attach the connection diagram and updated ratecard; will follow with a suggested pilot config (conn counts, per-connection QPS, burst window) by EOD.
+4) Procurement: Laura to share preliminary SOW and MSAs; Fintegrate to indicate procurement timeline.
+
+Attachments: conn_pool_diagram.png (network sketch), redwood-ratecard-v2.pdf (pilot pricing + rate limits).
+
+Thanks — Jordan
+Jordan Blake
+Enterprise Solutions
+Redwood Inference
+[jordan.blake@redwood.com]
+
+From: Tom Harris <tom.harris@fintegrate.com>
+To: Jordan Blake <jordan.blake@redwood.com>
+Cc: sre@fintegrate.com, Laura Bennett <laura.bennett@redwood.com>
+Date: Tue, 19 Aug 2025 11:03:00 -0700
+Subject: Re: Parallel request profile + connection pooling — post-call summary & next steps
+
+Thanks Jordan — useful summary. A few clarifications from our side: 
+
+- The 1,000 parallel flows are global across our US region only (we don't plan active APAC traffic in the pilot). We expect a 70/30 split between short non-streaming calls and long-lived streaming sessions.
+- We'll extract a short anonymized trace today and drop it in the shared drive link in this thread. Should include interarrival times and token lengths.
+- One ask: can Redwood provide a short test harness or a simple k6 script that mimics the per-connection QPS behavior so we can validate connection limits from our side?
+
+If you can provide the pilot config and a sample harness by EOD, we can queue the SRE team to run it early next week.
+
+Tom Harris
+Sr. Director, Platform Engineering — Fintegrate
+[tom.harris@fintegrate.com]
+
+From: Laura Bennett <laura.bennett@redwood.com>
+To: Tom Harris <tom.harris@fintegrate.com>, Jordan Blake <jordan.blake@redwood.com>
+Cc: Neha Kapoor <neha.kapoor@redwood.com>
+Date: Tue, 19 Aug 2025 13:02:00 -0700
+Subject: Re: Parallel request profile + connection pooling — post-call summary & next steps
+
+Tom — attaching the diagram and ratecard as discussed. A few notes on the pilot config we plan to hand off: 
+
+- Pilot capacity (initial): 200 connections from your edge -> Redwood per region, target 5 req/s/connection steady, 12 req/s/connection burst (burst window 180s).
+- Concurrency handling: we will reserve capacity for 1,000 concurrent request slots; long-lived streaming sessions consume a slot while active.
+- Rate limiting behavior: token-based accounting with graceful 429 backoff that includes Retry-After; we also provide client-side headers so your SREs can observe remaining quota per route.
+- Test harness: attached k6 script + a short README (see hubspot link) — it will simulate the mix you described.
+
+Procurement: for the pilot we have a time-limited credit in the ratecard that reduces unit costs for the first 90 days. I'll start the SOW draft and circulate a DocuSign link; if procurement can confirm target signer + timeline we can lock the pilot window.
+
+Laura Bennett
+Commercial Ops — Redwood Inference
+[laura.bennett@redwood.com]
+
+Attachment stubs: conn_pool_diagram.png (PNG, 420KB), redwood-ratecard-v2.pdf (PDF, 110KB)
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Tom Harris <tom.harris@fintegrate.com>, Jordan Blake <jordan.blake@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Date: Tue, 19 Aug 2025 16:03:00 -0700
+Subject: Re: Parallel request profile + connection pooling — post-call summary & next steps
+
+Tom — quick note from an SRE/ops perspective:
+
+- When you share the trace, please include NAT/egress aggregation info (are you fronting multiple app servers behind a single egress IP?) — that impacts the per-connection distribution we recommend.
+- On the k6 harness: we'll add a short variation that emulates slow-consumer streaming (keeps the TCP/TLS connection open but reads tokens slowly) to validate swapouts under load.
+- If Fintegrate wants to push more than 12 req/s/connection during onboarding we can approve a temporary elevated burst but will ask for a rollback plan to avoid noisy neighbor effects.
+
+I'll be available for a quick 30-minute runthrough tomorrow if you'd like to walk the SREs through the harness.
+
+-Neha
+Neha Kapoor
+Solutions Architect — Redwood Inference
+[neha.kapoor@redwood.com]

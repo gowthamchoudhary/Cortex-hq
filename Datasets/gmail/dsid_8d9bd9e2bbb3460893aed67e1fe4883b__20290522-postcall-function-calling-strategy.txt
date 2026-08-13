@@ -1,0 +1,131 @@
+Post-call: Function-calling strategy & SDK/auth routing for VectorPay POC
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Alex Chen <alex.chen@vectorpay.com>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+Date: Wed, 22 May 2029 16:05:00 -0700
+Subject: Post-call: Function-calling strategy & SDK/auth routing for VectorPay POC
+
+Thanks again for the call earlier — appreciate the clarity on VectorPay's fraud-detection use case and the constraints around PCI scope and vendor-managed keys. Quick recap and proposed approach so the engineering teams can triage: 
+
+Key takeaways:
+- Goal: Replace bespoke rule-set with an LLM-assisted decision layer to surface risk signals (explainability required).
+- Traffic: ~600 reqs/min peak, most requests are single-turn (short context) but we have bursts during settlement windows.
+- Data sensitivity: transaction IDs + partial PANs; we need to keep PCI scope minimized and prefer tokenization/HSM.
+
+Proposed pattern (high level):
+1) SDK setup: server-side SDK only (no client-embedded keys). We'll provide sample Node and Go snippets.
+2) Auth: short-lived tokens issued by VectorPay's auth service (OIDC client credentials) that exchange for Redwood-provided session tokens; fallback option is a cross-account API key held in Vault for POC.
+3) Routing: steer high-risk requests to Dedicated pool in us-west, else fall back to hosted lower-cost model.
+4) Function/tool calling: define two tools in the call graph -
+   - external_risk_api (sync API call to VectorPay's existing risk service)
+   - local_reranker (fast, local reranker to score/canonicalize results)
+   We'll run these in parallel on the inference path with a 200ms circuit-breaker for external_risk_api. If the external call times out, local_reranker finalizes output with an explainability stub.
+5) Embeddings & rerank: embeddings for contextual similarity will be computed offline for historical alerts; live requests will use a small on-node L2 reranker and optionally call an async embedding/rerank pipeline for retrospective enrichment.
+
+Open questions for you (alex):
+- Procurement: preferred contract start date? (Procurement was on the call)
+- KMS: can you confirm whether VectorPay prefers a bring-your-own-key flow for the POC or if we can use a Redwood-managed key for 60 days?
+
+Next steps (owner):
+- Redwood: send SOW draft + auth checklist (attached) — Karthik (today).
+- Engineering: provide sample SDK snippets, tool-def JSON example, and failure-mode diagrams — Vanessa + Marissa (EOW).
+- VectorPay: confirm KMS preference and share test certs if BYOK — Alex (EOW).
+
+Attachments: Redwood_POC_SOW_draft.pdf (see section 2 for Dedicated pool pricing), VectorPay-auth-checklist.xlsx
+
+Thanks — I'll coordinate a short follow-up tech deep-dive next week once we have Alex's KMS note.
+
+— Karthik
+Karthik Iyer
+Account Executive, Redwood Inference
+https://redwood.ai
+
+
+From: Alex Chen <alex.chen@vectorpay.com>
+To: Karthik Iyer <karthik.iyer@redwood.ai>
+Cc: Procurement Team <procurement@vectorpay.com>, Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Date: Thu, 23 May 2029 09:18:00 -0400
+Subject: Re: Post-call: Function-calling strategy & SDK/auth routing for VectorPay POC
+
+Karthik — thanks for the recap and clear next steps. A couple of clarifications from our side: 
+
+1) BYOK: Procurement wants BYOK in production, but for the POC they are ok with a Redwood-managed key if it keeps the timeline short. I can confirm BYOK decision by Friday.
+2) PCI: We cannot allow any PANs to be logged by third parties; partial tokenized PANs are fine. Can you confirm the SDK will redact or hash PANs before leaving our network?
+3) Reranker behavior: If the external risk API is down, we want the system to return a deterministic fallback with an 'uncertain' flag, not a silent default. Is that the 200ms circuit-breaker behavior you were proposing?
+
+Also, can you share the tool-definition samples you mentioned ASAP — our infra team wants to review the parallel-run approach and the decisioning around quorum vs first-success semantics.
+
+Thanks — Alex
+Alex Chen
+Head of Fraud Ops, VectorPay
+
+On Wed, May 22, 2029 at 4:05 PM Karthik Iyer <karthik.iyer@redwood.ai> wrote:
+> (original message quoted)
+>
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Alex Chen <alex.chen@vectorpay.com>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+Date: Thu, 23 May 2029 12:02:00 -0700
+Subject: Re: Post-call: Function-calling strategy & SDK/auth routing for VectorPay POC
+
+Alex — good questions. Quick technical answers + an attached minimal tool-definition snippet in the Drive link below. High level: yes to deterministic fallback and redaction. Details: 
+
+SDK/auth
+- Server-only SDK: the SDK includes a pre-send hook where you can implement PAN redaction/tokenization. We recommend doing deterministic hashing (HMAC with an internal salt) prior to sending anything to Redwood so full PANs never leave your environment.
+- Token exchange: VectorPay's token service (OIDC client credentials) will exchange for a short-lived Redwood session token via our /v1/auth/exchange endpoint. We'll provide code samples for Node and Go.
+
+Routing & Dedicated pool
+- Policy-based routing: requests tagged 'settlement' or with high-risk indicators go to Dedicated (us-west). Default route uses hosted standard model. We surface per-route SLOs in the Console so you can set up alerts.
+
+Function/tool calling pattern (concrete)
+- Tool definitions (example):
+  * external_risk_api: sync HTTP POST -> returns structured JSON {score, explanation, evidences[]}. Timeout 150ms, circuit-breaker trips after 3 errors in 10s.
+  * local_reranker: runs a micro model on the same node to normalize outputs and add a deterministic 'uncertain' flag when inputs are incomplete.
+- Execution semantics: run both tools in parallel; accept the first fully-formed response that meets a confidence threshold (>=0.75). If none meet the threshold within 200ms, return local_reranker's deterministic fallback with 'uncertain': true and include a call-to-action to queue for async enrichment.
+- Error handling:
+  1) transient external_risk_api error -> retry once with jitter (50ms) while local_reranker proceeds; if retry fails, circuit-breaker opens and we mark subsequent requests for 30s to use local_reranker only.
+  2) persistent degradation -> route to a lower-cost, higher-latency model (fallback route) and create an Ops alert.
+
+Embeddings & rerank
+- For real-time decisions we do not recommend calling the heavy embedding service inline. Use a cached nearest-neighbor index on a dedicated node for fast similarity. We'll provide a suggested embedding TTL and reindex cadence.
+
+Deliverables by EOW (ETA):
+- Tool-definition JSON + sample SDK snippets (Marissa).
+- System diagram + error-state sequences (Vanessa).
+
+Drive link: https://drive.google.com/open?id=1a2b3c4d-redwood-vectorpay-poc-plan (tool-defs/ folder)
+
+— Vanessa
+Vanessa Ortiz
+Solutions Engineer, Redwood Inference
+
+On Thu, May 23, 2029 at 09:18 AM Alex Chen <alex.chen@vectorpay.com> wrote:
+> (quoted)
+>
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Alex Chen <alex.chen@vectorpay.com>, Procurement Team <procurement@vectorpay.com>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Stephanie Nguyen <stephanie.nguyen@redwood.ai>
+Date: Fri, 24 May 2029 11:12:00 -0700
+Subject: Re: Post-call: Function-calling strategy & SDK/auth routing for VectorPay POC
+
+Great — thanks for the fast turnaround, Alex. Confirming next steps and owners so Procurement and engineering are aligned: 
+
+1) KMS decision: Alex to confirm BYOK vs Redwood-managed key by Friday COB (owner: Alex).
+2) Tech deep-dive: schedule 60-min tech session w/ VectorPay infra + Redwood engs (owner: Karthik) — propose Tue 28 May 10:00 PT.
+3) Deliverables (Redwood): SOW + auth checklist (sent), tool-def JSON, SDK snippets, and error-mode diagrams (owners: Marissa & Vanessa) — due EOW.
+4) Security review: we will ask VectorPay to fill the short security questionnaire (I attached an evidence checklist in the auth spreadsheet).
+
+I'll lock the Tuesday slot if Procurement confirms it works. If BYOK is required for the POC start date, we will need certs and a short onboarding window for the key exchange flow; otherwise we proceed with Redwood-managed key to shorten time-to-first-test.
+
+Thanks all — looking forward to the deep-dive.
+
+— Karthik
+Karthik Iyer
+Account Executive, Redwood Inference
+
+On Thu, May 23, 2029 at 12:02 PM Vanessa Ortiz <vanessa.ortiz@redwood.ai> wrote:
+> (quoted)
+>

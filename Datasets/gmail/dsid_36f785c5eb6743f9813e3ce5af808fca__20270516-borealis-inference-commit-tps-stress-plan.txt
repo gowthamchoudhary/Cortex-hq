@@ -1,0 +1,96 @@
+Borealis capacity mapping - tokens/sec stress plan and SLO fit
+
+From: Emma Larson <emma.larson@borealis.ai>
+To: rishi_malhotra@redwood.com
+Cc: ben_carter@redwood.com, dylan_brooks@redwood.com
+Date: Mon, 16 May 2027 08:12:00 -0700
+Subject: Re: Borealis throughput snapshot
+
+Thanks Rishi — quick note from our ops side.
+
+We ran a series of load tests on our end against the preview endpoint earlier this morning. Observed behavior:
+- Steady-state generation at ~620 tokens/sec (avg) for 4 concurrent sessions (chat style), 99th latencies ballooning to 1.6s on tails.
+- One realistic long-horizon flow (multi-turn, 2k context) dropped to 280 tokens/sec under checkpointing.
+- Requests included mixture of web and mobile clients; token distribution skewed towards medium-length completions (~120 tokens).
+
+Primary ask: we need a recommended committed slab that meets a p99 latency of <= 800ms for their 95% of traffic and has at least 30% headroom for holiday peaks. Can you confirm what Dedicated slab or pool configuration you'd propose? Also attaching the raw CSV from our internal tests.
+
+— Emma
+
+Attachment: borealis-usage-samples-20270515.csv (text/csv)
+From: rishi_malhotra@redwood.com
+To: Emma Larson <emma.larson@borealis.ai>
+Cc: ben_carter@redwood.com, dylan_brooks@redwood.com, marissa_cole@redwood.com
+Date: Mon, 16 May 2027 09:04:00 -0700
+Subject: Re: Borealis throughput snapshot
+
+Emma — thanks for the data and the concrete SLO target. Quick notes and plan:
+
+Summary of immediate read:
+- Baseline tokens/sec from your test (620 avg) aligns with our preview metrics for same model/quantization. P99 mismatch likely due to batching and KV cache warmup.
+- Long-context flows will need KV-cache-optimized instances and reduced batch sizes; that explains 280 tps.
+
+Proposal (high level):
+1) Committed slab: 3 x A100-equivalent GPU nodes with optimized quantized model build (q4_0) for production. That maps to ~1,800 effective tokens/sec sustained for mixed workloads with 30–40% burst capacity.
+2) Autoscale policy: maintain >=2 nodes during off-peak with rapid scale-to-3 for 95th-percentile traffic; allow 1 additional burst GPU (burst pool) for sustained holiday spikes.
+3) SLO mapping: recommend p99 <= 800ms for typical single-turn requests at <=700 tokens/sec; for long-horizon flows, we guarantee p95 <= 800ms and p99 <= 2s but with fallback to a low-cost variant.
+
+Next steps: Ben will coordinate commercial commit vs non-committed burst pricing; Dylan and Marissa can run a short dedicated stress harness to validate our numbers on a mirrored fleet. I'll follow up with an ops runbook.
+
+Rishi
+
+Signature:
+Rishi Malhotra
+Enterprise Sales, Redwood Inference
+rishi_malhotra@redwood.com
+From: ben_carter@redwood.com
+To: Emma Larson <emma.larson@borealis.ai>, rishi_malhotra@redwood.com
+Cc: dylan_brooks@redwood.com, marissa_cole@redwood.com
+Date: Mon, 16 May 2027 10:22:00 -0700
+Subject: Commercial options for Borealis commit
+
+Emma — quick commercial note to align ask and pricing bands.
+
+Options:
+- Committed: 3-node monthly reserve (month-to-month pilot) — list price $65K/mo, with 15% startup credit for first 3 months and a 10% overage discount for burst usage.
+- Committed + burst pool: 3-node reserve + 1 dedicated burst node — $78K/mo effective with a blended token price for overflow.
+- Flexible: 2-node reserve with aggressive autoscale to 4 nodes on demand — higher unit cost but lower commit.
+
+I'll prepare a short one-pager with numbers and TCO scenarios. If you want to lock a multi-quarter discount we can push to an enterprise rate card and include a response-time SLA carveout.
+
+Ben
+
+Attachment: sla-fit-matrix.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+From: dylan_brooks@redwood.com
+To: rishi_malhotra@redwood.com, ben_carter@redwood.com, Emma Larson <emma.larson@borealis.ai>
+Cc: marissa_cole@redwood.com
+Date: Tue, 17 May 2027 11:15:00 -0700
+Subject: Re: Borealis throughput snapshot
+
+Emma — I spun up a mirrored 3-node cluster with q4_0 and ran the mixed-workload harness you shared.
+
+Key telemetry (single-run median):
+- Sustained tokens/sec: 1,720 (3 nodes)
+- p50/p95/p99 latencies: 60ms / 420ms / 730ms for single-turn (<=200 tokens)
+- Long-context (2k): sustained 340 tps, p99 ~1.9s
+- Optimizations applied: KV cache pre-warm, small-batch immediate flush for chat flows, and token-level early-exit heuristics.
+
+Conclusion: 3-node committed slab meets your p99 <= 800ms target for the majority of single-turn traffic, with expected degradation for 2k horizon flows. Recommend we ship a short-run with real traffic routing to validate in production. I'll attach the p99 breakdown.
+
+Dylan
+
+Attachment: borealis-p50-p99-latency-breakdown.pdf (application/pdf)
+From: Emma Larson <emma.larson@borealis.ai>
+To: rishi_malhotra@redwood.com, ben_carter@redwood.com, dylan_brooks@redwood.com
+Cc: marissa_cole@redwood.com
+Date: Tue, 18 May 2027 15:44:00 -0700
+Subject: Re: Borealis throughput snapshot
+
+Thanks all — that gives us confidence. A couple of follow-ups before exec sign-off:
+- Can you produce a short runbook for the fallback policy (what variant is used when long-context workloads exceed SLO)?
+- We need a clear breakdown of token pricing at committed vs burst tiers for our finance team.
+- Can we schedule a 30-minute validation window next Wednesday for a production mirror run?
+
+If you can send the runbook and the pricing table by EOD Thursday we'll take to our CFO and circle back.
+
+— Emma

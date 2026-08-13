@@ -1,0 +1,142 @@
+Recap: HealthScope discovery — migration off proprietary LLM APIs
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Alyssa Chen <alyssa@healthscope.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Neha Kapoor <neha_kapoor@redwood.com>
+Date: 2026-07-12T09:15:00-07:00
+Subject: Recap: HealthScope discovery — migration off proprietary LLM APIs
+
+Alyssa — thanks again for the time this morning. Below is a concise recap of what we discussed and proposed next steps so we’re all aligned. Please reply with any clarifications or missing context.
+
+Key pain points you shared
+- Heavy reliance on OpenAI + Anthropic for customer-facing features; vendor lock-in risk and unpredictable costs.
+- Latency spikes during peak hours that impact chat responsiveness for support use-cases.
+- Data residency & auditability requirements (HIPAA-sensitive records; logs must be retained 7 years).
+- Need to reduce inference unit costs by ~30% without sacrificing quality.
+
+Current stack (what you said)
+- Prompt/templating service sits in AWS us-west-2; calls out to OpenAI (text-davinci/ChatGPT) and Anthropic (Claude).
+- ~3M tokens/month currently, 70% chat workload, 30% embeddings/batch reranking.
+- Some on-prem ETL for PHI ingestion; majority of inference is in-cloud today.
+
+Success criteria for a migration/P0 evaluation
+- Quality parity on the 12 canonical prompts we reviewed (F1/acceptability within ±5% of current).
+- 99th percentile generation latency under 600ms for chat median payloads.
+- Verified audit logs and key management controls for private deployments.
+- Total cost of serving reduced by >=30% on steady-state volumes.
+
+Initial model shortlist (compatibility-first)
+- Llama 2.1 (70B) — strong instruction-following when quantized; good latency/cost tradeoffs for Dedicated.
+- Mistral Large-Instruct — promising instruction performance, smaller memory footprint.
+- Falcon-40B-Instruct — good on long-form prompts and embeddings equivalence tests.
+- RedPajama-Chat-3B — candidate for lower-cost, high-concurrency routes (fallback).
+
+Proposed next steps
+1) Technical deep-dive: schedule a session with your infra + security teams (30–45m). I’ll bring Rishi (infra) and Neha (solutions).
+2) POC scope: compile the 12 prompt set + sample traffic; Redwood will run a 4-week POC (test & metric collection).
+3) Security & compliance: share Redwood’s SOC/PCI docs and receive your security questionnaire.
+4) Commercial: Ben will draft an initial SoW and pricing estimate (reserved vs. private options).
+
+Attachments included: healthscope_current_usage.csv (token breakdown), discovery-call-recording.mp3 (meeting recording).
+
+If that looks right I’ll lock the tech call for next week (suggested slots below) and Ben will send the SoW draft.
+
+Suggested times (PST):
+- Thu Jul 16, 10:00–10:45
+- Fri Jul 17, 13:00–13:45
+
+Thanks —
+Karthik
+
+Karthik Iyer
+Senior Solutions Engineer
+Redwood Inference
+karthik_iyer@redwood.com | +1 (415) 555-0182
+
+---
+Note: attachments referenced above are stubs in this thread.
+From: Alyssa Chen <alyssa@healthscope.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Neha Kapoor <neha_kapoor@redwood.com>
+Date: 2026-07-12T11:02:00-07:00
+Subject: Re: Recap: HealthScope discovery — migration off proprietary LLM APIs
+
+Karthik — thanks for the tidy summary, that matches our notes. A couple quick items from our side: 
+
+1) Latency baseline: our current 95th/99th pctl for chat at peak is ~450ms/1.2s (we'll send the exact metrics bucketed by payload size). Is your 600ms 99p target measured on equivalent payloads?
+2) Data residency: we have a strict requirement that PHI inference for certain workflows must remain within our VPC / on-prem environment. Can Redwood support a Private deployment with KMS/HSM integration?
+3) Procurement: attached is our vendor_contract.pdf — it contains standard terms we ask vendors to confirm. Our procurement lead (procurement@healthscope.com) is cc’d for the commercial thread.
+
+We'd be happy to do the technical deep-dive — Thu Jul 16 at 10:00 PST works. Please include anyone from your infra team who will need to answer questions about deployment modes and audit logs.
+
+Best,
+Alyssa
+
+Alyssa Chen
+Head of AI Platforms
+HealthScope
+alyssa@healthscope.com | +1 (202) 555-0137
+
+---
+Attachment: vendor_contract.pdf (PDF stub)
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Alyssa Chen <alyssa@healthscope.com>
+Cc: Neha Kapoor <neha_kapoor@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2026-07-12T12:30:00-07:00
+Subject: Re: Recap: HealthScope discovery — migration off proprietary LLM APIs
+
+Alyssa — great, confirmed for Thu Jul 16 10:00 PST. I've added Rishi (infra) to the thread so he can bring the deployment playbook and logging/KMS details. Quick answers ahead of the call: 
+
+- Latency: the 600ms 99p target I gave is for median-sized chat payloads (~120 tokens input / 150 tokens output) on Dedicated with dynamic batching disabled for tail-sensitive routes. We’ll validate on your exact payloads during the POC.
+- Private deployment & KMS: yes — Redwood Private supports customer-managed KMS (AWS KMS + external HSM options) and can be deployed in a VPC or air-gapped environment for PHI workflows. We’ll bring the compliance checklist.
+
+POC & timeline
+- Week 0: confirm prompt set, dataset sampling, and success metrics.
+- Week 1–2: baseline runs of shortlisted models (Llama 2.1 70B, Mistral Large-Instruct, Falcon-40B-Instruct, RedPajama-Chat-3B) against your prompts.
+- Week 3: optimization (quantization, KV-cache tuning) and latency tuning on Dedicated/Private shapes.
+- Week 4: final evaluation, cost modeling, and recommendation.
+
+Deliverables from Redwood
+- POC results dashboard (latency, cost per token, quality metrics),
+- Config snapshot for recommended deployment,
+- Draft SoW and pricing options (Ben will follow up).
+
+I’ve attached a short POC scope doc (POC-scope.docx) for your review ahead of Thu. Zoom link for the technical deep-dive: https://zoom.us/j/9876543210?pwd=example
+
+Looking forward to the call — I’ll prepare the prompt-set template and ask Ben to circulate the SoW.
+
+Thanks,
+Karthik
+
+Karthik Iyer
+Senior Solutions Engineer
+Redwood Inference
+karthik_iyer@redwood.com
+
+---
+Attachment: POC-scope.docx (docx stub)
+From: Ben Carter <ben_carter@redwood.com>
+To: Karthik Iyer <karthik_iyer@redwood.com>, Neha Kapoor <neha_kapoor@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>
+Date: 2026-07-12T15:22:00-07:00
+Subject: Internal: HealthScope commercial / SoW next steps
+
+Team — quick internal note after today’s discovery: I’ll draft the SoW and an initial pricing estimate for two tracks: (A) Dedicated reserved capacity + managed rollout, (B) Private (VPC) deployment with an annual platform fee + support.
+
+Action items:
+- Ben: SoW v1 (attach SoW_healthscope_v1.pdf) and initial pricing ranges by Tue Jul 14.
+- Rishi: be ready to outline infra choices and any runbook exceptions for air-gapped environments in Thu’s call.
+- Neha / Karthik: compile the 12 prompt set and mark the top 3 latency-sensitive flows.
+
+Commercial notes: based on ~3M tokens/month steady-state, my back-of-envelope shows Dedicated reserved capacity could meet the ~30% cost reduction target with a 12–18 month commit; we’ll firm numbers in the SoW.
+
+Linking HubSpot record: https://app.hubspot.com/contacts/12345/record/HS-2026-043
+
+Ben
+
+Ben Carter
+Account Executive, Enterprise
+Redwood Inference
+ben_carter@redwood.com
+
+---
+Attachment: SoW_healthscope_v1.pdf (PDF stub)

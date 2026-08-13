@@ -1,0 +1,136 @@
+NebulaWorks partnership — reference implementation & interop assurance review
+
+From: Anna Park <anna@nebulaworks.com>
+To: Sergio Alvarez <sergio_alvarez@redwood.com>
+Cc: Tom Ellis <tom.ellis@nebulaworks.com>
+Date: Mon, 10 May 2027 09:12:00 -0700
+Subject: Intro: NebulaWorks x Redwood — reference implementation + test plan
+
+Hi Sergio,
+
+Thanks for taking the time to evaluate a potential integration between NebulaWorks and Redwood Inference. Wed like to propose a short technical collaboration: a reference implementation (containerized) plus an interop/test plan to validate key production scenarios (auth, KMS, model variants, quantization, and graceful fallbacks).
+
+Attached: NW-reference-arch.pdf, interop-proposal.docx (high-level scope + proposed timeline).
+
+High-level goals:
+- Provide a reference container that demonstrably connects to Redwood Dedicated and Hosted patterns
+- Validate end-to-end auth (OIDC/KMS) and data residency for US customers
+- Run performance/latency sweeps against our standard prompt sets and Redwoods model variants
+- Surface any incompatibilities around KV cache and quantized model runtimes
+
+Would Redwood engineering be available for a 60-minute technical review next week? Tom (ccd) will be our lead engineer on the POC.
+
+Best,
+Anna Park
+Strategic Partnerships, NebulaWorks
+anna@nebulaworks.com
+
+Attachments (stubs): NW-reference-arch.pdf, interop-proposal.docx
+
+From: Sergio Alvarez <sergio_alvarez@redwood.com>
+To: Anna Park <anna@nebulaworks.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Tue, 11 May 2027 11:03:00 -0700
+Subject: Re: Intro: NebulaWorks x Redwood — reference implementation + test plan
+
+Anna — thanks for the clear scope. Were interested. Available windows for an initial technical review: Wed 5/12 10:00-11:00 PT or Thu 5/13 14:00-15:00 PT. Please confirm a slot and send a calendar invite.
+
+Quick asks ahead of the meeting so we can prep:
+- A single-run README for the reference container and a small sample dataset (prompt set + expected outputs)
+- Clarify what authentication modes the container supports (OIDC client creds? mTLS? KMS integration?)
+- Any pre-built tests or harnesses you want Redwood to run (we can instrument with our perf harness)
+
+Ill have Marissa assemble a test matrix and Jonas will join for runtime/quantization questions.
+
+- Sergio
+VP Partnerships, Redwood Inference
+sergio_alvarez@redwood.com
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Sergio Alvarez <sergio_alvarez@redwood.com>
+Cc: Anna Park <anna@nebulaworks.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Wed, 12 May 2027 08:45:00 -0700
+Subject: Re: Intro: NebulaWorks x Redwood — reference implementation + test plan
+
+Thanks Anna — attaching a draft interoperability matrix (nw-interoperability-matrix.xlsx). Highlights / proposed test sequence below:
+
+1) Connectivity & Auth
+   - Validate OIDC client-credentials flow + token exchange
+   - KMS integration: test key wrapping/unwrapping via Redwood KMS passthrough
+2) Deployment modes
+   - Hosted API (short smoke), Dedicated (reserved GPU pool), Private (VPC peering test)
+3) Model runtime compatibility
+   - Verify model artifact formats (fp16 / int8 quantized) and model config (kv cache semantics)
+   - Run small/medium/long sequence latency sweeps (1-4k tokens)
+4) Failure & Fallback
+   - Simulate capacity-constrained route to verify automatic fallback to smaller model variant
+   - Validate request tracing and deterministic fallbacks for A/B/canary policies
+5) Security evidence
+   - Need SOC2 evidence for NebulaWorks and any attestations around HSM/KMS usage
+
+Please include any pre-built tests from your side in the shared drive. Ive flagged items where we may need a long-running container and where well need NebulaWorks to run a container in their staging VPC.
+
+Attachments (stubs): nw-interoperability-matrix.xlsx
+
+-Marissa
+Solutions Architect, Redwood Inference
+marissa_cole@redwood.com
+
+From: Anna Park <anna@nebulaworks.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Sergio Alvarez <sergio_alvarez@redwood.com>
+Cc: Tom Ellis <tom.ellis@nebulaworks.com>
+Date: Thu, 13 May 2027 14:20:00 -0700
+Subject: Re: Intro: NebulaWorks x Redwood — reference implementation + test plan
+
+Thanks Marissa — this is great. We will: 
+- Share a pre-built reference container (nebula-ref-container.tar.gz stub) with a README that shows 1) point Redwood credentials at our connector endpoint and 2) run the included harness.
+- Provide SOC 2 summary and KMS/HSM integration notes (we use Vault + AWS KMS for envelope keys).
+- Provide a GDrive folder with sample prompts and expected outputs: https://drive.google.com/drive/folders/1a2bNW-ref-impl
+
+Tom will be on the technical review; he can answer deep runtime questions and confirm the container supports both OIDC and mTLS. Were fine running the container in our staging VPC or providing the image for Redwood to run in a test project.
+
+Weve penciled in Wed 5/12 10:00 PT for the review — if that works for you well send the invite.
+
+Best,
+Anna
+Strategic Partnerships, NebulaWorks
+
+Attachments (stubs): nebula-ref-container.tar.gz
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Tom Ellis <tom.ellis@nebulaworks.com>, Anna Park <anna@nebulaworks.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Sergio Alvarez <sergio_alvarez@redwood.com>
+Date: Fri, 14 May 2027 10:05:00 -0700
+Subject: Re: Intro: NebulaWorks x Redwood — reference implementation + test plan
+
+Tom / Anna — quick technical items for the review: 
+- KV cache persistence model: do you persist full KV across container restarts? If so, what format and size expectations should we plan for?
+- Quantization compatibility: do you publish tooling for 8-bit conversion and the specific ops that are not supported?
+- Perf artifacts: can you share a sample model-config.json and a few synthetic traces so we can pre-validate whether our kernels will accept the op kernels?
+
+On our side, well bring a canary rollout plan: a simple 3-step rollout (canary -> 50% -> 100%) with perf and quality gates. Also planning to attach a test-harness endpoint (/internal/test-harness) to capture per-token latency and KV hit rates.
+
+On Wed, May 12, 2027 at 8:45 AM Marissa Cole <marissa_cole@redwood.com> wrote:
+> Thanks Anna — this is great. Ive attached a draft interoperability matrix (nw-interoperability-matrix.xlsx).
+> -Marissa
+
+From: Anna Park <anna@nebulaworks.com>
+To: Sergio Alvarez <sergio_alvarez@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Mon, 17 May 2027 15:26:00 -0700
+Subject: Re: Intro: NebulaWorks x Redwood — reference implementation + test plan
+
+All — thanks for the thoughtful questions. Confirming our technical review is scheduled for Wed 5/19 10:00 PT (weve sent a calendar invite). Quick updates: 
+- We uploaded a small sample model-config.json and two synthetic traces to the shared drive.
+- SOC2 summary and KMS notes are in the folder (see doc: NW-security-summary.pdf).
+- Shared a DocuSign link for a short POC MOU (NW-POC-MOU-docusign.pdf) — signing simply confirms access to staging resources and timelines.
+
+Links: https://drive.google.com/drive/folders/1a2bNW-ref-impl
+DocuSign: https://docusign.com/signed/NW-POC-1347
+
+We will provide the container image and can run the first smoke-suite in our staging VPC if Redwood prefers. See you Wednesday.
+
+— Anna
+Strategic Partnerships, NebulaWorks
+anna@nebulaworks.com
+
+Attachments (stubs): NW-POC-MOU-docusign.pdf

@@ -1,0 +1,133 @@
+POC evaluation approach: shadow vs. offline + success criteria
+
+From: Markus Klein <markus.klein@redwood.ai>
+To: Alex Gomez <alex.gomez@nimblecare.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Sat, 3 Apr 2027 15:22:00 +0000
+Subject: POC evaluation approach: shadow vs. offline + success criteria
+
+Thanks again for the call today, Alex & Priya — good first pass on the integration constraints and performance goals. As promised, summary + proposal so we have a single source of truth going into the trial design phase.
+
+Quick recap of what you said on the discovery:
+- Goal: reduce average time-to-answer for clinical triage questions from 28s to under 10s on peak traffic while keeping hallucination rate < 1% for diagnosis-related prompts.
+- Data: you can provide a 30k-sample de-identified historical questions CSV and a streaming webhook for live shadowing.
+- Security: SOC2 evidence and VPC peering required for private data; hookup via SFTP for initial data drop is fine.
+- Timeline: internal procurement wants a 6-week POC window; pilot wants a go/no-go decision week 5.
+
+Proposed POC structure (high level):
+1) Week 0-1: Data ingestion + schema validation (we'll run quick data quality checks; attachment: nimblecare-data-schema.csv)
+2) Week 2-3: Offline evaluation (batch scoring) using your labeled subset + our automated rubric to set a baseline
+3) Week 4-5: Shadow deployment (non-UI live traffic) to measure latency, metrics drift, and on-call triage behavior
+4) Week 6: Joint review + acceptance decision (pass/fail criteria below)
+
+Suggested success criteria (pass if all met):
+- Latency: median end-to-end response < 10s under your 95th percentile traffic mix
+- Accuracy: task-specific precision >= 96% on labeled offline set; hallucination rate < 1% on random sample of shadowed responses
+- Reliability: 99.5% uptime for inference requests during shadow window
+- Cost: estimated per-call cost within agreed threshold (we'll produce cost model in week 2)
+
+Evaluation methodology note — we recommend a two-pronged approach:
+- Offline (batch) eval: fast, repeatable, lets us tune prompts & quantization without risk. Primary use for initial model selection and establishing the rubric.
+- Online shadow: runs against live traffic, measures real-world latency, distribution shift, and endpoint reliability.
+
+Proposed ownership & next steps:
+- Redwood: Markus (POC lead), Lauren (ops/infra contact), Marissa (success metrics & scoring)
+- NimbleCare: Alex (product), Priya (security/procurement)
+
+Action items:
+- Alex: share the 30k de-identified CSV + SFTP credentials to staging by EOD Mon (we'll validate schema)
+- Markus: produce a one-page eval plan + rubric (attached: shadow-vs-offline-eval-one-pager.pdf) by Tue
+- Lauren: prepare VPC checklist and estimated time for peering connection
+
+Thanks — I'll stand up the draft rubric and baseline scripts once we have the ingestion sample.
+
+—
+Markus Klein
+Senior Sales Engineer | Redwood Inference
+markus.klein@redwood.ai | +1 415-555-0113
+
+Attachments: nimblecare-data-schema.csv, shadow-vs-offline-eval-one-pager.pdf
+
+From: Alex Gomez <alex.gomez@nimblecare.com>
+To: Markus Klein <markus.klein@redwood.ai>
+Cc: Priya Shah <priya.shah@nimblecare.com>
+Date: Sun, 4 Apr 2027 09:11:00 -0400
+Subject: Re: POC evaluation approach: shadow vs. offline + success criteria
+
+Thanks Markus — that captures the discussion nicely. A few clarifications from our side:
+
+1) The 30k sample is ready but contains three label types: "urgent", "follow-up", "informational". We can provide labels for ~6k of those for offline scoring — hope that aligns with your rubric.
+2) Privacy note: we need a short DPA addendum before data transfer (Priya will follow up).
+3) For shadowing, there is a sampling rule we must enforce: no more than 5% of live requests during peak hours can be mirrored to third-party services. Can Redwood support sampling at the gateway?
+4) Procurement: we have a preferred contract template; we'll circulate a redline in week 2.
+
+Next steps from our side:
+- Priya will send SFTP creds and the DPA request by Monday.
+- I'll confirm traffic profile (95th percentile QPS) so you can size the shadow deployment.
+
+Appreciate the clear success thresholds — looking forward to the one-pager.
+
+Best,
+Alex
+Product Lead, NimbleCare
+alex.gomez@nimblecare.com
+
+On Sat, Apr 3, 2027 at 15:22 Markus Klein <markus.klein@redwood.ai> wrote:
+> Thanks again for the call today, Alex & Priya — good first pass on the integration constraints and performance goals. As promised, summary + proposal so we have a single source of truth going into the trial design phase.
+
+From: Lauren Bishop <lauren.bishop@redwood.ai>
+To: Markus Klein <markus.klein@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Cc: Alex Gomez <alex.gomez@nimblecare.com>, Priya Shah <priya.shah@nimblecare.com>
+Date: Mon, 5 Apr 2027 14:03:00 +0000
+Subject: Re: POC evaluation approach: shadow vs. offline + success criteria
+
+Couple of operational clarifications from infra/security:
+
+- Sampling support: yes, we can implement gateway-level sampling. We'll propose an initial 2% mirror rate by default and ramp to 5% only during controlled windows. This will be in the VPC peering runbook.
+- Data transfer: SFTP ingestion is fine for the initial batch. We'll validate the CSV and return a small schema report.
+- Metrics instrumentation: Karthik will add metric hooks for latency P50/P95, hallucination flag, and a quality_score tag so Marissa can aggregate the rubric outputs into dashboards.
+
+About the rubric — Marissa and I sketched a compact scoring model (low-friction for procurement and product):
+- Offline (batch) scoring: weighted accuracy on labeled set (weights: urgent 0.5, follow-up 0.3, informational 0.2); pass if weighted >= 0.96
+- Shadow scoring: sampled manual review of 250 randomly selected shadowed responses across the window; pass if hallucination rate < 1% and manual precision >= 0.95
+- Operational: median latency < 10s and no more than 2 incidents impacting requests in shadow window
+\Ownership: Markus (POC comms), Karthik (instrumentation & dashboards), Marissa (scoring & acceptance report), Lauren (infra & VPC).
+
+I'll attach the short scoring matrix to the shared drive after this — will flag the HubSpot deal with the POC milestone.
+
+—
+Lauren Bishop
+Principal Solutions Architect | Redwood Inference
+lauren.bishop@redwood.ai
+
+On Sun, Apr 4, 2027 at 09:11 Alex Gomez <alex.gomez@nimblecare.com> wrote:
+> Thanks Markus — that captures the discussion nicely. A few clarifications from our side:
+> ...
+
+From: Markus Klein <markus.klein@redwood.ai>
+To: Alex Gomez <alex.gomez@nimblecare.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Priya Shah <priya.shah@nimblecare.com>
+Date: Mon, 5 Apr 2027 18:10:00 +0000
+Subject: Re: POC evaluation approach: shadow vs. offline + success criteria
+
+Perfect — thanks all for the clarity. Short update and next steps so this is actionable:
+
+1) Alex/Priya: please share SFTP creds + the 30k file and the contract redline to the HubSpot deal (link above). We'll wait for DPA addendum before processing the data.
+2) Markus: I'll drop the one-page eval plan + the scoring matrix into the Drive by EOD Tuesday. (attachment: redwood-poc-success-criteria.xlsx)
+3) Lauren/Karthik: prepare the VPC peering runbook and a proposed initial gateway sampling config (we'll start with 2% and have windows for 5%).
+4) Marissa: outline the manual review plan for shadowed responses (250-sample random review + annotation template).
+
+Operational notes:
+- If procurement cannot sign the DPA in week 1, we'll proceed with a strictly offline-only baseline (no shadow) and postpone the shadow window; that will push acceptance to week 8.
+- We'll include a provisional cost estimate in the week-2 deliverable so NimbleCare has transparency on per-call economics under the proposed config.
+
+Next scheduled sync: Thu Apr 8, 10:00 AM PT — 30m check to confirm data transfer and security checklist. I'll send invite.
+
+Thanks everyone — looking forward to kicking this off.
+
+—
+Markus Klein
+Senior Sales Engineer | Redwood Inference
+markus.klein@redwood.ai | +1 415-555-0113
+
+Attachments: redwood-poc-success-criteria.xlsx

@@ -1,0 +1,97 @@
+Pilot: network boundaries, retention & pilot scope (follow-up)
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Ananya Rao <ananya@medcommerce.com>
+Cc: David Kim <david.kim@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Tue, 04 May 2027 09:15:00 -0700
+Subject: Pilot: network boundaries, retention & pilot scope (follow-up)
+
+Hi Ananya / John,
+
+Thanks again for the call this morning — good alignment on the pilot goals. I wanted to capture the technical asks and confirm next steps so we can get your security team the right artifacts. Summary from our side:
+
+- Pilot scope: VPC/private deployment in eu-west-1, single-tenant for the initial 6-week trial.
+- Data residency: all inference requests and associated logs must remain in customer-controlled subnets and S3 in eu region.
+- PII handling: MedCommerce will tag inputs that contain PII; Redwood must not persist raw inputs outside the customer's VPC.
+- Retention: you requested request/response logs retained for 90 days for product troubleshooting and 12 months for audit logs (access logs).
+- Egress: no direct internet egress from inference instances; allowed endpoints are customer-managed S3, KMS, and our control-plane endpoints over mutually agreed private connectivity.
+
+Action items we committed to:
+1) Send SOC2 snapshot and a short note on logging retention options (we'll include how long token-level logs vs. aggregated metrics are kept).
+2) Draft a minimal network diagram showing proposed peering and egress controls (David).
+3) Confirm whether MedCommerce can provide a customer-managed KMS key or prefers Redwood-managed KMS with wrapped keys (Monica).
+
+Ananya — can you confirm the retention windows above are correct (90d troubleshooting / 12mo audit) and whether your security team needs full request payloads for the audit copies or redacted metadata is acceptable? Also attaching the data classification sheet you mentioned would be helpful.
+
+Thanks,
+Evelyn Hart
+Enterprise Account Executive | Redwood Inference
+E: evelyn.hart@redwood.com | M: +1 (415) 555-0134
+
+[Attachment: request - medcommerce-data-classification.xlsx]
+From: Ananya Rao <ananya@medcommerce.com>
+To: Evelyn Hart <evelyn.hart@redwood.com>
+Cc: security@medcommerce.com, John Sanders <john.sanders@medcommerce.com>
+Date: Tue, 04 May 2027 10:02:00 -0700
+Subject: Re: Pilot: network boundaries, retention & pilot scope (follow-up)
+
+Evelyn — thanks for the clear summary and for taking notes. A few clarifications from security: 
+
+- Retention windows correct: 90 days for request/response records used by product/ops, 12 months for immutable audit trails (access/authorization events).
+- For the 12-month audit copy, we need request metadata (user id, timestamp, model id, request size) and full request payloads for a sampled subset (we'll provide sampling rules separately).
+- Egress: we cannot permit outbound traffic to public cloud object storage owned by Redwood. All persisted logs must land in our S3 bucket in eu-west-1 under our account.
+- KMS: preferred option is customer-managed KMS key in our account. If Redwood requires an alternative workflow, please propose it and include any key rotation/expiry implications.
+
+I've attached the data classification spreadsheet used by our compliance team — it should help map which fields are considered PII. I'll loop in Caroline from security for the sampling rules.
+
+Ananya
+Ananya Rao
+Head of Security, MedCommerce
+ananya@medcommerce.com
+
+[Attachment: medcommerce-data-classification.xlsx]
+From: David Kim <david.kim@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: Tue, 04 May 2027 11:30:00 -0700
+Subject: Fwd: Pilot: network boundaries, retention & pilot scope (follow-up)
+
+Forwarding Ananya's note with quick implementation notes. High-level feasibility checks:
+
+- VPC private deployment: yes — we can deploy a private control plane with no public IPs on the inference nodes. We'll use PrivateLink / VPC peering to enable the customer to push requests to the cluster.
+- Egress controls: enforce outbound firewall rules on the compute nodes to restrict traffic to the customer's S3 endpoints and their KMS. No internet egress allowed. We'll add an exception for our control-plane health probes but those will be routed over the private control channel.
+- Logging/retention: two-tier logging approach recommended:
+  * Troubleshooting logs (90d): anonymized token-level traces kept in the customer's S3 bucket; default redaction applied for fields marked in the classification sheet.
+  * Audit logs (12mo): write-only access logs (who/when/what model) to the customer's S3; for sampled full payloads we will store encrypted copies in the same bucket using the customer's CMK.
+- KMS: support for customer-managed CMKs in their account is straightforward; we need the key ARN and cross-account grant for the redwood service principal.
+
+I'll attach a draft network diagram and a minimal ops runbook for the pilot. Monica — can you confirm if we want to propose the cross-account KMS flow in the initial statement of work or leave it as a follow-up?
+
+-David
+
+[Attachment: rdw-network-diagram-draft.png]
+[Attachment: redwood-soc2-snapshot.pdf]
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Ananya Rao <ananya@medcommerce.com>
+Cc: David Kim <david.kim@redwood.com>, Monica Patel <monica.patel@redwood.com>, security@medcommerce.com
+Date: Tue, 04 May 2027 11:55:00 -0700
+Subject: Re: Pilot: network boundaries, retention & pilot scope (follow-up)
+
+Ananya / Caroline / John — thanks for the quick clarifications and the classification sheet. Next steps I propose:
+
+1) Redwood to share pilot SOW (1 page) capturing scope (6-week pilot), network approach (VPC peering + PrivateLink), and data handling commitments (90d troubleshooting logs, 12mo audit logs, sampled payload storage encrypted with customer CMK). I'll have this ready by EOD Wed PT.
+2) David will schedule a 60-minute technical kickoff (include your security ops + our infra lead) — proposed slots Thu or Fri.
+3) MedCommerce to share KMS key ARN and S3 bucket name for initial test writes; if you need help creating cross-account grants we can include instructions in the SOW.
+4) Redwood to upload SOC2 snapshot and the draft network diagram to the Drive link below.
+
+If that sounds right, I'll prepare the SOW and a short 1-page checklist for your security reviewers.
+
+Best,
+Evelyn Hart
+Enterprise Account Executive | Redwood Inference
+E: evelyn.hart@redwood.com | D: +1 (415) 555-0134
+
+Links: https://drive.redwood.com/shared/medcommerce/soc2-snapshot
+
+---
+On Tue, May 4, 2027 at 10:02 AM Ananya Rao <ananya@medcommerce.com> wrote:
+> Evelyn — thanks for the clear summary and for taking notes. A few clarifications from security: ...

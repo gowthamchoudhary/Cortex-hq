@@ -1,0 +1,129 @@
+HelioHealth: regional data fate & retention Q&A
+
+From: HelioHealth Security Team <security@heliohealth.com>
+To: Avery Johnson <avery.johnson@redwood.ai>
+Cc: Samuel Greene <samuel.greene@heliohealth.com>
+Date: Thu, 02 Nov 2028 09:12:00 -0800
+Subject: Initial RFI — regional handling, retention, and deletion (hosted API)
+
+Hi Avery,
+
+Thanks for the demo last week. As part of our vendor security onboarding we have a short set of follow-up questions focused on how Redwood handles data geography, retention, and deletion for the hosted API. We want brief, factual answers we can include in our procurement review.
+
+High-level asks:
+- Where is customer request data stored (regions and backups)?
+- How long do you retain request/response logs and traces by default?
+- What is the deletion workflow for an account-level purge and for a single-tenant erasure request?
+- Are backups (DB snapshots, object store) included in retention/erasure?
+- Can you provide an attestation or diagram we can reference?
+
+Can you respond by next Wednesday (11/09)? Attaching our standard RFI matrix for reference.
+
+Regards,
+HelioHealth Security Team
+security@heliohealth.com
+
+Attachment: Helio_RFI_matrix.xlsx (xlsx)
+From: Avery Johnson <avery.johnson@redwood.ai>
+To: HelioHealth Security Team <security@heliohealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Sergio Alvarez <sergio.alvarez@redwood.ai>
+Date: Mon, 06 Nov 2028 10:05:00 -0800
+Subject: Re: Initial RFI — regional handling, retention, and deletion (hosted API)
+
+Hi Helio team — thanks for the clear list. I'll put together concise answers and a diagram. In the meantime:
+
+Quick answers (summary):
+- Regions: Primary storage for API request payloads and response logs is per-region (we deploy in us-east-1, us-west-2, eu-west-1, ap-southeast-1). For Helio we can constrain to US regions only; we do not replicate request/response logs to EU/APAC unless configured.
+- Default retention: 30 days for request/response logs (used for debugging and billing), 90 days for aggregated telemetry/metrics; KV cache contents are ephemeral and not persisted long-term.
+- Deletion: Account-level purge triggers a workflow that deletes live logs, invalidates and removes prefixes from KV caches, and submits background jobs to remove records from our index store and long-term object buckets. Backups are treated separately (see below).
+- Backups: We encrypt and snapshot backups; we do not automatically delete snapshot copies on immediate purge — snapshot rotation is on a 90-day cycle by default. For contractual commitments we can commit to shorter snapshot retention or manual snapshot removal per agreement.
+
+I'll have Marissa add the diagram and Sergio can provide the deletion job details. We'll also attach a short attestation you can include.
+
+Best,
+Avery
+Avery Johnson
+Director, Customer Security & Compliance
+Redwood Inference
+
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: HelioHealth Security Team <security@heliohealth.com>
+Cc: Avery Johnson <avery.johnson@redwood.ai>, Sergio Alvarez <sergio.alvarez@redwood.ai>
+Date: Wed, 08 Nov 2028 14:30:00 -0800
+Subject: Re: Initial RFI — regional handling, retention, and deletion (hosted API)
+
+Hi — adding the architecture sketch and procedural details you asked for. See the attached PDF for the region mapping; key points below.
+
+Technical details (exported for matrix):
+- Storage tiers:
+  * Live request/response logs: retained in region-local object store (S3-equivalent) with AES-256 encryption; access-limited via IAM roles.
+  * Indexed metadata (searchable traces): stored in region-local index clusters with role-based encryption keys.
+  * Aggregates & metrics: aggregated centrally for billing/ML features but contain no PII unless customer opts in.
+- Deletion workflow (account purge):
+  1) Customer request received via Console API -> triggers 'purge-request' event.
+  2) Synchronous deletion: remove live log objects and indexed metadata pointers within the region.
+  3) Asynchronous jobs: kick off background workers to scrub object-store manifests and reindex affected buckets (progress tracked in audit log).
+  4) Snapshot handling: identify snapshots containing the account and mark for expedited retention expiration; physically delete within agreed SLA (default snapshot TTL 90 days; contractual SLA required for shorter windows).
+- Backups & DR: backups are encrypted and immutable for a short window; we provide proof of disposal when manual snapshot deletion occurs.
+
+Attachment: redwood-region-dataflow.pdf (pdf)
+
+If you prefer, we can provide a short statement of attestation on our letterhead after you confirm the minimal acceptable snapshot TTL.
+
+Thanks,
+Marissa Cole
+Senior Product Manager, Data Lifecycle
+Redwood Inference
+
+
+From: Samuel Greene <samuel.greene@heliohealth.com>
+To: Marissa Cole <marissa.cole@redwood.ai>, Avery Johnson <avery.johnson@redwood.ai>
+Cc: HelioHealth Security Team <security@heliohealth.com>
+Date: Thu, 09 Nov 2028 09:18:00 -0800
+Subject: Re: Initial RFI — regional handling, retention, and deletion (hosted API)
+
+Marissa / Avery — thanks for the summary and the diagram. Couple of clarifying items from procurement/security:
+- Can you confirm whether deletion is cryptographic (re-keying/crypto-shredding) or logical object removal only?
+- For the account purge, how long until snapshots containing deleted data are physically removed if we sign a 30-day snapshot SLA?
+- Do you provide an audit log entry per object deletion that we can pull for our records?
+
+Also, could you add a short plain-English sentence we can paste into our vendor compliance sheet that says how long live request/response logs exist by default and where they are stored?
+
+Thanks — Sam
+Samuel Greene
+Vendor Risk Manager
+HelioHealth
+
+
+From: Sergio Alvarez <sergio.alvarez@redwood.ai>
+To: Samuel Greene <samuel.greene@heliohealth.com>, HelioHealth Security Team <security@heliohealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Avery Johnson <avery.johnson@redwood.ai>
+Date: Thu, 09 Nov 2028 16:45:00 -0800
+Subject: Re: Initial RFI — regional handling, retention, and deletion (hosted API)
+
+Hi Sam — answering each of your clarifications inline below.
+
+On Thu, Nov 09, 2028 at 09:18, Samuel Greene <samuel.greene@heliohealth.com> wrote:
+> Can you confirm whether deletion is cryptographic (re-keying/crypto-shredding) or logical object removal only?
+
+We perform logical object removal for live objects and metadata pointers (we delete manifests and index entries). For snapshots, we support crypto-shredding (re-keying) as an add-on for customers that require cryptographic certainty; this is done by removing the key material in the KMS/HSM and marking snapshots as inaccessible before physical deletion. If you require crypto-shredding as part of the SLA, we can include that in the contract.
+
+> For the account purge, how long until snapshots containing deleted data are physically removed if we sign a 30-day snapshot SLA?
+
+If you sign a 30-day snapshot SLA we will schedule expedited deletion and ensure snapshots are permanently removed within 30 days. The background deletion job will also report progress to the audit log and the console.
+
+> Do you provide an audit log entry per object deletion that we can pull for our records?
+
+Yes — every purge job emits audit records with object-key lists and job status. You can export these logs via the Console (Security -> Data Actions -> Exports) or via the Audit API.
+
+Plain-English line you can paste: "By default, live API request/response logs are stored in the customer-selected US region for 30 days; snapshots and backups are retained for 90 days by default but can be shortened by contract."
+
+Attachments: helio_rfi-answers-20281109.xlsx (xlsx)
+
+Let us know if you'd like a formal attestation PDF; we can produce it with our legal team once Helio confirms the snapshot TTL you require.
+
+— Sergio
+Sergio Alvarez
+Principal Site Reliability Engineer
+Redwood Inference

@@ -1,0 +1,157 @@
+Contract amendment: dedicated capacity addition + autoscale adjustments
+
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Janet Lee <janet.lee@acme-corp.com>, Tom Alvarez <tom.alvarez@acme-corp.com>
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Tue, 2 Nov 2027 09:15:00 -0800
+Subject: Contract amendment: dedicated capacity addition + autoscale adjustments
+
+Hi Janet / Tom —
+
+Thanks again for the renewal conversation last week. Per our call, Acme is planning to expand committed Dedicated capacity as part of the 12‑month renewal. I pulled together a concise amendment proposal so procurement/infra can review quickly:
+
+Summary proposal (high level)
+- Reserved GPU uplift: add 8 Tesla‑class GPUs to the existing Dedicated pool (16 -> 24).
+- Reserved warm pool: prewarmed replicas = 3 (booted and KV warmed for primary model variant).
+- Autoscale policy changes: transition current min/max from (min=2, max=20) to (min=4, max=36).
+- Scale-up lag SLA: target average scale‑up time <= 30s (95th <= 60s) for single‑replica cold starts; fallback to prewarmed replicas during critical windows.
+- Throughput guarantee: baseline sustained token throughput of 800 tokens/sec across the Dedicated pool with 2x burst capacity for 5m windows during peak.
+
+Why this shape? Acme’s traffic profile shows frequent short peaks and several 10–15 minute bursts; warm pool reduces observed user‑latency while keeping unit cost efficient. The min_replicas bump keeps steady state latency predictable during regional traffic.
+
+Ask from your side
+- Confirm acceptance of the capacity uplift and autoscale targets (or send counter proposals).
+- Indicate preferred renewal term (12 vs 24 months) — we have slight pricing flexibility on 24‑month commit.
+- If procurement is happy, we’ll send a contract amendment + SLA appendix for signature (DocuSign link included).
+
+Attachments: Redwood‑Dedicated‑Amendment‑v3.pdf (proposal), SLA‑Appendix.xlsx (metrics/SLO language)
+
+If useful I can set up a 30‑minute alignment with your infra lead next week. Thanks — looking forward to the quick win here.
+
+Best,
+Naomi Feldman
+Account Executive
+Redwood Inference
+
+From: Janet Lee <janet.lee@acme-corp.com>
+To: Naomi Feldman <naomi_feldman@redwood.ai>, Tom Alvarez <tom.alvarez@acme-corp.com>
+Cc: procurement@acme-corp.com
+Date: Tue, 2 Nov 2027 11:02:00 -0800
+Subject: Re: Contract amendment: dedicated capacity addition + autoscale adjustments
+
+Naomi —
+
+Thanks for the clear summary. A few clarifying questions from infra and procurement before we loop in legal:
+
+1) Can you clarify how the warm pool is billed? Do prewarmed replicas count against the reserved GPU total, or are they metered separately as burst capacity?
+2) For the scale‑up lag SLA, what are the failure modes and automatic rollback actions if scale fails to meet the target (e.g., do we have fallback to model‑light variants or cross‑region failover)?
+3) We need a concrete delta in monthly cost for the +8 GPU uplift + warm pool + SLA credits — procurement wants a single line item we can route to AP.
+4) On throughput guarantee, is the 800 tps sustained figure measured at model token output or at request ingress? We need that aligned with our telemetry.
+
+If you can provide a short technical note that answers (1)–(4) I’ll share with our infra/ops team for sign‑off. We’re targeting the renewal signature by end of November.
+
+—Janet
+Janet Lee
+Senior Infrastructure Manager, Acme Corporation
+
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Wed, 3 Nov 2027 08:40:00 -0800
+Subject: Fwd: Contract amendment: dedicated capacity addition + autoscale adjustments
+
+Marcus / Karthik —
+
+Forwarding Janet’s note below with Acme’s questions. Can you pls craft a short technical response we can send to Janet (goal: answer the 4 bullet points and include expected monthly delta and an ops playbook snippet)?
+
+Quick context: Acme currently has 16 reserved GPUs, uses two model variants in prod (main and fallback light), and experiences short bursts around business hours. Procurement asked for a single-line cost impact for the uplift.
+
+Thanks — if you can get this by EOD tomorrow I’ll route to Janet.
+
+On Tue, Nov 2, 2027 at 11:02 AM Janet Lee <janet.lee@acme-corp.com> wrote:
+> Naomi —
+> 
+> Thanks for the clear summary. A few clarifying questions from infra and procurement before we loop in legal:
+> 
+> 1) Can you clarify how the warm pool is billed? Do prewarmed replicas count against the reserved GPU total, or are they metered separately as burst capacity?
+> 2) For the scale‑up lag SLA, what are the failure modes and automatic rollback actions if scale fails to meet the target (e.g., do we have fallback to model‑light variants or cross‑region failover)?
+> 3) We need a concrete delta in monthly cost for the +8 GPU uplift + warm pool + SLA credits — procurement wants a single line item we can route to AP.
+> 4) On throughput guarantee, is the 800 tps sustained figure measured at model token output or at request ingress? We need that aligned with our telemetry.
+> 
+> If you can provide a short technical note that answers (1)–(4) I’ll share with our infra/ops team for sign‑off.
+> 
+> —Janet
+> Janet Lee
+> Senior Infrastructure Manager, Acme Corporation
+
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Naomi Feldman <naomi_feldman@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Thu, 4 Nov 2027 10:12:00 -0800
+Subject: RE: Fwd: Contract amendment: dedicated capacity addition + autoscale adjustments
+
+Naomi —
+
+Draft technical response below you can send to Janet. I included brief ops playbook bullets and a one‑line monthly delta estimate (ballpark based on current prices). I attached a short PDF with measured scale times from the last month.
+
+Answers to Acme’s questions:
+
+1) Warm pool billing
+- Prewarmed replicas are charged as reserved capacity when assigned to the customer’s Dedicated pool. In practice the warm pool size is taken from the customer’s committed GPUs (so your 24 GPUs will include the 3 prewarmed replicas). This avoids separate metering surprises.
+
+2) Scale‑up failure modes and rollback
+- Typical failure modes: image pull failures, insufficient GPU headroom in the zone, or long model KV warm times for cold starts.
+- Fallbacks: (a) automatic route to warm pool replicas for latency‑sensitive requests, (b) graceful downgrade to pre‑approved light model variant (configured in rollout policy), (c) auto‑failover to the secondary region if cross‑region routing is enabled.
+- We include automatic alerting and a circuit breaker that pauses aggressive scale‑ups if 95th‑percentile scale time exceeds 60s for >3 consecutive minutes; engineering/ops are alerted and a manual review is triggered.
+
+3) Monthly delta (single line item)
+- +8 GPUs (committed) + warm pool sizing + SLA credits estimate = $18,600 / month on a 12‑month term.
+- Notes: 24‑month commit reduces the uplift to ~$15,900 / month. Exact invoice line will be in the amendment PDF.
+
+4) Throughput measurement
+- Throughput reported and guaranteed at model output tokens/sec aggregated across the Dedicated pool (we map request ingress to model output in our telemetry for you). The 800 tps baseline is measured at the model token output.
+
+Ops playbook (short)
+- Prewarm window: warm pool replicas run a daily KV refresh 5 minutes before expected peak windows (configurable).
+- Scale monitoring: we track scale latency at 50/95/99th; automated alerts at 95th > 45s.
+- Emergency rollback: if sustained scale failures occur, traffic is routed to the fallback light variant and we hold a manual escalated incident call.
+
+Attachments included: autoscale‑recommendation‑2027‑11‑02.pdf (20‑page timing analysis).
+
+If useful I can add a short table with expected p95 latency at 800 tps for your model.
+
+—Marcus
+Marcus Lin
+Director, Solutions Engineering
+Redwood Inference
+
+From: Naomi Feldman <naomi_feldman@redwood.ai>
+To: Janet Lee <janet.lee@acme-corp.com>, Tom Alvarez <tom.alvarez@acme-corp.com>, procurement@acme-corp.com
+Cc: Marcus Lin <marcus_lin@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Sat, 6 Nov 2027 16:48:00 -0800
+Subject: Re: Contract amendment: dedicated capacity addition + autoscale adjustments
+
+Janet —
+
+Thanks for the quick turn. Please find a consolidated response attached and a single line monthly delta for procurement: $18,600 / month (12‑month term). Details and SLA language are in the attached Redwood‑Dedicated‑Amendment‑v3.pdf and SLA‑Appendix.xlsx.
+
+Key items in the attached amendment:
+- +8 GPUs reserved (24 total), warm pool of 3 prewarmed replicas taken from the reserved pool.
+- Autoscale policy updated (min_replicas=4, max_replicas=36).
+- Scale‑up SLA: average <=30s, 95th <=60s; circuit breaker at sustained 95th >60s for 3m.
+- Throughput guarantee: 800 tokens/sec sustained (model output), 1600 tokens/sec burst for up to 5 minutes — integrated with your telemetry.
+- Commercial: $18,600 / month on 12‑month term (DocuSign link below). 24‑month term reduces to $15,900 / month.
+
+DocuSign (amendment): https://docusign.com/embedded/xyz123-sign
+
+Next steps
+1) Please confirm you’re good with the numbers and I’ll route the DocuSign envelope to procurement.
+2) If you want a short 30‑minute runbook walkthrough, Marcus can join and go over the ops playbook.
+
+Thanks again — happy to align on timing this week so we can ensure prewarm configuration before your end‑of‑month peak.
+
+Best,
+Naomi Feldman
+Account Executive
+Redwood Inference
+
+Attachments: Redwood‑Dedicated‑Amendment‑v3.pdf, SLA‑Appendix.xlsx

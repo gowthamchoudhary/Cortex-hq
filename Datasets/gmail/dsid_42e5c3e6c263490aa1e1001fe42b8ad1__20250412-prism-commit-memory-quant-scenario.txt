@@ -1,0 +1,124 @@
+PrismBio commit: memory profile, KV-cache impact & quantization scenarios
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Alex Rivera <alex.rivera@prismbio.com>, Priya Shah <priya.shah@prismbio.com>
+Cc: Ben Carter <ben.carter@redwood.ai>
+Date: 2025-04-12T09:27:00-07:00
+Subject: PrismBio commit: memory profile, KV-cache impact & quantization scenarios
+
+Alex / Priya — attaching a short sizing brief and the memory appendix (CSV).  Thanks again for the deep discussion this morning.  Below are the recommended sizing scenarios tied to the commit conversation we had:
+
+High-level ask: please confirm the QPS and % of requests that need the 32k context path vs the 2k/4k path. That distribution materially changes commit sizing.
+
+Summary (three scenarios):
+
+1) Conservative / no quantization (baseline)
+- Model: Llama-3-70B FP16 serving footprint (no offload): ~280 GB replica RAM for weights + ~55 GB for 32k KV-cache (per-replica when full 32k KV present) = ~335 GB total replica working set.
+- Recommendation: reserved pods sized to host 1 replica per 80 GB GPU using multi-GPU sharding (approx 4 x 80GB GPUs per replica) — pilot recommended commit: 12 GPUs (3 replicas) to support ~15 rps for 32k-heavy mix.
+
+2) Mixed quant (8-bit runtime + FP16 KV)
+- 8-bit model quant reduces weight storage to ~150-160 GB; KV-cache kept in FP16 or 8-bit depending on hit-rate; with FP16 KV for 32k context add ~55 GB => ~210-220 GB replica footprint.
+- Recommendation: 2 x 80GB GPUs per replica (NCCL sharded) or 1 x 80GB + NVLink pairing depending on topology. Pilot commit: 8-10 GPUs (4 replicas) to hit target throughput with headroom.
+
+3) Aggressive quant (4-bit / QLoRA-style runtime) + KV offload
+- 4-bit lowering can push the model storage down to ~90-110 GB. If KV offload to host or tiered NVCache is enabled, per-replica GPU memory requirement can be ~120-140 GB.
+- Recommendation: conservative production commit: 10-16 x 80GB GPUs (distributed across 6-8 replicas) with KV offload config.
+
+KV-cache notes (impacters):
+- 32k vs 16k: moving from 16k -> 32k increases KV by ~1.8x-2.0x depending on tokenizer and chunking.
+- Hit-rate assumptions matter: at 60% KV hit-rate effective GPU memory pressure drops significantly; at <40% you need more replicas to avoid eviction throttling.
+
+Operational asks for PrismBio before we lock numbers:
+- Confirm which model(s) you want us to serve (Llama-3-70B / other checkpoints).
+- Provide expected QPS by context bucket (1k, 4k, 16k, 32k).
+- Any hard latency SLOs (p50/p95/p99) and preferred availability window.
+
+Attached: redwood-dedicated-scope.pdf (proposal) and prism_memory_appendix.csv (per-model footprints & assumptions).
+
+If you’re comfortable, I’ll ask Ben to produce two committed options (pilot 3-month and 12-month committed pool) with clear per-token cost and headroom trade-offs.
+
+— Vanessa Ortiz
+Account Executive, Redwood Inference
+vanessa.ortiz@redwood.ai
+Redwood Inference
+Attachment(s): redwood-dedicated-scope.pdf (PDF), prism_memory_appendix.csv (CSV)
+
+From: Alex Rivera <alex.rivera@prismbio.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Date: 2025-04-12T12:05:00-07:00
+Subject: Re: PrismBio commit: memory profile, KV-cache impact & quantization scenarios
+
+Vanessa — thanks for the clear breakdown and for the appendix. A few quick clarifying Qs before we pull procurement in: 
+
+- Which exact model build are you sizing against in those numbers (is that stock Llama-3-70B or our fine-tuned checkpoint)?
+- For the mixed quant scenario you call out FP16 KV + 8-bit weights — can you confirm whether that path supports the same latency SLOs (p95 < 1.2s) for our expected 10 rps spike?
+- Can you provide an apples-to-apples estimate of monthly committed cost for the pilot vs 12-month commit (per-token or per-hour blended)?
+
+We'd like an SE deep-dive before signing — can Ben join a 45m call tomorrow morning PT? Also cc'ing Priya to loop in procurement constraints (retainer vs committed GPUs).
+
+Thanks,
+Alex
+Director of ML Engineering, PrismBio
+alex.rivera@prismbio.com
+On Sat, Apr 12, 2025 at 09:27 AM Vanessa Ortiz <vanessa.ortiz@redwood.ai> wrote:
+> Alex / Priya — attaching a short sizing brief and the memory appendix (CSV).  Thanks again for the deep discussion this morning.  Below are the recommended sizing scenarios tied to the commit conversation we had:
+> (full message quoted)
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: 2025-04-12T11:15:00-07:00
+Subject: Fwd: PrismBio commit: memory profile, KV-cache impact & quantization scenarios
+
+Ben / Marissa — forwarding the PrismBio thread.  Alex wants concrete pilot vs 12-month commit numbers (they expect up to 10 rps spikes and care about p95 < 1.2s).  Please prepare: 
+
+- Option P (Pilot, 3 months): minimal commit that buys predictable throughput for a mixed 1k/32k traffic mix. Provide GPU count (type), replicas, and expected sustained QPS and headroom.
+- Option C (Committed, 12 months): production pool for their 10 rps spikes + 50% headroom; include cost per token estimate and break-even analysis vs pay-as-you-go.
+
+Key inputs to vary in the analysis: model footprint for Llama-3-70B (stock + our fine-tuned), quantization strategy (FP16/8-bit/4-bit), KV-cache hit-rate scenarios (30/60/80%).
+
+Deliverable cadence: send a 1-pager + updated appendix (CSV) by EOD Monday so I can share with Alex and procurement.  If you need specific trace samples or tokenization details, tell me now.
+
+— Vanessa
+
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: 2025-04-13T16:12:00-07:00
+Subject: Re: Fwd: PrismBio commit: memory profile, KV-cache impact & quantization scenarios
+
+Vanessa / Marissa — attached is the updated appendix (prism_memory_appendix.csv) and my quick calc notes.  High level conclusions and concrete numbers below.  I included conservative headroom assumptions to match their p95 target and QPS spikes.
+
+Assumptions used:
+- Model baseline: Llama-3-70B (stock) FP16 parameter storage ~280 GB. Fine-tune delta +/- 5-10% depending on LoRA size.
+- KV per token (FP16) ~1.6 bytes/token after token packing (empirical); 32k context => ~52–60 GB KV per full context replica.
+- Network/aggregation overhead 10% on top of GPU working set.
+
+Calculated footprints (per-replica, GPU memory required):
+- Baseline (FP16, no quant): ~335 GB (weights + KV) -> translates to ~4 x 80GB GPUs (NCCL sharded) per replica.
+- 8-bit mixed (weights in 8-bit, KV FP16): ~210–220 GB -> ~3 x 80GB GPUs (or 2 with NVLink shedding) per replica.
+- 4-bit aggressive (weights 4-bit + KV offload): ~120–140 GB -> fit on 2 x 80GB GPUs comfortably, or 1 x 80GB if we accept host-KV offload latencies.
+
+Pilot sizing (Option P, 3 months):
+- Traffic assumption: baseline 3 rps steady, 10 rps spikes (30s windows), 40% of requests need 32k path.
+- Recommended commit: 10 x A100/H100 80GB GPUs (configured as 4 replicas in 8-bit mixed quant).  This gives:
+  * Sustained throughput: ~8–12 rps depending on prompt lengths
+  * Headroom for spikes: short autoscaling via burst pool + routing to smaller-context variants
+  * Estimated blended monthly cost (committed pilot pricing): $XX,XXX — see CSV for line itemization.
+
+Committed sizing (Option C, 12 months):
+- Assumption: steady-state 5 rps, 10 rps spikes, target p95 <= 1.2s, aim for 50% headroom.
+- Recommended commit: 28 x 80GB GPUs (equivalent H100 pool) providing ~8 replicas in 8-bit mixed quant.  Rationale: replication reduces tail latency impact and allows rolling upgrades without capacity loss.
+
+Risk & mitigations:
+- If Prism needs strict 99.9% availability with zero-fallback tolerance, recommend additional cross-region reserve (adds ~15% to GPU count).
+- If procurement insists on minimizing GPUs, we can push KV offload to host/NVMe but must accept increased p95 under peak load.
+
+Next steps / action items:
+- Vanessa: confirm model checkpoint and the percentage split by context buckets (prism to provide telemetry).
+- Marissa: prepare the contractual language for pilot vs committed pool (billing cadence, breakage, and SLA).
+- I will prepare a short one-page cost comparison (pilot vs 12mo) and a runbook for KV offload fallback.
+
+-- Ben Carter
+Sales Engineer, Redwood Inference
+ben.carter@redwood.ai
+Attachment(s): prism_memory_appendix.csv (CSV)

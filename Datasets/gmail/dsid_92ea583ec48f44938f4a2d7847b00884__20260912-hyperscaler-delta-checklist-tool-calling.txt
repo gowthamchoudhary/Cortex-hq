@@ -1,0 +1,123 @@
+Post-call: Hyperscaler delta checklist & proposed tool-calling tests
+
+From: Priyom Das <priyom.das@redwoodinference.com>
+To: Ava Chen <ava.chen@novahealth.ai>
+Cc: Karthik Iyer <karthik.iyer@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Sat, 12 Sep 2026 14:05:00 -0700
+Subject: Post-call: Hyperscaler delta checklist & proposed tool-calling tests
+
+Ava — thanks again for a productive call this morning. Quick recap and proposed next steps so we can align engineering workstreams and keep your eval moving quickly.
+
+Recap (from our notes):
+- Objective: validate production viability for Nova Health ingest pipelines (structured outputs + streaming for near-real-time triage).
+- Primary success criteria: reliable tool/function calling (deterministic invocations + retry semantics), structured JSON output that passes your schema validation, and streaming latency under 200ms end-to-end for short responses (50–150 tokens).
+- Secondary: cost per 1k tokens, KV cache behavior with longer patient-context windows, and graceful fallbacks to quantized variants if needed.
+
+Immediate asks / proposed test plan (actionable):
+1) Tool/function calling smoke: Redwood will run a side-by-side where the model must call a provided 'lookup_patient' tool and include both the call and the resolved result in the final output. We'll check for correct call args, idempotency, and error propagation. (Assigned: Redwood infra team)
+2) Structured output validation: run 1000 prompts from your sample set against Redwood and two hyperscaler endpoints. We'll validate outputs against Nova Health's schema and report pass/fail + common failure modes. (Data: you to share sanitized sample set)
+3) Streaming latency experiment: measure time-to-first-byte and steady-state token latency for short responses. Target: median TTFB < 120ms.
+4) Stress: 10k requests over 30 minutes to observe batching and queueing effects.
+
+Attachments: I attached an eval checklist (redwood-eval-checklist.xlsx) with suggested metrics and an example scoring sheet.
+
+Proposed timing:
+- You provide sanitized sample prompts and schema by Tue (2026-09-14).
+- Redwood runs initial parity tests Wed–Thu; deliver a short report by Fri.
+
+Can you confirm the priority order (tool-calling vs structured outputs vs streaming) and whether we have permission to run tests against a staging dataset that includes long patient-context examples?
+
+Thanks — I'll lock in resources once I hear back.
+
+— Priyom
+Priyom Das | Enterprise Sales
+Redwood Inference
+pri...@redwoodinference.com | +1 (415) 555-0123
+
+---
+Attachment: redwood-eval-checklist.xlsx (spreadsheet, 42KB)
+
+From: Ava Chen <ava.chen@novahealth.ai>
+To: Priyom Das <priyom.das@redwoodinference.com>
+Cc: ml-platform@novahealth.ai
+Date: Sun, 13 Sep 2026 09:18:00 -07:00
+Subject: Re: Post-call: Hyperscaler delta checklist & proposed tool-calling tests
+
+Priyom — really useful summary, thanks. Confirming priorities:
+1) Structured outputs (must match our event schema reliably)
+2) Streaming (low latency for triage)
+3) Tool-calling (we need correctness but can tolerate retries during the POC)
+
+We can share a sanitized sample set (500 prompts + schemas) by end of day Tue 2026-09-14. We also attached a quick PoC spec to this reply (nova-poc-spec.docx) that outlines our staging endpoints and a small list of edge cases (long_context, nested_json, ambiguous-intent).
+
+Questions for Redwood:
+- For the structured-output pass/fail, do you support schema-level diffs (e.g., field types, missing required fields) in your scoring sheet?
+- For streaming latency, can you also capture per-token variance (p95, p99)? That matters to our SLA modeling.
+
+We'll be ready to schedule a short tech sync Thu morning PT if that works for you and your engineers.
+
+Thanks — Ava
+Ava Chen
+Head of ML Platform, Nova Health
+ava.chen@novahealth.ai | +1 (646) 555-0199
+
+---
+Attachment: nova-poc-spec.docx (document, 18KB)
+
+From: Karthik Iyer <karthik.iyer@redwoodinference.com>
+To: Priyom Das <priyom.das@redwoodinference.com>, Ava Chen <ava.chen@novahealth.ai>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Sun, 13 Sep 2026 16:40:00 -07:00
+Subject: Re: Post-call: Hyperscaler delta checklist & proposed tool-calling tests
+
+Looping in some technical specifics so the test harness can be stood up quickly. Quick notes below and a tiny test matrix.
+
+Notes:
+- Endpoints: we'll provide three endpoints for parity runs: redwood-hosted (baseline), redwood-quantized (cost variant), and an in-region hyperscaler endpoint (your choice of vendor) so we can compare identical prompts.
+- Tool-calling validation: we'll instrument both the 'call' envelope (tool name + args) and the final generated message. We'll capture whether the call was executed, returned error codes, and whether the model re-issued the call after a simulated failure.
+- Structured schema diffs: we can run JSON Schema validation and output both boolean pass and a human-readable list of diffs (missing required fields, type mismatches). We'll include counts and examples in the report.
+- Streaming metrics: we will measure TTFB, p50/p95/p99 per-token latency, and tokens/sec throughput. We can also produce a timing waterfall for a small subset to show where latency comes from (network vs runtime).
+
+Proposed minimal test matrix (we'll start with small batches to iterate fast):
+- Case A: Short prompt, structured JSON expected (200 inputs) -> measure pass rate, field-level diffs
+- Case B: Streaming triage prompt (1000 inputs) -> TTFB, p50/p95/p99, tokens/sec
+- Case C: Tool call with simulated tool failure (100 inputs) -> retry behavior and final state
+
+I can get infra to stand up the endpoints Wed morning if you provide the sanitized prompts Tues evening. If we need a custom tool shim to match Nova's lookup_patient API, share the API spec and we'll mock it in the harness.
+
+— Karthik
+Karthik Iyer | Applied ML — Inference
+karthik.iyer@redwoodinference.com
+
+On Sun, Sep 13, 2026 at 09:18 AM Ava Chen <ava.chen@novahealth.ai> wrote:
+> Priyom — really useful summary, thanks. Confirming priorities:
+> 1) Structured outputs (must match our event schema reliably)
+> 2) Streaming (low latency for triage)
+> 3) Tool-calling (we need correctness but can tolerate retries during the POC)
+>
+> We can share a sanitized sample set (500 prompts + schemas) by end of day Tue 2026-09-14. We also attached a quick PoC spec to this reply (nova-poc-spec.docx) that outlines our staging endpoints and a small list of edge cases (long_context, nested_json, ambiguous-intent).
+
+From: Priyom Das <priyom.das@redwoodinference.com>
+To: Ava Chen <ava.chen@novahealth.ai>
+Cc: Karthik Iyer <karthik.iyer@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Mon, 14 Sep 2026 09:22:00 -07:00
+Subject: Re: Post-call: Hyperscaler delta checklist & proposed tool-calling tests
+
+Thanks all — great alignment. Confirming next steps and a quick schedule:
+- Nova to share sanitized prompts + schema by EOD Tue (2026-09-14).
+- Redwood to spin up parity endpoints Wed morning (2026-09-15) and run initial small-batch tests Wed afternoon.
+- Deliver initial parity report Thu (2026-09-16) with pass/fail, top failure patterns, and streaming latency snapshots.
+
+I'll schedule the Thu morning tech sync for 9:30am PT — invite should hit your calendars shortly. If Thu morning doesn't work, reply with two alternate windows.
+
+Related: I opened a HubSpot record and linked the eval checklist here: https://app.hubspot.com/contacts/123456/company/987654 — I'll attach the initial report to that record when ready.
+
+Looking forward — we'll prioritize structured-output scoring first per your list.
+
+— Priyom
+Priyom Das | Enterprise Sales
+Redwood Inference
+pri...@redwoodinference.com
+
+---
+Related link: https://app.hubspot.com/contacts/123456/company/987654

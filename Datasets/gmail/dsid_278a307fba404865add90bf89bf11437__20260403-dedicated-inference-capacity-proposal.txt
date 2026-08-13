@@ -1,0 +1,127 @@
+Dedicated inference capacity sizing for Acme Health — next steps
+
+From: Elena Martinez <elena.martinez@acmehealth.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>
+Cc: Michael Cho <michael.cho@acmehealth.com>
+Date: 2026-04-01T15:12:00-07:00
+Subject: Sizing for dedicated inference cluster
+
+Hi Rishi,
+
+Thanks for the demo yesterday — the team was excited by the latency and cost profile you showed. We're starting to lock down requirements for a dedicated deployment to support our patient-facing summarization APIs and a small internal research workload. Before we can move forward with procurement, security needs a sizing artifact and procurement needs a ballpark cost/commit for the contract.
+
+Can you send your pre-sales sizing questionnaire (concurrency, prompt/response sizes, retention, expected QPS, streaming vs non-streaming, model variants) and an example capacity plan? We can provide sample traffic if that helps.
+
+Target timeline: POC in early June, production by late Q3.
+
+Thanks,
+Elena Martinez
+Director of Product
+Acme Health
+
+---
+Attachments: none
+
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Elena Martinez <elena.martinez@acmehealth.com>
+Cc: Laura Bennett <laura.bennett@redwood.ai>, Grace O'Connor <grace.oconnor@redwood.ai>
+Date: 2026-04-01T16:08:00-07:00
+Subject: Re: Sizing for dedicated inference cluster
+
+Elena — thanks for the note and the timeline. Sending our standard dedicated sizing questionnaire; if you can fill the highlighted fields we can produce a targeted capacity plan and a line-item cost estimate for Reserved Capacity.
+
+Attached: dedicated_sizing_questionnaire.xlsx
+
+To make the questionnaire easier, quick clarification on the key items we use to size Dedicated clusters:
+- Typical and peak concurrency (concurrent inferences per second and p95 concurrency)
+- Average prompt length and average/90th/max response length (tokens) — affects memory/KV cache sizing
+- Percentage of requests that use streaming vs non-streaming responses
+- Sequence length assumptions for tokenization (longest end-to-end context)
+- Expected sustained QPS (24h average) and burst QPS (peak 1m/5m)
+- Required latency SLOs (p50/p95) and whether tail latency is critical for the UX
+- Retention/audit logs (do you need request/response retained on our side and for how long)
+- Encryption/bring-your-own-key and VPC requirements (if different from default)
+
+If you can paste your answers into the questionnaire or reply inline, Laura (our SE) and Grace (solutions) will draft a capacity proposal (GPU types, node counts, autoscaling policy, canary configuration). We aim to turn around a draft within 48 business hours after we get the completed file.
+
+Thanks —
+Rishi Malhotra
+Account Executive, Redwood Inference
+rishi.malhotra@redwood.ai
+Phone: +1 (415) 555-0198
+
+---
+Attachments: dedicated_sizing_questionnaire.xlsx (spreadsheet, 1 sheet)
+From: Elena Martinez <elena.martinez@acmehealth.com>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>
+Cc: Michael Cho <michael.cho@acmehealth.com>
+Date: 2026-04-02T10:21:00-07:00
+Subject: Re: Sizing for dedicated inference cluster
+
+Rishi — attaching a quick pass at the questionnaire and a sample of anonymized traffic for a 7-day window. I've answered the highest-impact fields inline below for speed; full spreadsheet attached (traffic_samples_acme.csv).
+
+Quick answers (summary):
+- Primary workload: patient-note summarization API (real-time) + internal research batch runs overnight.
+- 24h average QPS: ~8 r/s
+- Peak QPS: ~320 r/s (sporadic bursts during business hours)
+- Typical concurrent requests (average): 35
+- Peak concurrent requests (p95): 120
+- Average prompt length: 180 tokens (most prompts are ~150–250 tokens)
+- Average response length: 420 tokens; 90th percentile ~1200 tokens; occasional up to 2048 tokens for longer summary modes
+- Streaming: ~10% of calls use streaming (progressive summary updates)
+- Desired p95 latency SLO: <= 300ms for standard summary mode; for long summaries p95 <= 800ms is acceptable
+- Retention: we need request metadata and outputs retained for 30 days for troubleshooting and audit; full PHI storage will remain in our environment (we do not want Redwood to store PHI payloads beyond metadata)
+- Region preference: us-west for proximity to our users
+- POC target: start early June with a reduced footprint (canary ~10% of expected prod traffic)
+
+Please confirm whether the tail-latency SLO (p95) is feasible on a Dedicated cluster with 1:1 reserved GPUs vs a smaller multi-tenant fallback option. Also provide an initial ballpark recurring cost for the reserved baseline + buffer for autoscaling.
+
+Thanks,
+Elena
+
+---
+Attachments: traffic_samples_acme.csv (CSV, 7 days anonymized samples)
+From: Rishi Malhotra <rishi.malhotra@redwood.ai>
+To: Laura Bennett <laura.bennett@redwood.ai>, Grace O'Connor <grace.oconnor@redwood.ai>
+Date: 2026-04-02T12:40:00-07:00
+Subject: Fwd: Sizing for dedicated inference cluster — ACME POC / production sizing request
+
+Laura / Grace — forwarding Elena's responses and the attached traffic sample. Key asks: POC in early June (10% canary), production by late Q3. They target p95 <= 300ms for standard summaries and have bursts up to 320 QPS with p95 concurrency ~120.
+
+Can you put together a capacity plan that includes:
+- Recommended GPU type(s) (A100 80GB vs H100/other) and quantization profile suggestions for cost/latency trade-offs
+- Reserved baseline (recommended number of GPUs for 24/7 reserved capacity to meet p95 SLO at expected average load)
+- Burst/autoscaling policy (how many additional nodes to allow in bursts to cover 95th/peak loads)
+- Canary config: how to route 10% of traffic to Dedicated for POC while keeping majority on Hosted fallback; include e2e monitoring hooks we can expose to the customer (p95 latency, cost per token, request sampling for quality)
+- Estimated monthly recurring cost for the reserved baseline + expected autoscale usage (range is fine)
+
+I've attached an initial template we sometimes use; populate the assumptions and deliver a slide/pdf we can share with procurement and security. Deal: ACM-2026-042.
+
+Thanks — please treat this as high priority so we can get procurement a ballpark number this week.
+
+Forwarded message:
+> From: Elena Martinez <elena.martinez@acmehealth.com>
+> To: Rishi Malhotra <rishi.malhotra@redwood.ai>
+> Date: 2026-04-02T10:21:00-07:00
+> Subject: Re: Sizing for dedicated inference cluster
+>
+> (quoted content omitted)
+
+---
+Attachments: initial_capacity_proposal.pdf (template, 4 slides)
+
+From: Grace O'Connor <grace.oconnor@redwood.ai>
+To: Rishi Malhotra <rishi.malhotra@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: 2026-04-03T13:45:00-07:00
+Subject: Re: Fwd: Sizing for dedicated inference cluster — ACME POC / production sizing request
+
+Rishi — got it. I'll draft a capacity plan with two baseline options (cost-optimized A100 mix, and latency-optimized H100 mix), include an autoscale profile to cover the 320 QPS bursts, and a canary routing config for 10% traffic.
+
+I'll have a draft PDF and a short slide deck by EOD tomorrow and will schedule a 30-minute sync with you + Elena to walk through assumptions.
+
+Grace O'Connor
+Solutions Architect, Redwood Inference
+grace.oconnor@redwood.ai
+
+---
+Attachments: none

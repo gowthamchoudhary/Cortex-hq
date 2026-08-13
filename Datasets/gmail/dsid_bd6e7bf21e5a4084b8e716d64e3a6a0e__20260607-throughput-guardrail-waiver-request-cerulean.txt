@@ -1,0 +1,112 @@
+Request: Throughput guardrail waiver for nightly reserved GPU window
+
+From: Avery Tan <avery@cerulean.ai>
+To: David Kim <david.kim@redwood.com>
+Cc: procurement@cerulean.ai
+Date: Mon, 7 Jun 2026 16:12:00 -0700
+Subject: Throughput guardrail waiver for nightly reserved GPU window
+
+Hi David,
+
+Quick context: Cerulean Analytics runs a nightly batch scoring job (2:00–04:00 PT) that spikes token throughput for a 90–120 minute window. We're on a Dedicated Reserved GPU plan and generally happy with performance, but our batch peak is being clipped by your throughput guardrails/queueing during that window and it causes a cascade of retries in our pipeline. That, in turn, pushes downstream SLA breaches for our customers.
+
+We'd like to request a temporary exception (guardrail waiver) to:
+- Allow additional in-flight concurrency for our reserved pool between 02:00–04:00 PT up to +40% of our nominal reserved throughput for the next 90 days.
+- Ensure no preemption of our batch jobs from the dedicated pool during that time (or an agreed fallback to a compatible reserved node family).
+
+Attached is an export showing the last three weeks of nightly peaks and an initial sketch of the scheduling window (cerulean_sla_window.xlsx). Our procurement team (cc'd) asked me to reach out formally so we can get an amendment in place before Q3 traffic ramps.
+
+Can you advise on feasibility, what telemetry you need to sign off, and whether Redwood would consider credits for the additional capacity while we validate steady-state?
+
+Thanks,
+Avery
+Avery Tan
+Head of Platform
+Cerulean Analytics
+
+
+From: David Kim <david.kim@redwood.com>
+To: Avery Tan <avery@cerulean.ai>
+Cc: procurement@cerulean.ai, laura.bennett@redwood.com, ben.carter@redwood.com
+Date: Tue, 8 Jun 2026 09:04:00 -0700
+Subject: Re: Throughput guardrail waiver for nightly reserved GPU window
+
+Hi Avery — thanks for the clear summary and the spreadsheet. Appreciate you surfacing this early.
+
+Short answer: this is a conversation we can have. We typically enforce throughput guardrails to protect multi-tenant scheduling and deterministic tail latency for Dedicated customers, but we do offer carveouts and temporary addenda for scheduled windows when justified by steady historic peaks.
+
+Next steps I propose:
+1) Loop in our Reserved Capacity PM and SRE (laura and ben) to validate whether your requested +40% fits into the pool model for your dedicated nodes and whether we can promise non-preemption during 02:00–04:00 PT for a 90-day trial.
+2) Share more telemetry (per-minute token rates for the peak window, job size distribution, and expected concurrency). The attached workbook is a great start; if you can add a sample job manifest (small/med/large) that helps kernel/cpu/gpu packing decisions.
+3) We'll draft a short SLA addendum + a trial credits proposal if we accept the waiver.
+
+Laura/Ben — can you review the attached sheet and advise on: capacity impact, queueing changes required (time-slicing vs soft-reservation), and any recommended fallback variant? If we can provision a temporary scheduled carveout in the dedicated pool, I'm inclined to propose a 60–90 day trial with proportional usage credits while Cerulean validates.
+
+Avery — I'll keep you posted; aim to have a feasibility determination by EOD tomorrow.
+
+— David
+David Kim
+Account Exec, Enterprise
+Redwood Inference
+
+From: Ben Carter <ben.carter@redwood.com>
+To: David Kim <david.kim@redwood.com>, Laura Bennett <laura.bennett@redwood.com>
+Cc: Avery Tan <avery@cerulean.ai>, procurement@cerulean.ai
+Date: Tue, 8 Jun 2026 14:27:00 -0700
+Subject: Re: Throughput guardrail waiver for nightly reserved GPU window
+
+On Tue, Jun 8, 2026 at 09:04 AM David Kim <david.kim@redwood.com> wrote:
+> Laura/Ben — can you review the attached sheet and advise on: capacity impact, queueing changes required (time-slicing vs soft-reservation), and any recommended fallback variant?
+
+Checked the spreadsheet and the token burst profile looks predictable (daily spike ~90–120m with consistent job sizes). Two operational paths we can take:
+
+Option A — Scheduled soft carveout (lower risk)
+- Reserve an isolated headroom slice in the existing dedicated pool for Cerulean during 02:00–04:00 PT. This is implemented as a time-bound soft-reservation: other tenants can use unused headroom but are preemptible only outside the 02:00–04:00 window.
+- Behavior: no preemption of Cerulean jobs in the 02:00–04:00 window; outside that window, normal guardrails apply.
+- Risk: moderate — requires scheduler bump and nightly capacity monitoring.
+
+Option B — Deterministic time-slice (higher isolation)
+- Create a deterministic time-slice on a small set of reserved nodes (N+1 nodes) dedicated to Cerulean at 02:00–04:00. This guarantees isolation but increases cost (you get dedicated nodes guaranteed).
+- Behavior: full non-preemption and deterministic throughput during window.
+- Risk: lower, but material cost impact to Cerulean or Redwood depending on commercial terms.
+
+Recommendation: start with Option A for a 60-day pilot with telemetry gates: (1) average tail latency < 350 ms for priority requests during the window, (2) no more than 2% job retries due to scheduling, (3) observed headroom usage stable for 14 consecutive days before extending. If Option A proves insufficient, move to Option B.
+
+Attachments: draft SLA addendum (redwood_sla_addendum_draft.pdf) with proposed credit structure and trial length.
+
+I'll coordinate with SRE to provision a soft-reservation and set alerts. David — suggest we propose a credits package: 25% usage credit on the excess throughput for the pilot period. Cerulean — would that be acceptable commercially?
+
+— Ben
+Ben Carter
+Senior Product Manager, Reserved Capacity
+Redwood Inference
+
+From: David Kim <david.kim@redwood.com>
+To: Avery Tan <avery@cerulean.ai>
+Cc: procurement@cerulean.ai, laura.bennett@redwood.com, ben.carter@redwood.com
+Date: Wed, 9 Jun 2026 11:03:00 -07:00
+Subject: Re: Throughput guardrail waiver for nightly reserved GPU window
+
+Hi Avery / procurement team —
+
+Thanks for your patience. We reviewed your export and discussed internal options. Proposed plan:
+
+Pilot proposal (Option A — Scheduled soft carveout)
+- Window: nightly 02:00–04:00 PT, start date 2026-06-15 for 60 days.
+- Capacity: up to +40% nominal reserved throughput for your dedicated pool during the window.
+- Non-preemption: Cerulean jobs within the window will not be preempted by lower-tier tasks; other tenants may use the spare headroom but will be subject to soft preemption outside the window.
+- Telemetry gates: tail latency < 350 ms (p95 measured), <2% scheduling retries, stable headroom usage for 14 days.
+- Commercial: 25% usage credit on excess capacity consumed during the pilot period, subject to final addendum.
+
+Next steps:
+1) Cerulean — please confirm acceptance of the pilot plan and share the sample job manifests Ben requested (small/med/large).
+2) Procurement — we'll send a short SLA addendum and pilot statement of work via DocuSign; link will be shared once you confirm.
+3) Redwood — SRE will stand up the scheduled soft-reservation and a dashboard; engineering will monitor the first three nights and proactively flag anomalies.
+
+I've attached the draft addendum for review (redwood_sla_addendum_draft.pdf) and included a HubSpot link for the deal. If this all looks good, I'll ask legal to prepare the addendum and ops to schedule the carveout.
+
+— David
+David Kim
+Account Exec, Enterprise
+Redwood Inference
+

@@ -1,0 +1,152 @@
+PolarisHealth capacity runway and GPU ask
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Alex Jordan <alex.jordan@polarishealth.com>
+Cc: Morgan Blake <morgan.blake@polarishealth.com>
+Date: 2026-11-01T09:12:00-07:00
+Subject: PolarisHealth — initial sizing assumptions and recommended reserved slab
+
+Hi Alex / Morgan,
+
+Thanks again for the call this morning. Per our discussion, attached is a concise first-cut sizing for a Dedicated commitment that meets your 95th percentile latency target of <=450ms for conversational paths, and gives procurement a clear starting point for an MSA/commit conversation. Attachment: polaris_capacity_calc_v2.xlsx (cost & per-GPU math) and redwood_sla_matrix.pdf (SLO mapping).
+
+High-level assumptions (please confirm):
+- Peak concurrent requests (observed/spike): 80 req/s
+- Avg tokens per interaction (prompt + response): 600 tokens
+- Target p95 latency: <= 450ms for the primary customer flow
+- Model mix: 70% 7B-class (fast), 30% 13B-class (higher-quality)
+
+Derived throughput need:
+- Baseline tokens/sec = 80 req/s * 600 tokens = 48,000 tokens/sec
+- Effective tokens/sec after KV/prefix caching (conservative): 0.9 * baseline = ~43,200 tokens/sec
+
+Per-GPU steady throughput (reference A100/80GB, quantized kernels, conservative):
+- 7B variant: ~5,000 tokens/sec per GPU
+- 13B variant: ~2,000 tokens/sec per GPU
+
+Sizing math (rounded):
+- Mixed workload effective TPS need (weighted): 0.7*5k + 0.3*2k = 3,900 tokens/sec per equivalent-GPU (approx)
+- GPUs required = 43,200 / 3,900 ≈ 11.1 -> round up to 12 GPUs for steady-state
+
+Headroom and business constraints:
+- Recommend 30% operational headroom to cover traffic bursts and model tail latency: 12 * 1.3 ≈ 15.6 -> propose reserving a 16-GPU slab
+- Fallback policy: allow short bursts (up to 50% additional capacity) to be served by Hosted pool (no commitment) with automatic routing and throttling to preserve SLA for critical flows
+
+Next asks from your side to finalize:
+1) Confirm whether the 80 req/s peak is accurate or if you have a 99th-percentile spike number (we will size to the higher of the two).
+2) Procurement timeline and whether Polaris prefers a 12- or 24-month commit (pricing differs materially).
+3) Any constraints on region (we propose us-west for lower latency to your primary users).
+
+If that all looks reasonable I can run a sensitivity table (1) different model mixes, (2) different headroom %, and (3) alternate GPU types (A10 vs A100) and share updated calc.
+
+Proposed next step: 30 min review tomorrow to walk through the spreadsheet and confirm procurement ask.
+
+Thanks,
+Tessa Morgan
+Senior Sales Engineer | Redwood Inference
+attachments: polaris_capacity_calc_v2.xlsx, redwood_sla_matrix.pdf
+
+
+From: Alex Jordan <alex.jordan@polarishealth.com>
+To: Tessa Morgan <tessa.morgan@redwood.ai>
+Cc: Morgan Blake <morgan.blake@polarishealth.com>, Procurement <procurement@polarishealth.com>
+Date: 2026-11-01T11:03:00-07:00
+Subject: Re: PolarisHealth — initial sizing assumptions and recommended reserved slab
+
+Tessa — thanks, this is a helpful starting point. A few clarifications before we lock in a commit: 
+
+1) Peak and tail: the 80 req/s is our daily peak; we do see short bursts up to ~140 req/s for up to 10 minutes during heavy load windows (API funneling after batch uploads). We also care about 99th percentile tails — we currently target 95% for users but procurement will ask for 99% guarantees later in the process.
+
+2) Model mix: product wants quality on 20% of sessions (long-form medical summaries) and speed on the rest. Your 70/30 split is close — we prefer '80% 7B / 20% 13B'.
+
+3) Compliance: Procurement asked whether the Dedicated offering includes SOC2 reports and if the Private option (VPC) is available for an additional fee — please point us to the relevant evidence and an estimate.
+
+4) Per-GPU math: Procurement will want explicit per-GPU throughput and the cost delta for resizing to 32-bit vs quantized kernels. Can you add a per-GPU breakdown that shows worst-case modeling (no caching) vs conservative caching?
+
+We can meet tomorrow at 10:00 PT to review.
+
+—Alex
+Alex Jordan | Head of Platform Engineering, PolarisHealth
+
+On Mon, Nov 1, 2026 at 09:12 AM Tessa Morgan <tessa.morgan@redwood.ai> wrote:
+> [original message attached]
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>
+Date: 2026-11-02T08:42:00-07:00
+Subject: Re: PolarisHealth — initial sizing assumptions and recommended reserved slab (internal notes)
+
+Folks — quick internal calc for tomorrow's call (I pulled Alex's updates into the sheet). Key changes applied: 80->140 short-burst, model mix 80/20 (7B/13B), two scenarios: "steady" and "worst-case no cache". See bullets below; full workbook saved as polaris_capacity_calc_v2.xlsx (tab: calcs_v3).
+
+Assumptions used for this internal note:
+- Short-burst scenario: 140 req/s for 10 minutes (no change to avg tokens: 600)
+- Worst-case: caching disabled (no prefix reuse), so tokens/sec = req/s * 600
+
+Scenario A — conservative (30% caching reduction applied):
+- Baseline tokens/sec = 140 * 600 = 84,000 tps
+- With conservative caching (30% reduction) -> 58,800 tps
+- Using revised model mix (80% 7B @5k tps, 20% 13B @2k tps): effective per-GPU = 0.8*5k + 0.2*2k = 4,400 tps
+- GPUs required = 58,800 / 4,400 = 13.36 -> 14 GPUs
+
+Scenario B — worst-case (no caching):
+- Baseline tokens/sec = 140 * 600 = 84,000 tps
+- Effective per-GPU (same model mix) = 4,400 tps
+- GPUs required = 84,000 / 4,400 = 19.1 -> 20 GPUs
+
+Recommended commercial posture: reserve 14 GPUs for the core Dedicated slab and maintain auto-burst policy to hosted fleet to cover short spikes up to the worst-case (approx additional 6 GPUs equivalent). Commercial proposal would therefore be: 14-GPU committed slab + burst credit to cover up to +6 GPUs for short intervals. This matches a 14->20 operational runway and reduces committed spend vs committing full 20 up front.
+
+Notes on latency / p95 fit: the difference between 14 and 20 GPUs materially impacts your p95 on 13B sessions during bursts. To keep p95 <=450ms for the 13B requests, prefer either: 1) smaller request batching (we can tune runtime) or 2) increase headroom to 20 GPUs. I recommend we present both options to Polaris with explicit cost deltas.
+
+I attached a one-page memo (commit_term_summary.docx) that frames the 14+burst commercial ask and the 20-GPU committed alternative with pricing lines.
+
+Karthik
+Director, Sales | Redwood Inference
+attachments: polaris_capacity_calc_v2.xlsx, commit_term_summary.docx
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Alex Jordan <alex.jordan@polarishealth.com>
+Cc: Morgan Blake <morgan.blake@polarishealth.com>, Karthik Iyer <karthik_iyer@redwood.ai>, Hannah Schmitt <hannah_schmitt@redwood.ai>, Procurement <procurement@polarishealth.com>
+Date: 2026-11-03T15:04:00-07:00
+Subject: PolarisHealth — proposed commitment structure and next steps
+
+Alex / Morgan / Team,
+
+Thanks for the meeting today. Summary of the proposal and clear next steps so procurement can move the MSA forward.
+
+Agreed sizing posture (two options we discussed):
+A) Preferred commercial (cost-efficient): 14-GPU Dedicated slab (A100), with automatic burst routing to Hosted pool for short spikes (covers equivalent of +6 GPUs). This yields an operational runway of ~14->20 GPUs and keeps p95 for primary flows within target with tuning.
+B) Full-headroom commit: 20-GPU Dedicated slab (A100) for customers wanting capped latency tails at 99% without relying on Hosted bursts (higher monthly commitment).
+
+Cost delta & immediate ask:
+- We'll put formal pricing lines into HubSpot (ID: PH-2026-11A) — estimate included in the attached polaris_capacity_calc_v2.xlsx.
+- Next doc for procurement: draft term summary and redlined service clauses — see commit_term_summary.docx.
+
+Compliance/evidence: SOC2 and compliance package are available. I attached the redwood_sla_matrix.pdf and will push our SOC2 evidence via a secure link; Hannah will follow up with the evidentiary checklist and an optional Private (VPC) deployment add-on quote if you need managed networking (this adds ~10-15% to the commit cost).
+
+Concrete next steps / timeline:
+1) Procurement: review commit_term_summary.docx and share preferred term (12 / 24 months) by EOD Friday 2026-11-06.
+2) Legal: if you want, we can deliver a draft MSA this week for redlines.
+3) Technical: we’ll perform a short perf test window ahead of go-live — we’ll schedule with your platform team the week after contract signature.
+4) DocuSign: I will prepare the initial commercial SOW + DocuSign link once you confirm A or B and term length.
+
+Action items assigned:
+- Polaris: confirm preferred option (A or B) and target term length (12/24mo).
+- Redwood (Hannah): send SOC2 evidence and private deployment pricing by tomorrow.
+- Redwood (Karthik): finalize HubSpot quote and attach to the deal record (PH-2026-11A).
+
+DocuSign preview link (will be live once Polaris confirms option): https://app.docusign.com/PH-2026-11A
+HubSpot deal: https://hubspot.com/deal/PH-2026-11A
+Drive (calcs & memos): https://drive.google.com/drive/folders/polaris-capacity-v2
+
+Thanks all — happy to jump on a brief call if procurement wants to walk through the term summary.
+
+Best,
+Tessa Morgan
+Senior Sales Engineer | Redwood Inference
+Phone: +1-415-555-0120
+attachments: polaris_capacity_calc_v2.xlsx, redwood_sla_matrix.pdf, commit_term_summary.docx
+> On Nov 2, 2026, Karthik Iyer <karthik_iyer@redwood.ai> wrote:
+> > [internal sizing notes]
+> >
+> > On Nov 1, 2026, Alex Jordan <alex.jordan@polarishealth.com> wrote:
+> > > [questions on headroom and compliance]

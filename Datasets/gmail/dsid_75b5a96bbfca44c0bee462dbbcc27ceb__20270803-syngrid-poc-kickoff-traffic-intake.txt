@@ -1,0 +1,149 @@
+POC traffic intake & evaluation plan — Syngrid: workload profile and kickoff asks
+
+From: Tessa Morgan <tessa.morgan@redwood.ai>
+To: Emily Zhao <emily.zhao@syngrid.ai>, ben.carter@redwood.ai, karthik.iyer@redwood.ai, neha.kapoor@redwood.ai
+Date: 2027-08-03T15:12:00-07:00
+Subject: POC traffic intake & evaluation plan — Syngrid: workload profile and kickoff asks
+
+Hi Emily — great call today, thanks for walking us through the use case. Quick recap and concrete asks so we can finalize the POC plan on our side. Please confirm the numbers below or correct where needed.
+
+POC scope (as discussed)
+- Feature: real-time API for semantic search + summarization fallback on longer docs
+- Target duration: 3 weeks (1 week setup + 2 weeks ramp + evaluation)
+
+Needs from Syngrid (traffic profile / acceptance):
+1) Average sustained RPS: ? (we think ~2–5 based on demo)
+2) Peak burst RPS: ? (duration of typical burst windows)
+3) Typical prompt/response token lengths: average and 95th percentile / max
+4) Expected concurrency (simultaneous active callers) and session length distribution
+5) Any strict latency SLOs (p50/p95/p99 targets) and cost budget per 1k responses
+6) Access for test harness: sample endpoints, an S3 location or request logs, and a service account for read-only ingestion
+
+Initial acceptance criteria proposal (Redwood):
+- 95th percentile latency < 300ms for <=512 tokens under agreed concurrency profile
+- No errors > 0.5% during ramp window
+- Throughput sustained for peak windows without queueing beyond 2s
+- Quality smoke-test: top-3 relevance NDCG on provided sample set >= baseline (we'll work the eval set together)
+
+Attached is a blank POC intake spreadsheet (syngrid_poc_template.xlsx) for you to populate the traffic numbers and endpoints. Next steps:
+- Emily: populate the intake sheet and attach a short sample request log (CSV) if possible — by EOD Friday (8/6)
+- Redwood SE (Ben/Karthik): we’ll draft the test harness and a simulated burst plan once we have the log
+- CS (Neha): will coordinate success metrics and reporting cadence
+
+Proposed kickoff window: week of Aug 16 (flexible) — can you confirm a preferred start date?
+
+Thanks — Tessa
+
+--
+Tessa Morgan
+Enterprise Sales | Redwood Inference
+
+From: Emily Zhao <emily.zhao@syngrid.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, ben.carter@redwood.ai, karthik.iyer@redwood.ai, neha.kapoor@redwood.ai
+Date: 2027-08-04T09:41:00-07:00
+Subject: Re: POC traffic intake & evaluation plan — Syngrid: workload profile and kickoff asks
+
+Thanks Tessa, quick answers below and I attached a small sample log we exported this morning. See attachment: example_request_log.csv.
+
+Traffic snapshot (current prod-like traffic):
+- Average sustained RPS: 3.1 (business hours)
+- Typical concurrent active sessions: 8–14 (95th perc ~14)
+- Peak burst: up to 60 RPS sustained for ~20–45s during query storms (entry points: search autocomplete + bulk file enrich)
+- Typical prompt length: avg ~120 tokens; response avg ~210 tokens; 95th percentile request tokens ~820, response up to 1500 (we usually truncate at 2k)
+- Cold-starts: rare — most requests hit warmed pools, but there are short-lived spikes from new tenants
+
+Latency SLOs:
+- Our internal goal: p95 < 350ms for 512-token use case. If you can hit p95 < 300ms that's a big win for us.
+
+Access & logistics:
+- Sample dataset: https://s3.amazonaws.com/syngrid-testdata/poc-requests/ (read-only token will be provided once NDA is signed)
+- Procurement/legal asked us to loop them in. NDA and procurement contact are CC'd on this thread (procurement@syngrid.ai).
+
+We'll fill the intake spreadsheet and return it with the sample log by EOD Friday (8/6). For kickoff, Aug 17 works on our side.
+
+Best,
+Emily
+Product Lead, Syngrid
+
+On Aug 3, 2027, at 3:12 PM, Tessa Morgan <tessa.morgan@redwood.ai> wrote:
+> Hi Emily — great call today, thanks for walking us through the use case....
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Emily Zhao <emily.zhao@syngrid.ai>, karthik.iyer@redwood.ai, neha.kapoor@redwood.ai
+Date: 2027-08-04T11:05:00-07:00
+Subject: Re: POC traffic intake & evaluation plan — Syngrid: workload profile and kickoff asks
+
+Emily — thanks for the quick data. A few clarifying notes from the se side and a proposed test plan.
+
+Clarifications needed (quick):
+- When you say 60 RPS bursts for 20–45s, is that across a single endpoint or aggregated across multiple endpoints? If aggregated, can you share per-endpoint breakdown or percentages?
+- The 95th response token ~1500 is important for memory planning. Do you want us to cap outputs for the POC to 1k tokens to keep latency tight, or evaluate up to 2k for completeness?
+
+Proposed sim plan (once we have logs):
+1) Replay baseline traffic (3 RPS avg, concurrency 10) for 1 hour to validate steady-state.
+2) Run 6x synthetic burst tests: simulate 60 RPS across 30s, 60s, 120s to observe memory/backpressure behavior and latency tails.
+3) Run long-tail token tests with 95th token lengths (1k–1.5k) to measure p95/p99 under different batch/kv-cache settings.
+
+Acceptance thresholds (suggested):
+- p95 latency < 300ms for <=512 tokens under agreed concurrency
+- p95 latency < 600ms for 1k tokens (with no more than 1.5x error rate vs baseline)
+- No soft-failures (timeouts/retries), and OOM incidents must be zero
+
+Operational asks from Syngrid:
+- Provide per-endpoint split if possible (we can synthesize traffic distribution otherwise)
+- Provide a short list of high-priority queries for quality smoke tests (5–10 queries)
+
+I'll start building the harness and a replay script. If you want, we can kick off a small warmup cluster for the first day so cold-start noise is minimized.
+
+—Ben
+Solutions Engineer, Redwood Inference
+
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>, Emily Zhao <emily.zhao@syngrid.ai>
+Date: 2027-08-05T09:22:00-07:00
+Subject: Re: POC traffic intake & evaluation plan — Syngrid: workload profile and kickoff asks
+
+Quick internal note and owners assignment: 
+- Ben: lead on harness + replay scripts + initial cluster sizing
+- Neha: customer success lead — weekly check-ins and success matrix owner
+- Tessa: exec sponsor and primary commercial contact
+
+Proposed milestone timeline: 
+- Aug 6: Intake sheet + sample log returned from Syngrid (Emily)
+- Aug 9–13: Redwood builds harness & pre-provisioned cluster; smoke test with internal replay
+- Aug 17: POC kickoff — run baseline replay day 1, burst tests day 2–3, quality evals day 4
+- Aug 24: Final readout and acceptance decision (redwood provides metrics + cost estimates)
+
+If Syngrid confirms Aug 17 kickoff, Ben and I will reserve capacity for Aug 16 warmup.
+
+Thanks,
+Karthik
+
+From: Neha Kapoor <neha.kapoor@redwood.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Emily Zhao <emily.zhao@syngrid.ai>
+Date: 2027-08-05T11:03:00-07:00
+Subject: Re: POC traffic intake & evaluation plan — Syngrid: workload profile and kickoff asks
+
+Emily — just looping in confirmation that our CS team will run the weekly checkpoints and own the success matrix. A few quick asks from CS side:
+- Please add a single point of contact for quality feedback (name/email) so we don’t duplicate tickets
+- Any GDPR/data residency constraints we should be aware of for logs/data in the S3 bucket?
+
+We’ll prepare a short evaluation rubric for quality/accuracy (NDCG + manual spot checks) and circulate before the kickoff.
+
+—Neha
+Customer Success, Redwood Inference
+
+From: Emily Zhao <emily.zhao@syngrid.ai>
+To: Tessa Morgan <tessa.morgan@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>, procurement@syngrid.ai
+Date: 2027-08-06T10:04:00-07:00
+Subject: Re: POC traffic intake & evaluation plan — Syngrid: workload profile and kickoff asks
+
+Thanks all — we attached the completed intake sheet and a small request log (example_request_log.csv). Also attached: signed NDA (Syngrid_NDA_signed.pdf) via DocuSign. Procurement (procurement@syngrid.ai) will handle the DS/contract path — they asked for an initial estimate of committed hours and any waived setup fees for the POC.
+
+Confirming the kickoff on Aug 17. Our quality lead is Priya Desai (pri.desai@syngrid.ai) — she’ll be the single point for relevance feedback. No GDPR constraints for this test data (US-only tenancy).
+
+Emily
+Product Lead, Syngrid
+
+On Aug 5, 2027, at 11:03 AM Neha Kapoor <neha.kapoor@redwood.ai> wrote:
+> Emily — just looping in confirmation that our CS team will run the weekly checkpoints...

@@ -1,0 +1,155 @@
+Streaming SLA & Benchmark MAP — HelixAI evaluation plan and run schedule
+
+From: Hannah Schmitt <hannah_schmitt@redwood.com>
+To: Emma Gray <emma@helixai.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Marcus Lin <marcus_lin@redwood.com>
+Date: 2027-08-01T09:12:00-07:00
+Subject: Proposed MAP: streaming TTFT/latency baseline + evaluation plan
+
+Hi Emma —
+
+Thanks for the time today. Per our discussion, I wanted to capture a lightweight mutual action plan so we can lock the acceptance criteria for the HelixAI pilot. High level asks from your side: a replay of representative chat traffic, target concurrency profile, and any tokenization quirks. From our side we will:
+
+- Run a Redwood-managed benchmarking sequence (staging -> dedicated run) using your replay.
+- Measure TTFT (time-to-first-token) and streaming latency (p50/p95/p99), plus throughput/concurrency stability.
+- Surface a short report and a go/no-go recommendation for the proposed SLA (p95 TTFT <= 120ms at 8 concurrent sessions).
+
+Can you confirm the replay delivery target (S3 link or zip) and whether your baseline should include 8 and 16 concurrent sessions? If you prefer, we can start with 8 and scale to 16 in the same run.
+
+Proposed timeline: replay by 2027-08-07, Redwood validation run by 2027-08-15, final MAP signoff and commercial close week of 2027-08-22.
+
+Attaching a short MAP template we can fill (I will share a draft this afternoon).
+
+Thanks —
+Hannah Schmitt
+Account Executive, Redwood Inference
+hannah_schmitt@redwood.com
++1 (415) 555-0123
+
+Attachment: map_draft_v1.pdf
+From: Emma Gray <emma@helixai.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: ops@helixai.com
+Date: 2027-08-02T11:05:00-07:00
+Subject: Re: Proposed MAP: streaming TTFT/latency baseline + evaluation plan
+
+Hi Hannah —
+
+Thanks, that timeline looks reasonable. We'll provide a replay (S3 presigned link) and a small sample that contains longer-turn dialogues plus short-turn interactions. Delivering by 2027-08-07 is fine.
+
+A couple of notes on our side:
+- We tokenize using SentencePiece (v0.1.94) with system-level post-processing that sometimes appends a sentinel token.
+- Please include both streaming-enabled and non-streaming (batch) runs — we want to see the TTFT benefit and end-to-end latency.
+- Target concurrency: start with 8 concurrent chat sessions, then a second sweep at 16.
+
+I'll upload the replay and send the S3 link later today. We'll also attach the replay metadata (session ids, average message length) in the CSV.
+
+— Emma
+Emma Gray
+VP Ops, HelixAI
+emma@helixai.com
+
+On Mon, Aug 1, 2027 at 09:12 AM Hannah Schmitt <hannah_schmitt@redwood.com> wrote:
+> Thanks for the time today...
+From: Ben Carter <ben_carter@redwood.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: 2027-08-03T14:20:00-07:00
+Subject: DRAFT: MAP + instrumentation checklist for Helix replay
+
+Team —
+
+Attached is a first-pass MAP and the instrumentation checklist for the replay run. Key items covered:
+- Measurement definitions (TTFT = time from request invoice to first token received; streaming latency windows).
+- Required metrics we will capture: p50/p95/p99 TTFT, p50/p95/p99 token latency, tokens/sec, error rates, GPU utilization, queue depth.
+- Replay sanity checks: tokenization parity, message boundary consistency, warm-up period.
+
+I've stubbed pass/fail thresholds in the MAP (p95 TTFT <= 120ms at 8 concurrent sessions; error rate < 1%). Marcus — please validate the kernel/batching config and whether to run with kv-cache enabled.
+
+Ben Carter
+Solutions Engineer, Redwood Inference
+ben_carter@redwood.com
+
+Attachment: helix_replay_202708.zip, map_draft_v1.pdf
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Emma Gray <emma@helixai.com>, Hannah Schmitt <hannah_schmitt@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: 2027-08-05T10:07:00-07:00
+Subject: Re: DRAFT: MAP + instrumentation checklist for Helix replay
+
+Emma / Hannah —
+
+Quick technical note on how Redwood will measure TTFT and streaming latency so we're aligned before the dedicated run:
+
+Measurement specifics (short):
+- TTFT (time-to-first-token): measured client-side from request timestamp (t0) to first token byte received (t1). We will also log server-side dispatch time and kernel entry for correlation.
+- Streaming latency: per-token inter-arrival times are recorded; we will compute p50/p95/p99 for the time from t0 to token_n for n=first, 10th, last.
+- Concurrency strategy: run steady-state sessions (8) for 10 minutes after warm-up, then bump to 16 for 10 minutes. Each session will play randomized dialogue sequences from your replay.
+- Batching and KV-cache: Two runs — (A) streaming mode with KV cache enabled and small continuous-batch (target batch size 4), (B) non-streaming batched (larger micro-batches). This will highlight TTFT vs aggregate throughput tradeoffs.
+
+Pass criteria we will use for the MAP:
+- p95 TTFT <= 120ms at 8 concurrent sessions (no errors).
+- p99 token latency <= 350ms under 8 concurrent sessions.
+- CPU/GPU metrics within expected bounds (<85% sustained GPU utilization for the profile).
+
+We will produce a short HTML report and a CSV with raw timestamps. If you have specific markers for session priority or a subset of “high-value” dialogues, send that as we can highlight the metrics for those sessions.
+
+Marcus Lin
+Lead Performance Engineer, Redwood Inference
+marcus_lin@redwood.com
+
+On Tue, Aug 3, 2027 at 02:20 PM Ben Carter <ben_carter@redwood.com> wrote:
+> Team —
+>
+> Attached is a first-pass MAP...
+From: Emma Gray <emma@helixai.com>
+To: Hannah Schmitt <hannah_schmitt@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: 2027-08-08T16:35:00-07:00
+Subject: Helix replay — initial local-run results
+
+Hannah / Marcus / Ben —
+
+We ran the replay locally and attached a CSV with per-request timestamps. Highlights:
+- Streaming p50 TTFT: 95ms; p95: 180ms; p99: 420ms
+- Non-streaming batch p95 end-to-end: 680ms (higher latency but higher token throughput)
+- Error rate across the sample: 0.6% (mostly timeouts in sessions with long context)
+
+We uploaded the replay and results for Redwood: s3://helixai-replays/2027-08-07/ (presigned link in a separate email).
+
+Can Redwood validate the streaming run in dedicated mode and share any kernel/batching optimizations you recommend? If the dedicated run meets p95 TTFT <= 120ms at 8 concurrent sessions, we can proceed with the SLA addendum. Otherwise we want to see the remediation plan and a timeline to hit the pass criteria.
+
+Attachment: replay-results-0808.csv
+
+— Emma
+From: Hannah Schmitt <hannah_schmitt@redwood.com>
+To: Emma Gray <emma@helixai.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Lauren Bishop <lauren_bishop@redwood.com>
+Date: 2027-08-09T09:00:00-07:00
+Subject: Re: Helix replay — next steps and MAP signoff items
+
+Emma —
+
+Thanks for the upload and the initial numbers — helpful. Quick summary and actions from Redwood: 
+
+1) Redwood will run a dedicated validation on 2027-08-15 (UTC window 17:00–20:00) using the supplied replay. We will run the two-mode sweep Marcus described (streaming w/ KV-cache, non-streaming batch) and capture TTL, p50/p95/p99 metrics plus system telemetry.
+2) Pass/fail thresholds (per MAP): p95 TTFT <= 120ms at 8 concurrent sessions AND p99 token latency <= 350ms. If we hit both, Redwood will propose SLA language and countersign the addendum.
+3) If we miss either threshold, Redwood will provide a remediation plan (kernel/batching tuning, quantization profile adjustments) with a target remediation run by 2027-08-22.
+4) Ben will own artifact delivery (CSV + HTML report). Marcus will own the run config and kernel profile. Lauren will coordinate procurement/legal steps for the SLA addendum.
+
+Action items (owners):
+- Emma: confirm the S3 presigned link and any high-value session IDs (by 2027-08-11).
+- Ben: prepare instrumented runbook and start test env setup (by 2027-08-12).
+- Marcus: finalize kernel/batch config and schedule the dedicated cluster (by 2027-08-13).
+- Hannah: follow up on commercial timeline and get DocuSign ready for SLA addendum if green.
+
+Links: HubSpot deal record and DocuSign power form in the MAP.
+
+Looking forward — we should have a run summary within 24 hours of the dedicated window.
+
+Best,
+Hannah Schmitt
+Account Executive, Redwood Inference
+hannah_schmitt@redwood.com
+
+--
+Redwood Inference | Developer-first LLM inference runtime
+

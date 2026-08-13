@@ -1,0 +1,134 @@
+Post-call: ThermoGen private deployment follow-ups (air-gapped ops & HW)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Tom Sutherland <tom.s@thermogen.com>
+Cc: Monica Patel <monica.patel@redwood.ai>, Diego Fernandez <diego.fernandez@redwood.ai>
+Date: Sun, 20 Jun 2027 15:04:00 -0700
+Subject: Post-call recap & next steps — ThermoGen private deployment (air-gapped)
+
+Tom — thanks for taking the call earlier. Quick recap and proposed next steps so we have alignment before the technical deep dive: 
+
+Summary of your deployment intent
+- Goal: run inference for proprietary genomic pipelines inside an air-gapped cluster (no outbound internet).
+- Target throughput: ~600 requests/min peak, typical sequence lengths ~1k tokens.
+- RPO/RTO: batch-style inference acceptable; 99th-pct latency target 450ms for interactive endpoints.
+
+Open qualification items (we discussed on call):
+1) Hardware ownership: ThermoGen procurement vs Redwood-supplied appliance.
+2) Upgrade model: offline maintenance windows and how we deliver patches (USB/OTA alternative).
+3) Network topology: where model artifacts and checkpoint images will be staged; need network diagram.
+4) Data handling: KMS/HSM integrations and audit log retention.
+
+Proposed immediate next steps
+- I will loop in our ops lead (Diego) and solutions engineer (Monica) — they’ll propose a minimal hardware profile and offline patch MOP.
+- Please share your network diagram and SOC artifact (if available) before the deep-dive: upload to the Drive link below or reply to this thread.
+- Schedule a 60-minute technical deep dive (we’re proposing Wed 6/23 or Thu 6/24 in the morning PT).
+
+Attachments in this thread: estimate_RDW-4521.xlsx (initial pricing ballpark).
+
+If that list looks right, please reply with preferred deep-dive slot and an initial decision on procurement (ThermoGen buys HW vs Redwood ships appliance).
+
+Thanks,
+Ben
+Ben Carter
+Account Executive, Redwood Inference
+[attachment: estimate_RDW-4521.xlsx (Excel, 34 KB)]
+
+From: Tom Sutherland <tom.s@thermogen.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Laura Ng <l.ng@thermogen.com>
+Date: Sun, 20 Jun 2027 16:18:00 -0700
+Subject: Re: Post-call recap & next steps — ThermoGen private deployment (air-gapped)
+
+Ben — thanks for the clear recap. A few clarifications from our side: 
+
+1) Procurement: we prefer to purchase hardware through our vendors (capital spend). Can Redwood provide a validated BOM and equivalently supported parts list so we can route through procurement?
+
+2) Upgrades: we need a fully offline upgrade path. No outbound connectivity permitted from the cluster except to a physically-connected jump host inside our DMZ during scheduled windows. Are USB-signed images or offline package bundles supported? What’s the rollback story?
+
+3) Network diagram: Laura is attaching an initial internal diagram (sanitized) — it's on our side but I can upload to the Drive link.
+
+4) Security evidence: we have a SOC2 readiness pack but not a full SOC2 report. Can Redwood accept scoped evidence in lieu of a full report for the initial procurement?
+
+Deep-dive: Thu 6/24 9:00 PT works for me.
+
+Thanks,
+Tom
+Tom Sutherland
+Director, Infrastructure — ThermoGen
+[attachment: thermogen_network_diagram_v2.pdf (PDF, 120 KB)]
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Tom Sutherland <tom.s@thermogen.com>
+Cc: Monica Patel <monica.patel@redwood.ai>, Diego Fernandez <diego.fernandez@redwood.ai>, Laura Ng <l.ng@thermogen.com>
+Date: Mon, 21 Jun 2027 08:12:00 -0700
+Subject: Re: Post-call recap & next steps — ThermoGen private deployment (air-gapped)
+
+Appreciate the quick reply, Tom — answers inline and next steps below.
+
+1) Validated BOM: Monica will attach a validated BOM and supported parts list (we maintain an "RDX-validated" components table that procurement can use). If you prefer to run procurement, we’ll mark required parts and firmware versions.
+
+2) Offline upgrades & rollback: Yes — we support signed offline bundles. Typical flow we recommend:
+- We generate a signed update bundle (image + manifest + signature).
+- ThermoGen transfers bundle via encrypted USB or to an internal jump host in the DMZ.
+- On acceptance, ops apply bundle; system performs a snapshot-based install and can roll back to previous snapshot within 15 minutes.
+We’ll include an offline MOP and sample USB verification checklist in the deep-dive.
+
+3) Network diagram — received, thanks. We’ll review before the call.
+
+4) SOC evidence — scoped artifacts are fine for the procurement phase. For final contract we’ll need standard compliance attestations; we can accept an internal SOC2 readiness pack to start.
+
+Action items before Thu 6/24 09:00 PT deep-dive:
+- Monica: validated BOM + minimal HW profile + attachment of redwood_private_hw_requirements_v1.pdf.
+- Diego: offline upgrade MOP draft + runbook link.
+- ThermoGen: confirm procurement direction and upload any site access constraints.
+
+I’ve tentatively scheduled the deep-dive for Thu 6/24 09:00 PT (calendar invite to follow).
+
+Best,
+Ben
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Tom Sutherland <tom.s@thermogen.com>
+Cc: Diego Fernandez <diego.fernandez@redwood.ai>, Laura Ng <l.ng@thermogen.com>
+Date: Mon, 21 Jun 2027 08:45:00 -0700
+Subject: Redwood — minimal hardware profile & air-gap checklist (draft)
+
+Tom / team — attaching our draft minimal hardware profile and an air-gap checklist. Highlights: 
+
+Minimal profile (validated):
+- 8x A100-style GPUs (40GB) or 12x T4 equivalence for mixed workloads.
+- 2x redundant NICs to the DMZ jump host; isolated management network for KVM/ILO.
+- 2x NVMe arrays (RAID1) for model cache + separate persistent storage for datasets.
+- HSM/KMS edge appliance supported via offline import of keys (bring-your-own-HSM supported).
+
+Air-gap & offline upgrade notes:
+- Release bundles are cryptographically signed; verification uses an offline key validation tool (we’ll provide).
+- Upgrade performs block-level snapshot before install; rollback available if health checks fail.
+- Recommended maintenance window: 2 hours per node for major upgrades; 30–45 minutes for minor/patch releases.
+
+Actionable ask: please confirm whether ThermoGen will manage hardware procurement (we’ll supply exact SKUs) or prefer Redwood-supplied appliances. If ThermoGen buys, share procurement vendor contact and preferred lead time (typical delivery 6–10 weeks for validated SKUs).
+
+Attachment: [attachment: redwood_private_hw_requirements_v1.pdf (PDF, 210 KB)]
+
+—Monica
+Monica Patel
+Solutions Engineer, Redwood Inference
+
+From: Tom Sutherland <tom.s@thermogen.com>
+To: Ben Carter <ben.carter@redwood.ai>, Monica Patel <monica.patel@redwood.ai>
+Cc: Diego Fernandez <diego.fernandez@redwood.ai>, Laura Ng <l.ng@thermogen.com>
+Date: Mon, 21 Jun 2027 10:21:00 -0700
+Subject: Re: Redwood — minimal hardware profile & air-gap checklist (draft)
+
+Monica / Ben — this is excellent, thanks. A couple of quick confirmations: 
+
+• Procurement: ThermoGen will purchase hardware. Procurement team prefers a single-line SKU list we can attach to the PO; please provide SKUs and recommended vendor (we use CDW and Ingram for procurement).
+• Maintenance windows: 2-hour windows are acceptable; we tend to do rolling upgrades during our weekly maintenance window Fri 02:00–06:00 PT.
+• Offline verification: we’ll test signed bundles on a staging node first. Please include the verification tool + sample invocation in the runbook.
+
+I’ve uploaded an initial SOC evidence pack to the Drive link (thermogen_soc2_readiness.pdf). I’ll accept the calendar invite for Thu 6/24 09:00 PT. Looking forward to the deep-dive.
+
+Tom
+
+[attachment: thermogen_soc2_readiness.pdf (PDF, 470 KB)]

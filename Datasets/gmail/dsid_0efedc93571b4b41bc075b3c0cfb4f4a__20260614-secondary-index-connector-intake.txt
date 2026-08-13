@@ -1,0 +1,105 @@
+Secondary index connector: compatibility intake & residency questions
+
+From: Sam Harris <sam@vectorworks.io>
+To: Vivek Kulkarni <vivek@redwood.inference>, Ben Carter <ben@redwood.inference>
+Cc: 
+Date: Sun, 14 Jun 2026 09:12:00 -07:00
+Subject: Secondary index connector: compatibility intake + data residency questions
+
+Hi Vivek / Ben,
+
+Thanks for the quick intro earlier — following up with a short intake so we can scope a compatibility pass and pilot. VectorWorks has built a lightweight adapter that can front multiple vector stores (pgvector, Pinecone, Weaviate) and optionally tier cold segments to S3. Were proposing a small pilot to validate:
+
+- Integration model: direct SDK vs sidecar shim
+- Data flow: canonical embeddings in pgvector -> low-latency cache in Pinecone (optional) -> S3 cold lane for TTL overflow
+- Auth and tenancy: API keys, IAM, or mTLS for private deployments
+- Observability hooks for KV cache hits/evictions
+
+Attached is a short proposal (connector-proposal-v1.pdf) with an architecture sketch and our test plan. Questions for you to unblock design and commercials:
+
+1) Is pinning a canonical store (pgvector) acceptable for your customers or do some require only managed vector stores?
+2) Any specific data residency / encryption-at-rest expectations we should bake into the pilot?
+3) Are there Redwood pre-cert steps (vendor questionnaire, SOC2 evidence) we should start collecting now?
+
+Happy to do a 30-min technical sync next week; proposing Tue/Wed (PDT).
+
+Best,
+Sam Harris
+Head of Integrations, VectorWorks
+attachments: connector-proposal-v1.pdf
+
+From: Vivek Kulkarni <vivek@redwood.inference>
+To: Sam Harris <sam@vectorworks.io>
+Cc: Ben Carter <ben@redwood.inference>, Laura Bennett <laura@redwood.inference>
+Date: Mon, 15 Jun 2026 10:08:45 -07:00
+Subject: Re: Secondary index connector: compatibility intake + data residency questions
+
+Sam — thanks for the doc and the clear outline. Short answers up front, then a few asks so Ben/Laura can scope the ops and GTM side.
+
+Quick answers:
+- Pinning pgvector as canonical is fine for customers that self-host; many enterprise customers will expect a managed option (Pinecone/Weaviate) as well — wed like the adapter to be store-agnostic by config.
+- Residency: many EU customers will require region-specific storage and KMS keys; add a config flag for "regioned buckets" and a per-tenant KMS alias.
+- Redwood pre-cert: yes, please complete our vendor questionnaire and provide SOC2 report (if available).
+
+Technical asks for the upcoming sync (wed like answers ahead of the call where possible):
+1) Auth modes supported: API key, AWS IAM role assumption for S3, and can you support short-lived API tokens for Pinecone to avoid long-lived keys?
+2) Eviction semantics: how does the adapter decide between TTL-based eviction vs LRU when moving to S3? Can we configure a hot window and warm-up policy?
+3) Encryption: does the adapter encrypt the S3 objects client-side or rely on provider-managed encryption keys?
+4) Multi-tenancy: do you have tenant isolation primitives for metadata and index shards?
+
+Ops / commercial notes: Ben, Laura — can you review the proposal and suggest an ideal pilot SLA and success criteria we can share with VectorWorks? For pilots we usually want documented failure modes, a rollback plan, and an observability checklist.
+
+Sam, Tue 2026-06-16 11:00 PDT works for me — if thats okay Ill put a calendar hold.
+
+Thanks,
+Vivek Kulkarni
+Head of Partnerships (Acting), Redwood Inference
+redwood.inference | vivek@redwood.inference
+
+From: Ben Carter <ben@redwood.inference>
+To: Vivek Kulkarni <vivek@redwood.inference>, Sam Harris <sam@vectorworks.io>
+Cc: Laura Bennett <laura@redwood.inference>
+Date: Tue, 16 Jun 2026 14:22:10 -07:00
+Subject: Re: Secondary index connector: compatibility intake + data residency questions
+
+Looping in ops/partner-runbook perspective. A few practical items we need on the table before a pilot:
+
+- Attachments: Im adding an ops intake checklist (ops-checklist.xlsx) to capture runbook items (upgrade path, monitoring endpoints, sample metrics). Please populate the sections for metrics emitted and expected alert thresholds.
+- Security evidence: Well need a completed vendor security questionnaire (Ill send our standard doc) and the latest SOC2 / penetration test summary. No SOC2 is OK for an initial engineering pilot, but commercial pilots require evidence.
+- Deployment model: prefer a customer-managed sidecar when customers are in regulated industries (finance/healthcare). For managed Redwood Dedicated customers we can permit a managed connector if vendor agrees to our SLA and data handling terms.
+- Rollback: how do you handle schema changes to pgvector rows (if you store metadata alongside vector payload)? We need an explicit migration and rollback path.
+
+Sam — could you drop a short compat-matrix (columns: store, auth modes, eviction options, encryption at rest, tenancy model) before the call? Well triage and decide scope. Meeting invite accepted for Wed 06/16 11:00 PDT (Ive set it).
+
+Ben Carter
+Principal Partner Engineer, Redwood Inference
+attachments: ops-checklist.xlsx
+
+From: Sam Harris <sam@vectorworks.io>
+To: Ben Carter <ben@redwood.inference>, Vivek Kulkarni <vivek@redwood.inference>
+Cc: Laura Bennett <laura@redwood.inference>
+Date: Thu, 18 Jun 2026 09:00:00 -07:00
+Subject: Re: Secondary index connector: compatibility intake + data residency questions
+
+Thanks all — appreciated the fast turnaround. Quick replies inline to Ben/Vivek and attached the compat matrix you asked for (compat-matrix.csv).
+
+> Auth modes supported
+We support API keys, short-lived tokens (via an auth server/STS exchange), and AWS IAM for S3. For managed Pinecone we can accept ephemeral keys issued by your platform.
+
+> Eviction semantics
+Configurable: TTL-first policy with optional LRU within the hot window. You can set a hot window (e.g., most recent N days) and a separate cold threshold. We will expose metrics: cache_hits, cache_misses, promoted_to_s3, evicted_to_s3.
+
+> Encryption
+By default we rely on provider-managed encryption for S3 objects but offer client-side envelope encryption (CSEK) as an opt-in.
+
+> Multi-tenancy
+Per-tenant prefixing for metadata + optional shard isolation. We do not co-mingle tenant indexes unless the customer explicitly wants a pooled model (we document tradeoffs).
+
+Next steps:
+- Uploaded compat-matrix.csv and a short readme to the Drive link.
+- Will start the vendor questionnaire and share SOC2 if available (were currently SOC2 in progress).
+- Confirmed Wed 06/16 11:00 PDT for the technical workshop (invite accepted).
+
+Sam Harris
+Head of Integrations, VectorWorks
+attachments: compat-matrix.csv

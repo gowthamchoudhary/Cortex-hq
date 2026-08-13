@@ -1,0 +1,125 @@
+Livechat latency surge — mitigation plan and customer-facing comms
+
+From: Arjun Patel <arjun@freshcart.com>
+To: lauren_bishop@redwood.co
+Cc: FreshCart SRE <sre@freshcart.com>
+Date: 2027-04-16T17:22:00-07:00
+Subject: Sudden latency spike on streaming/chat (US-west)
+
+Hi Lauren,
+
+We started seeing a large increase in streaming latency on our production chat flows around 16:50 PDT — token emission pauses of 2.5–6s intermittently for about 30 minutes. It affected our checkout chat widget and caused several sessions to time out. No config changes on our side.
+
+We captured a client-side trace and packet capture (attached). Can you confirm whether Redwood had any infra events in US-west during that window and share immediate mitigations? This is impacting 4% of our daily active chat users — urgent for us.
+
+Thanks,
+Arjun
+Engineering Lead, FreshCart
+
+From: lauren_bishop@redwood.co
+To: ben_carter@redwood.co, rishi_malhotra@redwood.co
+Cc: marissa_cole@redwood.co
+Date: 2027-04-16T17:33:00-07:00
+Subject: Fwd: Sudden latency spike on streaming/chat (US-west)
+
+Ben / Rishi — incoming from FreshCart. They reported token emission pauses ~16:50 PDT in us-west. Attached are their pcaps + token dump. Can you triage and advise immediate customer-facing mitigations?
+
+Quick asks from me:
+- Root cause hypothesis within 30m
+- Temporary client-side config changes we can recommend (chunk size, poll fallback, keepalive)
+- Whether we need to route them to a different model variant or region as a short-lived workaround
+
+I will prepare an external note once we have the mitigations.
+
+—Lauren
+Senior CSM, Redwood Inference
+
+From: ben_carter@redwood.co
+To: lauren_bishop@redwood.co, rishi_malhotra@redwood.co
+Cc: marissa_cole@redwood.co
+Date: 2027-04-16T17:46:00-07:00
+Subject: Re: Fwd: Sudden latency spike on streaming/chat (US-west)
+
+Quick triage notes:
+- Telemetry shows a short-lived KV cache eviction storm on an edge shard serving us-west between 16:48–17:03 PDT; a subset of requests fell back to cold-path decoding which increases per-token latency.
+- Not a model failure; more of a cache/edge hot-shard backpressure event (micro-queueing).
+- We throttled and rebalanced the shard at 16:58 and saw token emission normalize by 17:02.
+
+Immediate customer mitigations we can recommend (safe, client-side):
+1) Set streaming.fallback_mode = "polling" for 5 minutes: switch to short-polling (100–200ms) until we confirm stability.
+2) Reduce max_tokens_per_chunk to 48 for their UI to avoid large websocket frames.
+3) Enable client keepalives every 15s to reduce ghosted connections.
+4) If they can tolerate slightly lower quality, route to the low-latency quantized model variant (redwood-q-lat) while we stabilize the caches.
+
+I'll open an internal incident (INC-20270416-007) and request shard replay + longer-term cache hardening.
+
+—Ben
+Principal Reliability Engineer, Redwood Inference
+
+From: lauren_bishop@redwood.co
+To: Arjun Patel <arjun@freshcart.com>, FreshCart SRE <sre@freshcart.com>
+Cc: ben_carter@redwood.co, rishi_malhotra@redwood.co, marissa_cole@redwood.co
+Date: 2027-04-16T18:05:00-07:00
+Subject: Re: Sudden latency spike on streaming/chat (US-west)
+
+Hi Arjun — thanks for the capture; we’ve confirmed an edge cache rebalance in us-west that produced short-lived increases in per-token latency (16:48–17:02 PDT). We’re really sorry for the interruption.
+
+Immediate steps you can take (client-side, low-risk):
+- Switch to streaming.fallback_mode = "polling" for the next 10 minutes (poll interval: 150ms). This keeps UX responsive while we confirm stability.
+- Set max_tokens_per_chunk = 48 in your client to reduce large frame processing.
+- Turn on websocket keepalive every 15s to avoid connections dropping silently.
+- Optional: If you can accept slightly lower fidelity temporarily, switch route to model redwood-q-lat (low-latency quantized variant).
+
+We’ve rebalanced the affected shard and are watching. I’ll send a short post-incident summary within 48 hours and include any configuration changes we make on our side.
+
+Attachments I’ve included from your capture: token_dump_20270416.txt, packet_capture_freshcart_0416.pcap.
+
+Please let me know if you want us to flip any route or perform a guided toggle while you watch.
+
+—Lauren
+Senior Customer Success Manager, Redwood Inference
+
+From: Arjun Patel <arjun@freshcart.com>
+To: lauren_bishop@redwood.co
+Date: 2027-04-16T18:12:00-07:00
+Subject: Re: Sudden latency spike on streaming/chat (US-west)
+
+Laura (and team) — thanks. We applied the polling fallback + reduced chunk size and saw immediate improvement; sessions stabilized within ~60s. Please send the post-incident note when you have it. We’ll keep monitoring.
+
+Arjun
+
+From: lauren_bishop@redwood.co
+To: Arjun Patel <arjun@freshcart.com>, FreshCart SRE <sre@freshcart.com>
+Cc: ben_carter@redwood.co, rishi_malhotra@redwood.co, marissa_cole@redwood.co
+Date: 2027-04-18T10:05:00-07:00
+Subject: Post-incident summary — us-west streaming latency surge (Apr 16)
+
+Hi Arjun,
+
+TL;DR: On 2027-04-16 at ~16:48 PDT a subset of edge connectors in us-west experienced a KV cache eviction storm during planned micro-rebalancing, which temporarily forced some requests to decode from cold path and increased token emission latency for ~14 minutes. We rebalanced the shard and applied targeted cache warming; customer-impact window was ~16:48–17:02 PDT.
+
+What happened (short):
+- Root cause: Edge shard rebalancing combined with a transient traffic microburst produced coordinated KV cache evictions on 3 host-tiles. Evictions caused higher per-token compute and I/O for affected streams.
+- Impact: ~4% of FreshCart chat sessions observed token emission pauses (median extra latency 2.3s, 95th percentile 5.9s). No dropped or corrupted responses were observed.
+
+Immediate mitigations we recommended & results:
+- Client polling fallback (150ms) + reduce max_tokens_per_chunk to 48: restored session responsiveness within ~60–90s of application.
+- Re-route to redwood-q-lat: marginally improved tail latency for sessions that could accept lower-precision weights.
+- Server-side: replaced the three hot host-tiles, executed targeted cache-warm on affected shards, and added a conservative admission control to prevent simultaneous aggressive cache eviction during future rebalances.
+
+Follow-up actions (what we’re doing):
+1) Short-term (completed): admission-control tweak and targeted cache warm during rebalances.
+2) Medium-term (2–4 weeks): implement per-tenant cache isolation heuristics to limit cross-tenant eviction blast radius.
+3) Long-term (Q3 roadmap): enhance shard rebalancer to perform staggered evictions with probabilistic warming and add an automated client guidance page for graceful streaming fallbacks.
+
+Attachments: redwood_streaming-config-suggested.json with recommended client toggles; token dump and pcap from your team.
+
+If you’d like a quick 20–30m call with Ben or Rishi to walk through the telemetry and the suggested toggles, we can schedule that this week.
+
+Thanks for the quick collaboration here — we’ll keep you posted on medium-term fixes.
+
+Best,
+—Lauren
+Senior Customer Success Manager, Redwood Inference
+Lauren Bishop | lauren_bishop@redwood.co | +1 415-555-0147
+Redwood Inference — Production-first inference platform

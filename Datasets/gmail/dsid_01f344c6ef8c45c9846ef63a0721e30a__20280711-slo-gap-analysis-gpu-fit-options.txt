@@ -1,0 +1,121 @@
+SLO gap analysis & GPU fit options
+
+From: Olga Petrov <olga_petrov@redwood.com>
+To: Maria Lopez <maria.lopez@soteriahealth.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Tue, 11 Jul 2028 09:14:00 -0700
+Subject: SLO gap analysis & GPU fit options
+
+Hi Maria —
+
+Thanks again for the demo time today. Quick recap and a proposed path forward so we can size the Dedicated pilot correctly. I attached a short SLO gap matrix (slo_gap_matrix.xlsx) that maps the targets you mentioned to how we would validate them in a pilot.
+
+Key points from our call:
+- Primary workload: patient-facing summarization and triage. Typical request = 150–300 tokens; 95th percentile prompt length ~280 tokens.
+- Streaming: interactive transcripts for longer conversations (up to ~2k tokens).
+- Target SLOs: p50 < 80 ms, p95 ~< 180–220 ms for short responses; streaming tail p95 < 800 ms for per-chunk latency.
+- Expected steady concurrency range: 40–120 concurrent users during business hours; occasional spikes up to ~350 concurrent (burst window ~5–10 minutes).
+
+Early sizing thoughts (high level) — we can refine after you confirm:
+- Reserved throughput baseline: 200–300 concurrent short requests (this covers steady + modest headroom).
+- GPU shortlist: A100-80GB for cost-sensitive reserved pools; H100-80GB for streaming-heavy and lower-latency tail. Tradeoffs attached in the matrix.
+- Fallback policy: route to quantized A100 variants for non-critical/low-priority requests to save cost; keep H100 for latency-sensitive routing.
+
+Asks / next steps:
+1) Confirm which SLOs are must-have vs. tradeoff (I circled p95 latency and streaming tail as highest priority).
+2) Share a small sample request set and a traffic profile (CSV or JMeter script) so we can run representative bench tests.
+3) Ben/Karthik and I can run an internal A/B bench (A100 vs H100) with your sample and share a throughput/latency matrix. We estimate 3 business days for bench runs + 1 day analysis.
+
+Proposed pilot kickoff dates: Week of Jul 18 (bench on Jul 18–20, review on Jul 21). Does that work for you?
+
+Attachments: slo_gap_matrix.xlsx (SLO mapping + recommended pilot configs)
+
+Thanks — Olga
+Olga Petrov
+Sales, Redwood Inference
+olga_petrov@redwood.com
++1 415-555-0199
+
+
+From: Maria Lopez <maria.lopez@soteriahealth.com>
+To: Olga Petrov <olga_petrov@redwood.com>
+Date: Tue, 11 Jul 2028 11:06:00 -0700
+Subject: Re: SLO gap analysis & GPU fit options
+
+Hi Olga —
+
+Appreciate the fast follow-up and the matrix. Quick answers:
+- Must-have: p95 latency for short responses must be <= 200 ms. p50 can be whatever as long as p95 holds.
+- Streaming: we care more about per-chunk latency (p95 < 800 ms) than end-to-end summarization time.
+- Concurrency: steady is closer to 50 concurrent; peaks could go to ~320 for 5–8 minute windows during morning triage.
+- Burst protection: we need automatic burst handling, ideally with graceful degradation (e.g., degrade model or routing) rather than hard failures.
+
+We'll attach a small sample set and the traffic profile today (dropping into the Drive link you shared). One question: are we OK with your team running benches on quantized variants or do you need to run at FP16/HF32 first?
+
+Thanks — Maria
+Maria Lopez
+Platform Eng, Soteria Health
+maria.lopez@soteriahealth.com
+
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Olga Petrov <olga_petrov@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Maria Lopez <maria.lopez@soteriahealth.com>
+Date: Wed, 12 Jul 2028 10:22:00 -0700
+Subject: Re: SLO gap analysis & GPU fit options
+
+On Tue, Jul 11, 2028 at 09:14 AM Olga Petrov <olga_petrov@redwood.com> wrote:
+> Key points from our call:
+> - Primary workload: patient-facing summarization and triage. Typical request = 150–300 tokens; 95th percentile prompt length ~280 tokens.
+
+Thanks — looping in some bench-level detail so everyone has visibility. I attached a snapshot (gpu_throughput_snapshot.pdf) of recent runs we did across a comparable model family. Below are concrete mapping steps and a recommended pilot config.
+
+Quick mapping of Soteria targets to bench observations:
+- p95 <= 200 ms (short responses):
+  - H100 (fp16) can achieve p95 ~= 140–190 ms at 200–300 concurrent short requests (model/sequence dependent).
+  - A100 (fp16) tends to sit at p95 ~= 180–260 ms under the same concurrent load for streaming-disabled workloads.
+- Streaming tail p95 < 800 ms:
+  - H100 gives more headroom for per-chunk throughput at high concurrency (sustained chunking for 2k-token sessions). A100 can hit it but with less margin and higher queuing when bursts arrive.
+
+Recommended pilot config (minimal viable):
+- Reserved pool: 2x H100 nodes + 4x A100 nodes (start) with autoscale burst pool + pre-warmed KV cache for common prefixes.
+- Baseline reserved throughput = 250 concurrent short requests (this maps to ~1200 tokens/sec sustained given your average prompt sizes).
+- Burst policy: allow up to 350 concurrent by pulling from burst pool (pay-as-you-go nodes) with automatic fallback to quantized A100 instances after 60s of sustained overload.
+
+Bench plan (3 business days):
+1) Day 1: FP16 runs on A100 and H100 with sample prompts (steady state).
+2) Day 2: Streaming/long-session runs on H100; measure per-chunk latencies and KV cache effectiveness.
+3) Day 3: Quantized runs (int8 / 4-bit where applicable) to measure cost vs. latency trade-offs and validate graceful degradation behavior.
+
+Deliverables: throughput/latency matrix (per GPU variant), tail latency graphs, recommended reserve sizing and expected monthly unit cost estimate for the baseline.
+
+Open question for Soteria: do you have a cold-start/scale-up SLO for new sessions? That affects warm cache strategy.
+
+Ben Carter
+Solutions Engineering, Redwood Inference
+ben_carter@redwood.com
+
+
+From: Olga Petrov <olga_petrov@redwood.com>
+To: Maria Lopez <maria.lopez@soteriahealth.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: Fri, 13 Jul 2028 15:42:00 -0700
+Subject: Re: SLO gap analysis & GPU fit options
+
+Thanks all — short sync to lock next steps and responsibilities.
+
+Summary / next steps agreed:
+- Soteria: drop sample prompt set + traffic profile into the Drive folder by EOD Jul 13 (Maria).
+- Redwood (Ben/Karthik/Olga): run bench (Jul 18–20) per Ben's three-day plan; share full results and a cost estimate by Jul 21.
+- Pilot config to start: reserved baseline = 250 concurrent short requests; pool composition = 2x H100 + 4x A100 + burst pool. We will iterate after bench results.
+- Acceptance criteria for the pilot: p95 short-response <= 200 ms and streaming per-chunk p95 <= 800 ms for the target reserved throughput.
+
+Logistics:
+- Bench access: we will provision a temporary test API key and a sandbox workspace. Maria — please confirm a test account and any IP allowlist windows we should know about.
+- Points of contact: Maria (Soteria platform) and Olga + Ben (Redwood). Karthik will own the bench runs and analysis.
+
+I'll set a calendar invite for the Jul 21 review and include the Drive and HubSpot links. If anything changes on timing, flag it here and we will adjust.
+
+Cheers — Olga
+Olga Petrov
+Sales, Redwood Inference

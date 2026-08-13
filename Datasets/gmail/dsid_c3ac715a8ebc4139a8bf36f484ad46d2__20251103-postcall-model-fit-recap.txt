@@ -1,0 +1,121 @@
+Post-call: long-context fit & next steps (summarization/truncation)
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Emma Parker <emma@careloop.ai>
+Cc: lauren_bishop@redwood.ai, stephanie_nguyen@redwood.ai
+Date: Mon, 03 Nov 2025 16:12:00 -0800
+Subject: Post-call: long-context fit & next steps (summarization/truncation)
+
+Hi Emma —
+
+Thanks again for taking time today. Quick recap from our discovery call and the next steps I promised:
+
+1) Requirements summary
+- Primary workload: clinician notes + intake forms (average session ~12k tokens, peak ~42k tokens).
+- Key outputs: high-fidelity extractive + abstractive summaries, timeline stitching, and prioritized follow-ups.
+- Hard constraint: PII must never be stored outside customer VPC in Private deployment (you flagged regulatory review next week).
+
+2) Main risks we identified
+- Truncation of older context windows leading to missing events in summaries.
+- Quality regression on multi-turn summarization when KV cache gets evicted.
+- Latency SLO: sub-600ms tail for short summaries; batching expected for batch nightly jobs.
+
+3) Proposed short-term plan (what I promised to send today)
+- A) Recommended model candidates for evaluation (shortlist + why)
+- B) Baseline benchmark artifacts (prompt set, eval harness link, sample outputs)
+- C) Suggested canary: 2-week long-window eval on a subset (50 de-duplicated patient threads)
+
+Attachments included: careloop-promptset-samples.md (sample prompt sets), long-context-benchmarks.pdf (overview + methodology), careloop-eval-results.csv (placeholders we discussed).
+
+Immediate asks from CareLoop: please share a single de-identified exemplar thread and confirm whether nightly batch jobs can be replayed to our staging environment (S3 path / bucket ok).
+
+I'll loop in Lauren and Steph for pricing + Dedicated/private deployment details in a follow-up.
+
+Next steps I will take by EOD tomorrow: upload a first-pass evaluation on two model variants and share a short summary of truncation behavior we observe.
+
+Thanks — talk soon.
+
+—
+Rishi Malhotra
+Senior Sales Engineer, Redwood Inference
+rishi_malhotra@redwood.ai
++1 (415) 555-0193
+
+
+From: Emma Parker <emma@careloop.ai>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: eng-team@careloop.ai
+Date: Mon, 03 Nov 2025 17:05:00 -0800
+Subject: Re: Post-call: long-context fit & next steps (summarization/truncation)
+
+Hi Rishi —
+
+Appreciate the recap. Quick answers:
+- We'll send one de-identified long thread tonight (should be ~27k tokens).
+- Nightly batch replay: yes, we can share an S3 staging bucket read-only.
+- Compliance note: our security team prefers Private deployment for any PII pipelines; happy to start the SOC2 questionnaire once we get a fit readout.
+
+One ask on the model shortlist: can you include a variant that preserves full verbatim sections when asked (we need exact clinician quotes preserved in some downstream audits)?
+
+Looking forward to the initial benchmarks.
+
+Thanks,
+Emma
+Director of Product
+CareLoop Health
+emma@careloop.ai
+
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Emma Parker <emma@careloop.ai>
+Cc: lauren_bishop@redwood.ai, stephanie_nguyen@redwood.ai
+Date: Tue, 04 Nov 2025 09:10:00 -0800
+Subject: Re: Post-call: long-context fit & next steps (summarization/truncation)
+
+Emma —
+
+Thanks, that S3 path works great. Per your request, below is the first-pass evaluation plan and the shortlist of model candidates we think are most relevant for CareLoop's workload. I've attached the sample prompt set and the initial benchmark PDF.
+
+Shortlist rationale (prioritized):
+- redwood-longwin-v1 (32k -> 128k KV-aware profile): Redwood-verified; best balance of long-range KV caching and deterministic summarization. Preserves designated verbatim spans via tagging. Good baseline for Private deployment.
+- llama-3-70b-32k: strong few-shot summarization fidelity in our tests; lower latency vs naive long-window variants when sequence compaction is enabled. Needs explicit prefix caching for patient timelines.
+- mistral-long-65k: aggressive long-window optimization for very long contexts; best at stitching threaded events but sometimes over-compresses low-salience details (we saw evidence of dropped verbatim quotes).
+
+Planned checks in the 2-week canary (what we'll measure):
+- Truncation surface area: fraction of summaries missing events that are >2 turns older than the final prompt.
+- Verbatim fidelity: ability to preserve marked quote spans (we'll use markers in the prompt set).
+- Summarization drift: ROUGE / BERTScore vs human labels on 50 held-out threads.
+- Latency and cost: tokens/sec and per-token cost under continuous batching (nightly) and 95/99 latency tails for interactive endpoints.
+
+Quick notes on prompt sets: the attached careloop-promptset-samples.md includes two modes — Audit (must retain verbatim flagged segments) and Human-readable (compress non-critical items). We'll instrument both in the harness.
+
+Where I'll publish results: the evaluation dashboard link (internal): https://app.redwood.ai/evals/CL-3192-long-window — I'll put initial CSVs there tonight. Public-friendly summary will land in the Drive folder I shared.
+
+Next internal step (for our team): Lauren, can you prepare a rough Dedicated vs Private cost delta for the two-week canary + projected monthly run rate (50k tokens/day baseline)? Stephanie, can you start a SOC2 intake ticket and flag required artifacts so we can estimate lead time if they want Private.
+
+Emma — thanks again. If you want the verbatim-preserve variant sooner I can spin up a canary of redwood-longwin-v1 with the 'preserve-tags' policy and give you a link to trial.
+
+—
+Rishi
+
+Attachments referenced: careloop-promptset-samples.md, long-context-benchmarks.pdf, careloop-eval-results.csv
+
+
+From: Lauren Bishop <lauren_bishop@redwood.ai>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>, stephanie_nguyen@redwood.ai
+Date: Tue, 04 Nov 2025 11:30:00 -0800
+Subject: Re: Post-call: long-context fit & next steps (summarization/truncation)
+
+Looping in here — I'll draft a preliminary pricing delta by EOD (Private vs Dedicated canary). For the canary sizing, we should include:
+- 2-week trial running both 'preserve-tags' and normal summarization (50 de-identified threads each)
+- Storage/ingress egress estimates for S3 replay
+- SOC2 intake lead time estimate (Stephanie to confirm)
+
+Rishi — please add an access expiration date for the S3 staging bucket in the HubSpot record so our infra team can enforce short-lived creds.
+
+Thanks — will follow up with numbers.
+
+—Lauren
+Head of Solutions, Redwood Inference
+lauren_bishop@redwood.ai
+

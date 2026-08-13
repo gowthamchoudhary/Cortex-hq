@@ -1,0 +1,114 @@
+Implementation gateways & service identity checklist
+
+From: Logan Wright <logan.wright@redwood.ai>
+To: Elena Morales <elena.morales@novacorp.com>
+Cc: Monica Patel <monica.patel@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-08-23T14:12:00Z
+Subject: Implementation gateways & service identity checklist
+
+Hi Elena —
+
+Thanks for the quick sync yesterday. Per our conversation, I wanted to circulate a concise implementation checklist so we can align owners and straight-line the first two weeks of work. This thread will be our single-source thread for access-control items (SSO/SAML, SCIM provisioning, IP allowlists, service accounts, and org policy constraints).
+
+High-level proposed sprint (2 weeks):
+- Week 1: SSO config + cert exchange, SCIM schema mapping & test push, verify admin directory.
+- Week 2: IP allowlist cutover for staging -> prod, create dedicated service accounts with least privilege patterns, validate org policy constraints (retention / audit).
+
+Questions / asks for NovaCorp before we lock dates:
+1) Confirm primary SAML IdP admin contact (name/email).
+2) Do you prefer SCIM push provisioning or periodic sync-only? Any existing attributes we must map beyond name/email/employeeNumber?
+3) Provide IP ranges or public egress CIDRs for both staging and production (we can accept CIDR blocks or cloud NAT IP lists).
+4) Any org-level policies (e.g., required MFA for admin roles, managed device requirements) that will block service account provisioning?
+
+Attached is a lightweight checklist and the template we use for service-account naming and least-privilege patterns. Monica and Marissa are looped in for implementation sequencing and SAML/SCIM specifics.
+
+Proposed next step: 30-minute RACI and cutover-guardrails call on Wednesday (Aug 25) 10:00–10:30 PT. Can you confirm?
+
+Thanks —
+Logan
+Customer Success Manager
+Redwood Inference
+
+Attachments referenced: implementation-stub-checklist.pdf
+
+From: Elena Morales <elena.morales@novacorp.com>
+To: Logan Wright <logan.wright@redwood.ai>
+Cc: IT Ops Team <it-ops@novacorp.com>, Tom Li <tom.li@novacorp.com>
+Date: 2026-08-24T01:46:00Z
+Subject: Re: Implementation gateways & service identity checklist
+
+Hi Logan —
+
+Thanks for the checklist — this is helpful. A few clarifying items from our side before the call: 
+
+- SAML: primary IdP admin is Tom Li (tom.li@novacorp.com). We'll need the ACS URL and SAML certificate from you earlier this week so Tom can upload and validate before the meeting.
+
+- SCIM: we prefer SCIM push provisioning for provisioning/deprovisioning. We have a legacy attribute, 'employeeRole', and a custom group membership claim we would like to carry through (we're open to mapping to 'entitlements' on your side). Can your SCIM connector handle nested group claims?
+
+- IP allowlist: we can provide a CIDR block for prod (3 ranges) and a separate smaller block for staging. However, we use a proxy in front of some services — do you accept proxy IP ranges or do you require origin NAT IPs?
+
+- Org policies: NovaCorp requires MFA for admin roles (policy applied via IdP) and device-checked access for service-level admin web consoles. For service accounts, we prefer short-lived keys rotated by our secrets manager; is Redwood compatible with rotating service account keys every 7 days?
+
+We'll confirm availability for Aug 25 10:00 PT; Tom will join for the SAML exchange.
+
+—Elena
+Director of IT Operations
+NovaCorp
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Logan Wright <logan.wright@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-08-24T10:05:00Z
+Subject: Internal: mapping & service-account pattern notes (do not send)
+
+Internal notes / recommendations before we reply to Elena: 
+
+1) SAML: We'll provide the ACS URL + metadata bundle (cert + entityID). Recommend verifying ACS against their IdP in a staging tenant first. Keep a rollback plan if assertion signing algorithms mismatch (we've seen RSA-SHA256 vs RSA-SHA1 in a small subset).
+
+2) SCIM: Redwood SCIM connector supports nested group claims if mapped into 'entitlements' array. Proposed canonical mapping (we'll attach CSV):
+   - userName -> userName
+   - externalId -> employeeID
+   - active -> active
+   - emails[type=work].value -> email
+   - employeeRole -> entitlements.role
+   - groups -> entitlements.groups (flattened)
+We should request a sample export from their IdP so Marissa can validate attribute names.
+
+3) Service accounts: propose one dedicated service account per environment (staging/prod) with scoped IAM roles: read-only model access + upload-only telemetry sink. Keys: we support short-lived keys via our API tokens; recommend they use their secrets manager to rotate every 7 days and call our token-rotation webhook. Document: service-account-guidelines.md attached.
+
+4) IP allowlist: we can accept proxy ranges but prefer origin NAT IPs for L4 allowlisting. If they must use proxy CIDRs, we'll validate we can accept the proxy header for originating IP in our gateway and add an allowlist exception for a maintenance window during cutover.
+
+Action items for discussion on call: sample SCIM export from NovaCorp, Tom to validate our certificate in staging, and agreement on token rotation cadence.
+
+Attachments for Elena: scim-attribute-mapping.csv (will send in reply), service-account-guidelines.md
+
+—Monica
+Senior Implementation Lead
+Redwood Inference
+
+From: Logan Wright <logan.wright@redwood.ai>
+To: Elena Morales <elena.morales@novacorp.com>
+Cc: Monica Patel <monica.patel@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Tom Li <tom.li@novacorp.com>
+Date: 2026-08-25T09:03:00Z
+Subject: Re: Implementation gateways & service identity checklist — next steps and owners
+
+Hi Elena / Tom —
+
+Thanks for the quick replies and for confirming Tom as IdP admin. Summary of agreed items and owners ahead of today's call (10:00 PT):
+
+- SAML exchange: Redwood to provide ACS URL + metadata bundle (Logan / Marissa) — action: Marissa will upload cert and endpoint to the staging tenant by today EOD.
+- SCIM provisioning: NovaCorp prefers SCIM push. NovaCorp to provide a sample SCIM export (Tom) by EOD today. We'll map employeeRole -> entitlements.role and groups -> entitlements.groups. (Owner: Marissa)
+- IP allowlist: NovaCorp to provide prod & staging CIDRs. If using proxy ranges, Tom to confirm origin NATs or allow maintenance-window proxy exception. (Owner: Tom / IT Ops)
+- Service accounts & key rotation: Redwood supports short-lived tokens and a rotation webhook. NovaCorp to confirm secrets manager approach; recommend 7-day rotation cadence. (Owner: Monica)
+
+Attachments: implementation-stub-checklist.pdf, scim-attribute-mapping.csv, service-account-guidelines.md
+
+Proposed cutover window (for minimal disruption):
+- Staging validation: Aug 26–27
+- Production cutover: Aug 31 (overnight window, 02:00–04:00 PT)
+
+If that timeline looks good, we'll send calendar invites and a short runbook for the prod window. See link to our checklist: https://drive.redwood.ai/Novacorp/onboarding/checklist and JIRA ticket SEC-4321 for tracking.
+
+See you on the call —
+Logan
+Customer Success Manager
+Redwood Inference

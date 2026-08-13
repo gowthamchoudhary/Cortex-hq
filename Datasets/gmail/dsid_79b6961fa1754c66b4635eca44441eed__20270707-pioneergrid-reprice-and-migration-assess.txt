@@ -1,0 +1,145 @@
+PioneerGrid: price-match request and migration viability assessment
+
+From: Priya Shah <priya.shah@pioneergrid.com>
+To: Lukas Meyer <lukas_meyer@redwood.com>
+Cc: Samir Patel <samir.p@pioneergrid.com>
+Date: Sun, 4 Jul 2027 09:15:00 -0700
+Subject: PioneerGrid - vendor swap economics and questions
+
+Hi Lukas,
+
+Thanks again for the demo last week. PioneerGrid is narrowing to two vendors for our inference layer: Redwood and TurbineAI. Turbine has sent a formal offer that includes a 22% platform discount for a 24-month commit plus a one-time migration credit of $120k.
+
+Attached is our RFP summary and the price sheet they shared (pioneer_rfp.pdf, price-comparison-sheet.csv). Before we proceed, procurement asked us to give Redwood an opportunity to match or propose an alternative packaging that reduces total cost while preserving the SLAs and private VPC requirement.
+
+Key asks from our procurement team:
+- Target blended cost reduction: ~18% vs Redwood's current list for comparable throughput.
+- Commitment window: preference for 18-24 months.
+- Migration assistance: explicit credit or dedicated SE time to hit go-live in 8 weeks.
+- Warranty on performance: we need a 99.9% platform SLA and regional (us-east/us-west) redundancy.
+
+Can you send a preliminary pricing sketch and outline what Redwood would commit for migration support (credits vs. SOW) by EOD Tuesday? Also CC your solutions engineer for a technical sanity check on the migration runbook.
+
+Best,
+Priya
+Procurement Lead, PioneerGrid
+
+---
+
+On Mon, 5 Jul 2027 08:42:00 -0700, Lukas Meyer <lukas_meyer@redwood.com> wrote:
+From: Lukas Meyer <lukas_meyer@redwood.com>
+To: Priya Shah <priya.shah@pioneergrid.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Rachel Kim <rachel_kim@redwood.com>
+Date: Mon, 5 Jul 2027 08:42:00 -0700
+Subject: Re: PioneerGrid - vendor swap economics and questions
+
+Hi Priya — thanks for the RFP and the context. Appreciate the transparency on Turbine's terms. I copied Marissa (SE) and Rachel (RevOps) so we can give you a single go-to-market response.
+
+Short answer: we can approach an equivalent commercial package, but I want to propose alternatives that are often more valuable in practice:
+1) A staged committed plan: 18-month core commit + optional 6-month bridge at discounted overage pricing.
+2) A migration credit that mixes upfront credit ($80k) + 4 weeks of dedicated SE days (onshore) and 2 weeks remote. If PioneerGrid prefers an SOW for deeper services, we can convert those days into discounted SOW hours.
+3) Performance SLA: we can commit to 99.9% platform availability for dedicated capacity with a regional-redundant failover play; we will include an uptime SLA and a runbook for rollback.
+
+Marissa — can you review the migration assumptions in their runbook and flag any red flags? Rachel — can you sketch the headline pricing delta that would hit ~18% blended reduction vs our list given the throughput numbers in their csv?
+
+I will also prepare a short commercial summary and an annotated price-comparison sheet.
+
+Thanks,
+Lukas
+Account Executive, Redwood Inference
+
+---
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Lukas Meyer <lukas_meyer@redwood.com>
+Cc: Priya Shah <priya.shah@pioneergrid.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Mon, 5 Jul 2027 10:05:00 -0700
+Subject: Re: PioneerGrid - vendor swap economics and questions
+
+Hi team / Priya,
+
+Quick technical read after scanning pioneer_rfp.pdf and the runbook:
+- Tech fit: Redwood supports PioneerGrid's model types and sequence lengths without re-architecting inference code. Good.
+- Data and VPC: private control plane + customer VPC is supported; we'll need a short network kick-off to validate connectivity patterns (NATs, egress rules).
+- Migration timeline: 8 weeks is tight but doable if PioneerGrid: (a) agrees to a parallel pilot with a subset of traffic (20%) in week 2, (b) provides a small cross-functional team for ramp support, and (c) approves preconfigured instance types.
+
+Risks and mitigations:
+- KV cache warm-up: first 48 hours will show higher token costs — propose a short prefix-cache strategy to blunt the cost spike.
+- Model quantization: if PioneerGrid accepts int8 quantization on non-critical pipelines we can reduce runtime by ~25% and improve cost parity.
+
+I'll attach a migration-runbook-v1.xlsx with the timeline and required checkpoints.
+
+Jonas — can you confirm whether the regional redundancy SLA requires multi-AZ within a single cloud region or active-active across regions? That affects cost.
+
+—Marissa
+Sr Solutions Engineer, Redwood Inference
+
+Attachment: migration-runbook-v1.xlsx (timeline, SE day allocation, checkpoints)
+
+---
+
+From: Priya Shah <priya.shah@pioneergrid.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Lukas Meyer <lukas_meyer@redwood.com>
+Cc: Samir Patel <samir.p@pioneergrid.com>
+Date: Mon, 5 Jul 2027 12:28:00 -0700
+Subject: Re: PioneerGrid - vendor swap economics and questions
+
+Thanks Marissa — that matches our internal read. A couple of clarifications from procurement:
+- The 8-week go-live assumes all 3rd-party connectors (authentication, analytics) are already integrated; they are.
+- For the migration credit: procurement will accept a hybrid approach (credit + guaranteed SE days). The $80k credit you proposed is within range, but we need the headline commercial numbers to be explicit (total committed spend, discounted price per token/embedding, and exact overage rates).
+
+We'll also need a short runbook entry for rollback criteria. Can your team draft one?
+
+Priya
+
+---
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Lukas Meyer <lukas_meyer@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Priya Shah <priya.shah@pioneergrid.com>
+Date: Tue, 6 Jul 2027 09:14:00 -0700
+Subject: Re: PioneerGrid - vendor swap economics and questions
+
+Quick note on SLA topology: to meet PioneerGrid's regional redundancy ask with a 99.9% SLA and reasonable cost, we recommend an active-primary/standby in a second region with automated failover (30s–90s target). Active-active would be materially more expensive and unlikely necessary for their workload profile. I'll add this as an option in the final commercial pack with delta pricing.
+
+Rollback criteria (high level) for the runbook:
+- Failure conditions: token latency > 2x baseline for 5 consecutive minutes for 2 critical routes, or sustained error rate > 2% for 10 minutes.
+- Auto-fallback: route to a validated Turbine-compatible model variant (if PioneerGrid signs off) or route back to their current vendor for a short window while we triage.
+- Rollback execution: SE lead initiates, MigrateOps runs traffic cut, engineer on-call monitors for 60 minutes before confirming rollback complete.
+
+—Jonas
+Director, Product & Reliability, Redwood Inference
+
+---
+
+From: Lukas Meyer <lukas_meyer@redwood.com>
+To: Priya Shah <priya.shah@pioneergrid.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Rachel Kim <rachel_kim@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Tue, 6 Jul 2027 16:22:00 -0700
+Subject: Re: PioneerGrid - vendor swap economics and questions
+
+Priya — appreciate the fast turnaround and clear asks. Attached is our headline commercial sketch (price-comparison-sheet.csv annotated) and a one-page commercial summary in the Drive link. High-level offer: 
+
+1) Commercial package (headline)
+- Term: 18-month committed plan equivalent to Turbine’s footprint, with optional 6-month extension at pre-agreed uplift.
+- Effective blended discount: 19% vs our published list after accounting for the migration credit + SE time.
+- Migration credit: $80k applied up-front to invoice; 28 SE days (4 weeks onshore + 2 weeks remote) dedicated to PioneerGrid; option to convert up to 8 SE days to SOW at 50% discount.
+- Overage: pre-negotiated overage rate at 60% of list for the term, ramp safety caps in months 1–3.
+
+2) Technical commitments
+- Private control plane + VPC: supported, network kick-off within 3 business days post-SOW.
+- SLA: 99.9% platform availability for Dedicated capacity with active-primary/standby regional failover (Jonas's approach).
+- Rollback and runbook: included; we'll provide the draft and a concise rollback play to be approved during the network kick-off.
+
+3) Next steps
+- If PioneerGrid confirms interest, Rachel will draft a term sheet for legal (DL: two business days).
+- Kick-off: 3-week prep window to lock schedules, then pilot and traffic ramp across weeks 2–8.
+
+Priya — does this headline hit the procurement targets? If yes, I’ll get Rachel to issue a draft term sheet and Marissa to schedule the network kick-off and the SE calendar. Happy to hop on a 30-minute call tomorrow to finalize.
+
+Thanks all,
+Lukas
+Account Executive, Redwood Inference
+
+Attachments: price-comparison-sheet.csv (annotated), pioneer_rfp.pdf
+Drive: https://drive.google.com/open?id=1a2b3c-migration-runbook

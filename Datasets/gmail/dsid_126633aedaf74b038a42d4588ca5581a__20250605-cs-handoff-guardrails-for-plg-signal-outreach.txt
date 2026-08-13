@@ -1,0 +1,224 @@
+Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+From: Jasmine Liu <jasmine_liu@redwoodinference.com>
+To: Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>
+Cc: Jordan Blake <jordan_blake@redwoodinference.com>, Isabelle Laurent <isabelle_laurent@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>, Tyler Benson <tyler_benson@redwoodinference.com>, Rachel Kim <rachel_kim@redwoodinference.com>
+Date: Thu, Jun 5, 2025 at 9:12 AM PT
+Subject: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+Stephanie (+ team) —
+
+We had a couple of near-misses this week where an AE task fired from a PLG signal on an account that also has an active CSM motion (Dedicated customer w/ a self-serve workspace spun up by a new team). I want to lock down guardrails for the NA pilot so we don’t create a “two Redwoods” experience.
+
+Proposed rules (v1) for signal-triggered outreach:
+
+1) If Company has an active CSM owner (paid Dedicated/Private OR Enterprise hosted plan), CSM is primary. Sales does not send first-touch until CSM acknowledges or opts out.
+   - In HubSpot: if “CSM Owner” is populated and “Customer Status = Active”, auto-create a CS task + internal note to CSM instead of AE/SDR task.
+
+2) If Company is self-serve paid (card) with no CSM, AE/SDR can run playbook, but should check for open Support escalations first.
+   - If there’s an open Sev2+ / ongoing reliability incident: suppress outbound and route to CS/Support.
+
+3) For expansions (new team/workspace invites spike, new API keys, new region): we should loop in the existing CSM within 24 hours.
+   - Goal is coordinated outreach (e.g., one email thread, not parallel pings).
+
+4) “Compliance intent” signals (security FAQ, SOC2 doc views, VPC/private docs): treat as high-sensitivity.
+   - CSM + SE should be tagged on the HubSpot note by default if there’s an existing customer relationship.
+
+5) Customer preference: if customer has asked “no sales outreach” or we’ve marked them as “do not contact” for GTM, signals should not create tasks.
+
+If you’re aligned, Isabelle can help translate into concrete HubSpot workflow rules. I can draft a short one-pager for CSMs: how to triage signal notes + what to do if Sales is already engaged.
+
+Can we confirm:
+- what property we’ll treat as canonical for “active customer” (Customer Status? Billing plan?)
+- what the expected SLA is for a CSM “acknowledge/opt out” so Sales isn’t blocked indefinitely
+
+Thanks,
+Jasmine
+
+—
+Jasmine Liu
+Customer Success Lead
+Redwood Inference
+
+
+From: Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>
+To: Jasmine Liu <jasmine_liu@redwoodinference.com>
+Cc: Jordan Blake <jordan_blake@redwoodinference.com>, Isabelle Laurent <isabelle_laurent@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>, Tyler Benson <tyler_benson@redwoodinference.com>, Rachel Kim <rachel_kim@redwoodinference.com>
+Date: Thu, Jun 5, 2025 at 9:36 AM PT
+Subject: Re: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+Aligned.
+
+Two additions from Sales side:
+- We should preserve existing owner always. If there’s an AE owner already (even if not “in pipeline”), the task should go to the AE, but with “CSM review required” flag when Customer Status = Active.
+- For card-paid self-serve, we’ve seen the fastest conversion when we do Day 0 touch (within 4 business hours) on high-confidence signals (429 spam + spend velocity). So for non-CSM accounts, please don’t add extra gates beyond “open Sev2+ support” and “do not contact.”
+
+On SLA: if Customer Status = Active, can we do a 1 business day SLA for CSM acknowledgement? If no ack, AE can send a light “looping in your CSM” note rather than a cold pitch.
+
+Isabelle — can you propose the workflow + required properties?
+
+Steph
+
+—
+Stephanie Nguyen
+VP Sales, North America
+Redwood Inference
+
+
+From: Isabelle Laurent <isabelle_laurent@redwoodinference.com>
+To: Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>, Jasmine Liu <jasmine_liu@redwoodinference.com>
+Cc: Jordan Blake <jordan_blake@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>, Tyler Benson <tyler_benson@redwoodinference.com>, Rachel Kim <rachel_kim@redwoodinference.com>
+Date: Thu, Jun 5, 2025 at 10:14 AM PT
+Subject: Re: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+Yes — here’s a concrete proposal for HubSpot logic (no promises until I confirm with David, but this is workable):
+
+Canonical fields:
+- Customer Status (enum): Prospect / Self-serve paid / Active customer / Churned
+- CSM Owner (user)
+- Primary Sales Owner (user)
+- Open Support Escalation (boolean) — we can sync a daily flag from Support/Jira as MVP
+- Do Not Contact (boolean)
+- PLG Signal: Last Qualified At (datetime)
+- PLG Signal: Last Qualified Type (string)
+- PLG Signal: CS Acknowledged At (datetime)
+
+Workflow:
+1) On new Qualified Signal:
+   a) If Do Not Contact = true => create internal note only (no task)
+   b) Else if Open Support Escalation = true => task to CSM Owner (if exists) else to Support liaison queue (we can decide owner)
+   c) Else if Customer Status = Active customer AND CSM Owner is known => create task for CSM Owner (“Review PLG expansion signal”), set PLG Signal: CS Acknowledged At blank, and add internal note tagging Sales Owner
+   d) Else => create task for Primary Sales Owner (or round-robin if blank)
+
+2) Escalation step:
+- If (Customer Status = Active customer) and task not completed and PLG Signal: CS Acknowledged At still blank after 1 business day => create task for Primary Sales Owner with subject “CSM unresponsive — send coordinated note, cc CSM”
+
+Ask: Jasmine, do you want CSMs to explicitly set CS Acknowledged At via a checkbox/button? HubSpot doesn’t do “button” great, but we can use a property update.
+
+Also: Tyler — we should ensure Marketing suppresses any lifecycle email for 7 days once a sales task is created, otherwise we’ll keep stepping on each other.
+
+-Isabelle
+
+—
+Isabelle Laurent
+Sales Ops
+Redwood Inference
+
+
+From: Tyler Benson <tyler_benson@redwoodinference.com>
+To: Isabelle Laurent <isabelle_laurent@redwoodinference.com>, Jasmine Liu <jasmine_liu@redwoodinference.com>, Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>
+Cc: Jordan Blake <jordan_blake@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>, Rachel Kim <rachel_kim@redwoodinference.com>
+Date: Thu, Jun 5, 2025 at 10:32 AM PT
+Subject: Re: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
++1 on suppression.
+
+Proposal:
+- When “PLG Signal: Last Qualified At” updates AND a Sales/CS task is created, add to list “PLG Signal Active — Suppress Nurture” for 7 days.
+- Exception: transactional product comms (billing receipts, incident comms) still go.
+
+We had one complaint last month about “too salesy too fast” tied to signal-triggered touch (see SUP-3392). The suppression window helps reduce the pile-on.
+
+Tyler
+
+—
+Tyler Benson
+Marketing Ops
+Redwood Inference
+
+
+From: Rachel Kim <rachel_kim@redwoodinference.com>
+To: Jasmine Liu <jasmine_liu@redwoodinference.com>, Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>
+Cc: Jordan Blake <jordan_blake@redwoodinference.com>, Isabelle Laurent <isabelle_laurent@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>, Tyler Benson <tyler_benson@redwoodinference.com>
+Date: Thu, Jun 5, 2025 at 11:07 AM PT
+Subject: Re: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+From the Enterprise CS side: please make sure the “Active customer” definition includes Dedicated/Private AND any hosted contract that has security terms (DPA, custom retention).
+
+If those accounts get an AE outbound without context it becomes a trust issue.
+
+Re: CSM ack SLA — 1 business day is fine, but I’d prefer the default outreach to be “operational” not “upgrade”:
+- “We noticed growth / errors; want help tuning rate limits / batching?”
+- “Happy to share best practices; if you’re evaluating Dedicated we can loop in Solutions.”
+
+We can standardize a short CSM template.
+
+Rachel
+
+—
+Rachel Kim
+Enterprise Customer Success
+Redwood Inference
+
+
+From: Markus Klein <markus_klein@redwoodinference.com>
+To: Jasmine Liu <jasmine_liu@redwoodinference.com>, Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>
+Cc: Jordan Blake <jordan_blake@redwoodinference.com>, Isabelle Laurent <isabelle_laurent@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Tyler Benson <tyler_benson@redwoodinference.com>, Rachel Kim <rachel_kim@redwoodinference.com>
+Date: Thu, Jun 5, 2025 at 12:01 PM PT
+Subject: Re: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+SE perspective: I’d like a hard rule that any “Private/VPC intent” signal on an existing customer automatically tags SE (or routes to SE-assist queue). Those conversations can get technical quickly and we risk sending the wrong message.
+
+If the signal type is:
+- SECURITY_DOCS_VIEW
+- PRIVATE_DEPLOYMENT_DOCS_VIEW
+- KMS/HSM_DOCS_VIEW
+
+…then: task should say “Coordinate with SE before customer-facing reply.”
+
+Markus
+
+—
+Markus Klein
+Solutions Engineering Lead
+Redwood Inference
+
+
+From: Jordan Blake <jordan_blake@redwoodinference.com>
+To: Jasmine Liu <jasmine_liu@redwoodinference.com>, Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>
+Cc: Isabelle Laurent <isabelle_laurent@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>, Tyler Benson <tyler_benson@redwoodinference.com>, Rachel Kim <rachel_kim@redwoodinference.com>
+Date: Thu, Jun 5, 2025 at 1:22 PM PT
+Subject: Re: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+This is the right direction. Two non-negotiables for pilot:
+
+1) No “surprise outreach” to active customers. If there’s a CSM, they are in the loop before any external email goes out.
+2) We should bias toward fewer touches, higher quality. If we can’t coordinate, we don’t reach out.
+
+Decision:
+- Adopt Isabelle’s workflow with 1 business day CSM acknowledgement SLA.
+- Add Tyler’s 7-day marketing suppression list.
+- Add Markus’ SE-tag requirement for security/private intent signals.
+
+Jasmine/Steph — please publish the final guardrails in Confluence and announce in #sales + #customer-success. Isabelle/Tyler please implement the workflow/list changes by EOW if possible.
+
+Jordan
+
+—
+Jordan Blake
+Chief Revenue Officer
+Redwood Inference
+
+
+From: Jasmine Liu <jasmine_liu@redwoodinference.com>
+To: Jordan Blake <jordan_blake@redwoodinference.com>, Stephanie Nguyen <stephanie_nguyen@redwoodinference.com>
+Cc: Isabelle Laurent <isabelle_laurent@redwoodinference.com>, Grace O'Connor <grace_oconnor@redwoodinference.com>, Markus Klein <markus_klein@redwoodinference.com>, Tyler Benson <tyler_benson@redwoodinference.com>, Rachel Kim <rachel_kim@redwoodinference.com>
+Date: Fri, Jun 6, 2025 at 11:18 AM PT
+Subject: Re: Guardrails: PLG signal outreach vs CSM touches (NA pilot)
+
+Confirmed. I’ll draft the Confluence page today with:
+- Definitions (Active customer, Self-serve paid, Expansion vs New)
+- The workflow + escalation path
+- CSM “ack” steps (update property) + suggested external language
+- Examples (429 spike on self-serve vs Private intent on existing Dedicated account)
+
+Steph — I’ll send you the suggested customer-facing copy for the “coordinated note” scenario (when CSM doesn’t ack in 1 business day).
+
+Isabelle/Tyler — thanks for taking on the plumbing.
+
+Jasmine
+
+—
+Jasmine Liu
+Customer Success Lead
+Redwood Inference

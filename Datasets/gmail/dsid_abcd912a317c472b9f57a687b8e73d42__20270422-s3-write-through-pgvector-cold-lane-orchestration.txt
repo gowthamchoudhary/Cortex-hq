@@ -1,0 +1,102 @@
+Re: Hybrid S3 write-through with pgvector (cold-lane orchestration)
+
+From: Samira Khan <samira@vectorglue.com>
+To: Logan Wright <logan.wright@redwood.com>
+Date: 2027-04-22T16:12:00Z
+Subject: Proposal: S3 cold-lane + pgvector write-through approach
+
+Logan,
+
+Thanks for taking this on. At VectorGlue we’ve been exploring a hybrid persistence pattern that keeps hot vectors in pgvector for sub-50ms read/write workloads, while archiving older vector shards to S3 cold lanes with object keys tied to index segments. The motivation is predictable storage cost and easier long-term retention.
+
+We sketched a few items we think are important and wanted to flag them before the call:
+- Write semantics: prefer write-through to pgvector (fast index updates) with async tombstone + flush to S3 for colding.
+- Consistency: reads should fall through to S3 if pgvector miss; need TTL-based prefetch/rehydration on read paths.
+- Metadata: object keying must include model id, namespace, and index epoch to support incremental reindexing.
+- Cost model: expect egress when rehydrating; we’d like your input on batching strategy to reduce token-level cost.
+
+Can you share Redwood’s operational constraints (SLOs, acceptable rehydrate latency), and whether you have preferences on where to run the canary (hosted vs dedicated)?
+
+Attached is a rough diagram and our cost sketch. Would love to sync Wed or Thu.
+
+Best,
+Samira Khan
+Head of Integrations, VectorGlue
+attachments: s3-pgvector-ops-diagram.png, vg-cost-model-v2.xlsx
+From: Logan Wright <logan.wright@redwood.com>
+To: Samira Khan <samira@vectorglue.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Laura Bennett <laura.bennett@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2027-04-22T18:05:00Z
+Subject: Re: Proposal: S3 cold-lane + pgvector write-through approach
+
+Samira — thanks for the clear summary and the attachments. High level reaction: this aligns with our cost/latency tradeoffs for large-scale corpora, and write-through + async colding feels like the right default. A few notes from our side upfront:
+
+- SLOs: for the pilot we target read p50 < 60ms for hot hits, and cold rehydrate p95 < 3s (acceptable as background fallback).
+- Canary: we prefer running the initial canary on a Redwood Dedicated slice in us-west1 to better measure tail latency under realistic queueing.
+- Batching: we’ll apply prefix-aware batching for rehydrate reads and use a short adaptive prefetch window for namespaces with >1 read/sec.
+- Ownership: Redwood will implement the routing policy and read-fallthrough in the serving runtime; VectorGlue will own the S3 object layout and lifecycle hooks.
+
+Next steps:
+1) Shared design doc (I created a drive draft): https://drive.google.com/open?id=1a2b3cDesignDoc
+2) Technical kickoff Thurs 2027-04-24 10:00 PT — confirm?
+3) We’ll run a small canary (10k vectors, mixed reads) and track latency, rehydrate egress, and cost per 1M tokens.
+
+Looping in Ben for ops playbook and Laura for commercial split. Karthik, please weigh in on index-keying constraints and reindex strategy.
+
+— Logan
+Logan Wright
+Product Partnerships, Redwood Inference
+
+From: Logan Wright <logan.wright@redwood.com>
+To: Ben Carter <ben.carter@redwood.com>, Laura Bennett <laura.bennett@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2027-04-22T18:07:00Z
+Subject: Internal: Action items from VectorGlue intro
+
+Ben/Laura/Karthik — short internal ask following Samira’s note (copied above). Please keep replies brief; we want to consolidate before Thurs kickoff.
+
+Ben: can you draft a 1-pager ops runbook for the canary that includes rollback criteria (error % > 2%, rehydrate p95 > 5s), alerts (rehydrate egress spike), and post-mortem template? Deadline: EOD Tue.
+
+Laura: commercial — VectorGlue suggested revenue share on storage egress > threshold. Can you propose an initial fair split and list any procurement/legal pre-reqs we should expect?
+
+Karthik: technical question on keying — is it safe to include index epoch in the object key to make reindex idempotent? Any concerns about namespace cardinality and S3 listing performance? If you can write a short note on preferred key schema, that’d be ideal.
+
+Also attaching the initial cost sketch so folks have context (vg-cost-model-v2.xlsx).
+
+— Logan
+From: Samira Khan <samira@vectorglue.com>
+To: Logan Wright <logan.wright@redwood.com>
+Cc: Tom Hsu <tom@pinecone.io>
+Date: 2027-04-23T09:34:00Z
+Subject: Re: Proposal: S3 cold-lane + pgvector write-through approach
+
+Thanks Logan — Thurs 10:00 PT works for us. Quick clarifications after internal read-through:
+- Legal: VectorGlue needs an SLA addendum for retention and forensics (we’ll loop in legal during the kickoff); retention tags on S3 objects are a must.
+- Keying: we prefer the model_id + namespace + epoch pattern too; we’ll include a compact manifest file per-index that maps object segments to vector offsets to speed rehydrate.
+- Rehydrate cost: to reduce egress we propose chunked rehydrates with progressive exposure (streaming vectors back to Redwood until top-k satisfied). That should cut downloads by ~40% in our tests.
+
+Tom from Pinecone is cc’d — he had a few suggestions about prefetch heuristics if you want vendor input on access patterns.
+
+We’ll bring a sample manifest and a small S3 bucket with test data to the kickoff.
+
+— Samira
+From: Logan Wright <logan.wright@redwood.com>
+To: Samira Khan <samira@vectorglue.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Laura Bennett <laura.bennett@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2027-04-25T23:45:00Z
+Subject: Re: Hybrid S3 write-through with pgvector (cold-lane orchestration) — plan and next steps
+
+Team / Samira — great discussion this week. Confirming the execution plan and owners:
+
+1) Design doc finalization (owner: Logan) — I’ll fold Samira’s manifest suggestion and Pinecone prefetch notes into the drive doc by Mon 2027-04-26. (link: https://drive.google.com/open?id=1a2b3cDesignDoc)
+2) Ops runbook & canary (owner: Ben) — runbook due 2027-04-27, canary scheduled 2027-05-03 on Redwood Dedicated us-west1. Canary success criteria: zero data loss, hot hit p50 < 60ms, rehydrate p95 < 3s, cost delta < 25% vs baseline. Rollback: immediate revert to full pgvector routing + invalidate any partial manifests.
+3) Commercials & procurement (owner: Laura) — Laura to send draft MOU and a proposed cost/egress split; include data retention addendum for S3 artifacts.
+4) Reindex & keying (owner: Karthik) — short spec due 2027-04-29 with recommended object key format and manifest schema.
+
+Attachments: s3-pgvector-ops-diagram.png, vg-cost-model-v2.xlsx; related Jira: https://jira.redwood.com/browse/INF-2789
+
+Samira — please confirm VectorGlue will provide a test bucket and a manifest sample before the canary. Also confirm any legal contact for the retention addendum so Laura can loop them in.
+
+Thanks — looking forward to it.
+
+— Logan
+Product Partnerships, Redwood Inference

@@ -1,0 +1,106 @@
+Post-call recap: inference unit-econ, batching/caching & pilot scoping
+
+From: Markus Klein <markus.k@redwood.ai>
+To: Oliver Park <oliver.park@brightcart.com>
+Cc: Aditya Rao <aditya_rao@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Sun, 20 Jul 2025 15:07:00 -0700
+Subject: Post-call recap: inference unit-econ, batching/caching & pilot scoping
+
+Hi Oliver — thanks again for the time today. Quick recap from our side so we have alignment and clear next steps. I tried to keep this tight; flag anything I misunderstood.
+
+Summary of pain points you shared
+- Token/unit cost is ballooning as you scale chat flows; current infra costs ~ $14k/mo on inference alone for a subset of conversational traffic.
+- Latency variability during peak windows (holiday promos) causes bad UX and extra retries.
+- Ops overhead: multiple model variants and ad-hoc quantization experiments that are hard to reproduce.
+
+Current stack (what you told us)
+- Mix of open-source LLMs + internally fine-tuned checkpoints, served on a self-managed GPU fleet (K8s + custom batching layer).
+- Prefetching/caching is limited to short-lived session keys; no KV cache between warm starts.
+- Some experiments with int8 quantization, but not comfortable with >2% quality delta on customer-facing prompts.
+
+Success criteria for a pilot (you indicated these are important)
+1) Reduce inference $/1k tokens by >= 30% while holding NPS-quality signals within a 1-2% delta.
+2) Stable p95 latency <= 300ms for 90% of requests in the pilot slice.
+3) Transparent op metrics: per-route token-cost, cache hit rate, and regression alerts.
+
+Specific asks and assumptions we discussed
+- Batching/caching expectation: you want a solution that preserves tail latency while letting us safely batch at the gateway for throughput-sensitive routes. We proposed continuous batching + prefix KV caching; you said session stickiness is required for some flows.
+- Quantization openness: you are open to int8 for internal experimental routes but want a staged approach for customer-facing traffic; unwilling to accept >2% regression on core intent classification.
+- Workload shape: average prompt length ~ 220 tokens; replies ~ 60 tokens. Peak QPS ~ 270, baseline ~ 45. (Please confirm numbers if I got them wrong.)
+
+Immediate next steps (proposed)
+1) You: send minimal infra diagram (K8s topology, GPUs per node, egress rules) and a short CSV with 7-day token/route distribution. (Oliver — you said you could share that today.)
+2) Us (Redwood): we’ll run a quick feasibility check (batching/caching fit + quantization impact outline) and return a recommended pilot slice and an estimated unit-econ model within 48 business hours.
+3) Align on a 4‑week pilot scope: sample volume, routes included, and acceptance thresholds.
+
+Attachments/links: I’ll attach a one‑page pilot scoping template and a sample infra diagram format for reference.
+
+Availability: proposing a 30m scoping call next Tue/Wed — send times that work and we’ll lock it.
+
+Thanks again — Mark
+
+--
+Markus Klein
+Senior Solutions Engineer | Redwood Inference
+markus.k@redwood.ai | +1 (415) 555-0192
+
+From: Oliver Park <oliver.park@brightcart.com>
+To: Markus Klein <markus.k@redwood.ai>
+Cc: BrightCart Engineering Team <eng-team@brightcart.com>, Monica Patel <monica_patel@redwood.ai>
+Date: Sun, 20 Jul 2025 17:02:00 -07:00
+Subject: Re: Post-call recap: inference unit-econ, batching/caching & pilot scoping
+
+Thanks, Mark — good summary and I appreciate the clear next steps. A few clarifications inline: 
+
+- Costs: current $14k/mo is for the e-commerce recommendation + chat inference combined; for chat-only traffic we’re seeing ~ $9.2k/mo. We’re looking to cut that in half ideally, but >=30% is a realistic first milestone.
+- Latency: p95 currently spikes to 650–800ms during promo peaks; baseline p95 is ~280–320ms.
+- Stack: we run a 3-node DGX-like cluster in our colo for inference (NVIDIA A40s), fronted by a custom gateway that does per-session routing.
+- Caching: we have a short-lived in-memory session cache but no persistent KV cache; many sessions are warm but we don’t persist decoder state across requests.
+- Quantization: engineering is comfortable testing int8 on a shadow route; for customer-facing intents we need to validate with your eval harness before any rollout. We are not ready to go below int8 for these models.
+
+I attached a very rough infra diagram (infra-diagram.png) and will extract the 7-day token histogram tomorrow morning and drop it in the Drive link you provided.
+
+Availability: Tue 7/22 at 10:00am PT or Wed 7/23 at 2:00pm PT works on our side.
+
+—Oliver
+Director of Engineering, BrightCart
+oliver.park@brightcart.com | +1 (646) 555-0123
+
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Markus Klein <markus.k@redwood.ai>, Oliver Park <oliver.park@brightcart.com>
+Date: Mon, 21 Jul 2025 08:14:00 -07:00
+Subject: Re: Post-call recap: inference unit-econ, batching/caching & pilot scoping
+
+Quick follow-ups from product/ops perspective:
+- For pilot sizing: can you confirm typical concurrent sessions during promo peaks (sessions that will require stateful KV cache vs stateless)?
+- Prompt distribution: is the 220-token average counting system + user + assistant, or only the user prompt? We ask because batching economics change if you include long system / context windows.
+- Acceptance test: we’ll need a small set (~150) of labeled prompts for quality regression checks. Will BrightCart be able to provide that or should we pull a randomized sample and annotate together?
+
+We’ll keep the scoping doc light — Markus: I’ll draft the acceptance checklist and sample eval probes once we get the token histogram.
+
+-Aditya
+Product Lead, Redwood Inference
+
+From: Markus Klein <markus.k@redwood.ai>
+To: Oliver Park <oliver.park@brightcart.com>
+Cc: Aditya Rao <aditya_rao@redwood.ai>, Monica Patel <monica_patel@redwood.ai>, Karthik Iyer <karthik_iyer@redwood.ai>
+Date: Mon, 21 Jul 2025 10:23:00 -07:00
+Subject: Re: Post-call recap: inference unit-econ, batching/caching & pilot scoping
+
+Perfect — thanks Oliver and Aditya. Confirming we’ll:
+1) Kick with a 4-week pilot for one high-traffic customer-facing route (your cart-recommendation chat), shadowing the route with int8 for internal experiments and int8-disabled for the live traffic until eval gates pass.
+2) Redwood will produce an initial unit-econ model (est $/1k tokens) and a target batching/cache config; we’ll surface the expected CPU/GPU footprint and an ops playbook for fallbacks.
+3) BrightCart to provide: infra diagram (received), 7-day token distribution CSV (you indicated tomorrow), and a 150-prompt acceptance set (or permission for Redwood to sample+annotate).
+
+Attached: pilot-scoping-template.xlsx (short checklist + sample metric targets). I’ll create the HubSpot deal PR and add the scoping doc to the Drive link.
+
+Next meeting: locking Tue 7/22 10:00am PT — meeting invite to follow.
+
+If that all looks right, Oliver — please confirm and I’ll start the internal kickoff and invite Karthik for the ops runbook review.
+
+Thanks — Mark
+
+--
+Markus Klein
+Senior Solutions Engineer | Redwood Inference
+markus.k@redwood.ai | +1 (415) 555-0192

@@ -1,0 +1,107 @@
+[Pilot] Transient GPU windows — approval & reservation flow
+
+From: Soojin Lee <soojin_lee@redwood.ai>
+To: Kimberly Park <kimberly_park@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Aditya Rao <aditya_rao@redwood.ai>
+Date: 2027-06-13T09:14:00-07:00
+Subject: [Pilot] Transient GPU windows — approval & reservation flow
+
+Team,
+
+We're starting a 6-week internal pilot (project HELIOS) that will run bursty end-to-end evals and a small sweep of canary models. To keep latency predictable for the customer-facing demo next month, I propose a transient dedicated GPU window on our west-coast pool:
+
+- Window: 2027-07-05 00:00 - 2027-07-10 23:59 PT
+- Capacity: 8 A100-equivalent slots (8x40GB) dedicated to pilot, reclaimed afterwards
+- Expected peak QPS: 250 qps over 2-hour nightly sweeps
+- Autoscale exception: disable preemption for these slots during the window
+
+Asks:
+1) Product sign-off on the window and SLO relaxation (Kimberly)
+2) Ops approval for carving 8 slots + short runbook (Laura, Jonas)
+3) Procurement / Finance path for the temporary reservation and cost approval (Aditya)
+
+Attached: transient-window-proposal.pdf, pilot-forecast.csv
+
+If we can't get a dedicated carveout, alternative is to run on burst lanes with aggressive caching but latency will increase ~40-60ms.
+
+Thanks,
+Soojin
+Soojin Lee
+Head of Capacity Programs
+Redwood Inference
+
+From: Kimberly Park <kimberly_park@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Jonas Weber <jonas_weber@redwood.ai>
+Cc: Laura Bennett <laura_bennett@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>
+Date: 2027-06-13T11:02:00-07:00
+Subject: Re: [Pilot] Transient GPU windows — approval & reservation flow
+
+On 2027-06-13, Soojin Lee wrote:
+> Team,
+> 
+> We're starting a 6-week internal pilot (project HELIOS)…
+
+Thanks, Soojin — this is helpful. A few clarifying points before I can give product sign-off: 
+
+- Can you quantify the SLO relaxation you expect? i.e., which latency SLOs would be relaxed and by how much for the demo window?
+- How will we detect and mitigate noisy-neighbor effects on the shared pool before the carveout?
+- Rough cost ballpark for 6 days of dedicated capacity (Aditya, FYI) — we need a quick number to route to finance for approval.
+
+If the impact to other paying customers is >5% in tail latency, we need to consider either tighter isolation or a shorter window. Otherwise I can sign off on the concept and timeline.
+
+-Kim
+Kimberly Park
+VP Product, Core Platform
+Redwood Inference
+
+From: Laura Bennett <laura_bennett@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>
+Cc: Jonas Weber <jonas_weber@redwood.ai>, Aditya Rao <aditya_rao@redwood.ai>
+Date: 2027-06-14T08:37:00-07:00
+Subject: Re: [Pilot] Transient GPU windows — approval & reservation flow
+
+Forwarded message:
+From: Laura Bennett
+
+Hi all,
+
+Operations notes / runbook sketch for the transient window request:
+
+1) Allocation plan:
+  - Reserve 8 slots in west-us pool tagged project=helios and costcenter=pilot-Helios
+  - Configure allocation TTL to auto-release at 2027-07-11T00:00 PT
+  - Set preemption policy to "no-preempt" for reserved slots during the window
+2) Monitoring & rollback:
+  - Canary probe every 5m against control tenants; if 95th p99 increases > 8% for > 10m, trigger auto-eviction and alert
+  - Ops oncall DRI: Jonas Weber (allocator team) — pager enabled 24/7 during window
+3) Isolation impact:
+  - With current pool utilization, carving 8 slots will increase queueing risk for bursty workloads; recommend a soft traffic cap of 18k tokens/min for any non-Helios workloads during the window to avoid tail spike cascades
+4) Pre-reqs before carving:
+  - Cost center tag and PO approval (Aditya)
+  - Confirm exact GPU SKU equivalence — we can flex between A100x40 and A40 quantized with small perf delta
+  - Apply slice-config.yaml (attached) to allocation policy
+
+Attachments: slice-config.yaml
+
+I'll schedule a short sync with Jonas and the allocator infra engineers to validate the TTL and preemption toggles. If we get cost greenlight this week, ops can implement the reservation in 48 hours.
+
+Laura Bennett
+Sr. Director, Cloud Operations
+Redwood Inference
+
+From: Aditya Rao <aditya_rao@redwood.ai>
+To: Soojin Lee <soojin_lee@redwood.ai>, Kimberly Park <kimberly_park@redwood.ai>, Laura Bennett <laura_bennett@redwood.ai>
+Cc: Jonas Weber <jonas_weber@redwood.ai>
+Date: 2027-06-15T17:02:00-07:00
+Subject: Re: [Pilot] Transient GPU windows — approval & reservation flow
+
+Thanks for the breakdown. Quick finance note:
+
+- Rough estimate for 6 days x 8 A100-equivalent slots (market-adjusted) = $28,000 — this includes device-hour premiums and a 10% ops surcharge for short-notice carveouts.
+- We can charge to costcenter=pilot-Helios under internal PO #INT-2027-135 if Product signs off.
+- Request: add metadata tags to the reservation (project, owner, costcenter) and a post-mortem expense note in Confluence.
+
+I approve conditional funding, pending product sign-off on SLO relaxation and ops confirmation of rollback triggers. Aditya
+Aditya Rao
+Director, Finance (Cloud Ops Partner)
+Redwood Inference

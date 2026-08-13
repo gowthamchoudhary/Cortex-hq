@@ -1,0 +1,169 @@
+AuthN/AuthZ alignment for Private Control Plane - SAML attributes & SCIM scoping
+
+From: Samir Patel <samir.patel@enterprisecorp.com>
+To: laura_bennett@redwood.ai
+Cc: Jin Zhao <jin.zhao@enterprisecorp.com>
+Date: Tue, 8 Dec 2026 15:22:00 -0800
+Subject: Private CP: SAML metadata + SCIM schema and role scoping questions
+
+Hi Laura,
+
+Thanks for the walkthrough last week. We're starting to wire up EnterpriseCorp's IdP to Redwood's Private Control Plane in our staging VPC. Two quick asks before the call on Friday: 
+
+- Can you confirm the exact SAML attribute names Redwood expects for role claims (we currently have role, groups, and custom:entitlement showing up in our IdP export)?
+- Attached are our current SAML metadata and SCIM schema exports (entercorp-saml-metadata.xml, scim-schema-v2.json). Can the SCIM group mapping support scoped groups (e.g. project-<id>-operators vs global-admins)? Any caveats for provisioning machine/service accounts?
+
+If useful we can include our InfoSec reviewer on the call (Jin).
+
+Thanks,
+Samir
+Samir Patel
+Head of Platform Engineering
+EnterpriseCorp
+
+Attachments: entercorp-saml-metadata.xml (application/xml), scim-schema-v2.json (application/json)
+From: laura_bennett <laura_bennett@redwood.ai>
+To: Samir Patel <samir.patel@enterprisecorp.com>
+Cc: priyom_das@redwood.ai, ben_carter@redwood.ai, naomi_feldman@redwood.ai
+Date: Wed, 9 Dec 2026 09:05:00 -0800
+Subject: Re: Private CP: SAML metadata + SCIM schema and role scoping questions
+
+Hi Samir / Jin —
+
+Thanks for sending these over and for the context. Looping in Priyom (identity integration lead) and Ben (solutions lead) so we can get the technical mapping nailed before the Friday session. Initial notes: 
+
+- SAML attributes: Redwood Private Control Plane prefers a namespaced claim named "redwood:roles" for explicit role assertions, but we also accept standard RFC groups for group->role mapping. If your IdP is sending groups only, we can map group names to roles via SCIM group membership.
+- SCIM scoping: scoped groups (project-1234-operators) are supported. We recommend a group naming convention: <org>-<project>-<role> to minimize ambiguity. Priyom will include the exact regex and an export-friendly CSV.
+- Service accounts: we treat service accounts as users with a machine tag; provisioning should come through SCIM with an attribute `x-redwood-type: machine`. Avoid assigning global-admin to service accounts.
+
+Attached is a quick CSV with our suggested mapping examples (redwood-privcp-role-proposal.csv).
+
+Proposed next steps:
+1) Quick 30-min discovery call tomorrow to confirm mappings and SCIM filters.  
+2) We will run a one-way test (IdP -> staging Private CP) and share logs.
+3) If all good, we'll schedule the operator onboarding window and provide a least-privilege checklist for your InfoSec team.
+
+Are you available tomorrow 10:00-10:30 PT?
+
+Best,
+Laura Bennett
+Senior Product Manager, Private Deployments
+Redwood Inference
+redwood.ai
+
+Attachment: redwood-privcp-role-proposal.csv (text/csv)
+From: priyom_das <priyom_das@redwood.ai>
+To: Samir Patel <samir.patel@enterprisecorp.com>, laura_bennett@redwood.ai
+Cc: ben_carter@redwood.ai
+Date: Wed, 9 Dec 2026 10:12:00 -0800
+Subject: Re: Private CP: SAML metadata + SCIM schema and role scoping questions
+
+Hi Samir —
+
+Quick technical notes ahead of the call. Apologies for the terse message; I'll expand if you want a written runbook after the call.
+
+1) Attribute mapping we recommend:
+   - SAML attribute: `redwood:roles` (multi-valued). Values map 1:1 to Control Plane roles: `redwood:admin`, `redwood:operator`, `redwood:auditor`.
+   - Fallback: Use `groups` with the mapping table: `enterprise-global-admins` -> `redwood:admin`, `proj-<id>-ops` -> `redwood:operator`.
+
+2) SCIM behavior and scoping:
+   - We support SCIM 2.0 group resources. For scoping, include a custom `meta.scope` attribute in the group resource (string: `org`, `project`, `env`).
+   - When SCIM provisioning creates a user, include `urn:ietf:params:scim:schemas:extension:redwood:2.0:user` with `type` = `machine|human` and `assignments` = array of role strings.
+
+3) Service accounts and long-lived credentials:
+   - Recommended: mark as `machine` and require a human owner attribute. We rotate machine API keys automatically but require a separate approval workflow for global-admin keys.
+
+4) Audit and least privilege enforcement:
+   - We log every SCIM patch and SAML assertion; for Private CP we can stream audit events to your SIEM via syslog/HTTPS. We will provide a sample mapping for your SOC team.
+
+Please see annotated examples in the call. If you want the JSON schema for the recommended SCIM extension before the meeting, I can paste it.
+
+Regards,
+Priyom Das
+Senior Identity Engineer
+Redwood Inference
+
+On Wed, Dec 9, 2026 at 09:05 AM laura_bennett@redwood.ai wrote:
+> Hi Samir / Jin —
+> 
+> Thanks for sending these over and for the context. Looping in Priyom (identity integration lead) and Ben (solutions lead) so we can get the technical mapping nailed before the Friday session. Initial notes: 
+> 
+> - SAML attributes: Redwood Private Control Plane prefers a namespaced claim named "redwood:roles" for explicit role assertions, but we also accept standard RFC groups for group->role mapping. If your IdP is sending groups only, we can map group names to roles via SCIM group membership.
+> - SCIM scoping: scoped groups (project-1234-operators) are supported. We recommend a group naming convention: <org>-<project>-<role> to minimize ambiguity. Priyom will include the exact regex and an export-friendly CSV.
+> - Service accounts: we treat service accounts as users with a machine tag; provisioning should come through SCIM with an attribute `x-redwood-type: machine`. Avoid assigning global-admin to service accounts.
+> 
+> Attached is a quick CSV with our suggested mapping examples (redwood-privcp-role-proposal.csv).
+> 
+> Proposed next steps:
+> 1) Quick 30-min discovery call tomorrow to confirm mappings and SCIM filters.  
+> 2) We will run a one-way test (IdP -> staging Private CP) and share logs.
+> 3) If all good, we'll schedule the operator onboarding window and provide a least-privilege checklist for your InfoSec team.
+> 
+> Are you available tomorrow 10:00-10:30 PT?
+> 
+> Best,
+> Laura
+
+From: Jin Zhao <jin.zhao@enterprisecorp.com>
+To: laura_bennett@redwood.ai, priyom_das@redwood.ai
+Cc: Samir Patel <samir.patel@enterprisecorp.com>
+Date: Thu, 10 Dec 2026 09:43:00 -0800
+Subject: Re: Private CP: SAML metadata + SCIM schema and role scoping questions
+
+Thanks, Priyom / Laura —
+
+This looks good. A couple of InfoSec items we need before greenlight: 
+- Can Redwood provide a SOC 2 type II snapshot or an exported audit sample from Private CP? We need to confirm that SCIM patches and SAML assertion events are retained for at least 90 days.
+- For operator accounts, we need an approval flow for granting `redwood:operator` to a user; does Redwood support an approval webhook that our IdP can call upon group changes?
+
+We've attached a draft MOU (MOU-draft.pdf) that includes timing preferences — we'd like a staging test on Dec 16 and production cutover on Jan 7.
+
+If both of those items are satisfied, we can move forward with the timeline.
+
+--
+Jin Zhao
+Senior InfoSec Engineer
+EnterpriseCorp
+
+Attachment: MOU-draft.pdf (application/pdf)
+From: laura_bennett <laura_bennett@redwood.ai>
+To: Samir Patel <samir.patel@enterprisecorp.com>, Jin Zhao <jin.zhao@enterprisecorp.com>
+Cc: priyom_das@redwood.ai, ben_carter@redwood.ai, naomi_feldman@redwood.ai
+Date: Thu, 10 Dec 2026 18:05:00 -0800
+Subject: Re: SAML attributes + SCIM scoping — next steps and evidence
+
+Samir / Jin —
+
+Thanks for the fast turnaround. Confirming next steps and owners: 
+
+- Priyom (redwood): prepare the SCIM extension JSON schema and the exact regex for group names by EOD Friday (owner: priyom_das@redwood.ai).
+- Ben (redwood): prepare a short example webhook spec for approval flows that your IdP team can call when a group change requests operator privileges (owner: ben_carter@redwood.ai).
+- Naomi (redwood): pull a 90-day audit sample export and sanitized SOC-like evidence bundle for Private CP staging to share with your InfoSec (owner: naomi_feldman@redwood.ai). We'll redact customer-specific identifiers.
+- EnterpriseCorp: sign and return the MOU draft if the timeline looks good (owner: Samir/Jin).
+
+We can do the staging test on Dec 16 as requested; please confirm the time window (recommended 09:30-11:30 PT) and we'll reserve it.
+
+Link to the shared onboarding folder: https://drive.google.com/drive/folders/1a2b3c-enterprisecorp-privcp-onboarding
+
+I'll follow up with a short meeting invite after I hear back on the time.
+
+Best,
+Laura Bennett
+Senior Product Manager, Private Deployments
+Redwood Inference
+
+On Thu, Dec 10, 2026 at 09:43 AM Jin Zhao <jin.zhao@enterprisecorp.com> wrote:
+> Thanks, Priyom / Laura —
+> 
+> This looks good. A couple of InfoSec items we need before greenlight: 
+> - Can Redwood provide a SOC 2 type II snapshot or an exported audit sample from Private CP? We need to confirm that SCIM patches and SAML assertion events are retained for at least 90 days.
+> - For operator accounts, we need an approval flow for granting `redwood:operator` to a user; does Redwood support an approval webhook that our IdP can call upon group changes?
+> 
+> We've attached a draft MOU (MOU-draft.pdf) that includes timing preferences — we'd like a staging test on Dec 16 and production cutover on Jan 7.
+> 
+> If both of those items are satisfied, we can move forward with the timeline.
+> 
+> --
+> Jin Zhao
+> Senior InfoSec Engineer
+> EnterpriseCorp

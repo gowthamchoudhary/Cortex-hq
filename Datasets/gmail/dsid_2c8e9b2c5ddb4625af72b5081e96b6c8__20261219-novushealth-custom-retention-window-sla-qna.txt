@@ -1,0 +1,107 @@
+Bespoke retention windows & deletion timeline — NovusHealth
+
+From: Amaya Patel <amaya@novushealth.com>
+To: chloe_martin@redwoodinference.com
+Cc: Legal Ops <legal@novushealth.com>, Rajiv Singh <rajiv@novushealth.com>
+Date: Tue, 15 Dec 2026 14:22:00 -0800
+Subject: Bespoke retention windows & deletion timeline for PHI subset
+
+Hi Chloe,
+
+Thanks for the demo last week — it helped. Im following up with a concrete ask from our privacy and legal teams. We need to confirm whether Redwood can support a bespoke retention cadence for a small subset of NovusHealth traffic (PHI-derived prompts only):
+
+- Ingested data: retain active KV/context for 14 days for live rewriting workflows
+- Cold retention for audit/forensics: retained encrypted at rest for 90 days before automatic wipe
+- Final deletion: secure crypto-erase within 7 calendar days of the 90-day mark (i.e., final destruction by day 97)
+
+Questions:
+1) Can you commit to the 90-day cold retention + 7-day destruction window in an order form amendment?
+2) Is the deletion process auditable — will you provide deletion certificates and an audit log of the wipe events?
+3) Can residency be enforced to keep the data in us-east-1 only (were subject to state-level controls)?
+
+Ive attached our retention request form with the sample dataset counts. Can we get a response before the end of next week? Legal will want the wording to plug directly into the order form.
+
+Attachments: [Novus_Retention_Request_Form_v2.pdf (pdf)]
+
+Appreciate it —
+Amaya
+Privacy Program Manager
+NovusHealth
+
+From: chloe_martin@redwoodinference.com
+To: Amaya Patel <amaya@novushealth.com>
+Cc: marcus_lin@redwoodinference.com, lauren_bishop@redwoodinference.com
+Date: Wed, 16 Dec 2026 09:08:00 -0800
+Subject: Re: Bespoke retention windows & deletion timeline for PHI subset
+
+Hi Amaya —
+
+Thanks for the clear summary and the form. We can support bespoke retention windows but need to align on a few operational details so the order form is precise. High-level answers up front:
+
+- Residency: yes, we can scope processing and storage to us-east-1 for this workload (region lock at the routing layer + storage tags).
+- Retention cadence: we can implement the 14-day active KV cache + 90-day cold retention and follow with a secure deletion workflow that targets completion within 7 calendar days after day 90.
+- Auditability: we can provide deletion event logs and an automated deletion certificate per dataset ID; those logs are exportable from our audit service and can be included as part of the order form appendix.
+
+Two clarifying items we need from you before we draft the redline:
+1) Do you need deletion certificates per-user, per-dataset, or per-batch? (per-batch is easiest; per-user increases operational cost)
+2) For the 14-day KV retention, does Novus require warm replication across AZs for HA, or is single AZ acceptable?
+
+Proposed next steps:
+- Ill pull a short order form amendment draft with precise SLA language and circulate with Marcus for the deletion mechanics and with Lauren for commercial terms.
+- If youre comfortable we can include the wording in an addendum that references the dataset IDs in your attached form.
+
+Ill follow up by end of day Friday with a draft.
+
+Best,
+Chloe Martin
+Account Executive, Enterprise Sales
+Redwood Inference
+
+From: marcus_lin@redwoodinference.com
+To: chloe_martin@redwoodinference.com, Amaya Patel <amaya@novushealth.com>
+Cc: lauren_bishop@redwoodinference.com
+Date: Fri, 18 Dec 2026 10:37:00 -0800
+Subject: Re: Bespoke retention windows & deletion timeline for PHI subset
+
+Chloe / Amaya — quick technical note (quoting Chloe below):
+
+> - Retention cadence: we can implement the 14-day active KV cache + 90-day cold retention and follow with a secure deletion workflow that targets completion within 7 calendar days after day 90.
+
+Operational detail we should capture in the SLA appendix:
+- Deletion method: we perform a two-stage wipe for encrypted blobs: (1) crypto-key destroy (KMS key revoke) timestamped, (2) metadata purge and object overwrite schedule for any replicated artifacts. Crypto-key destroy is immediate; object-level tombstone/overwrite may be scheduled within a maintenance window but will be completed within 7 calendar days. The deletion certificate will include KMS key ID, destroy timestamp, object ID list, and the job run id.
+- Audit logs: we will expose a signed, time-stamped audit stream containing deletion job events (job_id, status, start_ts, end_ts, operator_id). We can provide this as a daily export for the 90->97 window and a single consolidated certificate after completion.
+- For residency: if Novus requires strict AZ-local storage (no cross-AZ replication), we need explicit confirmation; by default our HA config uses cross-AZ replication inside us-east-1. Cross-AZ is more resilient but keeps the data in-region.
+- Edge-case: if a dataset is exported for debugging (redaction/forensic copy), we need to capture that as an exception and track re-ingestion controls.
+
+Ive attached a working spreadsheet with the proposed wording per line item and sample certificate fields — please review and flag any additional fields you need in the certificate.
+
+Attachments: [RNW-proposed-windows-20261217.xlsx (xlsx)]
+
+Thanks,
+Marcus Lin
+Sr. Security Engineer
+Redwood Inference
+
+From: Amaya Patel <amaya@novushealth.com>
+To: chloe_martin@redwoodinference.com
+Cc: Legal Ops <legal@novushealth.com>, Rajiv Singh <rajiv@novushealth.com>
+Date: Sat, 19 Dec 2026 10:03:00 -0800
+Subject: Re: Bespoke retention windows & deletion timeline for PHI subset
+
+Chloe / Marcus —
+
+Thanks for the quick turnaround and the level of detail. This looks aligned with what legal/privacy want. Quick answers:
+1) Deletion certificates per-dataset ID are preferred (Novus will map dataset IDs to patient cohorts).
+2) For the 14-day KV retention we require cross-AZ replication for HA.
+
+Two small asks before we sign:
+- Can you add a line in the certificate that confirms the KMS key owner namespace (to make sure keys are managed in Redwood's tenant space rather than Novus-managed KMS)?
+- Please include a sample redline of the order form addendum we can send to our legal team (DocuSign-ready).
+
+If you can send the redline + the updated certificate schema early next week, Legal will review and we can target an executed addendum by the 23rd.
+
+Appreciate it —
+Amaya
+Privacy Program Manager
+NovusHealth
+Attachments: [redline-orderform-novus-20261218.docx (docx)]

@@ -1,0 +1,137 @@
+NovaLedger — Post-call recap: pilot results, scale options & timeline
+
+From: Irene Choi <irene.choi@redwood.ai>
+To: Taylor Ho <taylor.ho@novaledger.com>
+Cc: Marcus Lin <marcus.lin@redwood.ai>
+Date: Sat, 27 Feb 2027 09:12:00 -0500
+Subject: NovaLedger — Post-call recap: pilot results, scale options & timeline
+
+Hi Taylor — thanks again for the time today. Quick recap from our side and next steps so we have alignment.
+
+Key pain points mentioned
+- Latency spikes on peak billing ingestion windows (up to 2.4s/token for long sequences) impacting UX for agents.
+- Embedding refresh cadence slows ingest pipeline; your team currently regenerates ~75k docs/day.
+- Concern about EU data residency for inference logs and KV caches.
+
+Goals you reiterated
+1) Move pilot from a 2-week proof-of-concept to a month-long pilot with production-like traffic.
+2) Reduce median inference latency to ~600ms for token streaming on the main billing flow.
+3) Reduce per-embedding cost and shorten embedding refresh time to <30m for incremental updates.
+
+Usage & findings (pilot Q1 snapshot)
+- Total tokens (30d): ~1.2M tokens/month (generation + system messages).
+- Embedding units: ~3.1M embedding calls/month (heavy RAG use).
+- Peak concurrency: 18 simultaneous request streams during billing runs.
+- Observed cache hit rate (prefix caching): ~22% with current client workload patterns.
+
+Recommended pilot-to-scale path (proposal)
+- Phase A (2–4 weeks): Dedicated pilot on 3x A100-equivalent nodes in eu-central, with prefix KV caching enabled and a 2x cheaper quantized candidate model for low-cost fallbacks.
+- Phase B (4–8 weeks): If SLOs met, shift to a reserved Dedicated pool (3 sustained nodes, 1 burst) + weekly embedding refresh automation.
+- SLO targets: p50 <600ms, p95 <1.2s for streaming; embedding refresh <30m.
+
+Pricing / asks we need from you
+- Expected monthly committed token budget for the next 6 months (helps size Dedicated pool).
+- Any procurement calendar constraints or approvals required (timeline).
+- Confirmation on EU-only log retention requirement (yes/no).
+
+Attachments: pilot Q1 usage CSV + one-pager SLA draft attached.
+
+Proposed next steps (my suggested owners & dates)
+- You: Confirm procurement contact + EU data residency requirement by Tue 2027-03-02.
+- Marcus: Provide draft SOW + cost estimate for 3-node pilot by Wed 2027-03-03.
+- Me: Schedule a short technical kickoff w/ your infra + security teams for week of 2027-03-08.
+
+If that matches your read, I’ll lock in the kickoff and get a formal SOW out. Appreciate the candor today — we’re excited about the potential with NovaLedger.
+
+Best,
+Irene Choi
+Senior Account Executive | Redwood Inference
+irene.choi@redwood.ai | +1 (415) 555-0193
+
+Attachments referenced:
+- novaledger-pilot-usage-q1.csv (CSV)
+- SLA-draft-3.pdf (PDF)
+- pilot-kpis-onepager.pdf (PDF)
+From: Taylor Ho <taylor.ho@novaledger.com>
+To: Irene Choi <irene.choi@redwood.ai>
+Cc: Marcus Lin <marcus.lin@redwood.ai>
+Date: Mon, 1 Mar 2027 10:04:00 +0000
+Subject: Re: NovaLedger — Post-call recap: pilot results, scale options & timeline
+
+Thanks, Irene — very helpful summary. A few clarifications from our side: 
+
+1) Procurement & contacts: Please add procurement@novaledger.com to the loop for SOW and contract details. They own PO timing (we typically need 3–4 weeks for new SaaS agreements).
+
+2) EU data residency: Yes, logs and any persisted KV must remain in the EU (we can provide a DPA addendum).
+
+3) SLA / availability: Curious if the p95 targets above assume the same model family you ran on the pilot or include the quantized fallback. We need to understand expected quality delta for the cheaper fallback (short examples would help).
+
+4) Budget: We expect to commit roughly $18k–$25k/month if we can hit the latency and embedding refresh targets. That’s a ballpark until we see the SOW.
+
+I’ll confirm procurement lead this week. Also CC’ing our infra lead in a follow-up after procurement is added.
+
+On the fallback quality: can someone share 2–3 short generation examples comparing the production model vs quantized candidate? That will help internal product stakeholders.
+
+Thanks — Taylor
+Taylor Ho
+Head of Platform Engineering | NovaLedger
+taylor.ho@novaledger.com | +44 20 7946 0123
+
+-----Original message-----
+On Sat, 27 Feb 2027 at 09:12, Irene Choi <irene.choi@redwood.ai> wrote:
+> Hi Taylor — thanks again for the time today. Quick recap from our side and next steps so we have alignment.
+> 
+> [snip - pilot snapshot and proposed next steps]
+> 
+> Best,
+> Irene
+From: Irene Choi <irene.choi@redwood.ai>
+To: Marcus Lin <marcus.lin@redwood.ai>, Lukas Meyer <lukas.meyer@redwood.ai>
+Date: Tue, 2 Mar 2027 08:21:00 -0500
+Subject: Fwd: NovaLedger — Post-call recap: pilot results, scale options & timeline
+
+Folks — forwarding the thread from Taylor at NovaLedger. Two immediate asks from the customer: EU-only log/KV residency, and a short sample comparison between our baseline model and the quantized fallback for product review.
+
+What I need from you:
+- Marcus: draft SOW + high-level pricing for a 3x Dedicated pilot (eu-central) + optional 1-node burst for 8 weeks. Include an option for weekly embedding refresh automation.
+- Lukas: quick technical note on how KV caching will be isolated/controlled in EU-only deployments and whether we need any platform changes for audit logging.
+
+Timeline: Marcus estimate by EOD Wed 03/03; Lukas to confirm feasibility and any caveats by Thu 03/04. I’ll pull procurement contact into the thread once Marcus's pricing is ready.
+
+Thanks — appreciate a fast turnaround on this one.
+
+Irene
+Senior Account Executive | Redwood Inference
+irene.choi@redwood.ai
+
+--- Forwarded message attached above ---
+From: Marcus Lin <marcus.lin@redwood.ai>
+To: Taylor Ho <taylor.ho@novaledger.com>, Irene Choi <irene.choi@redwood.ai>
+Cc: procurement <procurement@novaledger.com>
+Date: Wed, 3 Mar 2027 11:05:00 -0500
+Subject: Re: NovaLedger — Post-call recap: pilot results, scale options & timeline
+
+Hi Taylor — looping in procurement per your request and thanks Irene for the handoff. Quick answers and next steps from our side: 
+
+1) SLA & performance assumptions - The p95 targets in Irene's note assume we run the primary generation model on dedicated A100-equivalent nodes with KV caching. The quantized fallback (4-bit QAT candidate) is expected to increase p95 by ~20–40% depending on prompt length; we’ll attach 3 short side-by-side examples in follow-up for product review.
+
+2) Pricing estimate (preliminary) — 3-node dedicated pilot (eu-central)
+- Monthly committed (base): $19,500 (3 sustained nodes)
+- Optional burst node (on-demand): $2,800/month (billed separately for burst hours)
+- Embedding refresh automation add-on: $1,200/month
+Estimated total: $23,500/month (falls within the band Taylor referenced). Final SOW will have hourly burn projections and token/unit modeling.
+
+3) EU data residency & KV isolation- We can ensure logs and KV caches remain in eu-central. Lukas, +1 here to confirm any config or audit logging notes. We will include DPA language and an EU-only retention configuration in the SOW.
+
+4) Next step: 30m technical kickoff to align infra/security + finalize SOW items. Proposed slots (all CET-friendly): Thu 2027-03-10 09:00, Fri 2027-03-11 14:00, or Mon 2027-03-14 10:00. Please pick one or suggest alternatives.
+
+Action items summary
+- Marcus: Share SOW draft + example outputs by Fri 2027-03-05 (Irene to follow up).
+- Irene: Add procurement to thread once SOW is attached (will do).
+- Taylor: Confirm kickoff slot and whether procurement prefers to see pricing line items or a consolidated estimate.
+
+Thanks — Marcus Lin
+Solutions Engineer | Redwood Inference
+marcus.lin@redwood.ai | +1 (617) 555-0221
+
+Attachments to follow: 3-generation-examples.txt (plain text), preliminary-cost-sheet.xlsx (XLSX)

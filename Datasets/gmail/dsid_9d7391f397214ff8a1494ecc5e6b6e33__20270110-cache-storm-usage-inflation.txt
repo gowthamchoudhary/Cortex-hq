@@ -1,0 +1,100 @@
+Cache-storm usage inflation — incident summary & credit plan
+
+From: Jordan Harris <ops@acme-payments.com>
+To: aditya_rao@redwood.ai
+Date: 2027-01-10T09:12:00-08:00
+Subject: Sudden 6x spike on today's invoice — urgent
+
+Hi Aditya,
+
+We just noticed an unexpected spike on today's usage line item — roughly 6x our normal token consumption for morning traffic. This hit our alerting and will push us past this month's budget. Can you confirm whether this is a billing error on Redwood's side or if something changed on our end?
+
+We haven't rolled any client-side changes; traffic looks normal. Please advise next steps and whether you can pause billing or put a hold while this is investigated.
+
+Thanks,
+Jordan Harris
+Sr. Platform Ops | Acme Payments
+attachments: (screenshot-usage.png image)
+
+From: aditya_rao@redwood.ai
+To: Jordan Harris <ops@acme-payments.com>
+Cc: laura_bennett@redwood.ai, marissa_cole@redwood.ai
+Date: 2027-01-10T10:05:00-08:00
+Subject: Re: Sudden 6x spike on today's invoice — urgent
+
+Hi Jordan — thank you for flagging this. I'm sorry for the disruption.
+
+Quick notes / immediate actions:
+- We've opened internal incident INC-7894 and started a quantitative review of token accounting for your tenant.
+- For now we've applied a temporary credit hold on further billing for the remainder of today while we investigate; this prevents further invoice impact.
+- I'll follow up with a timeline for root-cause and an outline of any credits/adjustments within 48 hours.
+
+Preliminary ask: can you share a sample request id and the approximate time window for the spike (your screenshot helps, thank you)? That'll help us correlate traces.
+
+I'll loop in Laura (account lead) and Marissa (billing ops) so we can coordinate credits and formal adjustments.
+
+Best,
+Aditya Rao
+Head of Customer Reliability | Redwood Inference
+Redwood Inference
+attachments: (incident-ticket-INC-7894.txt text)
+
+From: aditya_rao@redwood.ai
+To: laura_bennett@redwood.ai, marissa_cole@redwood.ai, sean_gallagher@redwood.ai
+Date: 2027-01-11T08:30:00-08:00
+Subject: Internal: ACME spike — cache warm-up duplication hypothesis
+
+Team,
+
+Summary of findings so far (work in progress):
+- Correlated traces for the time window 2027-01-10T08:50:00-09:15:00 PST show a cluster of concurrent cold-warm events triggered by a cache eviction on the serving fleet.
+- During the cache-warm phase, several replicated workers independently serialized the same generation requests for a subset of long-running streams. Due to a race in our deduplication window (previously tuned for smaller concurrency patterns), we double-counted token output across replicas in the accounting layer for ~25 minutes.
+- Impact for ACME: token counts inflated by ~5.8x for affected requests, resulting in the spike Jordan reported. Affected sessions are limited to region-us, tenant acme-payments, and the 25-minute window above.
+
+Immediate remediation performed:
+- Disabled the aggressive cache eviction rule for the affected pool (rejected two misaligned kernel updates).
+- Turned on a short-term accounting sanity check that suppresses duplicate-attributed tokens while we push a code fix.
+- Produced an incident digest (attached) and opened follow-up engineering tasks to harden dedupe windows and add end-to-end test coverage.
+
+Suggested customer-facing outcomes:
+- Full refund/credit for the overbilled amount (we should compute precise token delta and propose credit).
+- Written postmortem and SLO guardrails sent to the customer.
+- A brief call if the account team wants more detail.
+
+I'll draft the customer-facing note once Marissa has the adjustment numbers. Sean, can you validate the accounting delta from analytics? Laura, please prepare the outreach and proposed credit amount.
+
+Thanks,
+Aditya
+
+attachments: (postmortem-draft.pdf)
+
+From: laura_bennett@redwood.ai
+To: Jordan Harris <ops@acme-payments.com>
+Cc: aditya_rao@redwood.ai, marissa_cole@redwood.ai
+Date: 2027-01-12T14:42:00-08:00
+Subject: Cache warm-up incident — findings, proposed credit, and next steps
+
+Hi Jordan — following up with the results of our investigation and the actions we're taking to make this right.
+
+What happened (short):
+- Between 08:50–09:15 PST on 2027-01-10 we had a cache warm-up event that led to replicated workers producing duplicated accounting for some generation requests. That produced an inflated token count for a subset of ACME sessions.
+
+What we did for you:
+- Issued a temporary billing hold the day you reported the spike to stop further impact.
+- Calculated the exact token delta for your tenant for the affected window. Total overcount: 11,244,920 tokens.
+- Applied a one-time credit of $4,498.37 to your account reflecting the overbilled amount. You should see the credit applied on your next invoice. We've also created adjustment record ACME-ADJ-20270112 (link below).
+
+Longer-term fixes we're implementing:
+- Code fix to strengthen deduplication and extend the accounting sanity window across replicas (deploy planned 2027-01-19).
+- Additional end-to-end test coverage and monitoring alerts to detect similar cache storms earlier.
+- Postmortem and RCA (attached) with action items and owners.
+
+If you'd like, we can schedule a 30-minute call to walk through the technical details and the postmortem. Otherwise we'll attach the final postmortem to your account record and close INC-7894.
+
+Again, really sorry for the incident and the surprise charge — we take these very seriously and appreciate you surfacing it quickly.
+
+Best regards,
+Laura Bennett
+Account Executive | Redwood Inference
+Redwood Inference
+attachments: (adjustment_20270112.csv, final-postmortem.pdf)

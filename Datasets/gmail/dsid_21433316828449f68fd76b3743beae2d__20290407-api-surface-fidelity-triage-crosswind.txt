@@ -1,0 +1,119 @@
+Unexpected session affinity behavior during Crosswind demo — SDK vs API parity
+
+From: Marta Ruiz <marta.ruiz@crosswind.ai>
+To: Logan Wright <logan.wright@redwood.com>
+Cc: Crosswind Eng <eng@crosswind.ai>
+Date: 2029-04-07T09:12:00-07:00
+Subject: Demo failure: sticky sessions + SDK mismatch
+
+Hi Logan —
+
+Thanks again for the demo earlier today. We ran a follow-up internal run with ~40 concurrent users hitting the demo flow and started seeing two issues around minute 2 of the demo:
+
+- Some requests appear to be routed to a legacy variant (shorter context) and responses were truncated unexpectedly.
+- ~4% of sessions returned 500s with the runtime logging a cache-miss / KV cache invalidation trace.
+
+I attached a short repro trace (crosswind-repro-traffic.log) and a screenshot of the request map. The steps we used are in the log header, but TL;DR: we used the latest JS SDK (v0.9.4) with streaming enabled.
+
+Can you confirm whether the hosted API and the SDK are guaranteed to preserve session affinity and all relevant handshake headers? The symptom looks like the session-id isn't propagated for streamed requests and so subsequent tokens route incorrectly. This is blocking our next-day demo at an enterprise customer.
+
+Appreciate a quick triage — if you need credentials or a demo token, I can generate one.
+
+—Marta
+Director of Platform
+Crosswind Analytics
+
+Attachments:
+- crosswind-repro-traffic.log (text)
+- screenshot-session-map.png (image)
+
+From: Logan Wright <logan.wright@redwood.com>
+To: Marta Ruiz <marta.ruiz@crosswind.ai>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Dev Patel <dev.patel@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2029-04-07T11:05:00-07:00
+Subject: Re: Demo failure: sticky sessions + SDK mismatch
+
+Hi Marta —
+
+Thanks for the quick repro and logs. Sorry you hit this during the PoC run. I've looped in Dev (platform infra) and Karthik (runtime) to investigate routing/handshake differences between the REST API and the JS SDK streaming path.
+
+Quick notes / asks from our side:
+- Can you confirm the SDK client was using the streaming connect path (ws/tcp) vs plain HTTP? You mentioned streaming in the notes but want to be explicit.
+- If possible, can you provide a short repro token that I can use to replay traffic on our side (we will only use it for debugging and delete it after)?
+
+Initial mitigation we can recommend to your SEs while we triage: pin the model_variant parameter to the stable variant in the request metadata (model_variant=stable) or set a request header X-REDWOOD-FORCE-VARIANT: stable. That will avoid routing fallbacks until we confirm the root cause.
+
+Dev / Karthik — please see attached log and the reproduced steps. High priority: this is impacting an enterprise demo and we should evaluate a short-term flag to disable session stickiness for Crosswind traffic while we root-cause.
+
+Logan Wright
+Senior Sales Engineer | Redwood Inference
++1 (555) 312-0912
+
+Attachments:
+- sdk-sample-repro.py (python snippet)
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Logan Wright <logan.wright@redwood.com>
+Cc: Dev Patel <dev.patel@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>, Marta Ruiz <marta.ruiz@crosswind.ai>
+Date: 2029-04-07T12:03:00-07:00
+Subject: Re: Demo failure: sticky sessions + SDK mismatch
+
+Looping back with context from the account team: Crosswind has an upcoming procurement demo with a security-heavy buyer on Friday. If this remains flaky at ~4% error rate their SRE will push back and we risk losing momentum on DEAL-7839.
+
+Two asks from Sales:
+1) Can we get an ETA for a mitigation (flag/override) that we can apply to the hosted endpoint asap? If the runtime team can expose a per-account flag (disable-session-stickiness=true) we can flip it for Crosswind during the demo window.
+2) If a code patch is required, can we get a temporary rollback or hotfix window? We should plan a short canary deploy and a rollback plan in case of side-effects.
+
+If runtime wants a quick call to triage live with the Crosswind logs and reproduce, schedule me in — I can coordinate timing.
+
+—Marissa
+Director, Sales Engineering | Redwood Inference
+
+From: Dev Patel <dev.patel@redwood.com>
+To: Logan Wright <logan.wright@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2029-04-08T09:40:00-07:00
+Subject: Re: Demo failure: sticky sessions + SDK mismatch
+
+Thanks for the signal and logs. I pulled the attached trace — initial read indicates a mismatch between the SDK streaming handshake and the HTTP path. Specifics:
+
+- The SDK uses a persistent streaming connection and sends a client-side session-id in the initial handshake metadata. In a subset of cases the runtime's routing layer drops that header for background replays (we see a missing X-Client-Session header on subsequent chunked requests).
+- The missing header causes the request router to fall back to variant selection heuristics which can pick a legacy variant with shorter context window — hence the truncation.
+- The 500s appear tied to a KV-cache invalidation race when a streaming request arrives without a valid session key. We get a short-lived exception that surfaces as a 500 in the public API.
+
+Immediate actions I propose:
+1) Short-term: add per-account routing override (disable-session-stickiness=true) — we can expose this today as a config flag in the routing table and flip it for Crosswind. No code change required; operational configuration only. I can coordinate the flip and a rollback window.
+2) Mid-term: patch the streaming handshake path to ensure X-Client-Session is upserted on every chunked request path. Karthik, can you scope the patch/work? My estimate: small runtime change, but we need a canary and cycle (~2 dev days + validation).
+
+For reproducing locally I've included a one-liner that replays the traffic using the token from Marta (please send via secure channel) and a quick command to toggle the routing flag:
+
+- repro: python sdk-sample-repro.py --token <redacted> --concurrency 40
+- toggle: rwctl routing set --account crosswind --disable-session-stickiness=true
+
+I can perform the config flip as soon as we get approval from Marissa/Logan and a narrow time window to monitor.
+
+—Dev
+Senior Platform Engineer | Redwood Inference
+
+From: Logan Wright <logan.wright@redwood.com>
+To: Marta Ruiz <marta.ruiz@crosswind.ai>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Dev Patel <dev.patel@redwood.com>, Karthik Iyer <karthik.iyer@redwood.com>
+Date: 2029-04-09T16:02:00-07:00
+Subject: Re: Demo failure: sticky sessions + SDK mismatch
+
+Marta —
+
+Thanks for the quick patience. Summary and next steps:
+
+- Short-term mitigation: We will flip a routing flag (disable-session-stickiness=true) on the hosted endpoint for Crosswind. This is an operational toggle; no code deploy required. Dev can do the flip and monitor for 30 minutes post-change.
+- Mid-term fix: runtime team will patch the streaming handshake so X-Client-Session is propagated for every chunked request. Target: canary + validation in ~2 business days; full rollout TBD pending canary results.
+- Temporary workaround for your SEs: include header X-REDWOOD-FORCE-VARIANT: stable or pass model_variant=stable in request metadata if you need a per-request override.
+
+Can you confirm a 30-minute window tomorrow morning (Apr 10 09:30–10:00 PT) when we can flip the flag and have your team run the same demo script? If that works we will schedule the flip and have on-call monitor.
+
+I'll follow up with a short status note after the config flip and include the HubSpot activity (DEAL-7839). Appreciate the repro artifacts — they made root-cause obvious and sped up the proposed mitigation.
+
+Best,
+Logan Wright
+Senior Sales Engineer | Redwood Inference
+
+(On behalf of the runtime & platform teams)

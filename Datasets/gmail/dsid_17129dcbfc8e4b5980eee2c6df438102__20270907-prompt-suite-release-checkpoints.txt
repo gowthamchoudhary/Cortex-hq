@@ -1,0 +1,128 @@
+Prompt suite release checkpoints & acceptance criteria
+
+From: Alice Zhou <alice.zhou@acme.com>
+To: evelyn_hart@redwood.example.com
+Date: Tue, 7 Sep 2027 09:12:00 -0700
+Subject: Prompt-suite rollout — acceptance criteria and A/B plan
+
+Hi Evelyn,
+
+Thanks again for the walkthrough last week. Our PM and platform teams want a clear set of go/no-go checkpoints for the prompt-suite release (A/B experiment + fallback plan). Can you share the acceptance criteria you typically use for prompt-set rollouts and the canary schedule you recommend? We need this for our procurement sign-off and to sync on monitoring alerts.
+
+Top asks from our side:
+- Concrete thresholds for % quality regression (by metric) that trigger rollback
+- Canary traffic ramp plan (time-based or user-count)
+- What telemetry you expect from our side (examples of events/logs)
+
+I've attached our draft test plan (see attachment). Happy to jump on a quick call if that's easier.
+
+Thanks,
+Alice
+Alice Zhou
+Senior PM, Acme Corp
+[attachment: acme_prompt_acceptance_draft.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+From: Evelyn Hart <evelyn_hart@redwood.example.com>
+To: marissa_cole@redwood.example.com, karthik_iyer@redwood.example.com, dev_patel@redwood.example.com, jonas_weber@redwood.example.com
+Cc: 
+Date: Tue, 7 Sep 2027 10:05:00 -07:00
+Subject: Fwd: Prompt-suite rollout — acceptance criteria and A/B plan
+
+Forwarding Acme's ask — they want explicit acceptance criteria and a canary plan for the prompt-suite A/B. They're targeting a pilot next month and procurement needs the rollback thresholds spelled out.
+
+Can each of you quickly note:
+- Marissa: proposed eval metrics and thresholds we can commit to for the pilot
+- Karthik: recommended canary ramp and product constraints (anything that blocks us from time-based ramps)
+- Dev: canary infra/config + monitoring hooks we need from Acme
+
+I've attached our internal test plan template and a stubbed canary config. Please reply with short bullets so I can send a consolidated response.
+
+Thanks — Evelyn
+Evelyn Hart
+Director, Customer Success — Redwood Inference
+[attachment: prompt_suite_test_plan_v2.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)] [attachment: canary_config.json (application/json)]
+From: Marissa Cole <marissa_cole@redwood.example.com>
+To: evelyn_hart@redwood.example.com, karthik_iyer@redwood.example.com, dev_patel@redwood.example.com
+Date: Tue, 7 Sep 2027 11:21:00 -07:00
+Subject: Re: Fwd: Prompt-suite rollout — acceptance criteria and A/B plan
+
+Evelyn / team — putting a concise proposal here (short bullets for Acme):
+
+Proposed acceptance criteria (pilot):
+- Primary metric: Corrected-Response Accuracy (CRA) on 1k held-out prompts from Acme — baseline = 0.842.
+  - Gate: no more than 1.5% absolute drop vs baseline (CRA >= 0.827) during canary window.
+- Secondary metric: Anchored user satisfaction (surveyed NPS-like) — no statistically significant decline (p>0.05) vs baseline.
+- Error/abuse rate: automated classifier false-positive rate < 0.5% and no safety violations flagged by manual review > 0.1% of sampled responses.
+- Latency: 95th percentile inference latency must not exceed baseline + 60ms overhead.
+
+A/B plan (suggested):
+- Round 0 (internal staging): 1000 synthetic prompts, run stability evals + coherence/verbosity checks.
+- Canary 1 (1% traffic) for 24 hours — collect CRA and latency, sample 200 responses for manual safety review.
+- Canary 2 (5% traffic) for 48 hours — automated metrics + expanded manual sampling.
+- Ramp to 20% for 72 hours if metrics hold, then to 50% and monitor for 7 days before full roll.
+
+Rollback triggers (automated):
+- CRA drop > 1.5% sustained for three 10-minute windows OR
+- Latency P95 increase > 60ms sustained for 30 minutes OR
+- Safety violation sample > 0.5% in manual checks.
+
+We can make thresholds looser/tighter per Acme risk tolerance — recommend we document these with explicit measurement windows. I'll attach a short MD with the metric calculations.
+
+- Marissa
+Marissa Cole
+Applied ML / Evals — Redwood Inference
+[attachment: eval-metrics-proposal.md (text/markdown)]
+From: Karthik Iyer <karthik_iyer@redwood.example.com>
+To: evelyn_hart@redwood.example.com, marissa_cole@redwood.example.com, dev_patel@redwood.example.com
+Date: Wed, 8 Sep 2027 08:15:00 -07:00
+Subject: Re: Fwd: Prompt-suite rollout — acceptance criteria and A/B plan
+
+Adding product constraints and scheduling notes:
+
+- Time-based ramp is OK but we need to reserve a rollback window (quiet hours) where rollbacks are coordinated with Acme's on-call (recommended 9a-6p PT for initial ramps).
+- Feature flags: we'll serve the prompt-suite behind a feature flag keyed by customer + experiment id. We can do percent-based targeting for A/B.
+- Opt-out path: immediate fallback to baseline model variant (pinned model version) with REST endpoint for forced fallback triggered by Acme's ops.
+- Dependencies: the only blocker is a short-lived quota change in Dedicated pool if they want higher concurrency; call out ahead of time so infra can provision.
+
+Proposed schedule for pilot (tentative):
+- Week 0: contract + security checklist complete
+- Week 1: staging runs and internal evals
+- Week 2: canary 1 (1% -> 5%)
+- Week 3: expand 20% -> 50% if green
+
+I'll coordinate with sales to confirm the procurement timelines.
+
+- Karthik
+From: Dev Patel <dev_patel@redwood.example.com>
+To: evelyn_hart@redwood.example.com, karthik_iyer@redwood.example.com, marissa_cole@redwood.example.com, jonas_weber@redwood.example.com
+Date: Thu, 9 Sep 2027 16:42:00 -07:00
+Subject: Re: Fwd: Prompt-suite rollout — acceptance criteria and A/B plan
+
+Infra notes + what we need from Acme:
+
+- We can support the proposed ramp. Deliverables from our side: canary_config.json (attached stub), dashboard links (Prometheus + Grafana), and an automated rollback webhook.
+- Monitoring hooks we need Acme to wire: request_id, experiment_id, prompt_id, user_tier, and optional client-side quality_score header. These are lightweight and will let us compute CRA and correlate with latency.
+- Attachments: canary_config.json (template), example grafana dashboard URL and a short runbook.
+- Cost guardrail: if token usage increases > 3x baseline for the rolling 24-hour window, auto-throttle canary to 10% and alert owners (will need Acme to accept throttling in advance).
+
+I'll drop the config into the shared doc and ping when done.
+
+- Dev
+Senior SW Engineer, Serving Runtime — Redwood Inference
+[attachment: canary_config.json (application/json)]
+From: Evelyn Hart <evelyn_hart@redwood.example.com>
+To: Alice Zhou <alice.zhou@acme.com>, platform@acme.com
+Cc: marissa_cole@redwood.example.com, karthik_iyer@redwood.example.com, dev_patel@redwood.example.com
+Date: Thu, 9 Sep 2027 17:00:00 -07:00
+Subject: Re: Prompt-suite rollout — acceptance criteria and A/B plan
+
+Alice — thanks for the clear asks. Internal team has proposed the acceptance criteria, canary schedule, rollback triggers, and infra needs (see thread). Next steps from my side:
+- I'll send Acme a consolidated one-pager that includes the thresholds, canary timeline, and the runbook links by EOD tomorrow.
+- Marissa will work with Acme to finalize metric windows and sample sizes.
+- Dev will share the finalized canary_config and dashboard links.
+- Karthik will sync with your procurement contact on schedule constraints.
+
+Would you like a 30-min alignment call Friday to walk through the plan, or would a one-pager suffice for procurement?
+
+Thanks,
+Evelyn
+Director, Customer Success — Redwood Inference

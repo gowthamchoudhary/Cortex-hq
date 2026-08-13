@@ -1,0 +1,104 @@
+Proposed inference engine trio & procurement path — next steps
+
+From: Tessa Morgan <tessa_morgan@redwood.com>
+To: Alex Turner <alex.turner@novus.ai>
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-03-19T15:02:00-07:00
+Subject: Proposed inference engine trio & procurement path — next steps
+
+Hi Alex — thanks again for the demo time today. Quick recap and a recommended path forward based on what we saw and Novus.ai’s primary constraints (high throughput, tight latency requirements for chat, and a hard budget target). I tried to keep this pragmatic and ops-focused so your engineers can validate quickly.
+
+1) Shortlist (recommended trio) — rationale (cost / latency / quality tradeoffs)
+- Redwood-Edge-4B-INT4 (low-cost, high throughput): best fit for high-volume routings (summary/embedding pre-filter). Bench (512-token typical request): p50 latency ~85 ms per token, estimated unit cost ~$0.0006/token. Quality: baseline F1 0.78 on your prompt set (acceptable for short generative answers).
+- OpenCore-7B-INT4 (balanced): primary candidate for day-to-day chat. Bench (512 tokens): p50 latency ~120 ms/token, unit cost ~$0.0011/token. Quality: F1 ~0.86 on Novus evals, notably better on follow-up coherence.
+- Atlas-70B-fp16 (high-quality fallback): for answers requiring high factuality or longer-form reasoning (reports, legal excerpts). Bench (512 tokens): p50 ~310 ms/token, unit cost ~$0.0045/token. Quality: F1 ~0.92, best on multi-turn reasoning.
+
+Recommendation: default route ~70% traffic to OpenCore-7B-INT4, 25% to Redwood-Edge-4B for cheap/short paths, and reserve Atlas-70B for low-confidence fallback or targeted features. This balances cost while keeping a path to high-quality outputs when needed.
+
+2) Operational guardrails & canary plan
+- Canary ramp: 5% -> 25% -> 50% -> 100% over 48–72 hours per stage; hold at each step for 6–12 hours and run automated checks.
+- Regression monitoring: run continuous evals on the agreed prompt-set (attached) + production sampling. Alert triggers: >5% drop in end-to-end answer similarity/accuracy vs baseline or >8% increase in high-entropy responses.
+- Fallbacks: automatic fallback to previous model variant or to Atlas-70B for low-confidence model outputs (policy based on token-level confidence and heuristic thresholds).
+
+3) Procurement / commercial path (what we need from Novus)
+- Preferred committed tier (three-month anchor to start): indicated volume to get committed discount. I’ve attached an initial pricing sheet — Ben can finalize numbers.
+- Security/compliance: we can enable VPC/private routing and SSO/SCIM within ~2 weeks after PoC sign-off.
+
+Attachments: novus_benchmarks_mar19.pdf (bench details + prompt-level breakdown), novus_prompt_set_v1.jsonl (sample prompt-set used for evals), mutual_action_plan_novus.xlsx (action items + timeline).
+
+Next step: are you available for a 30-min alignment call next Tue (Mar 23) to resolve the committed-tier question and lock the canary window? If you prefer, Ben can put together the formal quote first and we can align asynchronously.
+
+Thanks,
+Tessa
+Tessa Morgan
+Senior Solutions Engineer | Redwood Inference
+attachments: novus_benchmarks_mar19.pdf (report), novus_prompt_set_v1.jsonl (prompt-set), mutual_action_plan_novus.xlsx (MMP)
+On Fri, Mar 19, 2027 at 16:10 Alex Turner <alex.turner@novus.ai> wrote:
+> Thanks Tessa — very clear summary. A couple quick clarifying Qs from our side:
+> 1) Regression monitoring: can you be explicit about gating thresholds and who owns the triage when the alerts fire? We need an operational runbook idea before we start the canary.
+> 2) Fallback behavior: how graceful is the switch to Atlas-70B for low-confidence? We want to avoid doubling latency for the user.
+> 3) Pricing/committed tiers: ballpark: to reach our internal budget we need ~30–40% committed discount. Can you share what thresholds get us there?
+> Also, are there any compliance caveats we need to raise for our FedRAMP planning (we’re starting assessment later this year)?
+> 
+> —Alex
+
+Alex Turner
+Head of Product, Novus.ai
+alex.turner@novus.ai
++1 415 555 0123
+
+On Fri, Mar 19, 2027 at 15:02 Tessa Morgan <tessa_morgan@redwood.com> wrote:
+> [original message omitted]
+From: Tessa Morgan <tessa_morgan@redwood.com>
+To: Alex Turner <alex.turner@novus.ai>
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-03-20T08:00:00-07:00
+Subject: Re: Proposed inference engine trio & procurement path — next steps
+
+Alex — great questions, answered inline below. Keeping the runbook pragmatic so your on-call/ops folks can own steps without heavyweight process overhead.
+
+1) Regression monitoring and triage (who/what)
+- What we ship: continuous eval harness that runs the canonical prompt-set (attached) on every model version and daily production sampling.
+- Alerting thresholds: automated alert if end-to-end answer similarity drops >5% vs baseline or if the rate of high-entropy/unknown responses increases >8% over a 24-hour window.
+- Triage ownership: initial alert routes to Novus on-call + Redwood SRE (we'll add both paged contacts). Redwood can auto-roll back to the previously pinned model variant if a critical threshold is hit and the incident is acknowledged within the canary window.
+
+2) Fallback UX and latency impact
+- Graceful fallback strategy: we recommend a policy-first approach — only invoke Atlas-70B when the primary model signals low confidence (token-level entropy + heuristics) or a verified content failure is detected. That keeps the majority of requests on the primary path.
+- Latency mitigation: when fallback is required, use speculative execution (start Atlas in parallel for the top-n requests) or partial-response streaming (send best-effort primary output while Atlas completes). Both approaches add overhead but reduce perceived latency; we can implement speculative starts for high-value flows.
+
+3) Pricing / committed tiers
+- Ben is cc’d and has prepared an initial tier sheet. Rough thresholds that get you to ~30–40% off: 3–6 month commit at 1.5–2.0M tokens/day effective usage or an annualized equivalent. We’ll send a tailored quote once you confirm expected steady-state daily tokens.
+
+4) FedRAMP / compliance
+- Caveat: FedRAMP requires an isolated control plane and more stringent evidence than standard SOC2. We can support the artifacts and provide an on-prem / private deployment option; timeline will be longer (we can scope in the alignment call).
+
+Proposal: 30-min alignment Tue Mar 23, 10:00am PT? If not, propose a couple windows and we’ll adjust. If you want, Ben can include the preliminary pricing in advance.
+
+Thanks,
+Tessa
+--
+Tessa Morgan
+Senior Solutions Engineer | Redwood Inference
+Phone: +1 415 555 2034
+
+attachments: pricing_committed_tiers_v1.xlsx (pricing thresholds)
+From: Ben Carter <ben_carter@redwood.com>
+To: Alex Turner <alex.turner@novus.ai>, Tessa Morgan <tessa_morgan@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2027-03-20T09:12:00-07:00
+Subject: Re: Proposed inference engine trio & procurement path — next steps
+
+Alex — looping in the pricing details. I attached a simple committed-tier worksheet (pricing_committed_tiers_v1.xlsx) that maps monthly token tiers to discounts, with an example 3-month ramp. High level:
+- 0.5M tokens/day = standard pricing
+- 1.5M tokens/day = ~20% discount
+- 2.5M tokens/day = ~30% discount
+- 4M+ tokens/day = 35–40% discount (requires 6–12 month commitment)
+
+If Novus can agree to a 3–6 month initial commitment at the 1.5–2.5M/day range, we can meet the ~30% target you cited. I’ll follow up with a formal quote and draft agreement once you confirm the preferred tier.
+
+If helpful I’m happy to join Tue’s call to finalize commercial terms.
+
+—Ben
+Ben Carter
+Head of Commercial | Redwood Inference
+ben_carter@redwood.com
+attachments: pricing_committed_tiers_v1.xlsx (pricing worksheet)

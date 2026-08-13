@@ -1,0 +1,132 @@
+Segregated data-sovereignty scenarios + BYOK handshake mapping
+
+From: Cal Morris <cal.morris@globalbank.com>
+To: tessa_morgan <tessa_morgan@redwood.ai>
+Cc: DPO Team <dpo@globalbank.com>
+Date: Sun, 25 Oct 2026 16:12:00 -0400
+Subject: Private deploy options - keys + segmented residency questions
+
+Hi Tessa,
+
+Thanks for taking a look with us earlier. We need to validate a couple of privacy/legal constraints for a potential private deployment (VPC + on-prem staging) for our payments stack. High level asks:
+
+- Customer-managed keys (BYOK): we need to confirm the separation of custody and whether Redwood operators can ever access plaintext keys or decrypted tokens.
+- Data segmentation: some datasets are EU-origin; preference is that inference for those requests stays in eu-central region and logs never leave that region.
+- Subprocessors: a list of any subprocessors who might touch metadata/telemetry for private deployments (even if only for updates/patches).
+
+Can you point us to the specific DPA language + an operational mapping that shows: (a) who has access to keys, (b) what telemetry is collected and where it lives, and (c) breakglass/forensics process if we need emergency access?
+
+Cal
+Cal Morris
+Head of Platform Security, Global Bank - Payments
+
+From: tessa_morgan <tessa_morgan@redwood.ai>
+To: Cal Morris <cal.morris@globalbank.com>
+Cc: dev_patel <dev_patel@redwood.ai>, lauren_bishop <lauren_bishop@redwood.ai>
+Date: Mon, 26 Oct 2026 09:05:00 -0400
+Subject: Re: Private deploy options - keys + segmented residency questions
+
+Cal — thanks, appreciated. Looping in Dev (engineering lead for private runtime) and Lauren (legal) to provide the detailed mapping and DPA language.
+
+Quick answers up front:
+- BYOK: customer controls master keys in their KMS; Redwood can be configured to never persist unencrypted CEKs. We do have an operator breakglass mechanism but it is gated by a signed escrow and customer approval — details to follow.
+- Residency: routing policies can pin requests by dataset tag to a region-aware serving pool; we also support per-route egress restrictions in the private control plane.
+- Subprocessors: minimal for private - mostly cloud provider (if hosted) and patch management vendor for on-prem, but we will enumerate names and scopes.
+
+Dev, Lauren — can you supply a concise flow diagram + redlined DPA snippets and list of subprocessors we should expect for the private option? Cal needs this for internal privacy signoff this week.
+
+Thanks,
+Tessa
+Tessa Morgan
+Director, Solutions — Redwood Inference
+
+From: dev_patel <dev_patel@redwood.ai>
+To: tessa_morgan <tessa_morgan@redwood.ai>, Cal Morris <cal.morris@globalbank.com>
+Cc: lauren_bishop <lauren_bishop@redwood.ai>
+Date: Mon, 26 Oct 2026 11:18:00 -0400
+Subject: Re: Private deploy options - keys + segmented residency questions
+
+Cal / Tessa / Lauren — attaching a short mapping and two artifacts: redwood-byok-matrix.xlsx (matrix of key custody + operator entitlements) and key-flow-diagram.png (sequence diagram). Highlights:
+
+1) Key custody model (BYOK):
+- Master Key: always stored in customer KMS (supported: AWS KMS, Azure Key Vault, GCP KMS, and HSM export only).
+- CEKs (content encryption keys) are generated per-model instance; by default, CEKs are encrypted with the customer master key and only the ciphertext is stored by Redwood.
+- Operator access: operators cannot decrypt CEKs without an escrow flow. Escrow requires:
+  * a signed legal request (DocuSign) from an authorized customer admin,
+  * recorded justifications in audit log, and
+  * multi-party approval inside Redwood (security + legal).
+
+2) Telemetry and metadata collection (private control plane):
+- Mandatory telemetry: agent-heartbeat, pool-health, error traces (no input payloads).
+- Optional debug telemetry (only if customer toggles and shares a secure token): full request logs for a defined 72-hour window, stored in customer-controlled object store or encrypted Redwood bucket scoped to region.
+- EU-residency: for eu-tagged routes, telemetry is routed to eu-central buckets; no cross-region replication unless explicitly allowed by the customer.
+
+3) Subprocessors (private deployment profile):
+- Patch/Update Vendor: SecureOps Ltd — access limited to signed, time-bound update tokens; no telemetry access.
+- Monitoring Agent Provider: TeleProbe Inc — only aggregates (counts/errors), hosted in customer region.
+- Hardware vendor telemetry (on-prem): OEM diagnostic package — can be disabled.
+
+4) Breakglass-forensics path:
+- Emergency access starts with customer request + DocuSign approval link. We can support a blinded attestation mode where Redwood runs a forensics job that returns only parity/diagnostic results without revealing plaintext. Full decryption only allowed per escrow flow above.
+
+See attached for the matrix and diagram. Happy to review live.
+
+[attachment: redwood-byok-matrix.xlsx (application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
+[attachment: key-flow-diagram.png (image/png)]
+
+— Dev
+Dev Patel
+Senior Engineering Manager, Private Runtime
+
+From: lauren_bishop <lauren_bishop@redwood.ai>
+To: tessa_morgan <tessa_morgan@redwood.ai>, Cal Morris <cal.morris@globalbank.com>
+Date: Tue, 27 Oct 2026 08:02:00 -0400
+Subject: Re: Private deploy options - keys + segmented residency questions
+
+Cal — adding a few legal / DPA notes inline. Main items to consider for Global Bank:
+
+- DPA Annex: we propose an Annex that codifies BYOK obligations and operator breakglass requirements (we will insert explicit steps for DocuSign authorization + retention of approval evidence).
+- Subprocessor disclosure: we will include a short list and a promise of 30-day notice prior to onboarding any new subprocessor that can access telemetry/diagnostic aggregates. We will add a clause to restrict cross-border replication of telemetry unless signed off.
+- Data subject requests & retention: recommend explicit section that telemetry retention defaults to 90 days for error traces, 30 days for heartbeat metrics, unless the customer sets otherwise in the control plane.
+- Audit & evidence: Redwood can produce a PDF evidence package (signed) of any breakglass action within 14 days; for highly regulated customers we can add a certified notarization addendum (extra fee).
+
+I've redlined example language and uploaded it to DocuSign for a simple signature path we can use as evidence. Link: https://docusign.com/track/ABC1234
+HubSpot deal: https://app.hubspot.com/deals/GB-2026-0573
+
+Happy to walk through details live — propose a 30-minute call Wednesday 10:00 AM ET.
+
+Lauren Bishop
+Senior Counsel, Redwood Inference
+
+From: tessa_morgan <tessa_morgan@redwood.ai>
+To: Cal Morris <cal.morris@globalbank.com>, dev_patel <dev_patel@redwood.ai>, lauren_bishop <lauren_bishop@redwood.ai>
+Date: Tue, 27 Oct 2026 09:03:00 -0400
+Subject: Re: Private deploy options - keys + segmented residency questions
+
+Cal — thanks everyone for the quick turnaround and the artifacts. Next steps I propose:
+
+1) Cal / DPO: review the attached matrix and diagram; flag any missing edge cases (especially any third-party data enrichment flows).
+2) If ok, sign the DocuSign evidence path for the escrow process we outlined (Lauren's link).
+3) We'll schedule the Wed 10:00 AM ET call to walk the team through the flow and confirm the HubSpot deal next steps.
+
+If you want an offline copy of the matrix and diagram I attached them to this thread.
+
+Thanks — see you on Wednesday.
+Tessa
+
+
+On Tue, 27 Oct 2026 at 08:02:00 -0400 lauren_bishop <lauren_bishop@redwood.ai> wrote:
+> Cal — adding a few legal / DPA notes inline. Main items to consider for Global Bank:
+> 
+> - DPA Annex: we propose an Annex that codifies BYOK obligations and operator breakglass requirements (we will insert explicit steps for DocuSign authorization + retention of approval evidence).
+> - Subprocessor disclosure: we will include a short list and a promise of 30-day notice prior to onboarding any new subprocessor that can access telemetry/diagnostic aggregates. We will add a clause to restrict cross-border replication of telemetry unless signed off.
+> - Data subject requests & retention: recommend explicit section that telemetry retention defaults to 90 days for error traces, 30 days for heartbeat metrics, unless the customer sets otherwise in the control plane.
+> - Audit & evidence: Redwood can produce a PDF evidence package (signed) of any breakglass action within 14 days; for highly regulated customers we can add a certified notarization addendum (extra fee).
+> 
+> I've redlined example language and uploaded it to DocuSign for a simple signature path we can use as evidence. Link: https://docusign.com/track/ABC1234
+> HubSpot deal: https://app.hubspot.com/deals/GB-2026-0573
+> 
+> Happy to walk through details live — propose a 30-minute call Wednesday 10:00 AM ET.
+> 
+> Lauren Bishop
+> Senior Counsel, Redwood Inference

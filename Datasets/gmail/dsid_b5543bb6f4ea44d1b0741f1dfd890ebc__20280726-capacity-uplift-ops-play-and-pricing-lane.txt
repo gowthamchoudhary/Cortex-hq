@@ -1,0 +1,128 @@
+Hosted API capacity uplift & rate harmonization
+
+From: Elena Torres <elena@streamline.ai>
+To: karthik_iyer <karthik_iyer@redwoodinference.com>, vanessa_ortiz <vanessa_ortiz@redwoodinference.com>
+Cc: marco.ruiz@streamline.ai, contracts@streamline.ai
+Date: Thu, 26 Jul 2028 09:12:00 -07:00
+Subject: Capacity planning: hosted API commit uplift request
+
+Hi Karthik / Vanessa,
+
+Thanks again for taking time with the Streamline team yesterday. We finished an internal traffic forecast and it looks like our monthly token consumption will step up materially starting September — roughly 3x our current committed monthly tokens. The quick asks:
+
+- Can Redwood provide pricing and a clear path to increase our hosted commit for Sep 1 (or earlier if needed)?
+- We need to understand rate limits, burst pocket policy, and any SLA changes tied to an uplift.
+- Attached is our June traffic report and a draft SOW for the new commit (Streamline_Traffic_Report_Jun2028.pdf, SOW-Streamline-v2.docx).
+
+We'd like to align on a short mutual action plan (timeline, billing cadence, signed SOW) by next week to avoid service disruption for an upcoming product launch. Marco from infra and Legal are copied.
+
+A few context points: the uplift is driven by an in-app search feature (approx 180M tokens/month projected) and a parallel embedding pipeline for personalization. We care a lot about tail latency and token-level cost — please call out any mitigations (quantization, batching) you recommend.
+
+Thanks,
+Elena Torres
+Head of Product, Streamline.AI
+elena@streamline.ai | +1 415-555-0198
+
+Attachments: Streamline_Traffic_Report_Jun2028.pdf; SOW-Streamline-v2.docx
+From: karthik_iyer <karthik_iyer@redwoodinference.com>
+To: Elena Torres <elena@streamline.ai>
+Cc: vanessa_ortiz <vanessa_ortiz@redwoodinference.com>, marissa_cole <marissa_cole@redwoodinference.com>, vivek_kulkarni <vivek_kulkarni@redwoodinference.com>
+Date: Thu, 26 Jul 2028 11:03:00 -07:00
+Subject: Re: Capacity planning: hosted API commit uplift request
+
+Elena — thanks for the packet and clear ask. Looping in Marissa (pricing/renewal) and Vivek (runtime/ops) so we can turn this into a short playbook.
+
+High level next steps from my side:
+1) Marissa will propose a committed uplift tier and pricing bands we can offer for a Sep 1 start.
+2) Vivek will validate capacity, burst pocket sizing, and any required rate-limit changes; he'll advise on rollout canaries to protect latency.
+3) Vanessa / I will coordinate SOW language, billing cadence, and DocuSign link for signatures.
+
+Two quick Qs for you to help prioritize the options:
+- Do you need an immediate hard commit (monthly billing) or would a staged/bridge approach with a prorated first month work?
+- Any hard latency SLOs (p50/p95 targets) we should bake into the proposal?
+
+I'll aim to have an internal proposal by end of day tomorrow; Marissa will cc pricing bands.
+
+—Karthik
+VP Partnerships, Redwood Inference
+karthik_iyer@redwoodinference.com
+
+On Thu, Jul 26, 2028 at 09:12 AM Elena Torres <elena@streamline.ai> wrote:
+> Hi Karthik / Vanessa,
+> 
+> Thanks again for taking time with the Streamline team yesterday...
+From: marissa_cole <marissa_cole@redwoodinference.com>
+To: karthik_iyer <karthik_iyer@redwoodinference.com>, Elena Torres <elena@streamline.ai>
+Cc: vanessa_ortiz <vanessa_ortiz@redwoodinference.com>, vivek_kulkarni <vivek_kulkarni@redwoodinference.com>
+Date: Fri, 27 Jul 2028 08:17:00 -07:00
+Subject: RE: Capacity planning: hosted API commit uplift request — pricing bands and options
+
+Elena / team — draft pricing options below (high level). I'll put formal numbers into the attached pricing_grid_v3.xlsx and update the HubSpot deal after you pick a path.
+
+Option A — Committed monthly uplift (Recommended)
+- Commit: 180M tokens / month (12-month term)
+- Effective unit rate: $0.0009 / token (volume tier blended)
+- Burst pocket: 20% of monthly commit at no additional committed fee; overage at $0.00115 / token
+- Billing cadence: monthly invoice; 30-day terms
+- Incentives: 8% pre-payment credit if annualized for 12 months
+
+Option B — Staged ramp (2-month bridge)
+- Month 1: provisional commit 100M, Month 2: 140M, Month 3+: 180M final commit
+- Higher unit rate during bridge (0.00105 / token) to cover burst and fast provisioning
+- Can convert to Option A anytime with proration on the first billing cycle
+
+Operational notes from ops (Vivek):
+- We recommend enabling a KV prefix cache for your search traffic and a per-route batching profile to reduce p50 token cost by ~15%.
+- For latency SLOs: if you target p95 < 300ms we should run a pre-rollout canary on a 5% traffic slice for 72 hours; if you require stricter p95 < 200ms we need dedicated capacity (Dedicated pool) — I can scope the cost delta.
+
+Next steps: pick Option A or B? If Option A, confirm term length and whether you want the pre-pay credit. We'll provision and share a DocuSign SOW.
+
+Thanks,
+Marissa Cole
+Account Exec — Strategic Accounts, Redwood Inference
+marissa_cole@redwoodinference.com
+Phone: +1 206-555-0123
+
+Attachments: pricing_grid_v3.xlsx
+From: vivek_kulkarni <vivek_kulkarni@redwoodinference.com>
+To: marissa_cole <marissa_cole@redwoodinference.com>, karthik_iyer <karthik_iyer@redwoodinference.com>, Elena Torres <elena@streamline.ai>
+Cc: vanessa_ortiz <vanessa_ortiz@redwoodinference.com>
+Date: Fri, 27 Jul 2028 10:42:00 -07:00
+Subject: RE: Capacity planning: hosted API commit uplift request — ops notes
+
+Quick ops addendum — tagging behind Marissa's options:
+
+- Burst handling: we'll reserve burst buffer on the same host pool; that means isolated burst behavior but shared eviction policy. No changes to your existing keys.
+- Rate limits: for Option A we'll increase per-route QPS to match the 180M/month profile; new soft-limits applied with a 90-second exponential backoff window.
+- Canary plan: 5% traffic for 72 hours -> metrics we will monitor: p50/p95 latency, CPU/GPU utilization, kv-cache hit rate, and token error rates.
+- Fallback: automatic failed-request routing to the next compatible model flavor (slightly lower throughput) in case of sustained saturation for >10 minutes.
+
+I'll schedule an ops readiness call Tuesday (Jul 30) 10:00 AM PT to run through canary runbooks with Streamline infra.
+
+—Vivek
+Head of Runtime Engineering, Redwood Inference
+vivek_kulkarni@redwoodinference.com
+From: vanessa_ortiz <vanessa_ortiz@redwoodinference.com>
+To: Elena Torres <elena@streamline.ai>
+Cc: karthik_iyer <karthik_iyer@redwoodinference.com>, marissa_cole <marissa_cole@redwoodinference.com>, vivek_kulkarni <vivek_kulkarni@redwoodinference.com>, contracts@streamline.ai
+Date: Mon, 30 Jul 2028 15:45:00 -07:00
+Subject: RE: Capacity planning: hosted API commit uplift request — next steps and SOW
+
+Elena — thanks for confirming a preference on Option A in our call earlier. Attached is the redlined SOW and the DocuSign envelope to authorize the 180M/month commit starting Sep 1. Links below:
+
+- DocuSign: https://www.docusign.com/ENVELOPE12345
+- HubSpot deal: https://app.hubspot.com/deals/4982
+- Shared SOW: https://drive.google.com/drive/folders/1a2b3cStreamlineSOW
+
+Key summary for the SOW: 12-month term, 180M tokens/month commit, 8% pre-pay credit if paid annually, burst pocket 20% at no extra committed fee, monthly billing. Per-route rate limits and canary schedule appended as Exhibit B.
+
+If Legal needs specific clause language, contracts@streamline.ai can reply-all with redlines; we'll try to reconcile quickly so signatures can go out by end of week.
+
+I'll follow up with a calendar invite for the ops readiness call Vivek mentioned (Tue Jul 30, 10:00 AM PT).
+
+Best,
+Vanessa Ortiz
+Customer Success Manager, Redwood Inference
+vanessa_ortiz@redwoodinference.com
+
+Attachments: SOW-Streamline-v2.docx; pricing_grid_v3.xlsx

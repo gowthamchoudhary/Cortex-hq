@@ -1,0 +1,129 @@
+Post-call: Clearbridge integration — auth, key rotation, and SDK setup
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Emma Li <emma@clearbridge.ai>; Mike Torres <mike.torres@clearbridge.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: Mon, 9 Aug 2027 15:02:00 -0700
+Subject: Post-call: Clearbridge integration — auth, key rotation, and SDK setup
+
+Hi Emma / Mike —
+
+Thanks again for taking the time today. Quick recap from our discovery so the team has a single source of truth and clear next steps. TL;DR: Clearbridge wants a low-friction sandbox to validate embeddings + reranking, and an auth/key management model that meets procurement controls (rotation, scoped keys, and audit logs).
+
+Key points from the call:
+- Workload: document search + prioritized insight ranking (20M docs, ~5k QPS peak across global clients).
+- Critical SLOs: tail latency < 250ms for reranker happy-path; burst capacity to 10k QPS for short windows.
+- Data posture: PII redaction pipeline onsite, but inference can be hosted in Redwood VPC for now.
+- Auth requirements: centralized rotation, ability to issue short-lived tokens per-service, and an option for OAuth/JWT SSO for internal apps.
+
+Proposed integration approach (high level):
+1) Sandbox: we’ll provision a sandbox model with embeddings + a light reranker and share API keys scoped to a sandbox project.
+2) SDK: recommend using our JS SDK for quick POC (examples in the Drive link). We can also provide a Python snippet for bulk embed ingestion.
+3) Auth options — three paths we discussed:
+   a) API keys (scoped, rotated) — simplest for POC; we support prefix-based scoping, token expiry, and automatic rotation via our console APIs.
+   b) OAuth/JWT with your IdP — good for user-facing apps and SSO; helps centralize identity and audit.
+   c) Service accounts (mTLS optional) — recommended for backend job runners and high-throughput ingestion.
+4) Key rotation & audit: we’ll provide a rotation playbook (short template attached) and explain how to integrate with your KMS for key material.
+
+Open questions for you (please confirm by EOD Wednesday):
+- Do you want the sandbox keys to be time-limited (7 days) or to last through the POC (30 days)?
+- Any network restrictions (eg. static egress IPs) we should configure for the sandbox?
+- Who on your side will own procurement / PoC acceptance criteria?
+
+Next steps I’ll take this week:
+- Share a short proposal + sample SDK snippets (attached).
+- Marissa will follow up with a short technical checklist and suggested service account flow.
+- Vivek can stand up a demo project and run a live embedding + reranker test once we have sample documents.
+
+Attachments: redwood-integration-proposal.pdf (proposal + rotation playbook)
+Links: HubSpot deal, shared Drive folder with SDK examples
+
+Thanks —
+Ben Carter
+Account Executive, Redwood Inference
+ben.carter@redwood.ai
++1 (415) 555-0182
+
+On Mon, 9 Aug 2027 at 14:38 Emma Li <emma@clearbridge.ai> wrote:
+> Thanks for the call earlier — Emma
+
+From: Emma Li <emma@clearbridge.ai>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Mike Torres <mike.torres@clearbridge.ai>
+Date: Mon, 9 Aug 2027 16:05:00 -0700
+Subject: Re: Post-call: Clearbridge integration — auth, key rotation, and SDK setup
+
+Ben —
+
+Great summary, thanks. A couple clarifications from our end:
+- For the POC we prefer time-limited keys (7 days) initially, then extend to 30 days if the review is smooth.
+- Procurement will be looping in next week; primary contact there is procurement@clearbridge.ai.
+- We do have an internal IdP (Okta) and would like to explore the OAuth/JWT flow for our internal dashboards, but for backend ingestion jobs service accounts sound right.
+
+Question on your rotation playbook: does Redwood’s audit trail capture which internal service account or user rotated a specific key? Procurement requires a clear changelog.
+
+Also attaching a short questionnaire that procurement asked us to fill out for vendor security and keying (attached: clearbridge-questions.docx).
+
+—Emma
+Director, Platform Engineering
+Clearbridge Analytics
+
+On Mon, 9 Aug 2027 at 15:02 Ben Carter <ben.carter@redwood.ai> wrote:
+> (see above)
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Emma Li <emma@clearbridge.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+Date: Tue, 10 Aug 2027 09:17:00 -0700
+Subject: Re: Post-call: Clearbridge integration — auth, key rotation, and SDK setup
+
+Emma —
+
+Quick technical notes to answer the procurement question: yes, Redwood records who performs key operations in the audit logs (user/service account identity, timestamp, operation type). We can stream logs to your SIEM or provide time-limited log exports for the procurement review.
+
+A short checklist for the POC (we’ll expand if you want):
+- POC sandbox: scoped API key (7 days) + example embed/rerank project in the Drive
+- Ingestion: sample bulk ingestion script (Python) with service-account credentials and optional mTLS
+- Auth: example OAuth flow using Okta (auth code + JWT exchange) for dashboards
+- Key rotation: playbook + API endpoint to schedule rotation, plus webhook events when keys are rotated
+- Monitoring: per-token usage and anomaly alerts configured for the sandbox tokens
+
+I’ll attach code snippets to the Drive folder and paste an example OAuth redirect config into the shared doc. Vivek — can you indicate required IPs for the demo cluster?
+
+Thanks,
+Marissa Cole
+Solutions Engineer, Redwood Inference
+marissa.cole@redwood.ai
+
+> On Mon, 9 Aug 2027 at 16:05 Emma Li <emma@clearbridge.ai> wrote:
+> > (see above)
+
+From: Vivek Kulkarni <vivek.kulkarni@redwood.ai>
+To: Emma Li <emma@clearbridge.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Laura Bennett <laura.bennett@redwood.ai>
+Date: Wed, 11 Aug 2027 11:20:00 -0700
+Subject: Re: Post-call: Clearbridge integration — auth, key rotation, and SDK setup
+
+Emma / Mike —
+
+I can provision the sandbox cluster tomorrow if you can drop a sample dataset (500–1,000 docs) in the Drive folder. For the demo we’ll use scoped API keys that expire in 7 days. Notes:
+- IPs: if you need static egress, we can allocate the following CIDR for your sandbox: 34.201.120.0/28 (please confirm).
+- Rate limits: we’ll start with a 1k QPS test profile and can ramp to 5k QPS; let us know the realistic parallelism for your clients so we can size the cache.
+- Service accounts: I’ll attach a short JSON template for the service-account manifest and a curl example to request short-lived tokens from our control plane.
+
+Procurement / DocuSign: Ben — I’ve prepped a minimal SOW that matches the 30-day POC terms. If procurement is ready, we can send a DocuSign link to procurement@clearbridge.ai.
+
+Action items (who / when):
+- Emma: upload sample dataset + confirm sandbox IP preference (today)
+- Procurement: confirm procurement contact and timing (Emma to connect)
+- Ben: send DocuSign SOW once procurement confirms (Ben)
+- Marissa: paste OAuth redirect and sample config in Drive (Tue EOD)
+- Vivek: provision sandbox and share sandbox keys (Wed morning)
+
+Attachments mentioned: service-account-template.json (manifest), probing-script.sh (load test stub)
+
+Cheers,
+Vivek Kulkarni
+Solutions Architect, Redwood Inference
+vivek.kulkarni@redwood.ai
+

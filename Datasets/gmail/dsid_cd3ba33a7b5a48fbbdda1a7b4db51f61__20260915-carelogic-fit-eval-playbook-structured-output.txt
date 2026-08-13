@@ -1,0 +1,98 @@
+Post-call: CareLogic model-fit & structured-output runbook
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+To: Sam O'Neill <sam.oneill@carelogic.com>, eng-team@carelogic.com
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Dylan Brooks <dylan_brooks@redwood.ai>
+Date: Tue, 15 Sep 2026 10:12:00 -0400
+Subject: Post-call: CareLogic model-fit & structured-output runbook
+
+Hi Sam / CareLogic infra team,
+
+Thanks for the time today — good discussion. Quick recap and proposed next steps so we can validate model fit for your structured incident-routing workflow:
+
+Call highlights:
+- Goal: route inbound support tickets to the correct queue + create structured incident JSON (priority, product, components, suggested SLA) for downstream automation.
+- Data: 12k historical tickets (anonymized), ~8 classes for routing, variable-length descriptions (avg 120 tokens).
+- Constraints: JSON schema must be strict (no free-text in critical fields), PII redaction required, audit logs for each inference.
+
+Proposed evaluation plan (attached): carelogic_eval_plan_v1.pdf
+- Sandbox: 48–72 hour run in a dedicated eval pool with sampled traffic (2k examples).
+- Models to try (recommendation order):
+  1) rwd-optim-gpt-13b-8k (quantized, fast KV cache) — best latency/cost balance for structured outputs.
+  2) open/llama3-8k (higher precision on short instructions) — sanity check for schema compliance.
+- Metrics: schema-compliance rate (exact match of required fields), field-level precision/recall (entities), latency p50/p95, tokens/cost, regression on a 200-case golden set.
+- Tooling: we will run a JSON schema validator during inference and capture failure reasons / trace_id for each event.
+
+Next steps (please confirm by EOD if possible):
+1) Share a 2k-sample CSV (prefer redacted) + sample_prompt_set.csv (attached)
+2) Grant the Redwood eval account: eng-team@carelogic.com (we provided the invite in HubSpot).
+3) Accept initial runbook link: https://drive.google.com/drive/folders/1A2bExampleCareLogicEval
+
+I'll have Karthik follow up on retry and fallback behavior for function-calling / structured-output to ensure we meet your strict JSON requirements.
+
+Thanks,
+Vanessa Ortiz
+Enterprise Solutions — Redwood Inference
+vanessa_ortiz@redwood.ai
+Attachment: carelogic_eval_plan_v1.pdf (PDF, 32KB)
+Attachment: sample_prompt_set.csv (CSV, 8KB)
+From: Sam O'Neill <sam.oneill@carelogic.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Cc: eng-team@carelogic.com
+Date: Tue, 15 Sep 2026 11:03:12 -0400
+Subject: Re: Post-call: CareLogic model-fit & structured-output runbook
+
+Thanks Vanessa — that looks good. A couple of clarifying questions from our infra/engineering side before we hand over the sample data: 
+
+1) JSON schema validation: when you say "validator during inference", do you reject the response immediately or attempt automated repairs/retries? We need a deterministic behavior for downstream consumers.
+2) Retries: can we control retry policy per-route (e.g., 0–2 retries) and get structured logs for each attempt, including the prompt and model variant used?
+3) PII/redaction: we have a few fields that might accidentally include email/SSN. Will Redwood run a pre-inference redaction step or do you expect us to send already-cleaned examples?
+
+Also pm'd our security contact if you need SOC2 artifacts.
+
+—Sam
+Director, Platform Engineering
+CareLogic
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Sam O'Neill <sam.oneill@carelogic.com>, eng-team@carelogic.com
+Cc: Vanessa Ortiz <vanessa_ortiz@redwood.ai>, Dylan Brooks <dylan_brooks@redwood.ai>
+Date: Tue, 15 Sep 2026 12:25:40 -0400
+Subject: Re: Post-call: CareLogic model-fit & structured-output runbook
+
+Thanks Sam — quick technical answers and a concrete fallback pattern we recommend.
+
+1) JSON validation behavior
+- Primary flow: we run a JSON Schema validator on the model's output server-side. If the output passes, it's forwarded to your consumer with metadata (trace_id, model, token_cost, latency).
+- On schema failure: we attempt up to 2 automated retries with incremental prompt relaxation: 
+  • Retry 1: re-run same model with the validator-aware instruction + "Must respond in exact schema" and include the prior model output as context.
+  • Retry 2: downgrade to the alternate model (open/llama3-8k) and add an explicit field-level confirmation step (e.g., "Confirm priority is one of [P0,P1,P2]").
+- If retries all fail, we return a structured error object that conforms to your error schema (error.code, error.reason, last_model, trace_id) and tag the event as "needs_manual_review".
+
+2) Retry control and logging
+- Yes: retry policy is configurable per route in Redwood Console; you can set 0/1/2 and choose fallback models.
+- Logs: for every attempt we will store a single-line audit entry with trace_id and a reference to full payload in your private audit bucket (encrypted). We can surface the first 200 chars of prompts in the dashboard; full prompts are available on request under a contract.
+
+3) PII/redaction
+- We strongly recommend you pre-redact before sending production data for the eval. For the sandbox run, Redwood can run an optional pre-filter that masks common PII patterns (emails, credit card, SSN) but this is best-effort and not a replacement for client-side redaction.
+
+Attached: json_schema_checks.yaml — contains example schema + sample validator rules we use during the eval.
+
+Example retry flow (pseudo-cURL):
+curl -X POST https://api.redwood.ai/v1/generate -H "Authorization: Bearer <REDACTED>" -d '{"model":"rwd-optim-gpt-13b-8k","input":"<ticket_text>","schema":"/schemas/carelogic/incident-v1.json","max_retries":2}'
+
+We can run a short canary with 500 tickets next Wednesday if that works — Vanessa, can you book a 30-min slot with their eng team to kick off?
+
+—Karthik
+Principal Solutions Engineer — Redwood Inference
+Attachment: json_schema_checks.yaml (YAML, 4KB)
+
+From: Sam O'Neill <sam.oneill@carelogic.com>
+To: Karthik Iyer <karthik_iyer@redwood.ai>, Vanessa Ortiz <vanessa_ortiz@redwood.ai>
+Date: Tue, 15 Sep 2026 13:05:00 -0400
+Subject: Re: Post-call: CareLogic model-fit & structured-output runbook
+
+Perfect — thanks Karthik, Vanessa. Wednesday canary sounds good. Please send a Calendly or proposed time and we'll unblock the sample data today.
+
+—Sam
+

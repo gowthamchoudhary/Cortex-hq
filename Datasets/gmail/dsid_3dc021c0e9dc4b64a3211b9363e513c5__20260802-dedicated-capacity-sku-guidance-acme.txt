@@ -1,0 +1,140 @@
+Dedicated capacity sizing: SKU recommendations & tradeoffs for Acme Health deal
+
+From: Samir Khan <samir@acmehealth.com>
+To: Ben Carter <ben@redwood.com>, Marissa Cole <marissa@redwood.com>
+Cc: Acme Health Infra <infra@acmehealth.com>
+Date: Sun, 2 Aug 2026 14:05:00 -0700
+Subject: Dedicated capacity: expected traffic profile & SKU guidance request
+
+Hi Ben / Marissa,
+
+We're getting close to contract signature for the telemetry ingest + summarization feature. Before we finalize committed capacity we want a short read on the right GPU mix for our Dedicated pool. High level constraints:
+- Peak concurrent requests: ~480 requests/minute for the web tier (p50 latency target 250ms)
+- Typical prompt lengths: 512 tokens, with ~5% of requests reaching 4k tokens (long-run summaries)
+- Expected steady QPS: 4 qps average, bursting to ~8 qps during events
+- Budget: want to keep committed monthly spend predictable; prefer a mix that avoids large over-provisioning but has clear upgrade path
+
+Specific ask: given Redwood SKUs (H100, A100, L4) and the workload above, what mix would you recommend for month-1 committed capacity vs a 3-month runway? Memory/throughput tradeoffs and any quantization/latency knobs we should plan for would be helpful.
+
+Thanks,
+Samir
+Samir Khan
+VP, Platform Engineering
+Acme Health
+
+
+From: Ben Carter <ben@redwood.com>
+To: Samir Khan <samir@acmehealth.com>
+Cc: Marissa Cole <marissa@redwood.com>, Dev Patel <dev@redwood.com>
+Date: Sun, 2 Aug 2026 15:22:00 -07:00
+Subject: Re: Dedicated capacity: expected traffic profile & SKU guidance request
+
+Samir — thanks for the clear profile. Attached is a quick sizing spreadsheet (acme-dedicated-sizing-v1.xlsx) with three starter configurations and estimated throughput/costs. High-level guidance below.
+
+Short summary (starter commit recommendations):
+- Conservative baseline (cost-sensitive): 6x L4 nodes. Good for short-context (<= 1k tokens), best unit economics for high fan-out web traffic. Lower memory but very cost-efficient when most requests are short.
+- Balanced (recommended for this deal): 3x A100 + 2x L4. A100s handle mixed-length requests and longer KV caches; L4s absorb the short tail and keep unit cost down.
+- Performance / large-context heavy: 4x H100. If the 4k token tail grows or you run many simultaneous long summarizations, H100s provide headroom for larger batch sizes and bigger context windows.
+
+Tradeoffs to note:
+- Memory: H100 > A100 > L4. If you expect many cached contexts or models with large activations, prefer H100 or A100 (with 80GB variants where available).
+- Latency: For small requests L4 often has lower p50 cost per token but higher p99 variability under bursty loads — we rely on autoscaling/burst policies to smooth that.
+- Cost-per-token: L4 lowest, A100 mid, H100 highest but best for high-throughput long-context work.
+
+Operational suggestions:
+- Start with the Balanced mix and enable prefix/KV caching on A100s for the summarization flows.
+- Configure burst capacity to allow autoscaling into host-pools (A100/H100) for durable p99 latency during events.
+- Quantization: for text-gen models, int8/4 quantization is viable on L4 and A100 for most customers; H100 gives more headroom for FP16 paths with higher fidelity on long outputs.
+
+I'll loop in Dev for kernel/throughput knobs and cost estimates per 1M tokens. Can you confirm: target SLA (p99) and whether you need a hard guarantee on cold-starts?
+
+Best,
+Ben Carter
+Senior Solutions Engineer | Redwood Inference
+
+Attachment: acme-dedicated-sizing-v1.xlsx (sizing workbook, tabs: workloads, sku-comparison, monthly-commit-scenarios)
+
+From: Dev Patel <dev@redwood.com>
+To: Ben Carter <ben@redwood.com>, Samir Khan <samir@acmehealth.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: Sun, 2 Aug 2026 16:10:00 -07:00
+Subject: Re: Dedicated capacity: expected traffic profile & SKU guidance request
+
+Adding a few technical details from runtime side — quick notes rather than exhaustive benching.
+
+- Sequence length distribution matters more than average. If 95% are ~512 and 5% are 4k, plan for capacity that can splice long requests onto H100/A100 while L4s cover the short ones.
+- KV cache & batching: Enable per-model prefix caching and 8-16 request batching on A100/H100. Continuous batching on L4 is less effective for long contexts.
+- Memory configs: A100 80GB variants are significantly more flexible for pinned model shards and larger MVKV caches. H100 scales better for multi-tenant high batch sizes and for larger models with big kv state.
+- Quantization: We recommend trying int8 first on L4 for cost savings. For the summarization model we saw <2% output drift on int8 relatively consistently; if you need bit-exact reproduction use H100 FP16 paths.
+- Kernel/compilation: we can pre-warm kernels for your production model variants during the onboarding window; this reduces p99 by ~30% for long outputs.
+
+Estimated ops numbers (very rough):
+- Single H100 (80GB) can sustain ~1800 tokens/sec for long-context summarization workload (4k) with batching tuned.
+- Single A100 (40/80GB) ~900-1200 tokens/sec depending on batch shape and quantization.
+- Single L4 ~250-500 tokens/sec optimized for short sequences.
+
+I'll attach a short one-pager we can share with procurement that formalizes these numbers.
+
+- Dev
+Dev Patel
+Inference Infrastructure, Redwood Inference
+
+Attachment: rdw_sku-comparison-onepager.pdf
+
+From: Samir Khan <samir@acmehealth.com>
+To: Ben Carter <ben@redwood.com>
+Cc: Acme Health Infra <infra@acmehealth.com>, Marissa Cole <marissa@redwood.com>
+Date: Sun, 2 Aug 2026 17:05:00 -07:00
+Subject: Re: Dedicated capacity: expected traffic profile & SKU guidance request
+
+Ben / Dev — this is really useful, thanks. A couple follow-ups:
+1) Can you give a ballpark committed-month cost for the Balanced config (3x A100 + 2x L4)? We want a number we can put in the SOW.
+2) SLA question: we need p99 <= 350ms for short requests (<=512 tokens) across peak. Is that achievable with the balanced mix + autoscaling/burst to H100?
+3) Timeline: if we lock month-1 commit today, how long until Dedicated pool is provisioned and we can start onboarding models?
+
+Also looping in our infra team — if you want logs / HIPAA champ contact, say the word.
+
+Best,
+Samir
+
+On Sun, Aug 2, 2026 at 03:22 PM Ben Carter <ben@redwood.com> wrote:
+> Samir — thanks for the clear profile. Attached is a quick sizing spreadsheet (acme-dedicated-sizing-v1.xlsx) with three starter configurations and estimated throughput/costs. High-level guidance below.
+> 
+> Short summary (starter commit recommendations):
+> - Conservative baseline (cost-sensitive): 6x L4 nodes. Good for short-context (<= 1k tokens), best unit economics for high fan-out web traffic. Lower memory but very cost-efficient when most requests are short.
+> - Balanced (recommended for this deal): 3x A100 + 2x L4. A100s handle mixed-length requests and longer KV caches; L4s absorb the short tail and keep unit cost down.
+> - Performance / large-context heavy: 4x H100. If the 4k token tail grows or you run many simultaneous long summarizations, H100s provide headroom for larger batch sizes and bigger context windows.
+> 
+> Tradeoffs to note:...
+
+From: Ben Carter <ben@redwood.com>
+To: Samir Khan <samir@acmehealth.com>, Marissa Cole <marissa@redwood.com>, Dev Patel <dev@redwood.com>, Stephanie Nguyen <stephanie@redwood.com>
+Date: Sun, 2 Aug 2026 18:37:00 -07:00
+Subject: Re: Dedicated capacity: expected traffic profile & SKU guidance request
+
+Samir — quick answers inline and next steps.
+
+1) Ballpark committed cost (Balanced: 3x A100 + 2x L4) — monthly committed estimate: USD 112,000 / month (this is a starting commit; see spreadsheet for per-hour burn and optional burst pricing). We'll include a 10% onboarding credit for the first month in the SOW.
+
+2) SLA (p99 <= 350ms for <=512 tokens) — achievable if we:
+   - Pin the short-request route to L4 frontends with an autoscaled backing pool on A100s for heavier tails.
+   - Enable kernel pre-warm and prefix caching.
+   - Add a single H100 as reserved burst capacity (hot standby) to shave p99 spikes during events.
+
+3) Timeline — once commit is signed and PO issued:
+   - Provisioning window: 7-10 business days for Dedicated pool in our us-west region (we'll prioritize on exec sign-off).
+   - Model onboarding & perf tuning: 5 business days after capacity is live for first model (includes kernel pre-warm and quantization trial).
+
+Action items:
+- Marissa to update SOW line items (commit, burst H100 standby) and share draft with procurement.
+- Samir / Acme infra to confirm whether HIPAA BA is required for the SOW (we have a HIPAA package, will include controls).
+- I'll schedule a 30-min capacity-lock call this week to finalize numbers and DocuSign the SOW.
+
+Thanks — I'll follow-up with calendar invites and the redlined SOW.
+
+Ben Carter
+Senior Solutions Engineer | Redwood Inference
+
+> On Sun, Aug 2, 2026 at 04:10 PM Dev Patel <dev@redwood.com> wrote:
+> > Adding a few technical details from runtime side — quick notes rather than exhaustive benching.
+> > ...

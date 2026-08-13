@@ -1,0 +1,98 @@
+Transient rate window request + launch forecast coordination
+
+From: Sam Hart <sam.hart@novaretail.com>
+To: Soojin Lee <soojin_lee@redwood.com>
+Cc: procure@novaretail.com
+Date: Tue, 03 Nov 2026 09:12:00 -0800
+Subject: Re: Launch window — spike on Day 1
+
+Hi Soojin,
+
+Quick note from our side: the marketing team just confirmed a coordinated email + ad push for Nov 20 that will drive an estimated 120k API calls in the first 6 hours (see attached forecast). We expect steady traffic after that but the first 12 hours are the riskiest.
+
+Can Redwood provide a short-term rate band (temporary uplift) to cover the Day 1 peak? We can commit to a 3-month contract addendum or cover burst pricing — whatever is easiest. We don't want users to see throttles during the launch.
+
+Attaching the traffic sheet for visibility. Happy to jump on a quick call if helpful.
+
+— Sam
+Sam Hart
+Head of Product, NovaRetail
+
+From: Soojin Lee <soojin_lee@redwood.com>
+To: Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Irene Choi <irene_choi@redwood.com>
+Cc: Sam Hart <sam.hart@novaretail.com>
+Date: Wed, 04 Nov 2026 10:03:00 -0800
+Subject: Fwd: Launch window — spike on Day 1 — coordination and asks
+
+Team — forwarding NovaRetail's ask. TL;DR: ~120k calls in 6 hrs on Nov 20, wanting a temporary uplift to avoid throttles.
+
+Ask to each:
+- Ben: commercial — what is the simplest short-term pricing/contract approach we can offer that doesn't require legal dev time?
+- Marcus: capacity — can we provision a transient rate window or short-lived quota bump for 24 hours + an extended taper (12–48h) without impacting other customers? If yes, rough ops checklist and rollback plan.
+- Irene: product — do we need a behavioral guard (burst shaping, per-customer concurrency limit) or will a hard quota uplift suffice? Also product implications for metrics and billing.
+- Monica: CS/SRE — support coverage for Day 1 and an on-call rotation? Also confirm any change freeze limitations.
+
+Attachments: novaretail_traffic_model_v2.xlsx (from client).
+
+I'll consolidate answers by EOD Friday so we can respond with a single plan.
+
+— Soojin
+Soojin Lee
+Senior Sales Engineer, Redwood Inference
+
+From: Ben Carter <ben_carter@redwood.com>
+To: Soojin Lee <soojin_lee@redwood.com>
+Cc: Monica Patel <monica_patel@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Irene Choi <irene_choi@redwood.com>
+Date: Thu, 05 Nov 2026 09:17:00 -0800
+Subject: Re: Fwd: Launch window — spike on Day 1 — coordination and asks
+
+Soojin — short answer from commercial: we can do a temporary uplift via a 30-day addendum that includes a capped burst credit line. Option A: prepay a burst bucket at a reduced unit rate for the expected Day 1 volume (preferred). Option B: bill overage at an elevated but capped rate for the temporary window.
+
+For speed, recommend Option A with a simple signed email (no new SOW) plus PO from NovaRetail. That avoids legal delays. I'll draft the email template and send it to procure@novaretail.com once Marcus confirms ops feasibility.
+
+Ben
+Ben Carter
+Enterprise Sales, Redwood Inference
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Soojin Lee <soojin_lee@redwood.com>, Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>, Irene Choi <irene_choi@redwood.com>
+Date: Fri, 06 Nov 2026 15:48:00 -0800
+Subject: Re: Fwd: Launch window — spike on Day 1 — coordination and asks
+
+Short summary from infra side: we can provision a transient rate window tied to NovaRetail's API key for a 24-hour primary burst plus a 36-hour taper. Key constraints and ops notes:
+- We'll create a temporary quota record scoped to the customer (not global) and schedule it to be active 2026-11-20T02:00:00Z through 2026-11-21T02:00:00Z, with automated decrement to baseline over the following 36h.
+- Risk: if other customers spike simultaneously in the same pool, we may need to route NovaRetail to a fallback model variant (smaller size); we should predefine acceptable fallbacks.
+- Need Product to confirm whether we want burst shaping (token-per-second smoothing) vs. a hard token cap. Shaping reduces tail latency risk.
+- We'll require a 72-hour pre-notice to run a partial dry-run in staging; full prod changes can be automated but SRE must approve the schedule.
+
+Attachments: transient_rate_policy_draft.pdf (ops-runbook).
+
+I can lead the runbook and schedule the preflight if others agree.
+
+— Marcus
+From: Irene Choi <irene_choi@redwood.com>
+To: Soojin Lee <soojin_lee@redwood.com>, Marcus Lin <marcus_lin@redwood.com>, Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Mon, 09 Nov 2026 17:45:00 -0800
+Subject: Re: Fwd: Launch window — spike on Day 1 — coordination and asks
+
+Thanks all — product position: implement transient shaping + quota bump. Rationale: shaping minimizes the risk of downstream latency spikes and keeps overall SLOs healthy. Proposed approach:
+1) Quota bump: +3x baseline token allowance for 24 hours starting 2026-11-20T02:00:00Z.
+2) Shaping: 95th-percentile smoothing that caps sustained concurrency — implement on the customer's routing policy so we can disable quickly.
+3) Fallbacks: pre-approve two smaller model variants (gpt-3.5-8k-qs, gpt-3-6k-compact) for graceful degradation if pool saturation occurs.
+4) Rollback: immediate revert switch and customer failover to read-only responses if catastrophic.
+
+Ben — go ahead with Option A. Marcus — please schedule the 72-hour dry-run window for Nov 17. Monica — CS to own on-call schedule and provide an incident contact list (Sam included).
+
+I'll draft the technical note for the customer explaining the shaping behavior and included fallbacks. Once Ben has the signed email/PO, we can finalize the quota record.
+
+— Irene
+Irene Choi
+Director, Product Management, Redwood Inference
+
+On Mon, Nov 9, 2026 at 15:20 Soojin Lee <soojin_lee@redwood.com> wrote:
+> Thanks — I'll coordinate the PO and confirm the dry-run date with NovaRetail.
+> 
+> On Fri, Nov 6, 2026 at 15:48 Marcus Lin <marcus_lin@redwood.com> wrote:
+> > Short summary from infra side: we can provision a transient rate window tied to NovaRetail's API key for a 24-hour primary burst plus a 36-hour taper.
+> >
+> > — Marcus

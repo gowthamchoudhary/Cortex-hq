@@ -1,0 +1,149 @@
+Decision input: per-deal GPU allocation + fallback plan for Mediva regulated pilot
+
+From: Simon Holt <simon.holt@mediva.com>
+To: Evelyn Hart <evelyn_hart@redwood.com>
+Cc: Priya Shah <procurement@mediva.com>
+Date: Wed, 02 Dec 2026 09:12:00 -0800
+Subject: Pilot hosting question — Private vs Dedicated for regulated workloads
+
+Hi Evelyn,
+
+Thanks again for the walkthrough yesterday. Two quick asks from our side as we prepare the internal approval packet:
+
+1) For a regulated pilot (PHI scope, Fed/state residency requirements) handling ~500k requests/month, what is your recommended path between Redwood Dedicated (reserved GPU pool) vs Redwood Private (VPC/on-prem)? We need a short justification we can send to our security and procurement teams.
+
+2) What ballpark GPU allocation would you recommend to meet a p95 generation latency <= 750ms and sustain 80 concurrent requests at 1k tokens per session (avg)? Also curious about a practical fallback policy — we want to avoid downtime but are sensitive to data boundary rules.
+
+Attached: Mediva_RiskProfile.pdf (high-level security posture). If helpful, Priya (cc) can share expected transaction patterns.
+
+Can we get a one-page recommendation + rough cost delta by EOD Friday? Procurement needs a preliminary PO estimate.
+
+—Simon
+Simon Holt
+Head of AI Platform
+Mediva Health
+
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Simon Holt <simon.holt@mediva.com>
+Cc: Priya Shah <procurement@mediva.com>, Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Wed, 02 Dec 2026 13:35:00 -0800
+Subject: Re: Pilot hosting question — Private vs Dedicated for regulated workloads
+
+Simon / Priya —
+
+Appreciate the context and the Risk Profile. High level recommendation below; I'll follow up with a short spreadsheet with sizing scenarios and a draft MAP (attached).
+
+Recommendation summary (short):
+- For a short pilot with strong PHI/data residency requirements but where ownership of infra is not mandatory, recommend Redwood Dedicated (dedicated GPU pool + VPC peering).
+  - Why: gives physical isolation from multi-tenant hosts, predictable throughput, and still keeps our control plane for monitoring and faster time-to-value. It avoids the procurement and operational burden of a full Private/on-prem install for the pilot phase.
+- If Mediva requires air-gapped or customer-managed control plane for legal/compliance reasons, Private is still the right long-term choice.
+
+Sizing & fallback summary (ballpark):
+- Target workload: 80 concurrent requests @ ~1k tokens average -> roughly 80 active streams. For a high-capacity LLM (mixture of 13B-70B families) we recommend starting with either:
+  - Dedicated: 4 x A100 80GB equivalent (reserved nodes) with autoscale burst to 8 nodes for peak; OR
+  - Private: 10–12 x A100 80GB equivalent to allow private-only redundancy + headroom (no bursting to shared hosted).
+- Latency: With proper batching and KV cache settings we can meet p95 <= 750ms on the Dedicated baseline; Private gives more predictable low-jitter latencies at cost of larger committed footprint.
+- Fallback: Canary the pilot on Dedicated with routing policy that prefers Dedicated -> Dedicated-burst -> Hosted-compatible model variant (no PHI in hosted path). If PHI cannot leave Mediva boundary, fallback is to queue requests or thin-proxy to private sidecar (see MAP).
+
+I've attached a draft deal slate (deal_slate_draft.xlsx) with three scenarios (minimal pilot, production bridge, private conversion). Can you confirm: 1) expected monthly tokens per call (you said ~1k avg, please confirm distribution), and 2) any hard requirements that prohibit cross-region fallback?
+
+Happy to jump on a short call tomorrow to walk through the numbers.
+
+Thanks,
+Evelyn Hart
+Sr. Enterprise Sales Engineer
+Redwood Inference
+
+Attachments: deal_slate_draft.xlsx
+
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Rafael Mendes <rafael_mendes@redwood.com>
+Date: Wed, 02 Dec 2026 16:12:00 -0800
+Subject: Internal: Mediva pilot — sizing ask + procurement timeline
+
+Marissa / Jonas —
+
+Looping you both in. Simon wants a concise recommendation for Procurement by Friday EOD. Key constraints: PHI in-scope, 500k req/mo, target p95 <= 750ms, concurrent ~80 streams at 1k tokens/session avg. Priya from procurement will need a PO-level estimate and lead time.
+
+What I need from you:
+- Marissa: quick sizing sheet (nodes, memory, expected sustained RPS) for both Dedicated and Private options. Include cost delta (monthly committed vs private one-time infra + ops estimate). Please highlight assumptions.
+- Jonas: ops/implementation note — estimated provisioning lead time for Dedicated reserved (i.e., procurement -> provision -> canary) vs Private (VPC + private control plane or on-prem). Also call out any compliance blockers for fallback to hosted variants (e.g., tokenization/pseudonymization options).
+
+Rough numbers to validate against (my back-of-envelope):
+- Dedicated baseline: 4x A10080 GPUs reserved; burst to 8x A10080 for peaks; expected to handle 80 concurrent with batching; est. committed monthly $82k–$95k (inclusive of reserved slot premium + support).
+- Private baseline: 10–12x A10080 including redundancy; capital-equivalent ops and infra uplift; est. uplift 2.2–2.8x vs Dedicated for first 12 months (includes setup/validation/compliance).
+
+We should also propose an operational fallback ladder in the MAP: Dedicated-reserved -> Dedicated-burst -> Queue with SLA notification -> Private-sidecar forwarding. If Mediva forbids any cross-tenant compute for PHI, we need to mark Hosted as not allowed and propose Private-only path.
+
+Please get me a draft sizing table and the procurement lead times by EOD tomorrow so I can assemble the packet for Simon.
+
+Evelyn
+
+--- quoted earlier from Simon Holt ---
+> Attached: Mediva_RiskProfile.pdf
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Evelyn Hart <evelyn_hart@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Cc: Rafael Mendes <rafael_mendes@redwood.com>
+Date: Thu, 03 Dec 2026 09:08:00 -0800
+Subject: Re: Internal: Mediva pilot — sizing ask + procurement timeline
+
+Eve / Jonas —
+
+Attached is a quick sizing export (sizing_model_v1.csv) with assumptions called out in the first tab. Highlights:
+
+- Workload assumptions: 500k req/mo, diurnal pattern with 3x peak on weekdays, avg = 1k tokens, median 750 tokens, 95th pct 1.6k tokens.
+- Dedicated scenario (preferred pilot): 4x A10080 nodes reserved -> sustained throughput ~120 rps (with aggregation batches), p95 latency estimate 600–720ms depending on model family (best with 13B-quantized). Burst plan adds 4 nodes for short windows (minutes-hours). Estimated committed monthly run-rate: $78,500 (reserved compute) + $6k support/monitoring = $84,500.
+- Private scenario: to reach same p95 and headroom we need 10x A10080 (redundancy + no bursting). First-year TCO estimate ~ $235k–$260k (hardware + ops + certification support).
+- Notes on fallback: If PHI cannot leave Mediva boundary under any circumstance, we must deploy Private. If partial redaction/pseudonymization is acceptable, we can use Dedicated with a strict routing policy that excludes PHI to hosted fallback.
+
+Procurement lead times (Jonas / Ops input required):
+- Dedicated reservation: procurement -> PO -> 2–3 weeks to provision (for reserved capacity in our Dedicated pool) assuming slot availability.
+- Private deployment: procurement -> PO -> 8–12 weeks (K8s/VM provisioning, control plane, SOC2 evidence exchange, on-prem variants longer).
+
+If we want to offer a cost-limited fallthrough, propose adding a short-term burst pool (pre-approved credit for 4 nodes) that Procurement can approve as a contingency. That will reduce probability of SLA misses during spikes.
+
+Marissa
+Enterprise Solutions
+
+Attachments: sizing_model_v1.csv
+
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Simon Holt <simon.holt@mediva.com>, Priya Shah <procurement@mediva.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Rafael Mendes <rafael_mendes@redwood.com>
+Date: Thu, 04 Dec 2026 17:05:00 -0500
+Subject: Re: Pilot hosting question — Mediva recommendation & MAP (next steps)
+
+Simon / Priya —
+
+Thanks for the quick turnaround. Based on the risk profile and the numbers from Marissa / Jonas, our recommended path for the pilot is:
+
+Primary recommendation (pilot): Redwood Dedicated — 4x A10080 reserved with an approved contingency burst of +4 nodes.
+Why: predictable performance, faster provisioning (~2–3 weeks), lower first-year cost, and can meet your p95 <= 750ms target with the suggested model family + caching.
+
+Private (conversion path): If legal requires customer-managed control plane or no cross-tenant compute for PHI, we'll transition to Private with a target footprint of 10–12x A10080; conversion lead time 8–12 weeks and first-year uplift ~2.6x estimated.
+
+Fallback ladder (operationally enforceable):
+- Route policy: 
+  1) Dedicated-reserved (for PHI-present requests)
+  2) Dedicated-burst (pre-approved contingency nodes)
+  3) Queue + notify (if burst exhausted) with SLA alerting to Mediva SREs
+  4) Private-sidecar forward (only if explicit customer architecture allows private forwarders)
+  5) Hosted fallback: disabled for PHI flows unless data is pseudonymized
+
+Attached is a Mutual Action Plan (MAP_v2.xlsx) with milestones: PO signoff (Dec 18), provisioning & canary (Jan 5–Jan 20), pilot validation (Jan 21–Feb 4), decision point for Private conversion (Feb 14). Please review dates and confirm Procurement PO lead time on your side.
+
+Next asks from Mediva:
+- Priya: confirm PO approval date your team can commit to and whether contingency burst (pre-approved credit) is acceptable.
+- Simon: confirm token distribution mean/median we should bake into the final sizing (Marissa used median=750, mean=1000).
+
+If you agree, I'll prepare a short one-page justification for your security/procurement packet and a granular cost appendix for the PO.
+
+Best,
+Evelyn Hart
+Sr. Enterprise Sales Engineer
+Redwood Inference
+
+Attachments: MAP_v2.xlsx
+

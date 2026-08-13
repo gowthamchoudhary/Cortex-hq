@@ -1,0 +1,128 @@
+Implementation checklist: chat vs completions and schema questions
+
+From: Emma Zhao <emma.zhao@acmenet.com>
+To: Dylan Brooks <dylan.brooks@redwoodinference.com>
+Cc: AcmeNet Eng Team <eng@acmenet.com>
+Date: 2026-05-28T09:12:00-07:00
+Subject: Re: Post-call notes / integration questions
+
+Thanks for the recap, Dylan — great call this morning. Quick clarifications from our side before we loop in infra: 
+
+- Primary workload: chat assistant embedded in our admin console (context window ~6k tokens typical, occasional 12k).
+- We want structured, deterministic responses for a few flows (account summaries, action items) and freeform chat for others.
+- Embeddings: short vectors for semantic search over docs (1–3M items). Reranking will run server-side.
+
+A few concrete ask items you mentioned: 
+1) SDK/auth: we currently use an internal service that issues short-lived tokens; we'd prefer not to persist raw API keys.
+2) Routing: we want a low-cost fallback for non-critical traffic and a high-quality model for payments/PII flows.
+3) Schema: can you confirm best practice for chat vs completions when we need structured JSON + tool calling? Also how streaming works with structured outputs.
+
+I'll attach our lightweight integration spec (PDF) in a follow-up. Happy to jump on a 30m follow-up next week.
+
+—Emma
+Lead Product Manager, AcmeNet
+
+
+From: Dylan Brooks <dylan.brooks@redwoodinference.com>
+To: Emma Zhao <emma.zhao@acmenet.com>
+Cc: Dev Patel <dev.patel@redwoodinference.com>, Rishi Malhotra <rishi.malhotra@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>
+Date: 2026-05-28T11:04:00-07:00
+Subject: Re: Post-call notes / integration questions
+
+Thanks Emma — this is perfect context. Attaching a short checklist and a proposed schema sketch (see attachments).
+
+Next steps from Redwood:
+- Dev: draft an auth flow that integrates with your short-lived token approach (Dev, can you draft?).
+- SE: confirm whether Chat API or Completions API is preferable for structured outputs + streaming (Rishi/Dev).
+- Ops: propose routing policies (fallback model + canary for PII-sensitive endpoints).
+
+Would you be available Thurs June 3 at 10am PT for a 30m implementation walk-through?
+
+Quick note on deliverables attached: implementation-checklist.xlsx and redwood-schema-proposal.json.
+
+Thanks,
+Dylan
+Account Executive, Redwood Inference
+
+
+From: Dylan Brooks <dylan.brooks@redwoodinference.com>
+To: Dev Patel <dev.patel@redwoodinference.com>, Rishi Malhotra <rishi.malhotra@redwoodinference.com>
+Cc: Neha Kapoor <neha.kapoor@redwoodinference.com>
+Date: 2026-05-28T11:09:00-07:00
+Subject: Internal: Acme integration asks summary (chat vs completions, auth, routing, streaming)
+
+Team — summary and asks from Acme:
+- Primary ask: reliable structured JSON responses for critical flows (invoices, account actions), but also full chat for general support.
+- Token policies: customer issues short-lived tokens via internal service (no persisted raw API key).
+- Volume: embeddings index ~2M docs; reranker will be invoked per-query at ~100 qps peak.
+
+Please reply with a short implementation plan for each item:
+1) Auth pattern: support short-lived tokens (STS) + optional signed JWT for delegation? Any client SDK changes?
+2) Chat vs completions recommendation: when to use which, tokenization considerations, max_tokens behavior, predictable stop sequences for structured JSON.
+3) Streaming semantics: how to stream structured outputs safely (e.g., partial JSON pieces, final validation).
+4) Routing: how to configure fallback low-cost variant + high-quality pinned model for PII flows.
+5) Embeddings/reranker: batching recommendation and cost estimates.
+
+Make this a concise bullet list — I will consolidate and send back to Emma.
+
+Thanks — Dylan
+
+
+From: Dev Patel <dev.patel@redwoodinference.com>
+To: Dylan Brooks <dylan.brooks@redwoodinference.com>, Rishi Malhotra <rishi.malhotra@redwoodinference.com>
+Cc: Neha Kapoor <neha.kapoor@redwoodinference.com>
+Date: 2026-05-29T08:22:00-07:00
+Subject: RE: Internal: Acme integration asks summary (chat vs completions, auth, routing, streaming)
+
+High-level plan (concise):
+
+1) Auth pattern
+- Approach: support their short-lived tokens by accepting a signed bearer token issued by Acme's token service. We'll validate signature + expiry server-side. Optionally, offer a short-lived Redwood session token (STS) that maps to a customer id for routing/quota.
+- SDK change: add helper to exchange customer STS for Redwood session token (1 function, backwards compatible). Example: GET /auth/exchange?token=<signed-token> -> returns session_token (expires in 5m).
+
+2) Chat vs Completions recommendation
+- Use Chat API for: multi-turn assistants, tool calls, and structured JSON with function/tool calling. Chat models preserve role/tokens and make tool calling simpler.
+- Use Completions for: single-turn templated outputs where you control the prompt carefully (lower latency for ultra-simple tasks).
+- Tokenization notes: both APIs are tokenized the same; advise conservative max_tokens. For structured JSON, reserve N tokens for the model output (e.g., if context ~6k, and max model context is 8k, set max_tokens=1500 cap).
+- Stop sequences: for JSON we recommend using function-calling if available; otherwise supply a unique stop token ("\n--END_JSON--") and post-validate. Avoid relying solely on stop for correctness.
+
+3) Streaming semantics for structured outputs
+- Two options:
+  a) Stream raw chunks: client receives partial UTF-8 chunks. Risk: partial JSON invalid until final chunk. We recommend a framing layer: send incremental JSON lines where each chunk is a complete partial object (e.g., chunked fields) or use the event stream with "delta" tokens and an end-of-message sentinel.
+  b) Non-streamed final JSON: for critical deterministic flows, prefer non-streamed and validate on server before returning to client.
+- Implementation: we can support chunked "json-patch" style streaming as an opt-in mode in the SDK so client can rehydrate and validate progressively.
+
+4) Routing & fallback
+- Policy suggestion: route by policy key in the session token. Default route -> cost-optimized variant (quantized model). If request includes header X-PII-FOCUS=true or scope=payments, route to pinned high-quality model in dedicated pool. Canary rollout: 5% traffic pinned then 25% based on success metrics. Automatic fallback: if pinned capacity unavailable, fall back to next compatible variant with graceful degradation header.
+
+5) Embeddings & reranker
+- Batch embeddings (512–1024 items per batch) to max out GPU throughput. For 2M docs, recommend offline indexing pipeline with incremental updates. For reranking at 100 qps, use a two-step pattern: lightweight similarity candidate retrieval (FAISS) -> model-based reranker for top-K, keep reranker model small (distilled) for latency.
+
+Attachments: I've drafted redwood-schema-proposal.json with examples for chat function-calling + a fallback completions template. See attached.
+
+Let me know if you'd like me to spin a short code snippet for the SDK exchange flow — I can add to the doc before we send to Emma.
+
+—Dev
+Senior Solutions Engineer, Redwood Inference
+
+
+From: Dylan Brooks <dylan.brooks@redwoodinference.com>
+To: Emma Zhao <emma.zhao@acmenet.com>
+Cc: Dev Patel <dev.patel@redwoodinference.com>, Rishi Malhotra <rishi.malhotra@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>
+Date: 2026-06-02T15:43:00-07:00
+Subject: Re: Implementation checklist: chat vs completions and schema questions
+
+Emma — quick follow-up with an actionable checklist and proposed times. TL;DR: Dev recommends Chat API + function/tool calling for deterministic JSON, support short-lived signed tokens via token exchange, and an opt-in chunked streaming mode for progressive JSON rehydration.
+
+Action items we attached and assigned:
+- Redwood: auth exchange helper + example (Dev) — attached redwood-schema-proposal.json
+- Acme: confirm whether X-PII-FOCUS header will be set by your backend (Emma)
+- Joint: schedule 30m demo to review SDK flow and routing rules — propose Thurs June 3, 10am PT or Fri June 4, 9am PT.
+
+Attachments: implementation-checklist.xlsx (checklist + milestones), redwood-schema-proposal.json (examples + code snippets).
+
+Please reply with preferred time and whether you'd like a quick recorded demo of the SDK exchange flow before the call.
+
+Best,
+Dylan
+Account Executive, Redwood Inference

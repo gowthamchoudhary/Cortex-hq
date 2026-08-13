@@ -1,0 +1,133 @@
+Data leakage mitigation: logging controls & playbook next steps
+
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Alex Morgan <alex.morgan@medinet.com>, Katie Li <katie.li@medinet.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Fri, 30 Jun 2028 09:12:00 -0700
+Subject: Data leakage mitigation: logging controls & playbook next steps
+
+Hi Alex / Katie —
+
+Great to meet you both this morning. Quick recap from our discovery so everyone has the same picture and clear next steps on the logging/PII concerns you raised.
+
+Key notes from the call:
+- Primary concern: request/response logs occasionally contain patient identifiers (names, MRNs) from inbound text fields.
+- Secondary: headers currently include an un-hashed trace_id that your security team flagged as linkable across systems.
+- Retention ask: you prefer a 30-day window for raw telemetry, with aggregated metrics retained longer for product analytics.
+- Residency: logs must remain in the US region for the initial rollout.
+
+Options we discussed (high-level):
+1) Streaming redaction rule set (configurable) to remove or mask known PII fields in request/response bodies before storing logs.
+2) Header handling: hash or truncate trace_id values at ingress; preserve a short-lived mapping only for debug windows.
+3) Retention enforcement: automatic purge jobs (configurable window) + export controls for compliance exports.
+4) Rollout model: start with a pilot on a subset of routes, validate PII removal on sampled traffic, then flip globally.
+
+Immediate asks from your side:
+- Confirm the priority of redaction vs. trace ID hashing (which matters more for your auditors).
+- Share any internal compliance checklist or evidence format we should use (SOC2 artifacts, retention attestations).
+- Proposed time for a technical deep-dive with your infra team: next Wed (7/4) or Thu (7/5) afternoon PT.
+
+Attached: logging-redaction-options.pdf (high-level patterns + tradeoffs).
+
+Proposed next steps from Redwood:
+- Ben will draft an engineering playbook that outlines the redaction pipeline, sample regex/JSON path rules, and rollback procedures.
+- Monica will confirm regional deployment constraints and retention enforcement approach with ops.
+- Schedule a 60-min technical deep-dive next week to walkthrough config + sample logs.
+
+Alex / Katie — please reply with which item you want prioritized and which day works for the deep-dive.
+
+Thanks,
+Kimberly Park
+Principal Sales Engineer | Redwood Inference
+kimberly.park@redwood.com | (415) 555-0192
+Redwood Inference
+
+--- attachment: logging-redaction-options.pdf (PDF, 95KB) ---
+From: Alex Morgan <alex.morgan@medinet.com>
+To: Kimberly Park <kimberly.park@redwood.com>
+Cc: Katie Li <katie.li@medinet.com>
+Date: Fri, 30 Jun 2028 11:03:00 -07:00
+Subject: Re: Data leakage mitigation: logging controls & playbook next steps
+
+Kimberly —
+
+Thanks for the clear summary. A few clarifications from our side: we want trace_id hashing as the top priority for the first phase (auditors flagged correlation risk), then body redaction as the second priority.
+
+Specific questions:
+- Can you provide an example config that shows the redaction pipeline for JSON payloads (we use both structured JSON and free-text fields)?
+- For trace_id hashing, do you support HMAC with a customer-supplied key (so we don't share raw trace identifiers with Redwood)?
+- For the 30-day retention window: does Redwood provide automated certs/logs that prove deletion (audit logs we can ship to our GRC team)?
+
+We can do the technical deep-dive on Thu 2028-07-05 at 2:00 PM PT. Please send an invite and an ETA for the playbook.
+
+Appreciate it —
+Alex Morgan
+Director, Platform Security | Medinet Health
+alex.morgan@medinet.com | (617) 555-8810
+
+--- quoted on Fri, 30 Jun 2028 at 09:12 Kimberly Park <kimberly.park@redwood.com> wrote:
+> Great to meet you both this morning. Quick recap from our discovery so everyone has the same picture and clear next steps on the logging/PII concerns you raised.
+> 
+> [snip]
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Kimberly Park <kimberly.park@redwood.com>
+Cc: Monica Patel <monica.patel@redwood.com>, Alex Morgan <alex.morgan@medinet.com>
+Date: Mon, 2 Jul 2028 08:35:00 -0700
+Subject: Fwd: Data leakage mitigation: logging controls & playbook next steps
+
+Kim / team — forwarding a draft playbook for the scenario Alex described. High-level items included: redaction pipeline, header hashing approach, retention enforce, sampling strategy, and key management options (customer HMAC, per-tenant keys).
+
+Summary of the playbook (actionable bullets):
+- Ingress filter step: configurable JSONPath/regex rules; apply strict allowlist for fields that are persisted.
+- Free-text scrubber: named-entity detection first pass -> deterministic masking for names/MRNs -> fallback to redaction token.
+- Header handling: offer three modes: preserve (no change), truncate (first 8 chars), or HMAC-with-customer-key. Recommend HMAC for Medinet.
+- KV-cache debug window: store un-hashed trace_id only for 24 hours in ephemeral debug store with role-based access, then destroy.
+- Retention enforcement: automated purge job + immutable audit record (timestamped deletion entry) for compliance.
+- Pilot plan: route-level canary (5% traffic) + weekly sampling reports for 4 weeks before full rollout.
+
+Attachments: playbook-steps.md, redaction-implementation-plan.xlsx (detailed remediation tasks and engineering owners).
+
+Next steps I recommend:
+1) Send the playbook to Medinet for review (Kim).
+2) Schedule the technical deep-dive (Kim to set invite for Thu 7/5 2:00 PM PT).
+3) Engineering to prepare a short demo of the scrubber on synthetic sample logs.
+
+Ben Carter
+Sr. Solutions Architect | Redwood Inference
+ben.carter@redwood.com
+
+--- attachment: playbook-steps.md (Markdown, 12KB) ---
+--- attachment: redaction-implementation-plan.xlsx (Excel, 48KB) ---
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Alex Morgan <alex.morgan@medinet.com>, Katie Li <katie.li@medinet.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Date: Tue, 2 Jul 2028 16:45:00 -0700
+Subject: Re: Data leakage mitigation: logging controls & playbook next steps
+
+Alex / Katie —
+
+Thanks for the quick answers and for prioritizing trace_id hashing. Confirming next steps and owners: 
+
+Agreed priorities:
+- Phase 1 (high priority): implement trace_id HMAC with a customer-supplied key (no raw trace_id leaves the Medinet environment).
+- Phase 2: deploy the redaction pipeline (ingress filters + free-text scrubber) on pilot routes.
+- Compliance: generate deletion attestations for the 30-day retention window and provide SOC2 mapping artifacts.
+
+Owners & timeline:
+- Ben: lead engineering playbook and demo (deliverables: playbook doc + demo) — ETA Wed 7/4 EOD PT.
+- Monica: validate regional ops constraints and confirm purge job cadence — ETA Thu 7/5 EOD PT.
+- Medinet: provide sample sanitized logs (redacted) and the compliance evidence format you need for SOC2 — please upload to the secure share before the deep-dive.
+
+I’ve scheduled the technical deep-dive for Thu, 5 Jul 2028 at 2:00 PM PT — calendar invite sent. Agenda will be: 1) trace_id HMAC design and KMS options, 2) redaction pipeline walkthrough + sample logs, 3) pilot plan and success criteria.
+
+Links: HubSpot deal record — https://app.hubspot.com/deals/78431
+
+If anything needs to change on priorities or attendees, let me know before the call. Looking forward to the deep-dive.
+
+Best,
+Kimberly Park
+Principal Sales Engineer | Redwood Inference
+kimberly.park@redwood.com | (415) 555-0192
+
+--- attachments referenced: redaction-implementation-plan.xlsx ---

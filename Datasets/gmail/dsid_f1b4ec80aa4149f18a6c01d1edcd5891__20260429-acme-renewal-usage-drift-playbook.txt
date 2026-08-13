@@ -1,0 +1,121 @@
+Renewal planning: dedicated capacity sizing — usage drift and proposal
+
+From: Rebecca Torres <rebecca@acmeanalytics.com>
+To: Rachel Kim <rachel_kim@redwood.com>
+Cc: Jordan Lee <jordan.lee@acmeanalytics.com>
+Date: Wed, 29 Apr 2026 09:15:00 -0700
+Subject: Renewal planning: Dedicated capacity sizing for Q3
+
+Hi Rachel —
+
+Thanks for the catch-up last month. We're coming up on our renewal window (contract ends 2026-07-31) and the team is seeing steady growth in generation volume. I pulled together a quick usage summary and a couple of questions for sizing:
+
+- Q1 observed avg utilization: 63% across our dedicated fleet (p50 latency targets)
+- Peak day spikes up to ~92% sustained for 6–8 hours (business hours in US east)
+- Typical sequence lengths increased from 512 -> 720 after the recent prompt expansion
+
+Questions:
+1) Is there an efficient way to handle sustained peak days without a large capacity uplift for the entire term?
+2) Can we take advantage of burst pools or transient tranches under our current Dedicated contract?
+3) Do you recommend a top-up now, or a staged tranche at renewal?
+
+Attached is our Q1 usage export (acme_q1_usage_summary.csv). Would you and your team be able to sketch options (cost + expected latency impact) for: 1) a small top-up (+15% GPUs), 2) burst pool with autoscaling, 3) a schedule of staggered tranches timed to our expected feature launches?
+
+Appreciate any guidance — we want to keep SLA headroom without overspending.
+
+—Rebecca
+Head of ML Ops, Acme Analytics
+
+Attachment: acme_q1_usage_summary.csv (CSV, 87 KB)
+From: Rachel Kim <rachel_kim@redwood.com>
+To: Rebecca Torres <rebecca@acmeanalytics.com>
+Cc: Jordan Lee <jordan.lee@acmeanalytics.com>, David Kim <david_kim@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Wed, 29 Apr 2026 11:02:00 -07:00
+Subject: Re: Renewal planning: Dedicated capacity sizing for Q3
+
+Hi Rebecca — thanks for the summary and the CSV.
+
+Quick answer up front: yes — there are three practical paths we typically recommend depending on your tolerance for spend vs. latency risk:
+
+A) Staged tranche top-up at renewal (lower unit price, predictable throughput)
+B) Maintain baseline + configure a burst/spot pool for predictable peak coverage (lower committed cost, pays only when burst used)
+C) Hybrid: small committed top-up (+10–15%) + burst pool for the remaining spikes
+
+I'll work with David (accounts) and Ben (SE) to run your Q1 export through our sizing model and return two recommended configurations with ballpark economics and expected p95 latency estimates. Can you confirm your target p95 latency SLO and whether you need region pinning to us-east-1 for traffic? Also, any constraints on maximum spend increase at renewal (percent or $)?
+
+Proposed timeline:
+- Today: internal sizing run and initial options (David + Ben)
+- Thu 30 Apr: deliver 2 config options + one fallback (docs + attachment)
+- Fri 1 May: 30-minute review call if helpful
+
+
+Thanks —
+Rachel Kim
+Senior Account Executive | Redwood Inference
+redwood.com
+
+On Wed, Apr 29, 2026 at 09:15 AM Rebecca Torres <rebecca@acmeanalytics.com> wrote:
+> Hi Rachel —
+> 
+> Thanks for the catch-up last month... (see attached)
+> 
+> —Rebecca
+From: David Kim <david_kim@redwood.com>
+To: Rachel Kim <rachel_kim@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Wed, 29 Apr 2026 12:18:00 -07:00
+Subject: Fwd: Renewal planning: Dedicated capacity sizing for Q3
+
+Looping you both in. I ran a quick pass on the CSV and sketched three configurations in the attached playbook: redwood_dedicated_playbook.docx. High level notes: 
+
+- Baseline: Current committed GPUs (48 gpus) + 10% top-up = 53 gpus. Expected to bring avg util to ~55% and reduce p95 stalls. Cost uplift ~+12% over current committed spend.
+- Burst pool: Keep current commit but add a 16-GPU burst pool. Estimated call-to-burst frequency based on Q1 peaks would cost ~+4% when averaged monthly. Risk: p95 on extreme peaks may be 10–25% worse than full commit but within your stated tolerance if pinned to us-east-1.
+- Hybrid: +8% commit (52 gpus) + 8 GPU burst. Best compromise for headroom and cost control.
+
+Special considerations:
+- Sequence length growth suggests we should recommend a quantization/packing review to reduce memory per-token (Ben).
+- Autoscaling cooldown and pre-warming for cache (KV warmup) are critical for peak day coverage — recommend a 10-minute pre-warm policy for predictable launches.
+
+I'll let Ben add latency estimates. Rachel — do you want me to produce the formal proposal PDF for Rebecca or wait for Ben's numbers first?
+
+—David
+Sales Director | Redwood Inference
+
+Attachment: redwood_dedicated_playbook.docx (DOCX, 420 KB)
+From: Ben Carter <ben_carter@redwood.com>
+To: Rebecca Torres <rebecca@acmeanalytics.com>, Rachel Kim <rachel_kim@redwood.com>
+Cc: David Kim <david_kim@redwood.com>
+Date: Thu, 30 Apr 2026 17:04:00 -07:00
+Subject: Re: Renewal planning: Dedicated capacity sizing for Q3 — proposal and numbers
+
+Hi Rebecca —
+
+Thanks for the usage dump. We ran the full sizing and attached a concise proposal (acme_proposal_v2.pdf) and an exported CSV with simulated hourly cost for the three scenarios. Highlights below: 
+
+Scenario 1 — Committed top-up (+15% / 55 gpus)
+- Estimated monthly committed cost: $124,500
+- Expected p95 impact: meets your p95 SLO (<= 220ms) for 98% of hours; extreme peaks may see p95 degrade ~12% during the 6–8 hour sustained windows.
+
+Scenario 2 — Burst pool (16 GPUs) + no additional commit
+- Baseline committed cost unchanged: $111,000
+- Monthly expected effective cost (incl. burst use modeled on Q1): $116,800 (avg)
+- p95: generally within 250–280ms on peak days, dependent on pre-warm policy.
+
+Scenario 3 — Hybrid (small commit + burst): 8 GPU commit + 8 GPU burst
+- Committed cost: $118,200
+- Effective monthly modeled cost: $119,900
+- p95: within 220–230ms during peaks; best balance of predictability and spend.
+
+Recommendations and next steps:
+1) If Acme requires strict p95 guarantees for product-critical requests, pick Scenario 1.
+2) If cost flexibility is most important and some p95 variance is tolerable, pick Scenario 2 and add a 10-minute pre-warm policy for scheduled launches.
+3) Our recommended default: Scenario 3 — we propose adding a 6-month staggered tranche to phase the commit (2 months 4 GPUs -> 2 months +4 GPUs -> full 8 GPUs at renewal). This keeps cashflow reasonable while validated by telemetry.
+
+Attached: acme_proposal_v2.pdf (PDF, 95 KB)
+Also attached: acme_q1_usage_summary.csv (re-sent)
+
+Let me know if you want a side-by-side cost model exported to your finance template (we can drop into your spreadsheet). Happy to jump on the call Friday for the walk-through.
+
+Best —
+Ben Carter
+Principal Sales Engineer | Redwood Inference
+Attachments: acme_proposal_v2.pdf, acme_q1_usage_summary.csv

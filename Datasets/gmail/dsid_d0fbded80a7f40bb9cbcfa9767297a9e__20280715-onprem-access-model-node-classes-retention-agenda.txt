@@ -1,0 +1,101 @@
+On-prem access model, node classes and retention — preflight agenda
+
+From: Samir Rao <samir@arklight.com>
+Date: Mon, 15 Jul 2028 09:03:00 -0700
+To: Ben Carter <ben@redwood.com>
+Subject: Preflight: operator access, node classes, retention questions
+
+Hi Ben —
+
+Thanks again for offering to run the preflight call for our on-prem cluster. Before we lock the calendar, the ops and security teams asked for a short agenda so they can surface any obvious blockers. High-level questions that would help us prepare: 
+
+- Operator & admin access model: do you expect a quorum of customer SREs to hold operator credentials, or will Redwood run a read-only operator plus customer-admin service account? Any recommended IAM model for air-gapped sites?
+- Node classes / workload isolation: proposal for 3 node classes (control/infra, GPU/serving, general-purpose). What you usually recommend for workload density and eviction QOS?
+- Persistent volume retention & backups: typical retention windows you see for model KV caches vs. logs vs. inference telemetry. Also need guidance on snapshot cadence and offsite export.
+- Network egress & audit: a short checklist for required firewall rules, outbound endpoints, and where audit/logs should be pushed.
+
+We want to include our DPO on the call to confirm retention windows. If you can send a short preflight checklist and any sample node-class sizing beforehand that would be great.
+
+Samir Rao
+Head of Infrastructure, Arklight Health
+[Attachment: sample-host-inventory.csv]
+
+-----
+From: Ben Carter <ben@redwood.com>
+Date: Mon, 15 Jul 2028 10:20:00 -0700
+To: Samir Rao <samir@arklight.com>
+Cc: Laura Bennett <laura@redwood.com>, Neha Kapoor <neha@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Subject: Re: Preflight: operator access, node classes, retention questions
+
+Samir —
+
+Appreciate the clear list. I've scheduled a 60-minute preflight for Wed Jul 18 at 10:00 PT and invited your DPO and ops leads. Attached is a short checklist and a CSV with node-class examples tailored to similar healthcare customers. Quick answers inline to help your team triage: 
+
+- Operator access model: we typically recommend a split model for regulated customers: Redwood runs a dedicated control-plane operator (read-only by default) and we provision customer-managed admin service accounts for day-to-day operations. For air-gapped sites we provide an operator bundle that can be installed from your internal registry; operator credentials should be stored in your KMS/HSM and rotated on the same cadence as cluster admin keys.
+
+- Node classes: three logical classes is a good starting point. Suggested sizing (per 8-node rack): control/infra: 2 x m5-large-equivalent (control, probes, monitoring), GPU/serving: 3 x GPU (A10/NVIDIA T4 depending on model) with 192-384 GB RAM, general-purpose: remaining nodes with local NVMe for ephemeral caches. We'll bring a recommended eviction/QoS policy for mixed workloads to the call.
+
+- PV retention: separate policies per data type. Model KV cache: ephemeral by default (rebuild on restart), telemetry/logs: 30-90 days on blockstore with daily snapshots; long-term audit store: immutable export to S3-compatible object storage (encrypted, multipart sync). We'll propose snapshot cadences and retention matrix during the session.
+
+- Network / audit: minimal outbound endpoints for license check and health pings (we provide a short allowlist), and a push model for audit logs to your SIEM. Firewall rules should allow outbound HTTPS to our control-plane endpoints and ICMP/SSH for initial handoff if desired.
+
+Attachments: redwood-onprem-preflight-checklist-v0.3.pdf, node-classes-proposal.csv, egress-policy-draft.md
+
+Next steps: please confirm attendee list and we will circulate a short runbook we use for preflights.
+
+Thanks,
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+T: +1 415-555-0147
+
+-----
+From: Laura Bennett <laura@redwood.com>
+Date: Mon, 15 Jul 2028 13:05:00 -0700
+To: Ben Carter <ben@redwood.com>
+Cc: Neha Kapoor <neha@redwood.com>, Karthik Iyer <karthik@redwood.com>, Samir Rao <samir@arklight.com>
+Subject: Re: Preflight: operator access, node classes, retention questions
+
+Ben / team —
+
+A couple of tactical notes I want on record before the call: 
+
+- Control plane placement: prefer control/infra nodes to be dedicated and spread across failure domains. Use anti-affinity for kube-system critical pods. Control-plane nodes should be tagged for restricted SSH access and run only monitoring/control agents.
+- Operator privileges: if Arklight wants full control, provide them a cluster-admin service account and we run our operator with a CRD-only permission set and image admission controls. This reduces blast radius for incident response.
+- Node-local storage: for model KV caching, recommend node-local NVMe with a local eviction policy and periodic compressed snapshots to blockstore. Keep the ephemeral cache TTL short (<= 6 hours) to avoid stale state in model serving.
+- Backups: enforce immutable snapshots for audit logs for 365 days (industry expectation for certain healthcare audits) but keep user-activity telemetry to 90 days by default. If DPO requests, we can provide a variance table for regulatory requirements.
+
+I'll bring sample podDisruptionBudgets and a QoS profile to propose.
+
+Laura Bennett
+Lead, Private Deployments — Redwood Inference
+
+-----
+From: Neha Kapoor <neha@redwood.com>
+Date: Mon, 15 Jul 2028 16:22:00 -0700
+To: Samir Rao <samir@arklight.com>
+Cc: Ben Carter <ben@redwood.com>, Laura Bennett <laura@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Subject: Re: Preflight: operator access, node classes, retention questions
+
+Samir —
+
+Thanks for the prompt. Two final items before we meet:
+
+1) Please upload your host inventory (we received sample-host-inventory.csv) to the shared Drive link below so we can map node names to rack/ASN and validate NVMe availability.
+2) For egress allowlist: we will need one (1) outbound wildcard for license verification (license.redwood.com), two specific IPs for health telemetry, and an HTTPS endpoint for log push. We'll send a minimal ipset and FQDN list in a separate email.
+
+Call agenda (Wed Jul 18, 10:00 PT, 60m):
+- 10:00 — 10:10 Introductions & goals (Samir / DPO / Redwood leads)
+- 10:10 — 10:25 Access model options & recommended IAM patterns (Laura)
+- 10:25 — 10:40 Node classes, sizing and eviction/QoS (Karthik)
+- 10:40 — 10:50 PV retention, snapshots and audit export (Neha)
+- 10:50 — 11:00 Next steps, calendar of deliverables and DocuSign/PO checklist (Ben)
+
+Shared Drive: https://drive.redwood.com/open/1a2b3c-preflight-notes
+HubSpot: https://app.hubspot.com/contacts/arklight/DL-7893
+
+We look forward to it. If your DPO has specific retention regs to confirm (e.g., state-level retention for PHI), flag them here and we'll include a variance table.
+
+Best,
+Neha Kapoor
+Product Manager, Private Deployments — Redwood Inference
+[Attachment: node-classes-proposal.csv]

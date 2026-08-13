@@ -1,0 +1,118 @@
+Re: Tenant-specific log retention — Novum Health (request for exception)
+
+From: Sarah Lin <sarah.lin@novumhealth.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>
+Date: Wed, 29 Jul 2026 13:02:00 -0700
+Subject: Tenant log retention — ask for conditional exception (novum-prod-22)
+
+Hi Karthik,
+
+Thanks for the quick demo last week. We have an internal compliance question that surfaced from our SOC 2 reviewer: Novum requires a 180-day retention for operational logs used in incident forensics, but one of our workloads (novum-prod-22) generates large ephemeral session/debug traces that contain high-cardinality request metadata. Keeping the full debug traces for 180 days is causing storage and encryption key residency concerns on our side.
+
+We are looking to request a customer-scoped exception: reduce retention for these ephemeral debug traces to 30 days, while continuing to retain core audit logs for 180 days. To move forward we need:
+- Confirmation that Redwood can segregate ephemeral debug traces per tenant and apply a shorter TTL (30 days) without affecting audit logs
+- Evidence artifacts you can provide for SOC 2/CAIQ that describe the controls for this carveout (exportable list of retained fields, proof of key residency, sample deletion certificate/process)
+- Any required legal/contractual language (SLA/appendix) to sign that documents the exception and customer responsibilities
+
+Can you confirm feasibility and, if yes, provide sample artifacts by end of week? If helpful, Alex (cc) can join a short call to walk the reviewer through the technical approach.
+
+Appreciate it —
+Sarah Lin
+Senior Compliance Manager, Novum Health
+
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Sarah Lin <sarah.lin@novumhealth.com>, Alex Morales <alex.morales@novumhealth.com>
+Date: Thu, 30 Jul 2026 09:18:00 -0700
+Subject: Fwd: Tenant log retention — ask for conditional exception (novum-prod-22)
+
+Forwarding Novum's ask — they want a tenant-scoped carveout for ephemeral debug traces (30d) while keeping audit logs at 180d. Key points:
+- Tenant: novum-prod-22
+- Data type: ephemeral session/debug traces (high-cardinality, potentially PII in free-text)
+- Customer request: reduced TTL for those traces, but they need SOC2/CAIQ artifacts and a signing mechanism (appendix/addendum)
+
+Neha — from a controls/technical standpoint, can we:
+1) apply TTL at the collection-level per tenant (flagged trace indices) and guarantee logical separation from audit logs?
+2) provide an evidence bundle (keystore residency, retention matrix, sample delete manifest) and a deletion API that produces an auditable certificate?
+
+Ben — if we are amenable, what language do we need in a short addendum to cover liability, discovery, and legal-hold obligations? Also advise if we should require a signed customer acceptance form prior to making the change.
+
+I propose a quick 30-min sync with Novum and Security to finalize the acceptance criteria; I'm available Thu 4–5p or Fri morning.
+
+Thanks —
+Karthik
+Director, Customer Security & Trust
+Redwood Inference
+
+On Wed, 29 Jul 2026 at 13:02, Sarah Lin <sarah.lin@novumhealth.com> wrote:
+> Hi Karthik,
+> 
+> Thanks for the quick demo last week. We have an internal compliance question that surfaced from our SOC 2 reviewer: Novum requires a 180-day retention for operational logs used in incident forensics, but one of our workloads (novum-prod-22) generates large ephemeral session/debug traces that contain high-cardinality request metadata. Keeping the full debug traces for 180 days is causing storage and encryption key residency concerns on our side.
+> 
+> We are looking to request a customer-scoped exception: reduce retention for these ephemeral debug traces to 30 days, while continuing to retain core audit logs for 180 days. To move forward we need: ...
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Cc: Sarah Lin <sarah.lin@novumhealth.com>, Alex Morales <alex.morales@novumhealth.com>
+Date: Thu, 30 Jul 2026 11:05:00 -0700
+Subject: Re: Fwd: Tenant log retention — ask for conditional exception (novum-prod-22)
+
+Karthik — quick technical response and recommended compensating controls.
+
+Feasibility: yes. We can tag ingestion streams at the tenant+stream level (e.g., tenant=novum-prod-22, stream=ephemeral-debug) and apply separate lifecycle policies. Audit logs are written to a separate index/bucket (immutable-ops-audit) and are never subject to ephemeral TTLs.
+
+Controls we recommend to satisfy SOC 2/CAIQ:
+- Encryption: tenant-specific envelope keys stored in the customer's KMS scope for novum-prod-22. We will provide a keystore manifest showing residency and key rotation cadence.
+- Logical separation: distinct buckets/indices with RBAC preventing cross-export
+- Deletion certificate: retention engine will emit a signed deletion manifest (SHA256) including affected object IDs and timestamps; we keep a non-reversible hash of the manifest in our internal evidence store for audit (30d retention of the manifest hash)
+- Forensics snapshot: prior to deletion we offer a one-time export that Novum can request within a 7-day notice window (we will produce an export and mark associated ephemeral traces as expired)
+
+Acceptance criteria to provide Novum (draft):
+1) Redwood will apply a 30-day TTL to objects tagged stream=ephemeral-debug for tenant novum-prod-22;
+2) Core audit logs (stream=audit) remain retained for 180 days and are not affected;
+3) Customer must sign a retention exception addendum acknowledging that reduced retention may limit long-term forensic capability for ephemeral traces;
+4) For legal holds: Novum must issue a preservation request via the support-forensics mailbox; upon receipt we will snapshot affected objects (forensic export) and suspend TTL for those items until release;
+
+Artifacts we can provide: keystore_manifest.pdf (shows key residency and rotation), a CAIQ export (caiq_export.csv) with relevant control mappings, and a sample deletion_manifest.txt. I can assemble the artifacts and a short tech note explaining the lifecycle policy.
+
+I'll prepare the bundle and propose language for the addendum. If Novum wants, we can run a 30-minute technical walk-through to show the separation and demo the export.
+
+-Neha
+Security Engineer, Redwood Inference
+
+On Thu, 30 Jul 2026 at 09:18, Karthik Iyer <karthik.iyer@redwood.com> wrote:
+> Forwarding Novum's ask — they want a tenant-scoped carveout for ephemeral debug traces (30d) while keeping audit logs at 180d. ...
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Sarah Lin <sarah.lin@novumhealth.com>, Alex Morales <alex.morales@novumhealth.com>
+Cc: Neha Kapoor <neha.kapoor@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Fri, 31 Jul 2026 10:45:00 -0700
+Subject: RE: Tenant log retention — conditional exception proposal (novum-prod-22)
+
+Hi Sarah — thanks for the patience. Attached is the evidence bundle we discussed and a proposed path for signing an exception addendum. Summary below.
+
+What we can do (summary):
+- Apply tenant+stream TTL for novum-prod-22: ephemeral-debug traces -> 30 days; audit stream -> 180 days (no change).
+- Provide evidence artifacts: keystore_manifest.pdf (encryption residency + rotation cadence), caiq_export.csv (control mappings for the carveout), and a sample deletion_manifest.txt that will be produced per deletion event.
+- Forensics option: Novum may request a one-time snapshot export (7-day notice) before TTL enforcement. We will preserve the export for 30 days.
+
+Customer obligations and addendum highlights:
+1) Novum signs the Retention Exception Addendum acknowledging reduced forensic window for ephemeral traces and confirming any legal-hold requests will be submitted through support-forensics@redwood.com.
+2) Novum agrees to the limited export window and will maintain its own copies of any long-term forensic artifacts it requires.
+3) Redwood disclaims liability for forensic capability loss for ephemeral traces beyond the 30-day window; core audit logs retained at 180 days are subject to standard SLA.
+
+Next steps:
+- I attached the keystore_manifest.pdf and caiq_export.csv (links below) + draft addendum language. Please review and let us know if Novum wants the 30-minute walk-through with Neha and Ben to run through the controls.
+
+Attachments: keystore_manifest.pdf (shows KMS residency and rotation cadence), caiq_export.csv (relevant control mapping). Evidence folder: https://drive.redwood.com/secure/novum-retention-evidence
+
+If acceptable, Alex/Sarah — can you confirm who will sign the addendum? I will loop Legal to prepare the DocuSign when you confirm the signer.
+
+Best,
+Karthik Iyer
+Director, Customer Security & Trust
+Redwood Inference
+
+On Thu, 30 Jul 2026 at 11:05, Neha Kapoor <neha.kapoor@redwood.com> wrote:
+> Karthik — quick technical response and recommended compensating controls. ...

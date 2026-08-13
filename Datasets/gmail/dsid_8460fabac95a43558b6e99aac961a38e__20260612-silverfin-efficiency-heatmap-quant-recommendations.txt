@@ -1,0 +1,111 @@
+SilverFin: efficiency heatmap + quant recommendations
+
+From: Elena Park <elena@silverfin.ai>
+To: Naomi Feldman <naomi@redwood.ai>
+Date: 2026-06-12T09:12:00-07:00
+Subject: Efficiency assessment + ask on quantization/batching
+
+Hi Naomi,
+
+Thanks again for the demo earlier — SilverFin's team liked the latency profile you showed for longer-context retrieval flows. We're trying to build the internal business case and I need two pieces to present to procurement and infra: a simple heatmap that shows how batching, KV/prefix caching, and quantization choices (FP16 / INT8 / INT4) affect per-token cost and 99th percentile latency for a 2k prompt + 1k generation workload, and a short recommendation on which quant profile you would advise for a mixed retrieval+generation workload.
+
+Our constraints: 99th percentile latency target of 400ms per request, aggressive throughput requirements during batch windows (burst up to 180 qps for short periods), and strict data retention rules (so we can't use external persistent caches).
+
+Could you share a one-page heatmap and a short recommendation? Ideally by EOD Friday — procurement meeting on Monday.
+
+Thanks,
+Elena
+Elena Park
+Head of ML Infrastructure | SilverFin AI
+elena@silverfin.ai
++1 (415) 555-0132
+
+--
+Attachment: N/A
+
+From: Naomi Feldman <naomi@redwood.ai>
+To: Elena Park <elena@silverfin.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Grace O'Connor <grace_oconnor@redwood.ai>
+Date: 2026-06-12T10:03:00-07:00
+Subject: Re: Efficiency assessment + ask on quantization/batching
+
+Hi Elena — thanks for the clear ask and the context. Looping in Karthik (solutions) and Grace (pricing) so we can deliver a compact heatmap + recommendation that maps to SilverFin's latency SLO and burst pattern.
+
+Quick clarifying questions before we finalize:
+- Does the 2k prompt + 1k generation represent your worst-case traffic shape, or would you expect longer tails (up to 4k total tokens) during some retrieval scenarios?
+- Is the burst window 180 qps sustained for >60s or short spikes (~10-30s)? This affects batching thresholds vs immediate latency.
+
+We'll aim to get a one-page PDF and an XLSX heatmap by Friday EOD. If we can confirm the two bullets above now, we'll tailor hit-rate assumptions for the KV/prefix cache.
+
+Best,
+Naomi Feldman
+Senior Account Executive | Redwood Inference
+naomi@redwood.ai
++1 (650) 555-0199
+
+--
+Attachment: N/A
+
+From: Karthik Iyer <karthik_iyer@redwood.ai>
+To: Naomi Feldman <naomi@redwood.ai>, Elena Park <elena@silverfin.ai>
+Cc: Grace O'Connor <grace_oconnor@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Date: 2026-06-13T14:22:00-07:00
+Subject: Re: Efficiency assessment + ask on quantization/batching
+
+Hi Elena — Karthik here. I put together a short technical note and conservative assumptions that Naomi/Grace used to build the heatmap (attached as quant-recs-summary.pdf). High level up front:
+
+1) Quantization impact (typical for our verified model variants):
+   - FP16 -> INT8: ~35-45% per-token compute cost reduction; P99 typically increases by ~10-20ms but often stays within SLO for 2k/1k profiles when batching is enabled.
+   - INT8 -> INT4: additional ~20-30% compute savings on supported kernels; P99 increases more noticeably (~40-70ms) and can push you past 400ms depending on kernel maturity and sequence length. INT4 is best for very high throughput background jobs or when you can accept occasional P99 spikes.
+
+2) Batching vs immediate latency:
+   - Small batching windows (5-20ms) that maintain tail latency often provide 20-40% throughput efficiency at minimal P99 impact.
+   - Aggressive batching (50-200ms) yields bigger cost savings but drives P99 up; not recommended for strict 400ms SLO unless combined with prefix/KV caching.
+
+3) KV/Prefix caching assumptions used for heatmap:
+   - Conservative hit-rate: 20-30% (default scenario) — this assumes moderate reuse in retrieval flows.
+   - Optimistic hit-rate: 45-60% — requires pinned prompts or heavy overlap across users/sessions.
+   - Cache reduces generation compute proportionally to the cached token count and can dramatically lower P99 when the cached prefix is large (>512 tokens).
+
+4) Operational notes:
+   - For bursts up to 180 qps, we recommend a mixed policy: route latency-sensitive requests to lower-batch/FP16 or INT8 nodes and route bulk background/gap-filling traffic to INT4-preferred nodes with relaxed tail SLOs.
+   - Because SilverFin cannot use external persistent caches, we recommend an in-cluster KV cache with encrypted memory-only storage; we can document kube-level config and expected memory footprint (see attached heatmap Excel for examples).
+
+I'll highlight two concrete recommendations in the attached PDF (and the XLSX has the full heatmap): 1) Start on INT8 with small batching (10-20ms) + 25% conservative KV hit rate; 2) Evaluate INT4 for non-latency-critical backfills after a 2-week AB test.
+
+Let me know if you want me to include an A/B test plan (sample size, metrics) in the appendix.
+
+-Karthik
+Karthik Iyer
+Senior Solutions Engineer | Redwood Inference
+karthik_iyer@redwood.ai
+
+--
+Attachment: quant-recs-summary.pdf (pdf)
+
+From: Grace O'Connor <grace_oconnor@redwood.ai>
+To: Elena Park <elena@silverfin.ai>, Naomi Feldman <naomi@redwood.ai>
+Cc: Karthik Iyer <karthik_iyer@redwood.ai>, Marcus Lin <marcus_lin@redwood.ai>
+Date: 2026-06-16T15:40:00-07:00
+Subject: Re: Efficiency assessment + ask on quantization/batching
+
+Hi Elena — attaching the requested heatmap and a simple pricing sensitivity table that maps model variant (FP16/INT8/INT4), batching window, and KV hit-rate to estimated per-token cost and per-request 99th latency. Key callouts:
+
+- Baseline (FP16, <10ms batching, no KV cache): $0.0046 per 1k tokens; P99 ~380ms for the 2k/1k workload.
+- INT8 + 10-20ms batching + 25% KV hit-rate: estimated $0.0028 per 1k tokens; P99 ~410ms (borderline).
+- INT8 + 5-10ms batching + 35% hit-rate: estimated $0.0025 per 1k tokens; P99 ~390ms (recommended for SLO safety).
+- INT4 (mature kernel) + 50ms batching + 50% hit-rate: estimated $0.0017 per 1k tokens; P99 often >480ms (only for non-latency-critical workloads).
+
+Files attached: silverfin_efficiency_q2_heatmap_v1.xlsx (XLSX - heatmap + assumptions) and quant-recs-summary.pdf (technical notes). We've included a short slide you can drop into procurement materials (tab: exec_one_pager).
+
+Next steps: if procurement wants a firm price-table for a 12-month committed volume, we can produce a deal sketch (commit bands + estimated monthly spend) — I can draft that once you confirm whether SilverFin expects sustained 60 qps or sustained 120 qps for the committed band.
+
+Happy to hop on a 30-min call Friday if that helps finalize the deck.
+
+Best,
+Grace O'Connor
+Director, Commercial Pricing | Redwood Inference
+grace_oconnor@redwood.ai
+
+--
+Attachment: silverfin_efficiency_q2_heatmap_v1.xlsx (xlsx), quant-recs-summary.pdf (pdf)

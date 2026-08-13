@@ -1,0 +1,149 @@
+Post-demo SLO decisioning and streaming clarifications - Helix Labs
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Laura Chen <laura.chen@helixlabs.ai>
+Cc: Camila Reyes <camila_reyes@redwood.ai>
+Date: 2026-10-29T14:02:00-07:00
+Subject: Post-demo SLO decisioning and streaming clarifications - Helix Labs
+
+Hi Laura — thanks again for the demo this morning. Quick recap and asks so we can scope a direct hosted vs incumbent comparison for p95/p99 end-to-end latency and streaming behavior.
+
+Recap (what we heard today)
+- Primary latency targets you care about: end-to-end p95 and p99 for customer-facing inference.
+- Streaming is used for long-form assistant responses (chunked output) and you run some requests in low-latency chat mode.
+- Current provider: you reported inconsistent tails under burst traffic — want to validate if hosted Redwood can tighten p95/p99 while holding cost-neutral.
+
+Immediate asks to scope the comparison
+1) Traffic envelope (baseline RPS, burst RPS, tokens per request, percent streaming).
+2) Representative sample payloads (anonymized) and typical token distribution.
+3) A week-long window where we can run synthetic replay vs a small shadow on production.
+4) Security/procurement constraints for providing a limited test API key (data retention, audit logs).
+
+Proposed SLO targets for the test (initial):
+- p95 end-to-end (client-observed): <= 180ms
+- p99 end-to-end (client-observed): <= 380ms
+- Streaming: first-byte latency (p95) <= 120ms, steady-state chunk p95 <= 90ms
+
+These are starting points — if your baseline traffic numbers differ we'll tune. Camila (cc) can propose a concrete harness and test matrix. Can you share the traffic envelope and 10–20 representative payloads by Friday 10/31? Also, if there are specific IP allowlist or legal requirements we should know about, please flag.
+
+Next steps
+- Helix: share sample payloads + confirmation of burst profile (due 10/31).
+- Redwood-SE (Camila): propose a lightweight replay plan and what we need for a hosted vs incumbent side-by-side (by 11/2).
+- Redwood Sales (me): coordinate timing for a 2-hour perf window the week of Nov 6 and follow up SLA draft.
+
+Thanks — Ben
+
+--
+Ben Carter
+Account Executive, Platform Sales
+Redwood Inference
+ben.carter@redwood.ai | +1 (415) 555-0192
+
+From: Laura Chen <laura.chen@helixlabs.ai>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Tom Rivera <tom.rivera@helixlabs.ai>
+Date: 2026-10-29T16:10:00-07:00
+Subject: Re: Post-demo SLO decisioning and streaming clarifications - Helix Labs
+
+Ben — appreciate the summary. Quick answers below and a couple clarifications.
+
+Traffic envelope:
+- Baseline: ~120 RPS average (9–5 PST active users).
+- Normal burst: 700 RPS sustained for ~5–10 minutes during peak campaign spikes.
+- Peak flash: 2.5k RPS for short bursts (30–90s) on marketing pushes (rare).
+- Payloads: average request ~60 tokens output, median 45, 95th token length ~420 for long reports.
+
+Current provider observed latencies (prod, US-west):
+- p95 end-to-end: ~220ms
+- p99 end-to-end: ~520ms
+- Streaming: noticeable tailing when concurrency > 120, first-chunk p95 ~160ms, subsequent chunks variable.
+
+Constraints:
+- We can provide anonymized payloads (I'll attach a small sample).
+- We need a signed data handling addendum before providing live production traffic; a test account with restricted retention is fine.
+- Security: SOC 2 is required for production; for perf test we can proceed under an NDPA.
+
+We attached a small sample payload file and our baseline traffic CSV. Happy to target Friday for the payloads, but I need you to confirm the exact data handling steps so I can loop legal.
+
+Thanks — Laura
+
+--
+Laura Chen
+Head of Product Infrastructure
+Helix Labs
+laura.chen@helixlabs.ai | (415) 222-8801
+
+On Oct 29, 2026, at 2:02 PM, Ben Carter <ben.carter@redwood.ai> wrote:
+> Hi Laura — thanks again for the demo this morning....
+
+From: Camila Reyes <camila_reyes@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Laura Chen <laura.chen@helixlabs.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: 2026-10-30T02:45:00-07:00
+Subject: Re: Post-demo SLO decisioning and streaming clarifications - Helix Labs
+
+Thanks Laura — that traffic shape is helpful. A short technical note on proposed test methodology and what we'll need from Helix to make the p95/p99 comparison meaningful: 
+
+Test matrix (high level)
+- Replay vs live shadow: run a replay of anonymized payloads (1 hour) to characterize baseline p95/p99 using both Redwood hosted and your incumbent. Then run a 2-hour controlled canary (split traffic 90/10) to validate behavior under realistic concurrency.
+- Burst tests: simulate 3 burst profiles: 700 RPS (5–10m), 2.5k RPS spike (30–90s), and sustained 800 RPS window (15m) to observe queue/backpressure effects.
+
+Key measurement hooks we will use
+- Client-observed end-to-end (include client→edge→origin→model→client path), measured at your app edge.
+- First-byte for streaming (time-to-first-chunk) and steady-state chunk p95/p99.
+- Token throughput (tokens/sec) and concurrent active streams.
+- Error rate and partial responses (stream truncation), to evaluate graceful degradation/fallbacks.
+
+What we need from Helix
+1) 10–20 anonymized sample payloads (jsonl) covering short replies and long-form reports (you said you can share).
+2) A representative traffic CSV (timestamps + request size + whether streaming) — Laura mentioned you'll attach this.
+3) Allowlist of test IPs and a short NDPA for the perf window.
+4) A test API key / restricted account with retention <=72 hours for logs (we'll destroy after test).
+
+Test harness notes
+- We'll provide a reproducible harness (link below) and instructions (attached pdf). The harness supports controlled concurrency shaping, variable token lengths, and will record client-observed percentiles.
+- We'll run identical payloads and seeds against Redwood hosted endpoints and capture raw traces.
+
+Deliverables after the test
+- p95/p99 comparison table (hosted vs incumbent) across the traffic envelope, streaming first-byte and chunk tail analysis, cost delta estimate per 10M tokens, and suggested mitigation knobs (batching, KV cache hints, quantization suggestions).
+
+Attachments: hlx_payloads.jsonl (sample sent by Helix), redwood_harness_instructions.pdf (how to reproduce).
+
+If this looks good I can draft a runbook and proposed 2-hour window for Nov 9th or Nov 10th. Ben — want me to propose Nov 9 (Tue) 9–11am PST?
+
+- Camila
+
+--
+Camila Reyes
+Senior Solutions Engineer, Redwood Inference
+camila_reyes@redwood.ai
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Laura Chen <laura.chen@helixlabs.ai>, Camila Reyes <camila_reyes@redwood.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>
+Date: 2026-10-30T09:18:00-07:00
+Subject: Re: Post-demo SLO decisioning and streaming clarifications - Helix Labs
+
+Laura / Camila — perfect, thank you both. Confirming and adding a couple admin items: 
+
+Action items & timeline
+- Laura: please drop the anonymized payloads + traffic CSV into the Share link (or reply with attachment) by 10/31 EOD. We'll need the NDPA scan by then so our security can sign off on a test key. (Owner: Laura)
+- Camila: propose Nov 9 09:00–11:00 PST as the perf window; draft runbook + required allowlist and API key instructions by 11/2. (Owner: Camila)
+- Ben/Marissa: I'll coordinate procurement and follow up SLA/contract redlines after we have the test results. I'll copy procurement on the NDA once Laura confirms. (Owner: Ben)
+
+Canary plan (high level)
+- Phase A: 1-hour replay (compare p95/p99 host vs incumbent).
+- Phase B: 2-hour live canary (90% incumbent / 10% Redwood hosted) with burst injections at minute 30 and 75.
+- Success gates: p95_delta <= 25% improvement OR p99_delta <= 20% improvement while error rate < 0.2% and no increase in truncated streams. If gates are met, procurement will consider a dedicated trial.
+
+I'll attach a short SLA draft for you to review; Camila will include the harness link.
+
+Thanks again — see you on next steps.
+
+Ben
+
+--
+Ben Carter
+Account Executive, Platform Sales
+Redwood Inference
+ben.carter@redwood.ai | +1 (415) 555-0192

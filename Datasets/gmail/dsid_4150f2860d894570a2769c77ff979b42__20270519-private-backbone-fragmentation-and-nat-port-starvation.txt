@@ -1,0 +1,127 @@
+[Escalation] Private backbone fragmentation -> truncated model outputs / upload errors
+
+From: Sanjay Rao <sanjay.rao@brightfield.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Cc: infra-ops@brightfield.com
+Date: Wed, 19 May 2027 09:12:00 -0700
+Subject: High severity: private deployment responses truncated / uploads failing (Brightfield prod)
+
+Vanessa —
+
+We started seeing an uptick in failed uploads / truncated generation outputs from our Brightfield private deployment after last night's cutover. Symptoms: large model responses (>=18k tokens) are being truncated mid-stream, and some multipart uploads to the private gateway fail with "connection reset". The errors correlate with the private route that terminates in our on-prem NAT pool.
+
+What's already captured:
+- Correlation ID: bf-prod-20270519-7f2d
+- Router path: Brightfield VPC -> Partner transit -> Customer edge -> on-prem Redwood gateway
+- Packet capture attached (brightfield_truncated.pcap) showing retransmits and fragmented packets with IP ID patterns.
+
+We suspect MTU/fragmentation or NAT port exhaustion on the customer's edge appliance. Can you triage? This is affecting a handful of high-volume customers. We need: a brief root cause hypothesis and any immediate mitigations we can do from the Redwood side.
+
+Thanks,
+Sanjay Rao
+Infrastructure Lead, Brightfield Analytics
+S: +1 415 555 0192
+
+-- attachment: brightfield_truncated.pcap (pcap) --
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+To: Sanjay Rao <sanjay.rao@brightfield.com>
+Cc: infra-ops@brightfield.com, Rafael Mendes <rafael_mendes@redwood.com>, Logan Wright <logan_wright@redwood.com>
+Date: Wed, 19 May 2027 09:45:00 -07:00
+Subject: Re: High severity: private deployment responses truncated / uploads failing (Brightfield prod)
+
+Thanks for the details and the pcap, Sanjay. I’ve looped in Rafael and Logan from Network Engineering to triage immediately. Initial asks/notes from our side:
+
+- Can you confirm whether the customer edge does MSS clamp or any TCP MSS manipulation?
+- Any recent ACL / firewall rule changes on the transit path or the on-prem gateway?
+- Please run a quick traceroute + MTU path discovery (tracepath) from a failing host and share output.
+
+Immediate mitigation options we can apply while we triage:
+- Route heavier requests via Redwood Dedicated region (if allowed) to avoid the customer's NAT path;
+- Increase request-level timeouts and retry logic on server side to see if retransmits complete successfully;
+- On your side, consider temporarily reducing response payload size (model max tokens) as a short safety valve.
+
+Rafael, Logan — Rafael, can you start with a packet-level analysis and check for DF/fragment flags and whether fragments are being dropped by the transit firewall or the customer's NAT? Logan, please check service metrics for ephemeral port saturation on the hybrid gateway.
+
+Vanessa Ortiz
+Sr. Solutions Architect, Redwood Inference
+vanessa_ortiz@redwood.com
++1 650 555 8832
+
+-- attachment: redwood_quick_mtu_checklist.pdf (pdf) --
+
+From: Rafael Mendes <rafael_mendes@redwood.com>
+To: Vanessa Ortiz <vanessa_ortiz@redwood.com>, Sanjay Rao <sanjay.rao@brightfield.com>
+Cc: Logan Wright <logan_wright@redwood.com>, Priyom Das <priyom_das@redwood.com>
+Date: Wed, 19 May 2027 11:22:00 -07:00
+Subject: Re: High severity: private deployment responses truncated / uploads failing (Brightfield prod)
+
+Notes from packet-level triage (summary):
+
+1) What I saw in the provided pcap and an additional live tcpdump on the customer-facing GRE:
+- Multiple large TCP segments sent with DF=1 and sequence gaps when we see retransmits.
+- A series of fragmented IP packets from Redwood host 10.240.12.18 -> customer on-prem IP (frag offsets present in pcap). Fragments are not being reassembled on the far side; one of the intermediate firewalls is dropping later fragments.
+
+Snippet (from tcpdump -n -vv -r brightfield_truncated.pcap):
+  10:21:13.453123 IP (frag 0) 10.240.12.18.52344 > 172.31.10.8.443: Flags [P.], seq 3245:8421, ack 1982, win 64240, length 5176
+  10:21:13.453456 IP (frag 1856) 10.240.12.18 > 172.31.10.8: frag 1856:3711, proto TCP
+  10:21:13.453789 IP (frag 3712) 10.240.12.18 > 172.31.10.8: frag 3712:5423, proto TCP
+  10:21:13.756234 IP 172.31.10.8.443 > 10.240.12.18.52344: Flags [R], seq 0, ack 8421, win 0, length 0
+
+2) On the customer NAT / edge (logs provided by Brightfield infra-ops):
+- The stateful firewall is configured to drop out-of-order fragments that cannot be associated with an existing connection if the conntrack table is near capacity.
+- We observed conntrack table near 95% utilization during peak; NAT ephemeral ports limited to a smaller pool due to older appliance limits.
+
+3) Root cause hypothesis (short):
+- Large model responses produce large TCP segments that get fragmented in-flight across a path with MTU mismatch. An intermediate stateful firewall or NAT device is dropping later fragments when conntrack cannot associate them, resulting in truncated connections and reset behavior. Ephemeral port exhaustion exacerbates the problem, causing abrupt RSTs.
+
+4) Recommended immediate actions (playbook):
+- Increase conntrack_max on the customer's NAT appliance and/or expand ephemeral port range temporarily.
+- Apply MSS clamping on the customer's egress (or on the Redwood hybrid gateway) to avoid IP fragmentation for large TLS streams (set MSS to 1360-1400 depending on path).
+- Add a temporary rule on transit firewall to allow fragmented packets or to reassemble at the firewall if supported.
+- Plan a maintenance window to apply the NAT/conntrack changes and monitor for 2 business hours.
+
+5) Mitigation steps Redwood can do without customer maintenance window:
+- Route affected customers to an alternate region that avoids the constrained NAT path (we can do per-account routing for Brightfield test subset).
+- Implement server-side chunking so no single TLS record exceeds safe MTU thresholds (short-term patch).
+
+I’ve attached a conntrack dump excerpt and a short set of CLI commands to increase conntrack and adjust MSS. Priyom, can you coordinate with Brightfield infra-ops on the maintenance window? Logan, can you prepare an alternate routing rule for the small test cohort?
+
+-- attachment: conntrack_dump.txt (txt) --
+
+Rafael Mendes
+Network Engineering, Redwood Inference
+rafael_mendes@redwood.com
+
+From: Vanessa Ortiz <vanessa_ortiz@redwood.com>
+To: Sanjay Rao <sanjay.rao@brightfield.com>
+Cc: Rafael Mendes <rafael_mendes@redwood.com>, Priyom Das <priyom_das@redwood.com>, Logan Wright <logan_wright@redwood.com>
+Date: Thu, 20 May 2027 15:34:00 -07:00
+Subject: Re: High severity: private deployment responses truncated / uploads failing (Brightfield prod)
+
+Sanjay —
+
+Quick summary and next steps from our side after coordination with Network Engineering:
+
+What we did (timeline):
+- 2027-05-19 13:00 PDT: Applied temporary per-account routing for a 10% test cohort to avoid the customer's limited NAT path (Logan). Observed immediate reduction in truncation incidents for that cohort.
+- 2027-05-19 18:00 PDT: Brightfield infra ops increased conntrack_max and expanded the ephemeral port pool on their edge appliance per Rafael's guidance.
+- 2027-05-20 02:00 PDT: We applied MSS clamp of 1380 on the hybrid gateway egress facing Brightfield (temporary).
+
+Result: Post-change metrics show successful completion of previously-truncated responses and a drop in TLS connection resets. We still recommend keeping the MSS clamp for 72 hours while we monitor.
+
+Action items:
+- Brightfield: confirm the conntrack increase is permanent or provide the appliance model so we can recommend firmware/scale options.
+- Redwood: we will schedule a follow-up window next week to remove the temporary per-account routing once stable and update our config playbook with the exact commands used (NET-2158).
+- Both: run customer acceptance tests for large payloads (>16k tokens) and share results by EOD Friday.
+
+Thanks to Rafael, Logan and Priyom for rapid triage. Sanjay, please let us know if you'd like Redwood to run any additional post-change captures.
+
+Regards,
+Vanessa Ortiz
+Sr. Solutions Architect, Redwood Inference
+vanessa_ortiz@redwood.com
++1 650 555 8832
+
+Related: https://redwood.atlassian.net/browse/NET-2158
+-- end thread --

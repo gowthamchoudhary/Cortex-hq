@@ -1,0 +1,123 @@
+Throughput governance & scaling proposal for AtlasAI private deployment
+
+From: Markus Klein <markus_klein@redwood.com>
+To: Jane Liu <jane.liu@atlasai.com>, procurement@atlasai.com
+Cc: laura_bennett@redwood.com, rishi_malhotra@redwood.com
+Date: Wed, 25 Nov 2026 10:12:00 -0800
+Subject: Throughput governance & initial scaling proposal for AtlasAI private deployment
+
+Hi Jane / Atlas procurement team,
+
+Following our run-through last week, attaching an initial proposal for throughput governance and sizing for the private VPC deployment. The goal here is to align on steady-state throughput targets, how we expose burst capacity, and what reserved vs. on-demand carveouts look like for billing and SLAs.
+
+High-level asks:
+- Confirm a steady-state target: your team indicated ~80 qps for text-generation workloads (avg payload). Is that correct as a 24x7 baseline?
+- Peak profile: you mentioned 3x peaks during business hours with occasional spikes for batch exports. Please share the 4-hour moving-peak qps you expect.
+- Network constraints: confirm egress/ingress CIDR and whether the deployment will sit behind your customer-managed NAT/GW or a Redwood-managed VPN.
+
+What we propose (summary):
+1) Sizing model (attached capacity_model_v1.xlsx): assume baseline of N GPU nodes (A100-class or equivalent) to meet steady-state throughput with 25% buffer for headroom.
+2) Burst governance: a two-tier approach — (a) guaranteed reserved lanes for baseline (SLA-backed), (b) transient burst pool that is priced at a premium and throttled by a governance controller to avoid noisy-neighbor risk.
+3) Network/topology constraints (see network_topology.png): colocate model-serving nodes with an egress aggregator to avoid per-node peering blowup; prefer a single tun/tap to your VPC to reduce open connections.
+4) Scaling policy: goal-based autoscaling by sustained token-rate with an admission control window (90s) to prevent oscillation. Consider pre-warm snapshots for cached KV to minimize cold-start latency.
+
+Operational notes:
+- Warmup: recommend nightly warmup pass on reserved nodes for your peak models.
+- Quantization and kernel selection: we'll ship a quantized variant if you opt-in; that changes per-GPU QPS assumptions in the sheet.
+- Compliance: please attach SOC2 / security questionnaire earlier in the thread (we noted some items missing).
+
+Next steps:
+- Jane: confirm baseline qps and a 4-hour peak estimate by end of day Friday (11/27).
+- Procurement: confirm your PO lead and timeline; we can lock reserved capacity once PO received.
+- Internal: Laura and Rishi — can you validate the numbers in the spreadsheet vs. our current kernel performance metrics? Also note any network egress caps that would change sizing.
+
+Thanks,
+
+Markus Klein
+Director, Private Deployments
+Redwood Inference
+attachments: capacity_model_v1.xlsx (spreadsheet), network_topology.png (diagram)
+
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+To: markus_klein@redwood.com, laura_bennett@redwood.com
+Date: Thu, 26 Nov 2026 09:03:00 -0800
+Subject: Re: Throughput governance & initial scaling proposal for AtlasAI private deployment
+
+Markus — quick take after a pass through the spreadsheet:
+
+Notes / clarifying Qs:
+- The sheet's per-GPU QPS assumes FP16 quantized kernels at 30ms p95 per token for the \"chat-medium\" model. If AtlasAI wants the 8-bit quant path, we should adjust the QPS up ~1.6x.
+- For baseline N, the model shows 6 nodes (4 GPUs each). That meets the 80 qps baseline at 25% buffer, but if the 4-hour moving peak is >180 qps we need to plan a different reserved tranche (or larger nodes).
+- Admission control window: I recommend 60–120s with exponential backoff on the controller. Avoid <60s to reduce thrash.
+- Network: if Atlas is managing the NAT/GW and we only have an IPsec tunnel, we should budget for 1.2x egress concurrency overhead (SYN/handshake).
+
+I'll flag a few rows with conservative numbers in capacity_model_v1.xlsx. Laura — will you validate billing tier impact (reserved vs. burst) for procurement? I can populate the alternate quantization column if Jane confirms tolerances.
+
+—Rishi
+Senior Product Manager, Serving
+Redwood Inference
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Jane Liu <jane.liu@atlasai.com>, procurement@atlasai.com
+Cc: markus_klein@redwood.com, rishi_malhotra@redwood.com
+Date: Mon, 30 Nov 2026 10:22:00 -0800
+Subject: Re: Throughput governance & initial scaling proposal for AtlasAI private deployment
+
+Hi Jane / procurement team,
+
+Thanks for the quick sync. To make procurement progress we need the following items from Atlas:
+- Confirmed baseline QPS (24x7) and your expected 4-hour moving peak number. This locks the reserved-capacity tranche.
+- Confirmation on who will manage the customer side VPN/NAT and the expected CIDR blocks.
+- PO contact and target date for signing (we can provision a temporary dev tranche for testing prior to the PO).
+
+Mutual Action Plan (MAP) proposal:
+1) Week 0: sign MSA + NDAs (if not complete).
+2) Week 1: exchange SOC2 pack (you can attach to reply) and final baseline/peak numbers.
+3) Week 2: provision reserved baseline (soft launch) + 48h soak test.
+4) Week 3: run scaled-peak verification (2h soak at peak), then accept and convert to monthly billing.
+
+Pricing impact: reserved lanes priced at standard committed rate; burst lanes (on-demand) incur a premium. If Atlas locks a higher baseline (>=2x current ask) we can reduce per-unit rates by ~8%. I'll attach a short pricing note after you confirm numbers.
+
+Markus / Rishi — please stand by to approve a temporary dev tranche for their soak test once they confirm dates. Jane, if you can reply with the peak numbers and your SOC2 PDF we can slot the test next week.
+
+Best,
+Laura Bennett
+Head of Sales — Private Deployments
+Redwood Inference
+attachments: (none in this message)
+
+From: Jane Liu <jane.liu@atlasai.com>
+To: laura_bennett@redwood.com, markus_klein@redwood.com
+Cc: procurement@atlasai.com, rishi_malhotra@redwood.com
+Date: Mon, 30 Nov 2026 15:03:00 -0800
+Subject: Re: Throughput governance & initial scaling proposal for AtlasAI private deployment
+
+Laura / Markus / Rishi — thanks. Confirming our numbers and a few logistical points.
+
+Baseline: 90 qps sustained (24x7) for gen-medium models.
+4-hour moving peak: 260 qps (we see traffic bursts during daily ET business hours, typical pattern attached).
+Burst needs: we expect short-form bursts up to 600 qps for <15 mins 1–2x per week during heavy export windows — we'd like to test a burst lane that covers this with preemption tolerances.
+
+Network: Atlas will manage the VPN termination and NAT; CIDR block 10.140.0.0/16. We will provide an endpoint and firewall rules by EOD Tuesday.
+
+SOX/SOC2: attaching Atlas_SOC2_Requirements.pdf — note items 3 and 7 require audit log retention to 12 months; confirm Redwood's retention and whether logs can be exported to our S3.
+
+Test window: we can do a soft-launch soak Tue 12/1 at 09:00 PT for 48h and then a peak verification on Thu 12/3 for a 2h stress window. Please provision a dev tranche with the following:
+- Reserved baseline equivalent to 120 qps (to give us breathing room)
+- Burst lane up to 600 qps for peak verification (governed by admission control)
+
+On pricing: we understand there is a premium for burst; please send the pricing note after confirming the dev tranche.
+
+Thanks — Jane
+Jane Liu
+Director, Platform Engineering
+AtlasAI
+attachments: atlas_soc2_requirements.pdf
+
+---- Forwarded message ----
+From: Jane Liu <jane.liu@atlasai.com>
+Date: Mon, 30 Nov 2026 14:55:00 -0800
+Subject: traffic pattern (summary)
+To: laura_bennett@redwood.com
+
+Attached is a short CSV showing our 2-week moving peak pattern for the fleet.

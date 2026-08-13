@@ -1,0 +1,125 @@
+Performance probe orchestration — post-demo recap & next steps
+
+From: Camila Reyes <camila@redwood.com>
+To: Ari Nelson <ari.nelson@stellarus.com>, ops@stellarus.com
+Cc: Marissa Cole <marissa@redwood.com>, Ben Carter <ben@redwood.com>
+Date: 2026-11-13T16:05:00Z
+Subject: Performance probe orchestration — post-demo recap & next steps
+
+Thanks again for the demo earlier — great conversation, Ari. Quick recap and proposed next steps so we can line up the customer-led rehearsal: 
+
+Key SLOs you reiterated
+- P95 latency target (text gen): <= 220 ms for typical 128-token responses
+- Sustained throughput target: 6 QPS across the conversational route during peak simulation
+- Streaming requirement: up to 30 concurrent streaming sessions with ~60 token/min average pacing
+
+What we need from Stellarus
+- Provide a 2-hour test window next week (preferred: Tue 11/17 09:00–11:00 PT)
+- Share IP ranges to be allowlisted (we'll provide the exact egress IPs on our side)
+- Confirm whether you will run k6 or Locust (we attached a k6 scenario we usually start from)
+
+What Redwood will provide
+- A test account + API key scoped to a non-prod model and a sandbox dataset (creds will be sent by Marissa)
+- A runbook describing ramp profile, check-points, and abort criteria (attached: redwood-rehearsal-runbook-v2.md)
+- Open channel for real-time ops on Slack during the window (I’ll create the invite once slot is confirmed)
+
+Attachments: stellarus-k6-scenarios-v1.js (k6 starter script), redwood-rehearsal-runbook-v2.md
+
+Next step: Ari, please reply with which slot works and whether you want k6 (we suggested) or Locust so we can hand off creds and allowlist details.
+
+—
+Camila Reyes
+Enterprise Sales 
+Redwood Inference
+camila@redwood.com
+
+From: Ari Nelson <ari.nelson@stellarus.com>
+To: Camila Reyes <camila@redwood.com>
+Date: 2026-11-13T18:20:00Z
+Subject: Re: Performance probe orchestration — post-demo recap & next steps
+
+Camila — thanks for the clear recap. We can do the proposed slot on Tue 11/17 09–11 PT. A couple of clarifications before we lock in: 
+
+1) Streaming concurrency: when you say 30 concurrent streaming sessions, do you mean 30 independent clients holding an open SSE/websocket, or 30 simultaneous active token-producing streams? Our client library keeps long-lived connections and we want to make sure the runbook reflects the same pattern.
+
+2) Test accounts: we prefer to use Locust (we already have infra and observers built around it). Is the k6 script easily translatable or do you have a Locust variant?
+
+3) Allowlist: we'll send our egress ranges from Stellarus side, but we need the exact Redwoods egress IPs and the hostnames to allow (if any).
+
+Also looping in our ops alias (ops@stellarus.com) to confirm firewall change SLAs.
+
+Ari
+Head of Platform
+Stellarus
+ari.nelson@stellarus.com
+
+From: Camila Reyes <camila@redwood.com>
+To: Ari Nelson <ari.nelson@stellarus.com>
+Cc: Marissa Cole <marissa@redwood.com>, Ben Carter <ben@redwood.com>
+Date: 2026-11-13T19:02:00Z
+Subject: Re: Performance probe orchestration — post-demo recap & next steps
+
+Thanks Ari — great questions. Quick answers inline:
+
+On 11/13/26 18:20, Ari Nelson wrote:
+> 1) Streaming concurrency: when you say 30 concurrent streaming sessions, do you mean 30 independent clients holding an open SSE/websocket, or 30 simultaneous active token-producing streams?
+
+We mean 30 independent client connections with active token throughput during the window (i.e., each connection will be producing tokens intermittently). For clarity in the runbook we’ll phrase it as "30 concurrent streaming clients with a bursty token production profile (~60 tokens/min average)."
+
+> 2) Test accounts: we prefer to use Locust ... Is the k6 script easily translatable or do you have a Locust variant?
+
+Marissa has a Locust starter pack that’s closer to your current harness. Marissa — attaching the Locust entrypoint and a mapping doc would help (I added redwood-runbook-v2 and the k6 starter already).
+
+> 3) Allowlist: we need exact Redwood egress IPs and hostnames to allow (if any).
+
+Ben — can you paste the egress IP block we should share with Stellarus? Ideally we give them 3 static IPs for the dedicated rehearsal cluster.
+
+If that works, Ari, we’ll: (a) hand off Locust script and test creds on Monday 11/16 EOD PT; (b) confirm IPs and open the Slack channel; (c) publish a short runbook checklist with explicit abort criteria (errors > 5% for 5 minutes or P95 > 300 ms).
+
+—
+Camila
+
+From: Ben Carter <ben@redwood.com>
+To: Camila Reyes <camila@redwood.com>, Ari Nelson <ari.nelson@stellarus.com>
+Cc: Marissa Cole <marissa@redwood.com>
+Date: 2026-11-14T08:33:00Z
+Subject: Re: Performance probe orchestration — post-demo recap & next steps
+
+Hi all — sending the static egress addresses for the rehearsal cluster below. These are the three IPs to allowlist; we’ll route the rehearsal traffic through that cluster only.
+
+Redwood rehearsal egress IPs (TCP 443):
+- 34.210.124.77
+- 34.210.124.78
+- 34.210.124.79
+
+Hostnames: api.rehearsal.redwood-inference.com (TLS certificate validated)
+
+Notes on streaming behavior and warmup:
+- For streaming SLOs, the rehearsal cluster keeps a small KV cache warm. We recommend a 10-minute warmup with steady ramp to 30 concurrent streams before any aggressive bursts.
+- If you will run Locust, use a pacing profile with 3 phases: ramp (10m), sustain (60m at target QPS/concurrency), cool-down (10m).
+
+Marissa — please create the non-prod API key and add it to the runbook folder. I’ll rotate the keys after the rehearsal window.
+
+—Ben
+Senior Solutions Engineer
+Redwood Inference
+
+From: Ari Nelson <ari.nelson@stellarus.com>
+To: Camila Reyes <camila@redwood.com>, Ben Carter <ben@redwood.com>
+Cc: Marissa Cole <marissa@redwood.com>, ops@stellarus.com
+Date: 2026-11-16T09:12:00Z
+Subject: Re: Performance probe orchestration — post-demo recap & next steps
+
+Thanks — confirmed on our side. Firewall team will add the three IPs and allow api.rehearsal.redwood-inference.com; they confirmed the rule will be in place by 11/17 03:00 PT. We’ll run Locust using your suggested profile and will aim to keep token payloads aligned with the demo (median response ~110 tokens, some up to 300 tokens).
+
+A few final asks before the run: 
+- Can Marissa share the test API key and a small sample of the payload dataset so our observability team can map ingestion attributes to our dashboards?
+- We’ll open the Slack channel one hour prior to the window — would Redwood ops be available during 08:30–11:30 PT?
+
+Once we have the key and sample payload we’ll kick off a dry run internally on 11/16 afternoon. Looking forward to it.
+
+Best,
+Ari
+
+
+-- End of thread --

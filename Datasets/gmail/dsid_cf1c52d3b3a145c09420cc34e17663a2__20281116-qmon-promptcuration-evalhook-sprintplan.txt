@@ -1,0 +1,121 @@
+QMon: prompt curation + eval-hook integration sprint plan
+
+From: Dana Park <dana@brightleaf.ai>
+To: sean_gallagher@redwood.ai
+Cc: onboard@brightleaf.ai
+Date: Thu, 16 Nov 2028 09:02:00 -0800
+Subject: Re: Kickoff follow-up — QMon goals and resources
+
+Thanks again for the kickoff earlier. We're eager to get Quality Monitoring (QMon) wired up for our customer-facing summarization pipeline. A few specific asks we wanted to confirm before the implementation sprint: 
+
+1) Prompt inventory — we'll export our current prompt variations (templates + slot values) but curious what level of normalization you prefer (raw prompts vs. canonicalized templates).
+2) Eval harness integration — we have an internal CI system (Jenkins) and would like the eval hooks to run on PRs and nightly. Is there a recommended lightweight adapter?
+3) Regression alerts — we need threshold-based email + Slack alerts, and a clear rollback policy if a generation quality drop exceeds the SLO.
+4) Canary cadence — what's realistic for a canary rollout with our traffic (peak 120 req/s, avg 30 req/s)?
+
+I'll attach the current prompt snapshot. If useful, we can set a short sync tomorrow.
+
+Best,
+Dana Park
+Head of Product
+BrightLeaf AI
+
+Attachments: qmon_prompt_snapshot.csv (11 KB)
+From: sean_gallagher@redwood.ai
+To: Dana Park <dana@brightleaf.ai>
+Cc: marissa_cole@redwood.ai, monica_patel@redwood.ai
+Date: Thu, 16 Nov 2028 11:18:00 -0800
+Subject: Re: Kickoff follow-up — QMon goals and resources
+
+Dana — thanks for the clear list. I sketched a focused sprint plan below that balances fast wins and safety rails. Attaching three artifacts: (1) prompt inventory template, (2) evalhook integration guide, (3) canary schedule template.
+
+Sprint plan (2-week):
+- Day 0–2: Prompt ingestion and canonicalization. We’ll import your CSV, normalize templates (we keep both raw and canonicalized) and tag prompts by intent + risk (low/medium/high) so we can prioritize sentinel tests.
+- Day 3–5: Eval harness bootstrapping. We’ll deploy a lightweight evalhook container that runs locally and exposes a webhook for your Jenkins jobs. It supports the Redwood eval API and returns a JSON pass/fail summary for each prompt test.
+- Day 6–9: Build baseline metrics. Run batch evaluations to capture baseline BLEU/ROUGE/Embed-sim/Custom heuristics and set alert thresholds (automated suggestions + manual review).
+- Day 10–12: Canary configuration & dry-run. We’ll template a canary schedule (percent traffic ramp) and a rollback trigger (e.g., drop of avg embed-sim > 4 points or N failed sentinel tests in 15 minutes).
+- Day 13–14: Validation + handoff docs + invite for ops drill.
+
+Key asks from you before Day 0:
+- Confirm a CSV with current prompt variants and a small golden set (50 examples) you want used for baseline.
+- Provide a Jenkins runner with network access to the evalhook endpoint (we can proxy through a signed URL if needed).
+- Slack channel to post alerts (we can post to a webhook).
+
+I recommend the following preliminary rollback policy (we can refine):
+- Canary levels: 1% -> 5% -> 20% -> 50% over 48 hours (adjust for traffic), hold at each step for 2 hours.
+- Auto-rollback triggers: sustained increase in error rate (>1% for generation errors) OR avg embed-sim drop > 4 points from baseline OR >3 sentinel test failures in a rolling 15-min window.
+
+I'll loop in Marissa for the operational checklist and Monica for telemetry handoff. Happy to hop on a 30-min call tomorrow to finalize Day 0 artifacts.
+
+—Sean
+Sean Gallagher
+Senior Customer Success Manager, Redwood Inference
+sean_gallagher@redwood.ai
+Phone: +1 415-555-0182
+
+Attachments referenced: qmon_prompt_inventory.csv; evalhook_integration_guide.pdf; canary-schedule-template.xlsx
+From: marissa_cole@redwood.ai
+To: Dana Park <dana@brightleaf.ai>, sean_gallagher@redwood.ai
+Cc: monica_patel@redwood.ai, karthik_iyer@redwood.ai
+Date: Fri, 17 Nov 2028 08:09:00 -0800
+Subject: QMon implementation checklist & handoff items
+
+Adding the implementation checklist so you have a concrete acceptance criteria list for the end of the sprint. Quick notes inline.
+
+Acceptance checklist (must pass for handoff):
+- Prompt inventory imported and canonicalization mapping committed to your repo (or to shared Drive).
+- Eval harness runs reliably against Jenkins with at least one passing nightly job.
+- Baseline metrics captured (timestamped snapshot) and thresholds entered into Redwood console.
+- Sentinel prompt set (30–100 items) defined and annotated with expected labels.
+- Alerting wired to Slack + email and smoke tests for alert delivery verified.
+- Canary schedule created, reviewed by your SRE, and rollback policy documented.
+- Ops drill scheduled (30–45min) with attendees: SRE, CS, Prod OwR.
+
+Operational notes:
+- We recommend starting with conservative thresholds for the first two weeks (more false positives > missing regressions).
+- Karh tik will provide a small telemetry library snippet to push embed-sim deltas to the console (lightweight).
+
+Dana — if you can confirm the owners for each checklist item (who on BrightLeaf will own the Jenkins update, who will run the ops drill), we’ll add them to the plan and schedule the first review.
+
+—Marissa
+Marissa Cole
+Implementation Lead, Redwood Inference
+marissa_cole@redwood.ai
+From: Dana Park <dana@brightleaf.ai>
+To: marissa_cole@redwood.ai, sean_gallagher@redwood.ai
+Cc: onboard@brightleaf.ai
+Date: Mon, 20 Nov 2028 09:14:00 -0800
+Subject: Re: QMon implementation checklist & handoff items
+
+Thanks — this is great and aligns with our internal priorities. Quick owners:
+- Jenkins adapter & CI changes: Priya N. (eng lead)
+- Golden set curation + sentinel labels: Adeel (NLP lead)
+- SRE review & ops drill attendance: Clara (SRE)
+
+A couple of clarifying Qs: 
+- For the embed-sim baseline, do you recommend using sentence-transformer v2.2 or one of the Redwood-verified encoders? We want the most stable signal for regression detection.
+- For the canary ramp timing: given our peak of 120 req/s, can we shorten hold windows at lower traffic periods?
+
+We'll aim to drop the prompt export into the Drive link you provided by EOD today.
+
+—Dana
+
+
+From: sean_gallagher@redwood.ai
+To: Dana Park <dana@brightleaf.ai>, marissa_cole@redwood.ai, monica_patel@redwood.ai, karthik_iyer@redwood.ai
+Date: Mon, 20 Nov 2028 16:45:00 -0800
+Subject: Re: QMon implementation checklist & handoff items
+
+Dana — perfect, thanks for owners and the quick responses. Short answers to your questions: 
+- Embed-sim encoder: use Redwood-verified encoder rdx-encoder-v1 for the first baseline — it's tuned for stability across prompt paraphrases and will give a more consistent regression signal than an off-the-shelf transformer. We'll surface a comparison report in Day 3 baseline runs so you can decide to switch later.
+- Canary hold windows: yes — hold windows are configurable by traffic window. Practically, we use time-based holds (e.g., 2 hours) but you can convert to request-count based holds (e.g., 50k requests) if that aligns better with your traffic patterns. For your peak, I recommend the time-based ramp but shorten the lower-percentage holds to 30–60 minutes overnight.
+
+Next steps I just scheduled:
+- Day 0 import call: Wed 2028-11-22 10:00 AM PT (30 min) — link: https://meet.redwood.ai/j/rdx-qmon-blf 
+- I've added the attachments to the Drive folder and shared editor access to Priya and Adeel.
+
+I'll follow up after Day 2 with a short status note and baseline ETA.
+
+Thanks, team — excited to get this into production safely.
+
+—Sean

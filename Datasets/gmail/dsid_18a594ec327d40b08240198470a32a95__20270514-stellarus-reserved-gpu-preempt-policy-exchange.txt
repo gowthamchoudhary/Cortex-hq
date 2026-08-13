@@ -1,0 +1,112 @@
+Reserved GPU preemption policy — Stellarus provisioning & latency fallback
+
+From: Samir Patel <samir.patel@stellarus.health>
+To: michael.grant@redwood.ai
+Cc: procurement@stellarus.health
+Date: Fri, 14 May 2027 09:12:00 -0700
+Subject: Reserved GPU preemption policy — clarification
+
+Hi Michael,
+
+Thanks again for the demo last week — Stellarus is excited about Redwood's Dedicated offering. Before we move to contract, Procurement and our SRE leads asked for one clarifying item around preemption and latency fallbacks on reserved pools.
+
+Quick summary of our ask:
+- We need reassurance that our reserved GPUs will not be preempted during our business window (UTC 13:00-21:00). If preemption is possible, we'd like a clear fallback SLA (latency targets) and defined routing to a compatible quantized variant.
+- We also want to understand queueing behavior for short, high-concurrency bursts (e.g., 200 concurrent small requests at 1–2s each). What's the expected tail latency and any soft-limits that could be applied?
+
+Can you share a short write-up of how Redwood handles these scenarios and whether an exception to the standard preemption policy is feasible (or a contractual carve-out)? Happy to hop on a call if that's easier.
+
+Thanks,
+
+Samir Patel
+Sr. Cloud SRE, Stellarus Health
+samir.patel@stellarus.health
+
+---
+Attachment: capacity_plan_v1.xlsx (spreadsheet, 120KB)
+
+From: michael.grant@redwood.ai
+To: Samir Patel <samir.patel@stellarus.health>
+Cc: ben.carter@redwood.ai, lauren.bishop@redwood.ai
+Date: Fri, 14 May 2027 11:04:00 -0700
+Subject: Re: Reserved GPU preemption policy — clarification
+
+Samir —
+
+Appreciate the clear summary. Looping in Ben (sales lead) and Lauren (Dedicated product) so we can get a concise answer and a proposed carve-out.
+
+High-level answers up front:
+- Reserved GPUs: by default, reserved capacity is designed to avoid involuntary preemption in the firm's committed window. However, there are edge cases during severe capacity exhaustion where we route to preemptible pools unless a carve-out is negotiated.
+- Fallback routing: we can route to a lower-precision (4-bit/8-bit) variant in the same region; that usually preserves median latency but can increase token generation time by 10–25% depending on prompt length.
+- Short bursts: our runtime supports fine-grained queuing and burst tokens; the tail depends on concurrency and whether requests can be batched. Expect 95th percentile latency to degrade first; we can provide modeled numbers after looking at your traffic shape.
+
+Next steps: Ben and Lauren — can you draft a one-page carve-out proposal and a short queueing-runbook (2–3 bullets) that I can send Samir today? If we want a contractual guarantee for no preemption during the window, we should tie it to a reserved-capacity uplift (e.g., X% additional committed capacity) and a mitigation credit schedule.
+
+— Michael Grant
+Dir., Enterprise Sales — Redwood Inference
+
+
+From: ben.carter@redwood.ai
+To: Samir Patel <samir.patel@stellarus.health>
+Cc: michael.grant@redwood.ai, lauren.bishop@redwood.ai
+Date: Mon, 17 May 2027 09:22:00 -0700
+Subject: Re: Reserved GPU preemption policy — clarification
+
+Samir,
+
+Following up with a short proposal attached and a few clarifying Qs below.
+
+Proposal highlights (see attached Dedicated_SLA_Draft_Stellarus_v2.pdf):
+- No involuntary preemption for reserved pool during business window, subject to a 15% uplift on committed capacity (to cover headroom and multi-tenant variance).
+- If we detect an emergent hardware failure or region-wide outage, requests will failover to a regional compatible variant; in that case we commit to an end-to-end 95th percentile latency target of <= 450ms for small chat/QA requests (<256 tokens) and a mitigation credit equal to 10% of monthly dedicated fees for SLA misses.
+- Queueing behavior: short bursts will be smoothed by a combination of request shaping and automatic short-window autoscaling. For 200 concurrent 1–2s calls, modeled 95th latency is ~380–520ms depending on batching and model size. We'll include a small traffic-shaping header option you can use to declare high-priority flows.
+
+Clarifying questions:
+1) Can you share a representative 24‑hour request histogram for your busiest API key? We only need a sample to model headroom.
+2) Are you open to a grace-tier credit (50% credit for first month of production errors) to accelerate go-live while we tune autoscaling?
+
+Attachment: Dedicated_SLA_Draft_Stellarus_v2.pdf (3 pages)
+
+Thanks,
+Ben Carter
+Account Executive, Redwood Inference
+ben.carter@redwood.ai
+
+From: Samir Patel <samir.patel@stellarus.health>
+To: ben.carter@redwood.ai
+Cc: michael.grant@redwood.ai, lauren.bishop@redwood.ai
+Date: Tue, 18 May 2027 08:17:00 -0700
+Subject: Re: Reserved GPU preemption policy — clarification
+
+Ben,
+
+Thanks — the proposal looks reasonable. A few quick replies inline:
+1) We'll share a 72‑hour sampling extract (expect in a separate email from our analytics team).
+2) The grace-tier credit is acceptable; Procurement would still prefer a defined credit schedule if we see repeated misses after month one.
+
+One concern: the 15% uplift is sizable; is there room to make that dynamic (e.g., start at 10% with a Q1 rebaseline based on observed tail latency)? Also we'd like the option to exclude a small set of priority models from fallback routing entirely (those models are used for clinical triage).
+
+Samir
+
+
+From: lauren.bishop@redwood.ai
+To: Samir Patel <samir.patel@stellarus.health>
+Cc: ben.carter@redwood.ai, michael.grant@redwood.ai
+Date: Tue, 18 May 2027 16:03:00 -0700
+Subject: Re: Reserved GPU preemption policy — clarification
+
+Samir —
+
+Great to see the progress. Quick answers:
+- Dynamic uplift: yes. We can start at 10% with a Q1 telemetry-based rebaseline. We'll include a clause for rebaseline cadence and measurement methodology (50k requests sample, 95th latency target measurement windows).
+- Priority model exclusion: feasible for up to three model IDs, with explicit annotation in the routing table. For those models we'll route only to pinned instances and block fallback; this will require an extra reserved capacity buffer and a higher uplift (additional +5%).
+
+I'll prepare an amended carve-out and send the DocuSign link tonight. Ben — can you attach the queueing_runbook.xlsx and the one‑page for Procurement when you forward?
+
+Best,
+Lauren Bishop
+Product Manager, Redwood Dedicated
+lauren.bishop@redwood.ai
+
+---
+Attachment: queueing_runbook.xlsx (spreadsheet, 45KB)

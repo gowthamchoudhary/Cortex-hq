@@ -1,0 +1,146 @@
+Aurelia onboarding: ops & procurement coordination (network + KMS preflight)
+
+From: Sam Evans <sam.evans@aureliahealth.com>
+To: Sean Gallagher <sean.gallagher@redwood.com>
+Cc: Network Ops <networkops@aureliahealth.com>; Jill Torres <jill.torres@aureliahealth.com>
+Date: Thu, 29 Oct 2026 09:15:00 -0700
+Subject: Kickoff: Redwood private deploy prerequisites and evidence pack
+
+Hi Sean,
+
+Thanks for the intro call earlier. Per our internal readiness review, we want to lock down a short list of must-have items before we shift traffic to the private deployment. Can your team confirm the following and share any evidence artifacts we should collect for our security review?
+
+- VPC peering requirements and expected CIDR ranges (we will provide our CIDR once final).
+- Required firewall ports + allowed egress destinations (for telemetry, metrics, and CRLs).
+- Service account / IAM roles we need to create (least privilege recommended).
+- KMS integration pattern and whether HSM-backed keys are supported.
+- Audit log retention and sample query for a 30-day window.
+- Any network performance SLAs for the private path (p95 latency targets).
+
+We have a draft network diagram attached for your reference. Also looping in Procurement (procurement@aureliahealth.com) to get an expected PO timeline.
+
+Attachments: aurelia_network_diagram.pdf
+
+Appreciate if you can reply with a short mutual action plan and dates for a network run-through.
+
+Thanks,
+Sam Evans
+VP, Infrastructure
+Aurelia Health
+
+From: Sean Gallagher <sean.gallagher@redwood.com>
+To: Sam Evans <sam.evans@aureliahealth.com>
+Cc: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: Thu, 29 Oct 2026 10:03:00 -07:00
+Subject: Re: Kickoff: Redwood private deploy prerequisites and evidence pack
+
+Sam —
+
+Thanks for the clear list. We'll own the MOP and evidence artifacts. High-level next steps from our side:
+
+1) We (Marissa + Ben) will produce a concise preflight checklist addressing each bullet and populate the Drive folder you shared.
+2) Schedule a 60-min network run-through with your Network Ops to validate peering, routes, and port rules (propose Tue 11/2 or Wed 11/3 PST).
+3) Provide a KMS integration note (including whether we can accept HSM-backed keys) and a sample audit-log export for 30 days.
+4) Procurement request: once we confirm the MOP, we will send a final SOW/DocuSign packet for signature.
+
+I'm assigning Marissa to own the preflight checklist and Ben to own connectivity validation. Grace will be the contact for security evidence and will coordinate with your info-sec for the SOC/SAML artifacts.
+
+Would you prefer the run-through on Tue 11/2 at 10:00 AM PST?
+
+—Sean
+Sean Gallagher
+Head of Customer Ops, Redwood Inference
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Sam Evans <sam.evans@aureliahealth.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: Thu, 29 Oct 2026 11:25:00 -07:00
+Subject: Re: Kickoff: Redwood private deploy prerequisites and evidence pack
+
+Sam / team —
+
+I put together a targeted onboarding preflight we will use as the working checklist (we'll drop editable copies into the Drive link by EOD). Key items (short form):
+
+Account & IAM
+- Create service account: redwood-inference-deploy@aurelia-prod (service account should have: IAM roles: compute.networkUser, storage.objectViewer for artifact buckets; we will provide a minimal policy JSON).
+- Create a cross-account role for automated KV rotation (name: redwood-kv-rotator).
+
+Networking
+- Peering: accept peering request from redwood-psn-prod; require static route to our 10.240.0.0/16 (confirm final).
+- Ports: Allow outbound 443 to telemetry.redwood.com, 443 to model-updates.redwood.com, and 123/UDP to NTP endpoints. Allow inbound SSH from our jump box IP only.
+- Egress: Block all unexpected outbound except whitelisted endpoints (list to be provided).
+
+Secrets & KMS
+- HSM backed keys supported: yes, we can integrate with HSM-backed providers via our KMS adapter.
+- Key rotation: recommended monthly; we will provide a rotation runbook.
+
+Observability & Audit
+- We will export example audit logs (jsonl) for last 30 days and provide sample queries.
+- Tracing tags to include: tenant_id, request_id, model_version.
+
+Preflight tests we want to run during the run-through:
+- Verify peering connectivity and route propagation with 1GB test payloads (non-prod window).
+- Confirm TLS cert chain and cipher suites on control plane endpoints.
+- Validate KMS key handshake and an encrypt/decrypt round-trip.
+
+Proposed schedule: Tue 2026-11-02 10:00 - 11:00 PST (network run-through) and Thu 2026-11-04 09:00 - 10:00 PST (security evidence review).
+
+Attachments we'll add: redwood_mop_kms_integration.xlsx (detailed MOP), preflight_checklist.md
+
+—Marissa
+Marissa Cole
+Senior Onboarding Manager, Redwood Inference
+
+From: Sam Evans <sam.evans@aureliahealth.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Sean Gallagher <sean.gallagher@redwood.com>
+Cc: Procurement <procurement@aureliahealth.com>, Network Ops <networkops@aureliahealth.com>
+Date: Fri, 30 Oct 2026 08:02:00 -07:00
+Subject: Re: Kickoff: Redwood private deploy prerequisites and evidence pack
+
+Marissa —
+
+Appreciate the checklist. Procurement estimates PO approval in 10 business days once we have the final SOW/MOP. Two quick clarifications:
+
+1) SLA: We need p95 token latency for inference under the dedicated profile to be <= 250ms for the baseline 2k token request — can Redwood confirm this target is achievable in private deployment?
+2) KMS: We will require HSM-backed keys on production and a documented key rotation window (we prefer monthly).
+
+Network Ops will join the Tue 11/2 10:00 run-through. Procurement will expect the DocuSign packet by Monday 11/8 if possible.
+
+Thanks,
+Sam
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Sam Evans <sam.evans@aureliahealth.com>, Network Ops <networkops@aureliahealth.com>
+Cc: Sean Gallagher <sean.gallagher@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Date: Mon, 02 Nov 2026 09:45:00 -07:00
+Subject: Re: Kickoff: Redwood private deploy prerequisites and evidence pack
+
+Sam / Network team —
+
+Quick answers ahead of the run-through:
+- SLA: We can meet p95 <= 250ms for the dedicated profile assuming the deployment uses the recommended GPU instance class and the network path latency under 30ms. We'll bring profiling data to the run-through to show expected headroom.
+- KMS/HSM: Confirmed — HSM-backed keys supported. We'll demo the encrypt/decrypt and rotation during the security review.
+
+Practical notes for the run-through: please provide your peering acceptance window and a temporary jump-box IP so we can validate inbound rules. I'll prepare a short test plan and bring packet captures for any routing issues.
+
+Meeting link: https://meet.redwood.com/meet/ops-runthrough-aurelia (invite sent)
+
+—Ben
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+[attachment: redwood_mop_kms_integration.xlsx]
+
+From: Procurement <procurement@aureliahealth.com>
+To: Sean Gallagher <sean.gallagher@redwood.com>, Marissa Cole <marissa.cole@redwood.com>
+Cc: Sam Evans <sam.evans@aureliahealth.com>
+Date: Tue, 03 Nov 2026 16:12:00 -07:00
+Subject: Signed MOP and PO timing
+
+Hi team —
+
+We reviewed the MOP and have signed the execution-ready copy. Attached is the signed MOP; PO to follow within 7 business days. Please confirm the DocuSign envelope id if you need it for tracking.
+
+Attachment: signed_mop.docx
+
+Procurement
+Aurelia Health

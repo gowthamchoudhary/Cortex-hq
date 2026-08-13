@@ -1,0 +1,135 @@
+Post-call: mapping token surges to latency budget and steady-state sizing
+
+From: Mina Haddad <mina@redwood.com>
+To: Shelley Park <shelley.park@fastlane.ai>
+Cc: Karthik Iyer <karthik@redwood.com>, Sean Gallagher <sean@redwood.com>
+Date: Sun, 25 Apr 2027 15:10:00 -0700
+Subject: Post-call: mapping token surges to latency budget and steady-state sizing
+
+Shelley,
+
+Thanks for the call earlier — good conversation. Short recap + asks so we can size a pilot that matches your SLOs.
+
+Call highlights
+- Primary SLO: 95th latency <= 450ms end-to-end (text-gen streaming) for interactive agents.
+- Two traffic modes: steady-state background processing (~200 QPS, median 40 token responses) and short bursts from user events (~3500 QPS spikes lasting 30–90s, avg 120 tokens).
+- Concurrent streaming sessions: typical 1.2x concurrent multiplier on QPS for long polling flows.
+
+Asks / artifacts requested
+1) If you can share a 24h sample or a 1‑week peak window CSV of event timestamps (token-level not required) — sample format attached as fastlane-workload-sample.csv
+2) Confirmation: do burst windows contain mostly short responses (<150 tokens) or the 120 token average we discussed?
+3) Any P50/P95/P99 latency acceptance targets beyond the 95th noted above?
+
+Next steps
+- If you send the sample, we'll run a quick sizing pass and return a conservative Dedicated config + cost delta within 24 hours.
+- We're proposing an initial pilot: 8 reserved GPUs with streaming-optimized runtime + prefix caching for first 2 weeks; we will instrument token-level telemetry and evaluate cost vs latency.
+
+Attachments: fastlane-workload-sample.csv (attached), call recording will be uploaded to Drive.
+
+Thanks,
+
+Mina Haddad
+Account Executive, Redwood Inference
+mina@redwood.com | +1 415 555 0123
+Redwood Inference
+
+From: Shelley Park <shelley.park@fastlane.ai>
+To: Mina Haddad <mina@redwood.com>
+Date: Sun, 25 Apr 2027 16:05:00 -0700
+Subject: Re: Post-call: mapping token surges to latency budget and steady-state sizing
+
+Thanks Mina — attached is a 3-hour high-traffic extract (inlined snippet; full CSV link below). Quick answers:
+- Burst responses skew short: ~70% under 120 tokens; tails up to 500 tokens for some sessions.
+- We want to keep P95 <= 450ms; P99 we'd like <1200ms but can tolerate brief bursts.
+
+CSV link: https://fastlane.s3/exports/fastlane_sample_3h.csv
+
+I'll also drop a 24h anonymized stream by EOD tomorrow.
+
+Shelley
+Head of Product, FastLane.ai
+shelley.park@fastlane.ai
+
+On Sun, 25 Apr 2027 at 15:10, Mina Haddad <mina@redwood.com> wrote:
+> Shelley,
+> 
+> Thanks for the call earlier — good conversation. Short recap + asks so we can size a pilot that matches your SLOs.
+> 
+> Call highlights
+> - Primary SLO: 95th latency <= 450ms end-to-end (text-gen streaming) for interactive agents.
+> - Two traffic modes: steady-state background processing (~200 QPS, median 40 token responses) and short bursts from user events (~3500 QPS spikes lasting 30–90s, avg 120 tokens).
+> - Concurrent streaming sessions: typical 1.2x concurrent multiplier on QPS for long polling flows.
+> 
+> Asks / artifacts requested
+> 1) If you can share a 24h sample or a 1‑week peak window CSV of event timestamps (token-level not required) — sample format attached as fastlane-workload-sample.csv
+> 2) Confirmation: do burst windows contain mostly short responses (<150 tokens) or the 120 token average we discussed?
+> 3) Any P50/P95/P99 latency acceptance targets beyond the 95th noted above?
+> 
+> Next steps
+> - If you send the sample, we'll run a quick sizing pass and return a conservative Dedicated config + cost delta within 24 hours.
+> - We're proposing an initial pilot: 8 reserved GPUs with streaming-optimized runtime + prefix caching for first 2 weeks; we will instrument token-level telemetry and evaluate cost vs latency.
+> 
+> Attachments: fastlane-workload-sample.csv (attached), call recording will be uploaded to Drive.
+> 
+> Thanks,
+> 
+> Mina Haddad
+> Account Executive, Redwood Inference
+> mina@redwood.com | +1 415 555 0123
+> Redwood Inference
+
+From: Mina Haddad <mina@redwood.com>
+To: Karthik Iyer <karthik@redwood.com>, Sean Gallagher <sean@redwood.com>
+Cc: Shelley Park <shelley.park@fastlane.ai>
+Date: Mon, 26 Apr 2027 08:12:00 -0700
+Subject: Re: Post-call: mapping token surges to latency budget and steady-state sizing
+
+Karthik / Sean — Shelley shared a short extract and confirmed burst token distribution (70% <120 tokens, tail to 500). They want P95 <= 450ms and P99 <1200ms.
+
+Shelley's initial ask is a 2‑week pilot to validate latency under real bursts. Please see the rough sizing constraints below and flag anything missing:
+- Observed steady: 200 QPS, avg response 40 tokens => ~8k t/s steady
+- Burst peak: up to 3500 QPS with avg 120 tokens => ~420k t/s during peak windows (30–90s)
+- Streaming multiplier: ~1.2x concurrent sessions
+
+Preliminary sizing thoughts (Karthik — can you turn this into a Dedicated config + expected TPU/GPU mix and an estimate in redwood-sizing-estimate.xlsx):
+- Pilot conservative starting point: reserve capacity to handle 6–8 concurrent burst windows (we're thinking 12 GPUs with streaming optimizations + aggressive KV prefix caching)
+- Instrumentation: token-level metrics, per-request kv-hit rate, and CLI export to the Drive link below.
+
+Shelley — we'll include cost delta and a rollback plan if latency degrades.
+
+Drive link: https://redwood.share/drive/fastlane/workload-sample
+
+Thanks,
+Mina
+
+--
+Mina Haddad
+Account Executive, Redwood Inference
+
+From: Karthik Iyer <karthik@redwood.com>
+To: Mina Haddad <mina@redwood.com>
+Cc: Sean Gallagher <sean@redwood.com>, Shelley Park <shelley.park@fastlane.ai>
+Date: Mon, 26 Apr 2027 09:03:00 -0700
+Subject: Re: Post-call: mapping token surges to latency budget and steady-state sizing
+
+Quick calc and recommended pilot config (high-level)
+
+Assumptions derived from sample
+- Steady tokens/sec: ~8k t/s
+- Burst token/sec: peaks ~420k t/s for 30–90s
+- Streaming concurrency multiplier: 1.2x (peak-effective concurrent streams)
+
+Sizing (conservative)
+- Start pilot: 12 A100-class GPUs (streaming runtime enabled), NVMe cache for KV, and autoscale headroom of +25% via burst pool
+- Estimated sustained QPS capacity: ~3.5k concurrent streaming requests at 120 token avg with ~450ms p95 using batching + caching
+- For the 30–90s peaks we'll rely on burst pool and pre-warm strategy; expected P95 degradation risk at sustained >600k t/s
+
+Next ops ask
+- Need the 24h anonymized export and a sample of 10 slow traces for P99 analysis.
+- If Shelley agrees, we'll draft the pilot SOW and propose start date next Monday.
+
+I'll populate the redwood-sizing-estimate.xlsx with node counts, expected cost delta, and monitoring hooks by EOD.
+
+Karthik
+Senior Performance Engineer, Redwood Inference
+karthik@redwood.com

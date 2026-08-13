@@ -1,0 +1,117 @@
+Post-call: Sentria routing & SDK triage — routing policy choices and next steps
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Chris Li <chris@sentria.ai>, Anika Patel <anika.patel@sentria.ai>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Thu, 10 Dec 2026 15:08:00 -0800
+Subject: Post-call: Sentria routing & SDK triage — routing policy choices and next steps
+
+Hi Chris + Anika — thanks again for the walkthrough today. Quick recap and concrete next steps to keep the integration moving: we captured the high-level goals and constraints so Rishi can propose an initial routing + auth pattern for your infra. See the summary below and the action items at the end.
+
+Call highlights (as I heard them)
+- Primary goal: embed Redwood for real-time triage in Sentria’s clinician assistant. Low tail latency for short prompts (<= 200 tokens) and safe fallbacks when capacity/region issues occur.
+- Data sensitivity: PHI may be present in prompts; you want a private deployment option later but will start on Hosted API with strict redaction/contract controls.
+- Traffic profile: spikes around shift change, bursty websockets with p95 latency target 250ms.
+- Advanced features: structured tool-calling to query patient timeline, embeddings for semantic search/reranking across internal KB.
+
+Open technical constraints you mentioned
+- Need region pinning between US-EAST and US-WEST for data locality.
+- SSO + mTLS for server-to-server SDK auth preferred; short-lived tokens for frontends.
+- Preference to keep a cheap quantized fallback model for prevalence checks to reduce calls to the large hosted model.
+
+Proposed next deliverables
+1) Rishi to propose a first-pass routing policy (latency/cost thresholds + fallback chain) by EOD tomorrow.
+2) Engineering sync: 60m technical deep-dive next week to validate SDK auth flows and share sample config.
+3) I’ll send the integration checklist and a sample routing YAML (attached) you can use as a starting point.
+
+Attachments: sentria-integration-checklist.pdf (integration tasks + security checklist), sentria-sample-routing-config.yaml (example routing/policy)
+
+Thanks — please reply if anything above is incorrect.
+
+Best,
+Marissa
+Account Executive | Redwood Inference
+marissa.cole@redwood.ai
+[Attachment: sentria-integration-checklist.pdf]
+From: Chris Li <chris@sentria.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>
+Cc: Anika Patel <anika.patel@sentria.ai>
+Date: Thu, 10 Dec 2026 17:02:00 -0800
+Subject: Re: Post-call: Sentria routing & SDK triage — routing policy choices and next steps
+
+Thanks Marissa — that matches our notes. A few quick clarifications from our infra side so Rishi can scope the routing proposal correctly:
+
+Questions
+1) Can Redwood routing evaluate per-request metadata (tenant_id and user_role) and apply different SLOs? We’d like clinician requests to prioritize latency over cost, and analytics/HR queries to prioritize cost.
+2) For embeddings + reranker flow: our current infra runs a dot-product index in-memory for vector search; do you recommend a two-stage approach (dense retrieval -> cross-encoder rerank) and where should reranking run (Redwood hosted vs our infra)?
+3) SDK auth: we use mTLS for backend services and OIDC for the web app. For the quickstart, will short-lived API keys suffice or should we wire mTLS from day one?
+
+We’ll review the attached YAML tonight and loop back. Also happy to invite our infra lead (Vik) if you want a deeper network discussion.
+
+—Chris
+Lead Platform Engineer | Sentria Health
+chris@sentria.ai
+
+On Thu, Dec 10, 2026 at 15:08, Marissa Cole <marissa.cole@redwood.ai> wrote:
+> Hi Chris + Anika — thanks again for the walkthrough today...
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Chris Li <chris@sentria.ai>, Anika Patel <anika.patel@sentria.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Fri, 11 Dec 2026 09:24:00 -0800
+Subject: Re: Post-call: Sentria routing & SDK triage — routing policy choices and next steps
+
+Hi Chris / Anika — quick technical note with a recommended routing and auth approach based on the constraints you shared. I kept this pragmatic for a phased rollout.
+
+Summary recommendation (phased)\
+Phase 1 (Hosted quickstart, minimal infra changes)
+- SDK: use Redwood SDK v0.9.4 with short-lived API keys for backend services. Generate keys scoped to routes (read:clinician, read:analytics). Use server-side mTLS later for Private deployments.
+- Routing policy (first-pass): route by request.metadata.tenant_id + request.metadata.user_role. Implement policy evaluation order: exact-route -> SLA override -> cost-threshold fallback. Example logic: if user_role == clinician and region == us-east, prefer low-latency route (model: redwood-nyx-6b-llm-cached). If cost budget exceeded for the minute, fallback to quantized-local-3b (see fallback chain).
+- Fallback chain: redwood-nyx-6b-llm-cached (primary, hosted) -> redwood-nyx-3b-quant (hosted cheaper variant) -> local-quant-3b (customer-run lightweight LLM via Dedicated or Private) -> short-answer lamegrace static policy (structured KB lookup) for extreme degradation. Configure exponential backoff and circuit-breaker with 5s hard timeout.
+
+Phase 2 (Private/Dedicated + stricter auth)
+- mTLS + OIDC integration for service-to-service. Use KMS-integrated key rotation for long-lived secrets.
+- Region routing: implement geo-preferred route with per-tenant override. For compliance tenants keep processing in the pinned-region only; Redwood's routing table supports route tags: region:us-east, region:us-west, privacy:high.
+
+Embeddings & reranker pattern
+- Two-stage retrieval: 1) Vector search (dense embeddings) as the candidate generator; 2) Cross-encoder reranker as a second-stage quality pass for top-10. Recommendation: compute passage embeddings with redwood-embed-4k (64-d float16) and host the ANN index in your infra (FAISS/HNSW). For reranking, we suggest using Redwood hosted cross-encoder only for top-k to control cost (we have a reranker endpoint that accepts score-only calls). If you must keep everything on-prem initially, we can provide a small cross-encoder step that runs in your Dedicated cluster.
+
+Structured output & tool-calling
+- Use tool-calling for canonical KB queries: define two tools: get_patient_timeline(patient_id) and search_guidelines(query, top_k). Tool output should be strict JSON schema to avoid hallucination. Use our SDK tools interface to register tools and attach service tokens with limited scopes.
+
+Latency/cost policy knobs (config blueprint)
+- route.priority: integer (higher = lower latency allowance)
+- route.max_cost_per_minute: USD cents
+- route.max_tokens_per_request: default 1024 (override for analytics)
+- route.fallback_chain: ordered list of model ids
+- route.timeout_ms: 500 for clinician fast-path, 2000 for analytics
+- auto-batch.enabled: true for analytics routes, off for clinician websocket flows
+
+Attached I dropped a sample routing YAML and a short checklist. Two immediate asks from our side:
+- Please confirm whether Vik should be on the deep-dive call (network + mTLS).
+- Share a small sample dataset (50 example prompts + expected structured outputs) so we can sanity-check reranker quality.
+
+I can present the Phase 1 routing policy and a config walkthrough on the 60m call next week.
+
+Cheers,
+Rishi
+Principal Solutions Architect | Redwood Inference
+rishi_malhotra@redwood.ai
+[Attachment: sentria-sample-routing-config.yaml]
+From: Ben Carter <ben_carter@redwood.ai>
+To: Chris Li <chris@sentria.ai>, Anika Patel <anika.patel@sentria.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Rishi Malhotra <rishi_malhotra@redwood.ai>
+Date: Fri, 11 Dec 2026 10:42:00 -0800
+Subject: Re: Post-call: Sentria routing & SDK triage — routing policy choices and next steps
+
+Thanks all — short note to confirm next steps and owners: 
+- Rishi: deliver Phase 1 routing YAML + fallback chain tests (owner) — target: 2026-12-11 EOD.
+- Marissa: coordinate 60m technical deep-dive and invite Vik if Sentria wants. I’ll join for the reranker/embeddings conversation.
+- Chris/Anika: share sample prompt set + indicate whether PHI will be present in test data (we can provide a redacted option).
+
+If that timing works we’ll aim to have a sandbox route and sample reranker scores to you within 5 business days. See you on the call.
+
+Ben
+Solutions Engineering Manager | Redwood Inference
+ben_carter@redwood.ai
+
+Post-call thread between Marissa (AE) and Sentria engineers about initial routing policy, auth pattern, and embeddings/reranker approach. Rishi proposed phased routing/fallback plan, SDK quickstart guidance, and recommended two-stage dense retrieval + cross-encoder rerank. Next steps: Rishi deliver Phase 1 YAML, schedule 60m deep-dive, Sentria to share sample prompts and infra lead for mTLS discussion.

@@ -1,0 +1,152 @@
+Live chat latency: streaming endpoint impact — mitigation & follow-up
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Liam O'Connor <liam@acme-payments.com>
+Cc: Priya Gupta <priya.gupta@acme-payments.com>
+Date: 2026-11-07T09:14:00-05:00
+Subject: Live chat latency: streaming endpoint impact — immediate mitigations
+
+Hi Liam / Priya,
+
+I wanted to alert you immediately: between ~08:50–09:05 ET we observed high tail latency on the streaming/chat endpoint used by Acme Payments. This caused intermittent stalled chunks for some interactive sessions and visible lag in your agent-assist flows. Our telemetry shows elevated P99 token-delivery latency originating from an edge shard in us-east-1.
+
+What we are doing now (short term):
+- Redirecting new streaming sessions away from the affected shard to other healthy edges.
+- Rolling an emergency kernel selection rollback on that shard to revert a recent optimization we suspect triggered higher CPU on small-sequence workloads.
+- Placing a short traffic cap (10 minutes) on model variant variant-x to reduce load while we verify stability.
+
+Immediate mitigations you can apply (fast):
+- Switch to non-streaming (complete response) calls temporarily — this reduces per-token concurrency and should avoid the stalled-chunk behavior.
+- Add exponential backoff & jitter for streaming chunk timeouts (recommended: initial 150ms, max 2s).
+- For critical interactive paths, set max_tokens to 128 and lower chunk_size to 64 to reduce pressure.
+
+Attachments included: incident_snapshot_20261107.png (traces), support_runbook_v2.pdf (short checklist).
+
+We will keep you updated every 30 minutes; I can also get a quick call on the line if that helps. Apologies for the disruption — we know this impacts customer-facing experiences and are prioritizing it.
+
+Thanks,
+Monica Patel
+Senior Account Manager, Redwood Inference
+monica.patel@redwood.ai | +1 415 555 0119
+
+-----
+
+From: Liam O'Connor <liam@acme-payments.com>
+To: Monica Patel <monica.patel@redwood.ai>
+Cc: Priya Gupta <priya.gupta@acme-payments.com>
+Date: 2026-11-07T09:28:00-05:00
+Subject: Re: Live chat latency: streaming endpoint impact — immediate mitigations
+
+Thanks Monica — we saw the first customer reports at ~08:55 ET. Couple quick questions:
+
+1) How long do you expect the traffic cap/rollback to take before we see normal streaming behavior? Our peak hours start at 10:00 ET.
+2) If we switch to non-streaming for the agent-assist flow, what is the estimated latency delta your team expects (ballpark)?
+3) Can you confirm whether session continuity will be preserved if we redirect to a different edge (any token/session invalidation risk)?
+
+If useful, we can open a temporary manual failover from our side, but we'd prefer your guidance so we don't create split-state. We can be on a quick call in 10.
+
+—Liam
+Senior Platform Engineer, Acme Payments
+liam@acme-payments.com
+
+On 2026-11-07 09:14, Monica Patel wrote:
+> I wanted to alert you immediately: between ~08:50–09:05 ET we observed high tail latency on the streaming/chat endpoint used by Acme Payments...
+
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Logan Wright <logan.wright@redwood.ai>
+Date: 2026-11-07T09:40:00-05:00
+Subject: Fwd: Live chat latency — Acme Payments (urgent)
+
+Team — looping you in. Acme is seeing stalled streaming chunks and high P99 in us-east-1. Customer-facing impact. Please see attached snapshot and runbook. Need quick confirmation on:
+- Is kernel rollback fully validated for variant-x? Any side effects to other customers?
+- Can we shift Acme traffic to us-west-2 while we verify? What is ETA for a safe migration?
+- Recommend whether we should proactively throttle the variant or the customer.
+
+Proposed immediate actions:
+1) Approve emergency kernel rollback on the affected shard (Ben).
+2) Prepare a migration plan for routing Acme's sessions to us-west-2 for the next hour (Marissa + Logan).
+3) Offer customer an 8-hour credit and a post-incident review (I'll handle comms).
+
+I will provide a status update to Acme in 20 minutes.
+
+—Monica
+
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Liam O'Connor <liam@acme-payments.com>
+Cc: Priya Gupta <priya.gupta@acme-payments.com>, EdgeCloud Ops <ops@edgecloud.com>
+Date: 2026-11-07T10:15:00-05:00
+Subject: Update: mitigation steps and temporary workarounds (actionable)
+
+Hi Liam / Priya,
+
+Update from the ops team: root cause appears to be a tokenizer scheduling regression in our recent kernel optimizer for variant-x. On small-sequence, high-concurrency streams it caused CPU hotspots on an edge shard. We rolled back the optimizer at ~09:55 ET and started draining the shard; by ~10:05 ET token delivery P99 returned to normal on the majority of sessions.
+
+What we've completed:
+- Emergency rollback applied to shard us-east-1a at 09:55 ET.
+- Traffic split: new sessions are being routed to healthy edges (us-east-1b, us-west-2) with in-flight sessions drained gracefully.
+- Monitoring thresholds adjusted to detect early token-stall signatures and auto-divert traffic.
+
+What we recommend you do now (practical steps):
+- For immediate safety: switch to non-streaming generation for your highest-value flows. Example (curl):
+  curl -X POST https://api.redwood.ai/v1/generate \
+    -H "Authorization: Bearer $TOKEN" \
+    -d '{"model":"variant-x","stream":false,"max_tokens":128}'
+
+- If you must keep streaming: set client chunk timeout to 250ms with exponential backoff + jitter, and implement a single retry for partial responses. Sample pseudo: on chunkTimeout -> wait 200-400ms -> re-open stream with same conversation_id.
+- If you can, migrate agent-assist traffic to us-west-2 for the next 2 hours; we have prepared a routing toggle and can assist with DNS/edge pins.
+
+Potential impacts to expect if you switch to non-streaming: user-perceived latency may increase by ~150–300ms depending on payload size; however it eliminates chunk-stall behavior and reduces perceived jitter.
+
+Attachments: kb_streaming_mitigation.md (one-page runbook). I've also included the live incident trace on our status page: https://status.redwood.ai/incidents/2026-11-07-streaming-latency.
+
+I'll stay on this until we validate stable behavior for two hours. If you'd like, we can schedule a 30-minute technical debrief at 11:00 ET.
+
+Thanks,
+Monica
+Senior Account Manager
+monica.patel@redwood.ai
+
+
+From: Monica Patel <monica.patel@redwood.ai>
+To: Liam O'Connor <liam@acme-payments.com>
+Cc: Priya Gupta <priya.gupta@acme-payments.com>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Logan Wright <logan.wright@redwood.ai>
+Date: 2026-11-08T15:02:00-05:00
+Subject: Post-incident summary: 2026-11-07 streaming latency (Acme Payments)
+
+Hi Liam / Priya,
+
+Thanks again for your patience. Below is the post-incident summary and follow-up plan.
+
+Summary / timeline:
+- 08:50 ET — First elevated token-delivery P99 detected on us-east-1 shard serving variant-x.
+- 08:55 ET — Acme customers report stalled streaming chunks.
+- 09:14 ET — Initial customer notification sent.
+- 09:55 ET — Emergency kernel-selection rollback applied to affected shard.
+- 10:05 ET — Majority of sessions show P99 back to expected range; full traffic normalized by 10:30 ET after drain and verification.
+
+Root cause: A recent kernel selection optimization intended to improve throughput for long sequences caused unintended CPU scheduling pressure for small-sequence streaming workloads. Under high concurrency this produced token-stall signatures on specific edge hardware (us-east-1a).
+
+Remediations completed:
+- Rollback of the optimizer and shard drain (completed same day).
+- Automated guardrail added to prevent the optimizer from being selected for streaming workloads below 256 tokens.
+- Improved tracing to detect early token-stall patterns and auto-divert traffic after 2 progressive chunk timeouts.
+
+Action items (owner / ETA):
+- Engineering: full test coverage for kernel selection across sequence-length distributions (Logan Wright / 2026-11-21).
+- Runtime: capacity safety valve to avoid hot-shard saturation under optimizer mismatch (Ben Carter / 2026-11-14).
+- Customer success: postmortem call and credit arrangement (Monica Patel / 2026-11-09).
+
+Customer impact & compensation: We estimate the disruption affected ~0.6% of your sessions during the 08:50–10:30 window. We will apply an 8-hour service credit to your next invoice and are open to a short joint technical review.
+
+Attachments: postmortem_20261107.pdf (detailed timeline, traces, and remediation plan).
+
+If you'd like to schedule the technical debrief with Engineering, propose a couple of times and I'll coordinate. Appreciate the quick collaboration from your side during the event.
+
+Best,
+Monica Patel
+Senior Account Manager, Redwood Inference
+monica.patel@redwood.ai | +1 415 555 0119
+
+-- End of thread --

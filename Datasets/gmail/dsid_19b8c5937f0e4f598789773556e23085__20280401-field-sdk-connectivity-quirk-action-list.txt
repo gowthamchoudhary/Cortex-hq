@@ -1,0 +1,141 @@
+SDK connection hiccup during long-polling (customer capture requested)
+
+From: Anna Ortiz <anna.ortiz@finmetric.com>
+To: markus_klein@redwood.example.com, support@finmetric.com
+Date: Fri, 29 Mar 2028 09:12:00 -0700
+Subject: Observed intermittent connection resets while streaming long responses
+
+Hi Markus,
+
+We've been seeing intermittent connection resets from the Redwood SDK when streaming long model responses (chat completions > 2k tokens). This started after we updated to SDK v1.2.3 last week. Typical symptom: the client receives a truncated stream and the SDK raises a ConnectionResetError.
+
+Quick notes:
+- Repro frequency: ~1 in 20 long responses during peak traffic (09:00-11:30 PT).
+- Logs attached (finmetric-error-log-0329.txt).
+- We captured a brief tcpdump on one instance; attaching codecapture-20280330.pcap.
+- Workaround we tried: retry at application-level; that works but causes duplicate tokens and higher downstream cost.
+
+Can Redwood help with a short capture session (we can run traces/pcap together) and advise on temporary config we should set? We're mid-pilot (trial account FM-2028-043) and would like to avoid engineering churn on our side if it's a server-side setting.
+
+Thanks,
+Anna Ortiz
+Head of Integrations, FinMetric
+anna.ortiz@finmetric.com
++1 (415) 555-0192
+
+
+From: markus_klein@redwood.example.com
+To: dev_patel@redwood.example.com, soojin_lee@redwood.example.com, marissa_cole@redwood.example.com
+Cc: anna.ortiz@finmetric.com
+Date: Fri, 29 Mar 2028 10:03:12 -0700
+Subject: Fwd: Observed intermittent connection resets while streaming long responses
+
+Forwarding FinMetric report — they see truncated streaming responses with SDK v1.2.3. Logs and pcap attached.
+
+Ask: can runtime/platform confirm whether any of the following could explain resets during long responses?
+- connection keepalive timeouts at the load balancer or serving node
+- batching behavior that pauses progress while kernel selection/quantization path switches (unlikely but worth checking)
+- any recent socket-level changes in 1.2.3 SDK that interact poorly with our server-side TCP keepalive defaults
+
+If we don't have a quick root cause, please advise a minimal workaround I can give the customer (env var, header, SDK pin) and whether we should schedule a 30-minute capture session next week. I'm looping Product (Marissa) and Field (Soojin) for prioritization.
+
+—Markus
+Markus Klein
+Senior Sales Engineer, Redwood Inference
+markus.klein@redwood.example.com
+
+On Fri, Mar 29, 2028 at 09:12 AM Anna Ortiz <anna.ortiz@finmetric.com> wrote:
+> Hi Markus,
+> 
+> We've been seeing intermittent connection resets from the Redwood SDK when streaming long model responses (chat completions > 2k tokens). This started after we updated to SDK v1.2.3 last week. Typical symptom: the client receives a truncated stream and the SDK raises a ConnectionResetError.
+> 
+> Quick notes:
+> - Repro frequency: ~1 in 20 long responses during peak traffic (09:00-11:30 PT).
+> - Logs attached (finmetric-error-log-0329.txt).
+> - We captured a brief tcpdump on one instance; attaching codecapture-20280330.pcap.
+> - Workaround we tried: retry at application-level; that works but causes duplicate tokens and higher downstream cost.
+> 
+> Can Redwood help with a short capture session...
+> 
+> Thanks,
+> Anna
+
+From: Dev Patel <dev_patel@redwood.example.com>
+To: markus_klein@redwood.example.com, soojin_lee@redwood.example.com, marissa_cole@redwood.example.com
+Date: Fri, 29 Mar 2028 12:47:08 -07:00
+Subject: Re: Fwd: Observed intermittent connection resets while streaming long responses
+
+Thanks for the flag, Markus — I had a quick look at the log and pcap. Initial thoughts:
+
+- The pcap shows a TCP FIN from the server side shortly after the last data chunk; it looks like the serving process closed the socket rather than the client timing out. That could be an application-level close triggered by a timeout or an internal health check.
+- There was a small bump in CPU on the serving host in that window in our infra metrics; if the runtime preempts a worker to pick a new kernel/quant path there could be a short pause.
+
+Immediate asks to reproduce:
+1) Can FinMetric run a short script that streams a 3k token response in a tight loop against our hosted endpoint and paste full SDK debug logs (set REDWOOD_SDK_LOG=debug)?
+2) If comfortable, capture a second pcap but keep timestamps synced (we'd like server-side timestamps to align).
+
+Temporary mitigation we can recommend to the customer:
+- Set REDWOOD_SDK_KEEPALIVE_MS=30000 (increase client keepalive)
+- Pin to SDK v1.2.4-beta (we shipped a small keepalive tweak there)
+
+I've created INF-1428 and attached initial notes: https://redwood.atlassian.net/browse/INF-1428. Platform team: can someone check whether any recent haproxy/load-balancer config changes occurred for the FM fleet around Mar 28–29? If kernel selection is suspected we should capture a flame/trace of the worker around the event window.
+
+(I can take the first capture session tomorrow morning if FinMetric is available).
+
+—Dev
+Dev Patel
+Runtime Engineer, Redwood Inference
+dev_patel@redwood.example.com
+
+On Fri, Mar 29, 2028 at 10:03 AM markus.klein@redwood.example.com wrote:
+> Forwarding FinMetric report — they see truncated streaming responses with SDK v1.2.3...
+
+From: Soojin Lee <soojin_lee@redwood.example.com>
+To: dev_patel@redwood.example.com, markus_klein@redwood.example.com, marissa_cole@redwood.example.com
+Date: Mon, 01 Apr 2028 08:15:42 -07:00
+Subject: Re: Fwd: Observed intermittent connection resets while streaming long responses
+
+Thanks Dev — that aligns with a field pattern we've seen (rare, during heavy kernel-switch activity). A few product/field notes and asks:
+
+- Field ask: can we expose a documented SDK flag (or header) for session affinity/sticky connection to reduce client-side retries vs duplicate tokens? If we add a boolean header (X-Redwood-Session-Affinity: true) the gateway can avoid migrating the stream mid-request.
+- Roadmap: Marissa, adding a stable API flag will require minimal runtime change but needs validation for Dedicated customers where LB behavior differs. Can we schedule a quick design sync?
+- For the pilot: recommend we provide FinMetric the two-step mitigation (keepalive + pin to 1.2.4-beta) and the capture session so we can confirm server-side close vs LB behavior.
+
+Also: agree with INF-1428 creation. Markus — please ask FinMetric for a 30-min window where they can run the loop and keep the sdk debug logs attached to the ticket/drive. We'll triage and target a fix in the next patch (1.2.5) if reproducer confirms a server-side close.
+
+Soojin
+Soojin Lee
+Director, Field Engineering
+soojin_lee@redwood.example.com
+
+On Fri, Mar 29, 2028 at 12:47 PM Dev Patel <dev_patel@redwood.example.com> wrote:
+> Thanks for the flag, Markus — I had a quick look at the log and pcap...
+
+From: markus_klein@redwood.example.com
+To: Anna Ortiz <anna.ortiz@finmetric.com>
+Cc: dev_patel@redwood.example.com, soojin_lee@redwood.example.com, marissa_cole@redwood.example.com
+Date: Mon, 01 Apr 2028 17:24:00 -07:00
+Subject: Re: Observed intermittent connection resets while streaming long responses
+
+Hi Anna — thanks for sending the logs and pcap. Team has the initial triage steps and a short plan:
+
+1) Could you run a 30-minute capture session with the following:
+   - SDK: set REDWOOD_SDK_LOG=debug and REDWOOD_SDK_KEEPALIVE_MS=30000
+   - Repro script: stream a 3k-token completion in a tight loop for 30 minutes from one of your staging instances
+   - Attach the SDK debug logs and pcap to INF-1428 (https://redwood.atlassian.net/browse/INF-1428) and our shared Drive: https://drive.google.com/drive/folders/1a2B-capture-session
+
+2) Temporary workaround: pin to v1.2.4-beta which includes a keepalive tweak. We'll confirm if that completely mitigates or if a server-side fix is needed.
+
+3) Next steps: Dev will watch infra metrics during your test, Soojin/Product will validate a session-affinity flag and scope the work (targeting 1.2.5 if a server-side change is required).
+
+Would you be available for a 30-min session Tue 2028-04-02 10:00–10:30 PT? If so I will send a calendar invite and include the triage checklist.
+
+Thanks again for the patience — we'll try to make the session low-friction.
+
+—Markus
+Markus Klein
+Senior Sales Engineer | Redwood Inference
+markus.klein@redwood.example.com
+
+On Mon, Apr 01, 2028 at 08:15 AM Soojin Lee <soojin_lee@redwood.example.com> wrote:
+> Thanks Dev — that aligns with a field pattern we've seen (rare, during heavy kernel-switch activity)...

@@ -1,0 +1,139 @@
+NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Alex Turner <alex.turner@northbridge.com>, Sofia Delgado <sofia.delgado@northbridge.com>
+Cc: David Kim <david.kim@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: 2026-10-01T09:12:00-07:00
+Subject: NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+Alex / Sofia — thanks again for the call this morning. As discussed, NorthBridge is pushing for a firm p95 <= 75ms for inference calls during US market hours (08:30–16:30 ET) for their primary trading flows, and they want that in the contract as a separate committed window. They also asked that we provide an operational runbook for incident response and a dedicated on-call rotation for the first 6 months.
+
+I attached their formal ask (northbridge_sla_request.pdf) and dropped a draft of the runbook we discussed (operational_runbook_draft.md). Can the engineering/product/legal teams confirm feasibility and any material impacts to cost or capacity so we can reply with a single commitment + implementation plan?
+
+Immediate asks:
+- Is sub-75ms p95 realistic during peak with current model selection and dedicated pool?
+- What engineering controls (reservations, warm pools, prewarming, KV cache sizing) are required?
+- Any changes we should request in the wording (penalties/credits)?
+
+Alex/Sofia — target for a decision/plan by EOD Monday (10/04) so we can get procurement moving.
+
+Thanks,
+
+Marissa Cole
+Account Executive, Redwood Inference
+marissa.cole@redwood.com
+(415) 555-0182
+
+Attachments: northbridge_sla_request.pdf (application/pdf), operational_runbook_draft.md (text/markdown)
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, David Kim <david.kim@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: 2026-10-01T10:05:00-07:00
+Subject: Re: NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+Team — forwarding NorthBridge's ask. Quick thoughts before we commit:
+
+- Product: can we limit the commitment to a specific model family + max seq length (e.g., tron-13B q4/8k) and carve out traffic over a threshold?
+- Eng: need a capacity delta estimate and recommended guardrails (canary rollout, circuit breaker thresholds, fallback model).
+- Legal: flag on SLA language — credits vs. termination, and whether to accept a hard window tied to market hours.
+
+Please reply with concrete numbers or a short proposal. If we can't reach 75ms guaranteed, propose the closest p95 we can sustain with cost delta. Also include ops asks to support the dedicated window (on-call, runbook changes).
+
+Vanessa
+Vanessa Ortiz
+Head of Customer Success, Redwood Inference
+vanessa.ortiz@redwood.com
+
+-----Original message-----
+From: Marissa Cole <marissa.cole@redwood.com>
+Sent: 2026-10-01T09:12:00-07:00
+Subject: NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+[attached northbridge_sla_request.pdf]
+
+From: David Kim <david.kim@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Cc: Grace O'Connor <grace.oconnor@redwood.com>
+Date: 2026-10-02T08:22:00-07:00
+Subject: Re: NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+Vanessa / Marissa — reviewed the request and did a quick perf sweep against the suggested model family. Short answer: 75ms p95 across a 40M daily token workload during US market hours is aggressive but not impossible with the following constraints:
+
+Proposal (engineering constraints):
+- Dedicated reserved pool: 12x A100s (or equivalent) pinned to the account during window.
+- Model: tron-13B q4; maximum request seq length 512 tokens. Longer context will push p95 up.
+- KV cache + prefix caching enabled for recurrent session IDs; recommend session affinity at the routing layer.
+- Prewarmed standby and continuous micro-batching with a tight cap (max batch size 8) during 08:00–17:00 ET.
+- Canary rollout for 2 weeks starting with 10% traffic, ramp 10->50->100 with automated health checks (p95, error rate, GPU utilization).
+
+Operational asks (to support commit):
+- Dedicated on-call rotation for first 6 months (we can staff with CS+SRE overlap; costs below).
+- 24/7 extended telemetry retention for this customer's routing + token-level traces for 90 days.
+
+Cost delta estimate (rough):
+- Reserved capacity + prewarm overhead ~ +$45k/month baseline; telemetry & on-call ~ +$8k/month.
+- If NorthBridge wants penalty/credit terms, legal will need to set clear measurement windows and blackout exceptions for maintenance/force majeure.
+
+If product/legal agree, ops can produce a runbook and we can provide a phased timeline.
+
+-David
+David Kim
+Engineering Manager, Serving Runtime
+david.kim@redwood.com
+
+On 2026-10-01 Vanessa Ortiz wrote:
+> Team — forwarding NorthBridge's ask. Quick thoughts before we commit:
+> ...
+From: Kimberly Park <kimberly.park@redwood.com>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.com>, Marissa Cole <marissa.cole@redwood.com>, David Kim <david.kim@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: 2026-10-02T14:30:00-07:00
+Subject: Re: NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+Team — legal perspective:
+
+- We should avoid hard penalties tied to specific ms values unless we can clearly define measurement methodology and blackout windows. Recommend offering credits as the remedy and a defined SLA measurement window (e.g., p95 measured over rolling 30-day business-window excluding scheduled maintenance).
+- Define allowable exceptions: scheduled maintenance, act of nature, customer misuse, or unsupported integrations.
+- Runbook: accept a runbook reference in the contract but keep it as an operational exhibit rather than contract core text; that lets us iterate without bilateral amendment.
+- DocuSign: if we accept credit terms, prepare redlines and limit exposure to a capped quantum (e.g., credits not exceeding monthly committed spend).
+
+I can draft redline language for an SLA credit schedule and an exhibit reference. If product wants a tighter guarantee, we need to negotiate financial exposure upfront.
+
+Kimberly Park
+Senior Counsel, Redwood Inference
+kimberly.park@redwood.com
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Alex Turner <alex.turner@northbridge.com>, Sofia Delgado <sofia.delgado@northbridge.com>
+Cc: Vanessa Ortiz <vanessa.ortiz@redwood.com>, David Kim <david.kim@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Kimberly Park <kimberly.park@redwood.com>, Grace O'Connor <grace.oconnor@redwood.com>
+Date: 2026-10-03T16:47:00-07:00
+Subject: Re: NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+Alex / Sofia — thanks for your patience. Internal teams evaluated feasibility; below is our proposed path and asks so procurement can review.
+
+Proposed commercial + operational commitment:
+1) Committed window: US market hours 08:30–16:30 ET, measured as p95 over rolling 30-day window excluding scheduled maintenance.
+2) Target: p95 <= 75ms for requests <= 512 tokens using tron-13B q4 served from a reserved capacity pool.
+3) Operational controls: 12x GPU reserved pool, session affinity, prefix caching, micro-batching cap 8, prewarm standby.
+4) Rollout: 2-week canary (10% -> 50% -> 100%) with automated health checks.
+5) Runbook: we will provide an operational exhibit (attached) and an onboarding checklist; Redwood will staff a shared CS+SRE on-call rotation for first 6 months.
+6) Credits: if SLO misses, we propose credits capped at 100% of monthly committed spend; legal will draft specific credit schedule.
+
+Next steps requested from NorthBridge:
+- Confirm you accept the model family + seq-length constraint and the phased canary approach.
+- If yes, please confirm so we can circulate DocuSign with SLA exhibit and redlines (link will be HS deal + DocuSign).
+
+If acceptable I will ask Kimberly to prepare the SLA redline and David's team to produce a final runbook and a cost/order form for your procurement team.
+
+Thanks all — happy to hop on a 30-minute call tomorrow to walk through if helpful.
+
+Best,
+Marissa Cole
+Account Executive, Redwood Inference
+marissa.cole@redwood.com
+
+-----Original message-----
+From: David Kim <david.kim@redwood.com>
+Sent: 2026-10-02T08:22:00-07:00
+Subject: Re: NorthBridge - request for peak-hour p95 guarantee and runbook asks
+
+[attached operational_runbook_draft.md]

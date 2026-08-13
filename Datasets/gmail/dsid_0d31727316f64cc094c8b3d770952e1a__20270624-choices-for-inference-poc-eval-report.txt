@@ -1,0 +1,109 @@
+Inference POC: recommended model trio & quick eval plan
+
+From: Emma Carter <emma.carter@lumenbridge.com>
+To: Grace O'Connor <grace_oconnor@redwood.com>
+Cc: LumenBridge SRE <sre@lumenbridge.com>
+Date: 2027-06-24T13:02:00-07:00
+Subject: Quick follow-up from today's demo
+
+Thanks for the demo earlier — it was helpful. A couple of clarifications from our side so the POC scope is clear:
+
+- Priority is tail-latency under 250ms for single-token completions for the FAQ path (95th percentile).
+- Cost target is ~ $0.0008 per generated token on average for play-in traffic, with occasional long-context synth jobs (up to 8k tokens) for batch processing.
+- Quality bar: match or exceed our current vendor on intent classification and short-answer extraction; we can share a small labeled set.
+
+Could you send a concise shortlist (3 models) with your recommended default for the POC, the main tradeoffs, and a lightweight eval plan we can run next week? Also share any sample prompts and the prompt pack you mentioned.
+
+Best,
+Emma
+Emma Carter
+Head of AI Platform, LumenBridge
+
+From: Grace O'Connor <grace_oconnor@redwood.com>
+To: Emma Carter <emma.carter@lumenbridge.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: 2027-06-24T14:15:00-07:00
+Subject: Re: Quick follow-up from today's demo — concise shortlist + eval plan
+
+Emma — thanks for the clear priorities. Per our conversation, attached is a tight recommended trio that balances your latency requirement, cost target, and occasional long-context needs. High-level summary below; full lightweight benchmark and prompt pack attached (poc-prompt-pack-v1.jsonl) and a compact CSV snapshot of the latency/cost numbers (latency-cost-snapshot.csv).
+
+Recommended shortlist (ranked by suggested starting order):
+
+1) Redwood-Edge-13B (FP16 / 8-bit quantized) — Default POC pick
+   - Why: Best tradeoff for your 95th %-tile latency < 250ms at single-token steady state with our GPU serving profile and prefix caching.
+   - Cost estimate: ~ $0.0006/token for interactive traffic (fits below your $0.0008 target with batching/caching).
+   - Quality: Strong short-answer and intent accuracy on our internal evals; slight weakness on very long-context coherence beyond 6k tokens.
+   - Ops notes: Works with continuous KV cache; recommend warmup queries to populate cache for the FAQ route.
+
+2) Open-Mistral-7B-Instruct (INT8) — Low-cost, high-quality for short forms
+   - Why: Lowest cost and competitive quality for short prompts and intent extraction.
+   - Cost estimate: ~ $0.00025/token.
+   - Latency: Excellent single-token latency but may struggle on very long contexts; recommended for the bulk FAQ path where context < 1k tokens.
+
+3) LlamaX-70B-slim (quantized 4-bit) — Fall-back for highest-quality/complex cases
+   - Why: Use as a canary / fallback for hard extractions and long-context synthesis jobs where quality degrades on smaller models.
+   - Cost estimate: ~ $0.002/token (use sparingly via routing rules).
+   - Latency: Higher — use for batch jobs or when routed asynchronously.
+
+Benchmarks and artifacts included:
+- poc-prompt-pack-v1.jsonl (sample prompt sets + label mapping)
+- latency-cost-snapshot.csv (95th/median token latencies at representative QPS)
+- LLM-benchmarks-compact.pdf (short methodology and metric definitions)
+
+Quality regression concerns to watch for:
+- Prompt sensitivity: small prompt changes can shift extraction boundaries — include a 1000-query regression set from your labeled examples.
+- Tokenization differences: we observed trimming of leading whitespace for certain short-answer patterns between the 13B and 7B variants; include normalized tokenizers in the eval harness.
+- Long-context guardrails: Redwood-Edge-13B begins degrading beyond ~6k tokens; route >6k jobs to the 70B or run as batch jobs with extended compute.
+
+Suggested lightweight POC plan for next week (3 workstreams, 5–7 days):
+- Integration: connect our hosted eval endpoint to your sample labeled set (we can provide keys for a 7-day test).
+- Benchmarks: run the provided CSV workload (we recommend both cold and warm cache runs).
+- Quality checks: run the 1k labeled regression set (we'll score intent/answer F1 and provide diffs).
+
+Next steps we suggest now:
+1) Emma — confirm the sample labeled set location and an initial preferred POC start date.
+2) We'll provision a short-lived eval key and a sandbox route with the Redwood-Edge-13B as default and the two fallbacks configured.
+3) We can schedule a 30-min check-in mid-week to review raw numbers and steer model routing.
+
+Links: hubspot deal and drive folder (links included in this email's metadata).
+
+Happy to sync live — available Wednesday/Thursday afternoon PT.
+
+Thanks,
+Grace O'Connor
+Senior Solutions Engineer | Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Grace O'Connor <grace_oconnor@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Cc: Emma Carter <emma.carter@lumenbridge.com>
+Date: 2027-06-24T15:05:00-07:00
+Subject: Re: Quick follow-up from today's demo — technical notes on latency & caching
+
+Grace / Monica — a few quick technical points to call out that will affect the POC numbers so Emma has the right expectations:
+
+- Continuous KV cache: For the FAQ route, ensure the probe/warmup phase runs ~200 representative queries per shard. That moves steady-state 95p down ~30–50ms in our runs.
+- Batching policy: We recommend target batch window 8–12ms with adaptive burst up to 40ms for peak throughput. This keeps median latency low while preserving throughput.
+- Quantization tradeoffs: The Edge-13B quantized path we're proposing uses a mixed 8-bit kernel while preserving FP16 attention; this gives the best latency/cost balance. Full 4-bit gains for 13B currently introduce a small accuracy hit on precise extraction tasks — flag in the regression checks.
+- Long-context jobs (>4k tokens): Please plan to route as async jobs onto the 70B pool with slightly higher compute; for the POC we can run a small batch to validate cost/time.
+
+I'll attach a short snippet of the config we usually push for these POCs (will paste during the call).
+
+-Karthik
+Principal Infra Engineer, Redwood Inference
+
+From: Emma Carter <emma.carter@lumenbridge.com>
+To: Grace O'Connor <grace_oconnor@redwood.com>
+Cc: LumenBridge SRE <sre@lumenbridge.com>
+Date: 2027-06-24T15:40:00-07:00
+Subject: Re: Quick follow-up from today's demo — concise shortlist + eval plan
+
+Thanks — this is exactly the level I needed.
+
+We're good to start next Monday (2027-06-29) for a 5-day trial window. I'll upload the 1k labeled regression set to the drive link you shared by EOD Friday. Can you provision the sandbox keys and the route with Redwood-Edge-13B as default before then? Also please include the routing rule that will send >6k-token jobs to the 70B pool.
+
+I'll schedule a 30-min check-in for Wednesday (2027-07-01) 10:00 AM PT — invite to follow.
+
+Best,
+Emma
+
+--- End of thread ---

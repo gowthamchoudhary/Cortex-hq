@@ -1,0 +1,113 @@
+Post-call: Turnstile Pharma — ops constraints, SLOs & next technical steps
+
+From: Soojin Lee <soojin_lee@redwood.inference>
+To: Alex Brooks <alex.brooks@turnstilepharma.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.inference>, Monica Patel <monica_patel@redwood.inference>
+Date: Sun, 22 Nov 2026 19:03:00 -0800
+Subject: Post-call recap + proposed next technical steps
+
+Alex — thanks again for taking time today. Quick recap from our discovery call and the items we agreed to validate next: 
+
+1) Primary pain points you highlighted
+- Real-time drug-safety triage requires per-request latency <= 150ms (p95) under steady load.
+- Peak traffic during end-of-quarter analytics windows can spike 4–5x for ~30–90s bursts.
+- Cost predictability: team needs an ops plan that keeps per-1000-token cost within a defined budget threshold for pilot.
+
+2) Goals for pilot (90-day)
+- Support 10 sustained req/s with p95 <= 150ms and burst to 40–50 req/s for short periods.
+- Model quality: parity with your current fine-tuned Llama-2 baseline on our prompt set.
+- Observability: token-level cost and per-route latency dashboards; audit trail for requests.
+
+3) Action items we committed to
+- Redwood: provide a deployment topology proposal (dedicated GPU pool + autoscale policy) and a conservative cost estimate. (Karthik to draft).
+- Turnstile: share sample traffic distribution and 48-hour peak trace.
+- Both: exchange a short SLA draft for pilot (attached).
+
+Attachments: turnstile-sla-draft.pdf (attached), kv-cache-stats.xlsx (we discussed cache benefits)
+
+Next step — Karthik, can you own the topology sketch and a rough cost/throughput table by EOD Monday PST? Alex — if you can send the anonymized 48-hour trace, that’ll let us simulate batching and cache hit rates.
+
+Thanks,
+Soojin
+Soojin Lee
+Senior Solutions Engineer, Redwood Inference
+soojin_lee@redwood.inference
+[Attachment: turnstile-sla-draft.pdf]
+
+From: Alex Brooks <alex.brooks@turnstilepharma.com>
+To: Soojin Lee <soojin_lee@redwood.inference>
+Cc: bd@clearbridge.com
+Date: Sun, 22 Nov 2026 20:10:00 -0800
+Subject: Re: Post-call recap + proposed next technical steps
+
+Thanks, Soojin — that summary looks right. A couple clarifications from our side: 
+
+• Steady-state target is actually 12 req/s (we rounded up during the call) with an expected token footprint ~120 tokens/request (median).
+• P95 target: 120ms would be ideal, 150ms acceptable for the pilot. P99 we’d like to keep under 350ms if possible.
+• Bursts: historically we see 45–60 req/s for 30–60s during reporting jobs. If Redwood can handle a 60 req/s short burst with graceful degradation, that’s a big plus.
+
+I’m looping in ClearBridge (bd@clearbridge.com) — they’ll help us share sanitized traces and will own procurement gating. I’ve attached two sample traces (sanitized) and a spreadsheet of request-size distribution.
+
+Alex
+Alex Brooks
+Head of Data Ops, Turnstile Pharma
+alex.brooks@turnstilepharma.com
+[Attachment: ttle_sanitized_trace_1122.json]
+From: Karthik Iyer <karthik_iyer@redwood.inference>
+To: Alex Brooks <alex.brooks@turnstilepharma.com>, Soojin Lee <soojin_lee@redwood.inference>
+Cc: Monica Patel <monica_patel@redwood.inference>
+Date: Mon, 23 Nov 2026 08:22:00 -0800
+Subject: Re: Post-call recap + proposed next technical steps — topology & SLO sketch
+
+Alex / Soojin — thanks for the traces, Alex. I ran a quick back-of-envelope simulation and here are the recommended topology and mitigations to hit your targets while keeping cost predictable. High level summary first, followed by specifics.
+
+Summary recommendation (pilot):
+- Deployment: Redwood Dedicated pool (2 x A100-equivalent nodes for steady-state; reserve 1 additional burst node in warm pool).
+- Routing: smart routing with policy: primary -> dedicated pool (pinned model variant); fallback -> quantized 4-bit variant in same region.
+- Caching: prefix/KV caching for repeated prompt prefixes; expected cache-hit 18–22% from trace sample.
+- Batching: conservative batching up to 8 tokens/sequence for requests under 200 tokens, with dynamic batch windows to preserve p95.
+
+Key numbers from simulation (based on sample trace you provided):
+- Steady-state (12 req/s, median 120 tokens): p95 latency estimate ~110–140ms depending on quantization and batch window.
+- Burst handling: with warm burst node (scaled to 1 additional GPU) we can absorb short 60 req/s spikes for ~45s before shedding to quantized fallback.
+- Memory/KV: full KV cache kept in GPU memory per-replica; expected additional GPU memory overhead ~6–8GB.
+
+Model recommendation:
+- Start with a 34B dense model variant (fine-tuned on your prompts) + 4-bit quantized variant for fallback. 70B would provide quality headroom but increases steady-state cost ~1.8x.
+
+Operational controls we’ll provide:
+- Canary rollout with traffic mirroring for 24–48h before full cutover.
+- Per-route token & latency dashboards (token-level cost breakouts).
+- Auto-fallback policy: if p95 > 200ms or GPU queue depth > threshold, shift to quantized variant (same model family) and notify via pager.
+
+Preliminary cost note (very rough):
+- Expected incremental infra cost for pilot (monthly, dev/ops only): $8k–$12k depending on whether you choose 34B or 70B baseline. We’ll tighten this after a full simulation.
+
+Requested inputs to finalize design:
+1) Confirm whether you prefer quality-first (70B) or cost-first (34B) for the pilot.
+2) Provide 24–72h peak trace in CSV (timestamps + request size) so we can run an end-to-end sim and produce exact batching/cache levers.
+
+I’ve attached a short spreadsheet with the cache hit assumptions and a sample throughput table (kv-cache-stats.xlsx).
+
+Next steps: I’ll draft a topology diagram and a short runbook. Aim to share both by EOD Tuesday PST.
+
+—Karthik
+Karthik Iyer
+Principal Infra Engineer, Redwood Inference
+karthik_iyer@redwood.inference
+[Attachment: kv-cache-stats.xlsx]
+From: Alex Brooks <alex.brooks@turnstilepharma.com>
+To: Karthik Iyer <karthik_iyer@redwood.inference>, Soojin Lee <soojin_lee@redwood.inference>
+Date: Mon, 23 Nov 2026 09:14:00 -0800
+Subject: Re: Post-call recap + proposed next technical steps — topology & SLO sketch
+
+Appreciate the fast turnaround, Karthik — this looks workable. For the pilot we want to bias toward cost-first with the 34B baseline; we’ll accept minor quality delta if it keeps the pilot predictable.
+
+I’ll get you the 72h CSV trace by EOD today and confirm procurement timeline with ClearBridge.
+
+If you can include a short appendix on fallback behavior (what the output difference looks like for fallback quantized variant) that would help our QA signoff.
+
+Thanks — Alex
+Alex Brooks
+Head of Data Ops, Turnstile Pharma
+[--Previous message quoted above--]

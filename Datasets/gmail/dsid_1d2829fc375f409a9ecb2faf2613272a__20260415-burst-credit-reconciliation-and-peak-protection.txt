@@ -1,0 +1,132 @@
+Request: amend GPU commit + add temporary burst buffer
+
+From: Carlos Ruiz <c.ruiz@horizonops.com>
+To: Kimberly Park <kimberly_park@redwood.com>
+Date: Wed, Apr 15, 2026 at 09:12 AM -0700
+Subject: Dedicated GPU commit amendment request
+
+Hi Kimberly,
+
+Quick note from HorizonOps — our Q1 inference usage dropped by ~28% vs forecast (attached short CSV). We’re mid-renewal and have a committed pool for dedicated GPUs through June, but we have two asks: (1) can we temporarily reduce the committed tranche for May–June and convert the delta to a burst/credit buffer, and (2) can we shift 20% of the committed GPUs to a lower-cost quantized profile for non-prod traffic?
+
+We need to balance unit economics with reliability for peak runs. Procurement asked me to reach out to see what flexibility Redwood can offer without violating operational SLAs. We’re hoping to avoid a full contract amendment if possible.
+
+Thanks,
+Carlos Ruiz
+Head of Platform Ops
+HorizonOps
+
+Attachment: util_report_q1.csv (CSV, 45KB)
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Carlos Ruiz <c.ruiz@horizonops.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>
+Date: Wed, Apr 15, 2026 at 10:03 AM -0700
+Subject: Re: Dedicated GPU commit amendment request
+
+Hi Carlos — thanks for the data and the clear asks. I shared this with Ben (sales) and Monica (solutions) to map options. High level thoughts:
+
+- Short-term: we can convert unused committed capacity into a burst buffer (credit pool) for May–June, with a small administrative fee. That preserves throughput and allows you to spin up on demand.
+- Profile shift: we can create a policy that routes non-prod traffic to a quantized variant; we’ll want a short eval run (1–2 weeks) to confirm quality impact.
+- Contract: we can do a short amendment (appendix) rather than a full replacement; I’ll draft language and circulate.
+
+Next step: Monica, can you sketch the technical plan and any operational caveats? Ben — can you outline commercial tradeoffs (credit conversion rate, admin fee)? Carlos — are there peak windows we must guarantee?
+
+Best,
+Kimberly Park
+Director, Sales — Redwood Inference
+
+Attachment: amendment_proposal_redwood.pdf (draft summary)
+From: Ben Carter <ben_carter@redwood.com>
+To: Carlos Ruiz <c.ruiz@horizonops.com>, Kimberly Park <kimberly_park@redwood.com>
+Cc: Laura Bennett <laura_bennett@redwood.com>
+Date: Thu, Apr 16, 2026 at 08:22 AM -0700
+Subject: Re: Dedicated GPU commit amendment request — commercial options
+
+Carlos / Kimberly — pricing outline below. Numbers are illustrative; finals after Monica confirms technical viability.
+
+Option A — Burst credits conversion (preferred):
+- Convert up to 30% of committed GPU hours for May–June into burst credits at a 0.7x conversion rate (i.e., you get 70% of the monetary value as burst credits).
+- $500 administrative processing fee (one-time).
+- Unused credits expire Jul 31, 2026.
+
+Option B — Temporary reduction + make-up top-up:
+- Reduce committed tranche by 25% for May–June, with a rollover allowing you to add equivalent commit in next contract year at a 10% premium on the units you top up.
+
+Option C — Mixed: convert 15% to credits + reprofile 20% to quantized non-prod.
+
+I added Laura (account operations) to help with invoicing cadence and DocuSign flow. If this looks directionally right I’ll prepare a redline for the existing SOW and run finance approval.
+
+Cheers,
+Ben Carter
+Enterprise Sales Manager — Redwood Inference
+
+Related link: https://redwood-internal.prod/drive/HO-2026-042/usage-dashboard
+From: Monica Patel <monica_patel@redwood.com>
+To: Carlos Ruiz <c.ruiz@horizonops.com>, Kimberly Park <kimberly_park@redwood.com>
+Cc: Ben Carter <ben_carter@redwood.com>
+Date: Thu, Apr 16, 2026 at 11:45 AM -0700
+Subject: Re: Dedicated GPU commit amendment request — technical plan
+
+Hi all — quick tech runbook for the suggested mixed approach (Option C):
+
+1) Quantized non-prod profile
+- Create a parallel model variant with int8 quantization for non-prod routes. We’ll deploy behind the same endpoint and flag traffic via metadata. Expected latency change: +5–8ms, cost savings ~35% per token.
+- Risk: small increase in hallucination risk for certain prompt categories; recommend a 10k-step eval on your representative dataset (we can run this in a sandbox, ~48 hours).
+
+2) Burst credits implementation
+- Convert GPU-hours to credit units at 0.7x; credits are spent through the same billing metering with priority lower than committed capacity.
+- Operationally we’ll reserve a soft pool for you to guarantee warm nodes for the first 2 minutes after spin-up.
+
+3) Monitoring and SLAs
+- Add temporary tracing filter and token-level cost alerts for May–June to ensure we detect regressions.
+- No change to primary SLA for committed capacity; burst usage is best-effort with prioritized throttling rules documented.
+
+I’ll prepare the eval harness and a brief tech appendix to attach to the amendment. If you want, we can start the quantized eval this week so Ben can lock pricing.
+
+Thanks,
+Monica Patel
+Solutions Engineer — Redwood Inference
+
+Attachment: cost_breakdown_apr-to-jun.xlsx
+From: HorizonOps Procurement <procurement@horizonops.com>
+To: Kimberly Park <kimberly_park@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Mon, Apr 20, 2026 at 09:10 AM -0700
+Subject: Re: Dedicated GPU commit amendment request — proposal counter
+
+Kimberly / Ben,
+
+Thanks for the quick responses and options. Procurement is supportive but requests a tweak: we prefer the conversion to credits at 0.8x rather than 0.7x given our long-standing relationship and predictable runway. We also ask that expired credits roll into a 30-day grace period rather than immediate expiry, to avoid lost value for timing mismatches.
+
+On the quantization eval: we can start immediately; please confirm you can sign an NDA addendum for that sandbox data. As previously noted, we must keep a hard guarantee for peak processing during scheduled product launches (we have two windows in June: Jun 4–6 and Jun 18–19). Those must remain on committed capacity.
+
+Best,
+HorizonOps Procurement
+
+---
+Carlos Ruiz
+Head of Platform Ops
+HorizonOps
+From: Kimberly Park <kimberly_park@redwood.com>
+To: HorizonOps Procurement <procurement@horizonops.com>, Carlos Ruiz <c.ruiz@horizonops.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Monica Patel <monica_patel@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: Mon, Apr 20, 2026 at 04:45 PM -0700
+Subject: Re: Dedicated GPU commit amendment request — final next steps
+
+Thanks — we can accept the 0.8x conversion and add a 30-day grace window to credit expiry. We’ll keep the two June peak windows fully on committed capacity (Jun 4–6 & Jun 18–19) and mark them as protected in our routing policy. Monica will spin up the quantized eval this week; Laura will prepare the DocuSign amendment appendix and the updated billing schedule.
+
+Action items:
+- Monica: start quantized eval and share results by Apr 23.
+- Laura: prepare DocuSign amendment and include the 0.8x conversion / 30-day grace clause.
+- Ben: route the updated amendment to finance for sign-off once Laura finishes.
+- Carlos: confirm any additional blackout windows by EOD Apr 21.
+
+I’ll open the HubSpot task and attach the amendment draft. If all looks good we’ll route the DocuSign for signature and aim to have billing changes effective May 1.
+
+Appreciate the collaboration — we’ll keep this lightweight and reversible.
+
+Warmly,
+Kimberly Park
+Director, Sales — Redwood Inference
+
+Related link: https://app.hubspot.com/deal/HO-2026-042
+Attachment: amendment_proposal_redwood_signed_stub.pdf (pending signatures)

@@ -1,0 +1,114 @@
+Telemetry & egress scenarios for on-prem VPC deployment
+
+From: NetCore Solutions <infra@netcore.com>
+To: sergio_alvarez@redwood.ai
+Date: 2026-08-22T10:12:00-07:00
+Subject: Telemetry/egress scenarios for on-prem VPC deployment
+
+Hi Sergio,
+
+We're getting close to the network review with ACME and wanted to confirm Redwood's recommended patterns for telemetry and control/data plane egress in an on-prem VPC deployment. A few specific asks: 
+
+- Do Redwood control plane components need outbound Internet access, or can they speak back to Redwood over an outbound-only proxy?
+- For data plane telemetry (metrics/traces/logs generated on inference nodes), what are the supported delivery mechanisms? Direct push to customer's Splunk/Datadog, or must it route via a forwarder in their ops VPC?
+- Any recommended buffering/edge-collector pattern for intermittent connectivity (some of ACME's sites are behind strict NAT)?
+
+Attached a short doc summarizing our constraints (netcore-deploy-ask.pdf). We're scheduled for a technical Q/A (network) with ACME CloudOps on Monday; would like to align before then.
+
+Thanks,
+Marcus Patel
+NetCore Solutions — Infrastructure
+infra@netcore.com
+
+---
+Attachment: netcore-deploy-ask.pdf (8 KB, summary of site constraints)
+From: sergio_alvarez@redwood.ai
+To: NetCore Solutions <infra@netcore.com>
+Cc: irene_choi@redwood.ai, karthik_iyer@redwood.ai, aditya_rao@redwood.ai, stephanie_nguyen@redwood.ai
+Date: 2026-08-22T13:45:00-07:00
+Subject: Re: Telemetry/egress scenarios for on-prem VPC deployment
+
+Marcus — thanks for the clear summary. Looping in our infra and security leads to give concrete patterns: Irene (control/telemetry), Karthik (egress/NATs), Aditya (runtime constraints) and Stephanie (customer-facing runbook).
+
+High-level answers up front: 
+1) Control plane: outbound-only connectivity is supported. We can operate with a customer-managed egress proxy (HTTP(s) proxy or TLS-forwarder) so long as TLS termination is end-to-end and we negotiate an allowlist for destination IPs/DNS and certificate pin, or alternatively use a private peering / PrivateLink-like tunnel if the customer prefers no Internet egress.
+2) Data plane telemetry: three supported modes:
+   - Local forwarder: customer runs a small edge collector (Fluentd/Vector) that receives local metrics/traces and forwards to their telemetry backend.
+   - Redwood forwarder: run a Redwood-managed forwarder inside the customer's VPC (customer-managed host, our process) that batches and forwards to customer endpoint or to Redwood relay (for customers that want unified ingestion).
+   - Push direct: inference nodes can push directly to customer SaaS endpoints when network policy allows, but we strongly recommend buffering & retries.
+3) Intermittent connectivity: use a local collector with disk-based buffering + backpressure; Redwood's agent supports configurable batch windows and disk caps.
+
+I'll attach a brief design note (redwood-telemetry-options.pdf) and propose a short diagram for Monday's call. Action items: 
+- Karthik: can you generate suggested NAT/allowlist ranges and an example iptables/eBPF-based egress rule for ACME?
+- Irene: short note on telemetry auth (mTLS vs API keys) and what we need from ACME.
+- Marcus: send the list of telemetry endpoints (Datadog/Splunk URLs) ACME will use.
+
+Sergio Alvarez
+Solutions Engineer — Redwood Inference
+sergio_alvarez@redwood.ai
+
+---
+Attachment: redwood-telemetry-options.pdf (12 KB, options matrix)
+From: irene_choi@redwood.ai
+To: sergio_alvarez@redwood.ai, NetCore Solutions <infra@netcore.com>
+Cc: karthik_iyer@redwood.ai, aditya_rao@redwood.ai
+Date: 2026-08-23T09:02:00-07:00
+Subject: Re: Telemetry/egress scenarios for on-prem VPC deployment
+
+Sergio / Marcus — quick technical note from security/telemetry side.
+
+On the control plane: we treat control-plane telemetry (health checks, control metrics) as lower volume but higher sensitivity. Recommended approach: 
+- mTLS from control-plane components to a Redwood control-plane collector endpoint.
+- If customer disallows direct egress, we can terminate at a customer-operated TLS relay that forwards over an internal peer link to Redwood.
+
+On the data plane (inference nodes):
+- Prefer the local-forwarder model. Deployment: Vector running as a sidecar or node agent; it writes to local disk (capped) and forwards to the collector. Buffer settings: 50MB disk cap default, batch window 10s, retry backoff up to 30m.
+- Auth: If ACME wants their telemetry to go to a SaaS backend (Datadog/Splunk), we recommend customer-provided API keys embedded into the collector (customer-managed secret), or mTLS when supported. Avoid embedding keys in the inference process.
+
+Network considerations: 
+- Egress via NAT Gateway is ok; but if ACME wants highly restricted egress, configure a dedicated egress subnet + proxy with explicit allowlist.
+- For sites with strict NAT, use the forwarder-in-VPC approach so that one host manages retries and reduces ephemeral port churn from thousands of nodes.
+
+Also: privacy note — make sure ACME is aware of what telemetry includes. We can redact request payloads at the agent level if needed; this requires a short feature flag during onboarding.
+
+I'll prepare a one-pager on the mTLS certificate exchange and the minimal ACLs we need from ACME.
+
+Irene Choi
+Senior Security Engineer — Redwood Inference
+irene_choi@redwood.ai
+
+On 2026-08-22T13:45:00-07:00, sergio_alvarez@redwood.ai wrote:
+> Marcus — thanks for the clear summary. Looping in our infra and security leads to give concrete patterns: Irene (control/telemetry), Karthik (egress/NATs), Aditya (runtime constraints) and Stephanie (customer-facing runbook).
+>
+> High-level answers up front: 
+> 1) Control plane: outbound-only connectivity is supported. We can operate with a customer-managed egress proxy (HTTP(s) proxy or TLS-forwarder) so long as TLS termination is end-to-end and we negotiate an allowlist for destination IPs/DNS and certificate pin, or alternatively use a private peering / PrivateLink-like tunnel if the customer prefers no Internet egress.
+> 2) Data plane telemetry: three supported modes: ...
+
+From: karthik_iyer@redwood.ai
+To: sergio_alvarez@redwood.ai, NetCore Solutions <infra@netcore.com>, aditya_rao@redwood.ai
+Cc: irene_choi@redwood.ai, stephanie_nguyen@redwood.ai
+Date: 2026-08-23T11:18:00-07:00
+Subject: Re: Telemetry/egress scenarios for on-prem VPC deployment
+
+Folks — following up with concrete network artifacts. Attached is a CSV with suggested egress IP ranges for the Redwood forwarder and an example ACL template for ACME's perimeter router. Key points: 
+
+- If using a single NAT egress per site: recommend reserving a small, static range (e.g., /29) for forwarder & control-plane outbound to simplify allowlisting on customer firewalls.
+- Example iptables snippet (high-level):
+    iptables -t nat -A POSTROUTING -s 10.10.0.0/16 -o eth0 -j SNAT --to-source <NAT_PUBLIC_IP>
+  (We typically suggest controlling SNAT at the VPC egress to avoid node-level churn.)
+- For high-security sites: run the Redwood forwarder in an isolated egress subnet with a dedicated outbound proxy (Squid/TLS-forwarder). Forwarder talks to local proxy over mTLS; proxy terminates to external endpoints.
+
+Next steps/action items for Monday's call: 
+- Marcus/ACME: confirm whether ACME will accept a static NAT IP range allowlist or if they require PrivateLink/peering.
+- Sergio: share the one-pager from Irene on mTLS exchange (Irene, we'll use that to finalize the runbook).
+- Stephanie: draft the customer-facing ops checklist for telemetry handoff (what keys/certificates to exchange, firewall rules, forwarder sizing).
+
+Attaching: egress-ip-range.csv (3 rows example).
+
+Karthik Iyer
+Principal Infra Engineer — Redwood Inference
+karthik_iyer@redwood.ai
+
+On 2026-08-23T09:02:00-07:00, irene_choi@redwood.ai wrote:
+> Sergio / Marcus — quick technical note from security/telemetry side.
+> ...

@@ -1,0 +1,119 @@
+Prompt output custody & residency — follow-up and explicit answers
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Dana Li <dana.li@medsolve.com>, Carlos Mendes <c.mendes@medsolve.com>
+Cc: Ben Carter <ben.carter@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Date: Thu, 14 Jan 2027 10:02:00 -0500
+Subject: Follow-up: prompt/output custody and next steps after demo
+
+Thanks again for taking the demo this morning — good conversation. Quick recap and standing asks so we can move the security questionnaire and pilot forward without back-and-forth: 
+
+- Primary asks you raised: what parts of prompt/response payloads Redwood stores, where those artifacts are stored (region/account), and retention TTLs (default and configurable).
+- You also asked about runtime logging (request traces, model telemetry) vs stored transcripts, and whether we persist PII-containing fields or offer masking.
+
+Next steps I promised: get explicit, authoritative answers from our security/infra team and return a short playbook you can share with internal stakeholders (legal, security, engineering). I'm looping in Neha and Ben to provide the exact handling policy and any configuration options for the Dedicated/Private deployments.
+
+Attached: SOC2 questionnaire you shared (we'll fill items 3.2/3.3 today).
+
+Target: reply with answers by EOD tomorrow so you can present to your InfoSec sync on Monday. If there's any nuance we miss, please flag it in a follow-up.
+
+Best,
+Marissa Cole
+Account Executive | Redwood Inference
+marissa.cole@redwood.com | (415) 555-0198
+
+--
+Attachment: SOC2-Questions-MedSolve.xlsx (xlsx)
+
+From: Dana Li <dana.li@medsolve.com>
+To: Marissa Cole <marissa.cole@redwood.com>
+Cc: Carlos Mendes <c.mendes@medsolve.com>
+Date: Thu, 14 Jan 2027 12:18:00 -0500
+Subject: Re: Follow-up: prompt/output custody and next steps after demo
+
+Hi Marissa — thanks. A few clarifying points so your answers can be granular enough for our security review: 
+
+1) When you say 'we don't store prompts by default' — do you mean inputs are ephemeral in Hosted mode? What about Dedicated and Private?
+2) For outputs: do you store generated text for any reason (quality monitoring, safety review, retraining)? If yes, where (region) and what's the default TTL? Can we opt out or limit retention per project?
+3) Runtime logs: what is captured in request traces (IP, headers, full payloads)? Are any of those logs forwarded to third-party logging services?
+4) Is there automatic PII detection and redaction or an API-level masking option before storage?
+5) For Dedicated: can data residency be forced to a customer VPC/GCS/Azure storage endpoint under their control?
+
+If you can answer each numbered item explicitly it will help expedite our internal approval. I'm sharing the SOC2 worksheet as well.
+
+Thanks,
+Dana Li
+Manager, Product Security | MedSolve Health
+Dana.Li@medsolve.com
+
+From: Marissa Cole <marissa.cole@redwood.com>
+To: Neha Kapoor <neha.kapoor@redwood.com>, Ben Carter <ben.carter@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: Dana Li <dana.li@medsolve.com>, Carlos Mendes <c.mendes@medsolve.com>
+Date: Thu, 14 Jan 2027 15:40:00 -0500
+Subject: Fwd: Follow-up: prompt/output custody and next steps after demo
+
+Hi team — forwarding Dana's clarifying list (below). She needs explicit answers we can present to MedSolve security. Key asks: ephemeral vs persisted inputs, outputs retention/defaults/configurable, runtime trace contents, PII masking, residency options for Dedicated/Private.
+
+Can you confirm the answers inline for each numbered item? If applicable, please include the config flag names and any limits (e.g., max retention 365 days for archival). Also flag any answers that differ between Hosted / Dedicated / Private.
+
+Thanks — I told them we'd have a definitive reply by tomorrow morning.
+
+Marissa
+Account Executive | Redwood Inference
+
+
+---------- Forwarded message ---------
+From: Dana Li <dana.li@medsolve.com>
+Date: Thu, 14 Jan 2027 12:18:00 -0500
+Subject: Re: Follow-up: prompt/output custody and next steps after demo
+To: Marissa Cole <marissa.cole@redwood.com>
+Cc: Carlos Mendes <c.mendes@medsolve.com>
+
+Hi Marissa — thanks. A few clarifying points so your answers can be granular enough for our security review: 
+
+1) When you say 'we don't store prompts by default' — do you mean inputs are ephemeral in Hosted mode? What about Dedicated and Private?
+2) For outputs: do you store generated text for any reason (quality monitoring, safety review, retraining)? If yes, where (region) and what's the default TTL? Can we opt out or limit retention per project?
+3) Runtime logs: what is captured in request traces (IP, headers, full payloads)? Are any of those logs forwarded to third-party logging services?
+4) Is there automatic PII detection and redaction or an API-level masking option before storage?
+5) For Dedicated: can data residency be forced to a customer VPC/GCS/Azure storage endpoint under their control?
+
+From: Neha Kapoor <neha.kapoor@redwood.com>
+To: Marissa Cole <marissa.cole@redwood.com>, Ben Carter <ben.carter@redwood.com>, Rishi Malhotra <rishi.malhotra@redwood.com>
+Cc: Dana Li <dana.li@medsolve.com>, Carlos Mendes <c.mendes@medsolve.com>
+Date: Fri, 15 Jan 2027 09:45:00 -0500
+Subject: Re: Follow-up: prompt/output custody and next steps after demo — definitive answers
+
+Marissa / team / Dana — thanks for the clear list. Answers below by number (Hosted vs Dedicated/Private differences noted):
+
+1) Prompt inputs (what customers send in API requests)
+- Hosted API (default): inputs are NOT persisted to long-term storage by default. We retain transient request buffers and KV caches in-memory for the duration of the request and to support streaming; these are rotated and not written to durable object stores. Short-term request traces (request_id, timestamp, model variant, token counts) are kept in telemetry logs for 7 days by default for debugging and performance SLO analysis. These telemetry logs do NOT contain full prompt text unless customer enables 'persist_inputs' (opt-in).
+- Dedicated: by default inputs follow same ephemeral behavior. For Dedicated customers who enable enhanced observability, there is a config flag enable_input_logging=true that writes prompts to customer-isolated object storage; this is off by default. When enabled, storage location is the customer’s reserved S3 bucket (or object store) in the region specified in the Dedicated config.
+- Private (on-prem/VPC): All data is kept within customer-controlled infrastructure; persistence semantics are controlled by the customer's deployment configuration.
+
+2) Outputs (generated text)
+- Hosted: short snippets used for safety/quality monitoring may be persisted if safety_review=true (opt-in) and are stored in our encrypted customer tenancy for up to 30 days by default, configurable down to 0 days (no storage). We do not use stored hosted-customer outputs to retrain public models; any research use is explicitly gated under customer consent.
+- Dedicated: Generated outputs are not stored centrally by Redwood unless the customer enables output_persistence in their Dedicated configuration. If enabled, data writes go to the customer's allocated object store and retention is configurable by policy (defaults can be set per project).
+- Private: Controlled entirely by the customer.
+
+3) Runtime logs / traces
+- Captured fields (default Hosted telemetry): request_id, model_id, timestamp, latency metrics, token counts, and anonymized error traces. PII-containing payloads are NOT captured by default. IPs and header metadata are captured only for billing/abuse detection and purged within 7 days. No full payloads are sent to third-party SaaS logging providers unless the customer configures log forwarding. For Dedicated, log forwarding endpoints can be customer-managed (e.g., Splunk/Datadog into the customer's account).
+
+4) PII detection & redaction
+- Redwood offers pre-storage PII detection that can be enabled as a managed service (pii_detection=true). When enabled, the system applies regex + ML-based detectors and can either mask (replace tokens with [REDACTED]) or hash sensitive fields before storage. This is a configurable pipeline step for Hosted (opt-in), default-off for Dedicated (customer chooses to enable), and under admin control for Private. We also provide client-side SDK helpers to perform masking before sending if customers prefer end-to-end control.
+
+5) Dedicated data residency & customer-controlled storage
+- Yes. Dedicated supports writing persisted artifacts (when enabled) directly into a customer-managed S3/GCS/Azure container via cross-account/bucket policies. For Private we run inside the customer's VPC/cluster and data never leaves the customer environment unless explicitly configured.
+
+Additional operational notes:
+- Encryption: all persisted data (Hosted tenancy or Dedicated customer buckets) is encrypted at rest with AES-256; keys are managed by Redwood KMS in Hosted but Dedicated customers can opt to use their own KMS keys via customer-managed KMS integration.
+- Retention controls: retention windows are configurable (0 / 7 / 30 / 90 / 365 days) for stored prompts/outputs in Hosted telemetry workflows; Dedicated/Private can set arbitrary retention via lifecycle policy on the customer storage endpoint.
+- Access & audit: all persisted artifacts are subject to access controls and audited. We can export audit logs for any reads/writes to customer artifact buckets during the retention window.
+
+References & attachments: see attached sanitized_data_policy.pdf (summarizes masking options) and I've populated the SOC2 worksheet fields related to logging and retention. Happy to jump on a quick 15-min call with your InfoSec to walk through specifics.
+
+Neha Kapoor
+Senior Security Engineer | Redwood Inference
+neha.kapoor@redwood.com | (415) 555-0142
+
+--
+Attachment: sanitized_data_policy.pdf (pdf)

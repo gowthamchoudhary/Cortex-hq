@@ -1,0 +1,107 @@
+Intermittent 503s from thunderbolt-7b — pattern analysis and recovery
+
+From: Danielle Park <danielle@tempoai.com>
+To: Monica Patel <monica@redwood.ai>
+Date: Tue, 31 Aug 2027 09:12:00 -0700
+Subject: Re: Observed 503s on thunderbolt-7b during batch scoring
+
+Hi Monica —
+
+Over the last 6 hours we've seen ~0.8% 503s when calling thunderbolt-7b for our batch scoring job (context lengths ~1.6k tokens). Failures show up as timeouts followed by a 503. Trace ID sample: trace-28934. Affecting production only (no dev).
+
+Attached is a small sample of logs and a trace dump. Throughput hasn't changed on our side. Can you confirm if there are any known degradations or if we need to change client timeouts?
+
+Thanks,
+Danielle Park
+Senior ML Engineer, Tempo AI
+attachments: diagnostic_log_2027-08-31.txt, request-trace-28934.json
+From: Monica Patel <monica@redwood.ai>
+To: Danielle Park <danielle@tempoai.com>
+Cc: Tempo AI Ops <support@tempoai.com>
+Date: Tue, 31 Aug 2027 09:34:12 -0700
+Subject: Re: Observed 503s on thunderbolt-7b during batch scoring
+
+Hi Danielle —
+
+Thanks for the report and the traces, this is really helpful. We're opening an incident ticket (RW-INC-28934) and will investigate immediately. Preliminary ask: can you confirm the client timeout you're using and whether requests that failed had retries? Also please keep the log samples coming if you see new trace IDs.
+
+I'll loop in our on-call and triage owners; we'll follow up within 60 minutes with next steps.
+
+Best,
+Monica Patel
+Enterprise Account Lead, Redwood Inference
+Phone: (415) 555-0132
+From: Monica Patel <monica@redwood.ai>
+To: Rishi Malhotra <rishi@redwood.ai>, Stephanie Nguyen <stephanie@redwood.ai>, Ben Carter <ben@redwood.ai>
+Date: Tue, 31 Aug 2027 09:45:30 -0700
+Subject: Fwd: Observed 503s on thunderbolt-7b during batch scoring
+
+Team — forwarding Tempo's report (below). Summary: intermittent 503s/timeouts targeting thunderbolt-7b during mid-morning batch windows (samples show ~1.6k token inputs). Customer is in production; we're seeing request trace trace-28934.
+
+Ask: can you triage kernel-level logs and recent deployment changes for thunderbolt-7b in us-west-2? Please prioritize analysis of: 1) scheduling/backpressure events 2) KV cache pressure and mem spikes 3) any recent kernel rollouts in last 48h.
+
+Danielle included request logs attached. I'll keep Tempo in the loop.
+
+On Tue, 31 Aug 2027 at 09:12 AM Danielle Park <danielle@tempoai.com> wrote:
+> Hi Monica —
+> 
+> Over the last 6 hours we've seen ~0.8% 503s when calling thunderbolt-7b...
+
+--
+Monica Patel
+Enterprise Account Lead, Redwood Inference
+From: Rishi Malhotra <rishi@redwood.ai>
+To: Monica Patel <monica@redwood.ai>, Stephanie Nguyen <stephanie@redwood.ai>, Ben Carter <ben@redwood.ai>
+Date: Tue, 31 Aug 2027 11:02:07 -0700
+Subject: Re: Fwd: Observed 503s on thunderbolt-7b during batch scoring
+
+Quick update from the runtime team:
+
+- Confirmed transient queue saturation on two host shards running thunderbolt-7b for the us-west-2 pool between 08:45–09:10 PDT. We observed a pattern of head-of-line blocking when several long-context (>1k) requests landed simultaneously and the scheduler attempted tight coalescing.
+- KV cache eviction spikes correlated with a GC job that ran at 08:50; that amplified latencies for cache reloads and caused some scheduling timeouts (~250–400ms extra on affected hosts).
+- No recent kernel code rollouts in the last 48h, but we did push a new autobalance policy to the scheduler two days ago; early hypothesis: policy interacts poorly with certain request-length distributions and burst arrivals.
+
+Mitigation applied at 10:05 PDT: temporarily relaxed coalescing window and increased per-host concurrent request cap for thunderbolt-7b on the affected shard set; also disabled the GC compaction schedule for 30m. Immediate effect: 503 rate dropped to ~0.05% for the shard set.
+
+Next steps:
+- Produce a small patch to the autobalance policy to add hysteresis on coalescing decisions (wip, see attached thunderbolt-patch.diff).
+- Add metrics to alert on KV eviction spikes tied to GC activity.
+- Run a controlled replay of the failing traces in a staging pool with the new scheduler flag.
+
+I'll attach logs and request traces to RW-INC-28934. If we need to escalate to a full postmortem, I'll coordinate with ops.
+
+Rishi
+Sr. Staff Software Engineer, Runtime
+From: Monica Patel <monica@redwood.ai>
+To: Danielle Park <danielle@tempoai.com>
+Cc: Tempo AI Ops <support@tempoai.com>, Rishi Malhotra <rishi@redwood.ai>, Stephanie Nguyen <stephanie@redwood.ai>
+Date: Thu, 02 Sep 2027 17:40:00 -0700
+Subject: Update: thunderbolt-7b 503s — root cause and remediation
+
+Hi Danielle —
+
+Thanks for your patience while our team investigated. Below is a concise summary you can share internally.
+
+What happened
+- Between 08:45–09:10 PDT on 2027-08-31 a confluence of long-context requests and a GC compaction job caused KV cache pressure on a subset of us-west-2 hosts running thunderbolt-7b. That pressure increased scheduler latency during coalescing decisions and triggered request timeouts that surfaced as 503s for a small fraction of calls.
+
+What we fixed
+- Immediate mitigations (10:05 PDT): relaxed coalescing window, raised per-host concurrent caps, and deferred GC compaction. This reduced 503s from ~0.8% to ~0.05% for the affected shard set.
+- Deployed a guarded scheduler flag and the patched autobalance policy to canary hosts (see RW-INC-28934 and attached thunderbolt-patch.diff).
+- Added a KV-eviction alert driven by GC and a dashboard panel for long-context burst detection.
+
+What we will do next
+- Permanently add hysteresis to scheduling/coalescing logic (delivery ETA: 2027-09-08).
+- Run replay of failing traces in staging to validate patch under similar arrival patterns (ETA: 2027-09-03).
+- Offer you a 1-week lookback of traffic and a small usage credit to compensate for elevated error rates (happy to coordinate via account team).
+
+Attachments included: diagnostic_log_2027-08-31.txt, request-trace-28934.json, thunderbolt-patch.diff
+
+If you'd like a short technical debrief call with Rishi and Stephanie to walk through the fix and planned changes, I'm available tomorrow morning PST.
+
+Apologies for the disruption — let me know if you want us to run any additional validation against your request patterns.
+
+Best,
+Monica Patel
+Enterprise Account Lead, Redwood Inference
+Monica Patel | monica@redwood.ai | +1 (415) 555-0132

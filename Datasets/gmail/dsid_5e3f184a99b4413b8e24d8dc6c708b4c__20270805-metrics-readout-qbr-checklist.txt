@@ -1,0 +1,105 @@
+July dashboard readout + QBR prep checklist
+
+From: Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+To: laura.bennett@redwood.ai, markus.klein@redwood.ai, grace.oconnor@redwood.ai
+Date: Sun, 1 Aug 2027 09:12:00 -0700
+Subject: July dashboard readout + QBR prep checklist
+
+Hi all,
+
+Attaching the July metrics dashboard and a short QBR prep checklist (both attached). High-level notes from the dashboard:
+
+- Latency: p50 = 38ms (stable), p95 = 240ms (up from 160ms on 2027-07-18 spike)
+- Cost: unit cost per 1M tokens down 6% vs June; most of the improvement from caching configs
+- Uptime: 99.95% region-wide (we had a 30-min partial outage on 2027-07-18; postmortem in linked drive)
+- Usage: monthly active routes +18% (PLG uptake), embeddings steady with enterprise batch jobs
+- Cache hit rate: 71% overall, dropped to 48% during the 07/18 incident
+
+Action asks before our QBR readout (scheduled Aug 6 EOD):
+1) Markus — can you confirm root cause and mitigation for the 07/18 latency spike and provide a 1-slide summary we can include in the incident section? (owner: Markus; due: Aug 3)
+2) Grace — verify cache tuning changes and run the micro-benchmark against the July config; attach sampling data (owner: Grace; due: Aug 4)
+3) Laura — I'll need 2 bullets on product-level impact and any customer escalations to call out (owner: Laura; due: Aug 5)
+4) All — review the attached QBR-prep checklist and add any items under comments in the shared Drive link.
+
+Attachments: 2027-07-Metrics-Dashboard.pdf, QBR-prep-checklist.md
+
+Thanks — I want to keep the readout tight and focused on the three metrics the execs care about: latency, cost/unit, and uptime.
+
+— Vanessa Ortiz
+Head of Inference Operations
+Redwood Inference
+
+From: Markus Klein <markus.klein@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, laura.bennett@redwood.ai
+Cc: grace.oconnor@redwood.ai
+Date: Mon, 2 Aug 2027 11:05:00 -0700
+Subject: Re: July dashboard readout + QBR prep checklist
+
+Vanessa — copied a few quick notes inline.
+
+> - Latency: p50 = 38ms (stable), p95 = 240ms (up from 160ms on 2027-07-18 spike)
+The 07/18 spike correlates with the 00:45 deploy to prod of model-serving v2.3. Two things we observed: a) a KV-cache invalidation path triggered for long-tail prefixes which amplified immediate token generation cost; b) a kernel selection fallback on older GPU instances when sequence length distribution hit the long tail.
+
+Planned immediate actions (to include in 1-slide incident summary):
+- I will extract the deploy timeline + trace snippets and attach to the slide (doing now).
+- Re-roll the canary policy to restrict v2.3 to 10% traffic and enable rolling rollback automation if p95 > 200ms for 10 minutes (owner: Markus; ETA: Aug 3 EOD).
+- Short-term mitigation: increase KV cache TTL to avoid invalidations for repeated short prefixes (Grace — can you validate perf impact in the benchmark?).
+
+I'll push a draft 1-slide summary to the Drive by EOD tomorrow.
+
+— Markus
+Director, Serving Runtime
+
+On Sun, Aug 1, 2027 at 09:12 AM Vanessa Ortiz <vanessa.ortiz@redwood.ai> wrote:
+> Hi all,
+> 
+> Attaching the July metrics dashboard and a short QBR prep checklist (both attached). High-level notes from the dashboard:
+> 
+> - Latency: p50 = 38ms (stable), p95 = 240ms (up from 160ms on 2027-07-18 spike)
+> - Cost: unit cost per 1M tokens down 6% vs June; most of the improvement from caching configs
+> - Uptime: 99.95% region-wide (we had a 30-min partial outage on 2027-07-18; postmortem in linked drive)
+> 
+> — Vanessa
+
+From: Grace O'Connor <grace.oconnor@redwood.ai>
+To: Markus Klein <markus.klein@redwood.ai>, Vanessa Ortiz <vanessa.ortiz@redwood.ai>
+Cc: laura.bennett@redwood.ai
+Date: Tue, 3 Aug 2027 10:15:00 -0700
+Subject: Re: July dashboard readout + QBR prep checklist
+
+Thanks — quick update from bench side and attaching a small sample dump (latency-spike-dump.csv).
+
+- Cache hit rate drop was driven by two customer cohorts that shifted to exploratory prompts (higher diversity), so cold-path lookups spiked. I ran a 20k-sample micro-benchmark against the July cache configs: p95 improvement with the proposed TTL bump looks promising (~18% reduction in worst-case tail).
+- I scheduled a 30-min canary re-run for Wednesday Aug 4 08:00-08:30 PT to validate the TTL change + the reduced v2.3 canary. I'll post results to the Drive.
+
+Notes for QBR slide: include a single bullet that the tail was caused by cache invalidations for high-diversity prompts and that the immediate mitigation is TTL + stricter canary gating.
+
+Attachment: latency-spike-dump.csv
+
+On Mon, Aug 2, 2027 at 11:05 AM Markus Klein <markus.klein@redwood.ai> wrote:
+> Vanessa — copied a few quick notes inline.
+> 
+> The 07/18 spike correlates with the 00:45 deploy to prod of model-serving v2.3...
+> 
+> — Markus
+
+From: Laura Bennett <laura.bennett@redwood.ai>
+To: Vanessa Ortiz <vanessa.ortiz@redwood.ai>, markus.klein@redwood.ai, grace.oconnor@redwood.ai
+Date: Thu, 5 Aug 2027 16:03:00 -0700
+Subject: Re: July dashboard readout + QBR prep checklist
+
+Thanks for the quick follow-ups — this is the right level for the exec readout. Final asks before I assemble the QBR deck (I'll be presenting):
+
+1) Markus — please confirm the slide is in the Drive under /QBR/Incidents and label it "07-18 latency spike (root cause + mitigation)". If you can include the 3-line impact (customer-facing + internal risk + mitigation ETA) that would be ideal.
+2) Grace — attach the canary run CSV and a 1-line conclusion under the Drive comment thread (so I can copy it verbatim onto the slide).
+3) Vanessa — please add a 1-paragraph context blurb at the top of the dashboard PDF explaining the usage mix shift (PLG vs enterprise) so execs have context on why costs changed.
+
+I pulled an external-facing escalation list and there are no open customer P1s tied to this incident — good. I'll incorporate one slide in the "service health" block and a follow-up action list for ops.
+
+Link to working QBR deck: https://docs.google.com/presentation/d/1QBR-Jul-2027-edit
+
+If all owners hit the asks by EOD tomorrow I can lock the deck Friday morning.
+
+— Laura Bennett
+VP, Product Operations
+Redwood Inference

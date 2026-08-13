@@ -1,0 +1,107 @@
+CloudFrame marketplace: data evacuation & retention mapping across AWS/GCP/Azure
+
+From: CloudFrame Ops <ops@cloudframe.com>
+To: ben_carter@redwood.ai
+Cc: legal@acme-enterprises.com
+Date: Mon, 30 Nov 2026 09:12:00 -0800
+Subject: Marketplace listing – residency and emergency data evacuation questions
+
+Hi Ben,
+
+Quick question as we prep our marketplace listing: our security team needs a succinct mapping of how Redwood will handle customer data residency, retention TTLs, and — importantly — a verified path for 'data evacuation' (customer-requested data egress/deletion) across the three public clouds we operate in (AWS us-east-1, GCP us-central1, Azure eastus).
+
+Specifically they want to know:
+- Can we guarantee region-local storage for customer artifacts produced via the marketplace in each cloud?
+- If an enterprise requests full data evacuation for their tenant, what are the steps, expected timelines, and artifacts (audit logs / deletion receipts) we provide?
+- Are there any cross-cloud replication or backup behaviors that might impact deletion guarantees?
+
+We have a doc template to attach but wanted your written answers to include any constraints so we can include them in the listing and the legal review.
+
+Thanks — we’re on a tight listing deadline next week.
+
+— Priya (on behalf of CloudFrame)
+
+[attachment: CF-residency-ask-template.pdf (pdf, 18KB)]
+From: ben_carter <ben_carter@redwood.ai>
+To: CloudFrame Ops <ops@cloudframe.com>
+Cc: neha_kapoor@redwood.ai, jonas_weber@redwood.ai, marissa_cole@redwood.ai
+Date: Mon, 30 Nov 2026 11:08:00 -0800
+Subject: Re: Marketplace listing – residency and emergency data evacuation questions
+
+Hi Priya,
+
+Thanks — great questions. High-level answers below; I’ll follow up with a downloadable matrix and a short playbook. If you need language for the listing we can provide bullet points.
+
+Short answers (summary):
+- Region-local storage: yes — marketplace artifacts are pinned to the region selected at listing time (we support AWS us-east-1, GCP us-central1, Azure eastus for your region). Models and generated artifacts created in the listing are stored in region-local buckets managed by Redwood Private nodes in that cloud region.
+- Evacuation / deletion: customer-initiated evacuation is supported. Steps: request -> confirmation -> snapshot & verification -> deletion across primary + DR replicas -> signed deletion receipt. Target SLA for full deletion of customer artifacts is 14 business days; emergency deletions (legal/regulatory hold exceptions permitting) are expedited to 72 hours with additional attestations.
+- Cross-cloud replication: we do not replicate marketplace customer artifacts across clouds by default. Backups/replication occur within region / availability zone unless customer has enabled multi-region backup. Any cross-region or cross-cloud replication must be declared during onboarding and will appear on the matrix (and may impact deletion timelines).
+
+I’m attaching a draft residency matrix (per-cloud cells) and a short deletion/evacuation playbook that outlines logs/artifacts we can provide.
+
+Deliverables attached: CF-residency-matrix-v1.xlsx, redwood-data-evacuation-playbook.md
+
+Next steps: we’ll need to confirm whether CloudFrame requires immutable backups for any tenants (that changes deletion flow) and whether you plan to enable any cross-region backup on sign-up. If you can confirm, I’ll finalize the wording for the marketplace listing.
+
+Cheers,
+Ben
+Ben Carter | Partner Solutions 
+Redwood Inference
+[attachment: CF-residency-matrix-v1.xlsx (xlsx, 42KB)]
+From: jonas_weber <jonas_weber@redwood.ai>
+To: ben_carter <ben_carter@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>, neha_kapoor <neha_kapoor@redwood.ai>
+Date: Mon, 30 Nov 2026 12:05:00 -0800
+Subject: Re: Marketplace listing – residency and emergency data evacuation questions
+
+Ben — adding a few technical clarifications for the matrix before you send external: 
+
+- For AWS: primary artifacts are in S3 with object lifecycle rules. We keep snapshots for 30 days by default (hot cache TTL), but long-term retention depends on customer profile. Deletion flow: delete S3 objects, invalidate caches (FrontDoor), clear KV caches on inference nodes, then remove metadata from our config DB. Deletion events generate an audit file per tenant (signed).
+- For GCP: similar flow — GCS + regional snapshots. Note that GCP nearline/archival settings are separate and could keep copies outside normal retention windows if the partner requests archival. That would require an explicit opt-in and contractual note.
+- For Azure: blob storage + soft delete policy — soft delete window defaults to 7 days; we recommend setting soft delete to 0 for marketplace-managed tenants that require fast evacuation, but that needs platform ops approval.
+
+I’d also recommend we add a row in the matrix called 'Emergency legal expedite' that indicates the 72-hour escalation path and the required paperwork (signed DPA amendment + legal request).
+
+— Jonas
+Senior Infra PM
+From: marissa_cole <marissa_cole@redwood.ai>
+To: ben_carter <ben_carter@redwood.ai>, jonas_weber <jonas_weber@redwood.ai>
+Date: Mon, 30 Nov 2026 14:10:00 -0800
+Subject: Re: Marketplace listing – residency and emergency data evacuation questions
+
+Ben / Jonas — quick product note so CloudFrame has accurate listing language: 
+
+- Listing copy should say 'Region-local storage by default; cross-cloud replication only by explicit opt-in.'
+- For retention TTL we should provide a small set of presets (30d, 90d, 365d) with the standard default of 30d for marketplace tenants; custom retention requires partner onboarding.
+- Provide a sample deletion receipt (signed, timestamped, tenant-id) — I'll draft the template and drop into the Drive folder Jonas linked in the matrix.
+
+I updated the playbook with the preset TTL suggestions and a draft deletion receipt example (redwood-data-evacuation-playbook.md). We should confirm whether CloudFrame wants the 30-day default or to assign 90 days for some early enterprise customers.
+
+— Marissa
+Director, Product Partnerships
+From: ben_carter <ben_carter@redwood.ai>
+To: CloudFrame Ops <ops@cloudframe.com>
+Cc: legal@acme-enterprises.com, neha_kapoor@redwood.ai, jonas_weber@redwood.ai, marissa_cole@redwood.ai
+Date: Tue, 01 Dec 2026 14:37:00 -0800
+Subject: Re: Marketplace listing – residency and emergency data evacuation questions
+
+Hi Priya —
+
+Thanks for the patience. Attached is the finalized matrix and the evacuation playbook we discussed. Highlights for the marketplace listing: 
+
+- Region-local storage: confirmed for AWS (us-east-1), GCP (us-central1), Azure (eastus).
+- Default retention TTL for marketplace tenants: 30 days (hot snapshot + logs). Optional presets: 30 / 90 / 365 days. Custom retention requires partner onboarding and will be surfaced as a checkbox at purchase.
+- Evacuation SLA: standard 14 business days; legal expedited deletions: 72 hours after signed expedite request + DPA amendment.
+- Cross-cloud replication: none by default. Any replication or archival opt-ins are explicitly documented and will appear on the partner dashboard and in the contract annex.
+
+Attached artifacts: CF-residency-matrix-v1.xlsx, redwood-data-evacuation-playbook.md, sample-deletion-receipt.txt
+
+Links / next steps:
+- I uploaded the docs to your shared Drive: https://drive.google.com/drive/folders/1aBcDf-CloudFrame-Onboarding
+- If this looks good, please confirm the default TTL (30 days) and whether CloudFrame plans to opt any customers into archival/replication so we can include that in the listing.
+
+If you need legal language for the marketplace blurb, our legal team can provide a short clause.
+
+Best,
+Ben
+Partner Solutions, Redwood Inference
+[attachment: sample-deletion-receipt.txt (txt, 2KB)]

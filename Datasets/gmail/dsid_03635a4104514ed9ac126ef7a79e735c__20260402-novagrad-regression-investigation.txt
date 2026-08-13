@@ -1,0 +1,109 @@
+Urgent: Novagrad inference regression after model upgrade
+
+From: Daniel Park <daniel.park@novagrad.com>
+To: Rohan Mehta <rohan.mehta@redwood.com>
+Cc: NovaGrad SRE <sre@novagrad.com>
+Date: 2026-03-29T09:12:00-07:00
+Subject: Significant latency + errors since 2026-03-28 model deploy
+
+Rohan,
+
+We pushed your new v2.3.0-quant model on Sunday night (per the rollout) and since then our production job queues have seen a 3x increase in 95th and 99th percentile latency and a spike in 500s (roughly 4.8% of requests). Throughput has dropped by ~25% during peak windows. This is affecting downstream SLAs for our recommendation pipeline and is causing alert fatigue for the SRE team.
+
+We rolled back locally to the previous non-quantized variant and saw latency return to expected ranges. Can you confirm whether the quantization profile changed memory/KV behavior? We need an answer ASAP — we’re already on-call and gathering traces.
+
+Attaching a short snippet of the error log and the SRE summary.
+
+--
+Daniel Park
+Head of ML Ops, NovaGrad
+--
+
+From: Rohan Mehta <rohan.mehta@redwood.com>
+To: Monica Patel <monica.patel@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Priya Natarajan <priya.natarajan@redwood.com>
+Cc: Evelyn Hart <evelyn.hart@redwood.com>
+Date: 2026-03-29T09:35:00-07:00
+Subject: Fwd: Significant latency + errors since 2026-03-28 model deploy
+
+Folks — forwarding an urgent customer escalation from NovaGrad. Key asks:
+- Confirm whether the v2.3.0 quant profile (deployed 2026-03-28 23:00 UTC) could change tail latency / KV caching semantics.
+- Rapid mitigation: can we revert the quant changes remotely or route traffic to the prior variant?
+- Impact assessment: p95/p99 deltas, increase in 5xx, throughput drop, and any change in tokenization or model outputs that could cause retries.
+
+Priority: high — NovaGrad is threatening to pause traffic if we can’t stabilize in the next 48 hours. They’re on-call and will expect near real-time updates.
+
+Next steps I’m proposing: Marcus to own server-side perf triage + attach a perf snapshot; Monica to coordinate customer comms and rollback options; Priya to check rollout config, canary rules, and fallback routing. Evelyn — looping you for visibility in case we need credits or exec-to-exec.
+
+Thanks,
+Rohan
+Account Executive — Enterprise
+Redwood Inference
+
+> On Sun, Mar 29, 2026 at 09:12 AM Daniel Park <daniel.park@novagrad.com> wrote:
+> > Rohan,
+> > 
+> > We pushed your new v2.3.0-quant model on Sunday night...
+
+From: Marcus Lin <marcus.lin@redwood.com>
+To: Rohan Mehta <rohan.mehta@redwood.com>, Monica Patel <monica.patel@redwood.com>
+Cc: Priya Natarajan <priya.natarajan@redwood.com>, Evelyn Hart <evelyn.hart@redwood.com>
+Date: 2026-03-29T11:02:00-07:00
+Subject: Re: Fwd: Significant latency + errors since 2026-03-28 model deploy
+
+Quick update from infra side (initial triage):
+- Pulled recent perf traces from the affected clusters and attached a CSV (perf-report-2026-03-29.csv).
+- Observed a matching bump in KV cache miss rate for v2.3.0-quant across the customers who adopted the profile; this correlates with increased seq rebuilds and token decode latency on GPU kernels.
+- Memory footprint is ~8-12% lower for the quantized variant, but the runtime is doing more frequent KV repopulation which increases tail latency.
+- Error spike looks related to OOM throttles on some smaller instances where the runtime attempted aggressive prefetching under the new kernel path.
+
+Immediate mitigations I recommend:
+1) Switch NovaGrad back to v2.2.7-nq (non-quant) via routing policy — this is a config flip (low risk).
+2) In parallel, apply a conservative quant profile patch that reduces prefetch and disables speculative KV repop (diff-quant-profile.patch). Test on a canary pool with identical workload.
+3) Short-term: increase small instance memory reservation or move customers with tight memory to larger instance shapes to avoid OOM.
+
+I can flip routing now if we have customer sign-off. I’ve attached the CSV and the patch. More detailed trace fragments are in the Grafana link.
+
+-Marcus
+Senior Infra Engineer, Redwood Inference
+
+> On Sun, Mar 29, 2026 at 09:35 AM Rohan Mehta <rohan.mehta@redwood.com> wrote:
+> > Folks — forwarding an urgent customer escalation from NovaGrad...
+
+From: Monica Patel <monica.patel@redwood.com>
+To: Daniel Park <daniel.park@novagrad.com>
+Cc: Rohan Mehta <rohan.mehta@redwood.com>, Marcus Lin <marcus.lin@redwood.com>
+Date: 2026-03-29T12:10:00-07:00
+Subject: Re: Significant latency + errors since 2026-03-28 model deploy
+
+Daniel — thanks for the alert and for the logs. We can initiate a routing rollback immediately (Marcus has the config). Before we do that, two quick asks:
+1) Please confirm you’re OK with an immediate flip to v2.2.7-nq for traffic to your production namespace (this will restore the prior observed latency).
+2) If you can share a short sample of the problematic request IDs (or a single payload), Marcus can run them on the canary with the conservative patch to validate output parity.
+
+We’ll keep you informed of each step in-channel and via a 15-minly status update. Rohan and I will coordinate any customer-facing notes.
+
+Thanks,
+Monica Patel
+Customer Success Manager, Redwood Inference
+
+> On Sun, Mar 29, 2026 at 11:02 AM Marcus Lin <marcus.lin@redwood.com> wrote:
+> > Quick update from infra side (initial triage):...
+
+From: Evelyn Hart <evelyn.hart@redwood.com>
+To: Rohan Mehta <rohan.mehta@redwood.com>, Monica Patel <monica.patel@redwood.com>, Marcus Lin <marcus.lin@redwood.com>, Priya Natarajan <priya.natarajan@redwood.com>
+Date: 2026-04-02T17:45:00-07:00
+Subject: Exec visibility — NovaGrad regression & remediation plan
+
+Team — thanks for the fast triage. Summary for execs:
+- Impact: NovaGrad production saw p95/p99 latency regressions and a 4-5% 500 error rate spike after the v2.3.0-quant rollout.
+- Root cause (working hypothesis): quantization profile changed runtime prefetch/speculation behavior increasing KV repopulation and tail latency; on smaller instance shapes this triggered OOM throttling and 5xx errors.
+- Actions taken: routing rollback to v2.2.7-nq (completed 2026-03-29T12:22:00-07:00), applied temporary instance memory reservations for affected customers, and queued conservative quant profile patch for canary validation.
+- Current ask: engineering to complete canary validation of diff-quant-profile.patch and produce a clear RPO/RTO for safe re-roll of a refined quant variant. Customer-facing: Rohan/Monica to confirm whether a credit is requested; finance may need to approve.
+
+Rohan — please prepare a short exec summary for tomorrow’s partner call with NovaGrad (include timeline to validated re-roll and any proposed credits). Marcus/Priya — target for canary validation: end of day 2026-04-03.
+
+Evelyn
+VP, Customer Success & GTM Operations
+Redwood Inference
+
+> On Mon, Apr 02, 2026 at 16:30 Rohan Mehta <rohan.mehta@redwood.com> wrote:
+> > (internal) preparing materials for partner call...

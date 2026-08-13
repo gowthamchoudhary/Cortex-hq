@@ -1,0 +1,110 @@
+Token cost sensitivity analysis & proposal — next decision steps
+
+From: Aditya Rao <aditya@redwood.com>
+To: Emma Zhao <emma@coreledger.com>
+Cc: Ben Carter <ben_carter@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: Sun, 12 Sep 2027 14:05:00 -0700
+Subject: Token cost sensitivity analysis & proposal — next decision steps
+
+Hi Emma / Chris —
+
+Thanks again for taking the time today. Quick recap from our discovery + the high-level cost math we talked through on the call so we have a single source of truth and the next steps to move toward a pilot decision.
+
+Top pain & goal we heard
+- Pain: inference spend volatility and unpredictable per-user latency under peak traffic (esp. payment auth & fraud flows).
+- Goal: get unit economics under control (targeting < $0.0008 per API call equivalent) while keeping 95th percentile latency < 120ms.
+
+Key workload assumptions (please confirm):
+- Monthly active endpoints: 18M API calls/month (core payment verification + enrichment).
+- Avg tokens per call: 60 tokens (prompt + expected model completion).
+- Current per-token cost (customer on legacy hosted model): ~$0.00012/token.
+
+1) Sensitivity highlights (attached workbook has full scenarios)
+- Baseline spend (no batching/cache): 18M * 60 tokens * $0.00012 = ~$129,600/mo.
+- With conservative batching (avg batch size 2.4 requests) + 20% prefix cache hit -> estimated token reduction 35% -> projected spend ~$84k/mo.
+- Aggressive batching + 40% cache hit -> projected spend ~$57k/mo.
+
+2) Other levers we discussed
+- Quantized model variant reduces per-token cost by 22% with negligible quality loss on your payment NLU prompts (we can A/B).
+- Route 30% of tail traffic to a lower-cost region variant during off-peak to shave ~7% from total monthly spend.
+
+3) Initial ROI framing (12-month view)
+- Assume we deliver the conservative scenario (~$45k/mo savings vs baseline) -> ~$540k TTM savings.
+- Estimated Redwood setup + pilot support + config (~one-time): $30k.
+- Expected payback: under 2 months if conservative scenario holds.
+
+Next steps (proposed)
+- Confirm workload numbers above and share a Sanity token/sample traffic export (CSV) so we can run an empirical batching sim (action: Emma).
+- We'll share a pilot scope doc and savings scenarios by EOD tomorrow (action: Aditya, Marissa).
+- Internal review on procurement constraints and desired SLA (action: Chris).
+
+Attachments: savings-scenarios-CL-HL4721.xlsx (sensitivity tabs), inference-cost-assumptions-2027.pdf (assumptions & model variants).
+
+If any of the numbers above deviate from your telemetry, call it out and we'll recalc immediately.
+
+Thanks —
+Aditya Rao
+Account Exec, Redwood Inference
+aditya@redwood.com
++1 415-555-0182
+
+--
+Redwood Inference — production-first inference for teams
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Emma Zhao <emma@coreledger.com>, Chris Lang <chris@coreledger.com>
+Cc: Aditya Rao <aditya@redwood.com>, Ben Carter <ben_carter@redwood.com>
+Date: Mon, 13 Sep 2027 08:12:00 -0700
+Subject: Re: Token cost sensitivity analysis & proposal — next decision steps
+
+Emma / Chris —
+
+Adding a couple of quantified notes from our ops modeling and a short checklist for the pilot so the procurement team can vet scope quickly.
+
+Quick ops model notes (results from a short sim using your sample traffic profile):
+- Batch size distribution we expect under continuous batching: median 1.9, mean 2.6 (peak hour bump to ~3.8).
+- Cache effectiveness: prefix caching (auth templates) gives 18–28% hit depending on prompt template stability; full KV caching (session tokens) adds another ~6–12% when applicable.
+- Latency impact: conservative batching + non-blocking stream keeps P95 within target (+8–12ms overhead).
+
+Pilot checklist for procurement / security:
+- Pilot duration: 6 weeks (2 weeks setup & traffic mirroring, 4 weeks live with canary).
+- Data flows: no user PII persisted in Redwood logs by default; we can enable ephemeral mode + your KMS.
+- SLA ask: 99.5% availability for dedicated pilot endpoints; falls back to hosted model on quota breach.
+
+Deliverables we'll provide for the pilot:
+- End-to-end savings scenarios workbook (attached) with Monte Carlo sensitivity for batch size / cache hit / model variant mix.
+- Test harness for replaying a 72-hour window of traffic (you control sample extraction).
+- Weekly readout template + one joint decision checkpoint at week 4.
+
+Ben is looping in the engineering runbook and will share an estimated infra config for dedicated pilot capacity.
+
+Regards,
+Marissa Cole
+Solutions, Redwood Inference
+marissa_cole@redwood.com
+
+Attachments: savings-scenarios-CL-HL4721.xlsx (updated, see tabs 'OpsSim' + 'PilotScope')
+
+From: Emma Zhao <emma@coreledger.com>
+To: Aditya Rao <aditya@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Chris Lang <chris@coreledger.com>, Ben Carter <ben_carter@redwood.com>
+Date: Mon, 13 Sep 2027 09:17:00 -0700
+Subject: Re: Token cost sensitivity analysis & proposal — next decision steps
+
+Thanks Aditya / Marissa —
+
+This is very helpful and close to what we need to present to finance. A couple quick confirmations:
+- The monthly call volume above is correct (we'll send a redacted 72-hour sample by EOD).
+- Procurement is OK with a 6-week pilot; they want cost caps for the pilot month (can you include a hard cap line in the pilot SOW?).
+- Security team requests a short note on logging retention and KMS flow — happy to accept a short appendix.
+
+Can you send the pilot SOW including the hard cap example and the logging/KMS appendix? If we can have that by EOD Wednesday we can get a procurement slot next week.
+
+Thanks — looking forward to the workbook.
+
+Best,
+Emma Zhao
+VP Product, CoreLedger
+emma@coreledger.com
+
+[Quoted/forwarded history omitted for brevity]

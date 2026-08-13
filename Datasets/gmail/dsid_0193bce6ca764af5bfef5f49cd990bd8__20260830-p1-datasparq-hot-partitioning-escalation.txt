@@ -1,0 +1,127 @@
+P1: DataSparq production latency spike — hot-partitioning & HOL blocking
+
+From: Sanjay Kumar <sanjay@datasparq.com>
+To: laura.bennett@redwood.com
+Cc: ops@datasparq.com
+Date: 2026-08-30T08:15:00-07:00
+Subject: Severe latency + 500s on /generate — currently P1
+
+Laura —
+
+We started seeing a major degradation around 07:45 PT. P99 has jumped to ~4.5s, error rate up to ~12% (500s) and effective throughput dropped by ~40%. This is impacting search autosuggest in production and customers are complaining.
+
+We rolled back client-side changes (no change) and there are no infra changes on our side. Our logs point to long waits to Redwood API and many retried requests. Can you confirm this is on your side and provide a mitigation? This is P1 for us — please escalate.
+
+Sanjay
+Ops, DataSparq
+
+Attachments: metrics-screenshot.png (PNG, 124KB)
+
+From: laura.bennett <laura.bennett@redwood.com>
+To: Sanjay Kumar <sanjay@datasparq.com>
+Cc: vivek.kulkarni@redwood.com, monica.patel@redwood.com
+Date: 2026-08-30T08:20:00-07:00
+Subject: Re: Severe latency + 500s on /generate — currently P1
+
+Hi Sanjay —
+
+Thanks for the heads-up and sorry for the disruption. We're investigating immediately. I've looped in Vivek (SRE lead) and Monica (Customer Success) to triage. Can you confirm:
+- A request id from one of the 500s?
+- Which model/route you're hitting (model name + route id)?
+- Whether the traffic is steady or a short burst?
+
+We will push a mitigation quickly and follow up with root cause.
+
+—Laura
+Account Exec, Redwood Inference
+
+On 2026-08-30 08:15, Sanjay Kumar wrote:
+> Laura —
+>
+> We started seeing a major degradation around 07:45 PT...
+
+From: vivek.kulkarni@redwood.com <vivek.kulkarni@redwood.com>
+To: laura.bennett@redwood.com, monica.patel@redwood.com, markus.klein@redwood.com
+Cc: marissa.cole@redwood.com
+Date: 2026-08-30T08:35:00-07:00
+Subject: RE: Severe latency + 500s on /generate — currently P1
+
+Allocating SRE runbook now. Quick summary of what I'm seeing from the control plane metrics:
+- A single prefix for DataSparq (prefix=<datasparq-suggest>) is showing extreme hot-key behavior. Top 0.1% of prefixes are getting ~60% of requests.
+- Batching lane for that model is growing queue depth; long-tail requests are holding KV cache locks (HOL blocking) while batches assemble.
+- KC (KV cache) miss rate spiked concurrently; frequent prefix churn appears to be evicting hot entries (cache thrash).
+
+Immediate mitigations I am routing:
+1) Force batch size -> 1 for route dsq-suggest-prod (to avoid HOL blocking).
+2) Pin hot prefix into dedicated lane (hot-key isolation) and increase in-memory cache TTL for that prefix to avoid thrash.
+3) Enable fallback routing to a slightly older variant (model-v2b) for best-effort traffic.
+
+Monica — please prepare a customer-facing note and request the sample req id so we can trace. Markus — FYI I'm recommending an emergency config change (small blast radius) and will monitor.
+
+Vivek
+SRE Lead, Redwood Inference
+
+From: monica.patel@redwood.com <monica.patel@redwood.com>
+To: Sanjay Kumar <sanjay@datasparq.com>
+Cc: laura.bennett@redwood.com, vivek.kulkarni@redwood.com
+Date: 2026-08-30T08:48:00-07:00
+Subject: Re: Severe latency + 500s on /generate — currently P1
+
+Sanjay —
+
+Thanks, we're on it. Vivek is applying mitigations now. One quick ask — if you can share a single request id from a failed /generate call and a sample payload, that helps us trace KV key construction and confirm whether prefix entropy changed.
+
+We will also send a short status update within 30 minutes with the immediate impact.
+
+—Monica
+Customer Success, Redwood Inference
+
+From: vivek.kulkarni@redwood.com <vivek.kulkarni@redwood.com>
+To: laura.bennett@redwood.com, monica.patel@redwood.com, markus.klein@redwood.com, marissa.cole@redwood.com
+Cc: Sanjay Kumar <sanjay@datasparq.com>
+Date: 2026-08-30T09:05:00-07:00
+Subject: Status: mitigations applied — initial improvement but ongoing tail
+
+Update (09:05 PT):
+- Batch size set to 1 for dsq-suggest-prod; immediate drop in queue latency for the batch lane.
+- Hot-key lane enabled and we pinned top prefix (datasparq-suggest:hot) in RAM — cache hit rate for that prefix improved from 28% -> 93%.
+- Error rate reduced from 12% -> 3.1%; P99 improved from 4.5s -> 1.2s. Throughput still ~15% below baseline because mid-percentile requests still encountering KV eviction churn for adjacent prefixes.
+
+Root-cause hypothesis: a recent client-side change to the prefix tokenization introduced more ephemeral prefixes (higher cardinality), causing frequent evictions of hot entries. When the runtime batches requests, head-of-line (HOL) blocking made the impact visible at P99 and produced backpressure resulting in 500s for timed-out requests.
+
+Next steps (ETA):
+- Short-term: keep batch=1 for 2 hours and continue pinning top N prefixes. Toggle targeted prioritization (already in progress).
+- Medium-term: introduce per-prefix admission controls and limited-size dedicated caches for hot prefixes; schedule postmortem and a joint RCA with DataSparq devs.
+- Escalation: I'm recommending we loop in Product and Engineering leadership to approve a config change to the default batching policy for high-cardinality prefix routes. Markus — can you weigh in and approve the briefing for execs?
+
+Marissa — could you prepare the condensed timeline and suggested customer credit? We should propose a small service credit and a restart-of-rolling window for SLA measurement.
+
+Vivek
+
+On 2026-08-30 08:35, vivek.kulkarni@redwood.com wrote:
+> Allocating SRE runbook now...
+
+From: markus.klein@redwood.com <markus.klein@redwood.com>
+To: laura.bennett@redwood.com, vivek.kulkarni@redwood.com, monica.patel@redwood.com, marissa.cole@redwood.com
+Cc: Alejandra Pena <alejandra.pena@datasparq.com>, Sanjay Kumar <sanjay@datasparq.com>
+Date: 2026-08-31T16:45:00-07:00
+Subject: Re: P1: DataSparq production latency spike — hot-partitioning & HOL blocking
+
+Thanks team for the rapid response and containment. Final update for the execs and customer:
+- Status: Incident mitigated. Customer accepted fallback to model-v2b and hot-key pinning; batch size returned to default after gradual re-tuning and adding per-prefix admission limits.
+- Cause: Combination of increased prefix cardinality (client change) + batching semantics that allowed HOL blocking under skewed load -> frequent KV cache evictions (thrash).
+- Remediation delivered: hot-key isolation, increased cache TTL for pinned prefixes, temporary fallback routing, per-prefix admission control, and long-term engineering work to change default batching behavior for high-cardinality routes.
+
+Action items for postmortem (owners):
+- Vivek: full incident timeline + metrics dump + playbook updates.
+- Monica: customer-facing RCA and credit proposal (send this afternoon).
+- Laura: coordinate exec notes and commercial sympathy (credit).
+- Marissa: schedule a follow-up technical deep-dive with DataSparq engineering next week.
+
+I've approved a 5% service credit for the impacted billing period and authorized the Product change proposal to batching defaults for review. Monica, loop Legal if DataSparq requests contract language.
+
+Markus Klein
+VP Engineering, Redwood Inference
+
+On 2026-08-30 09:05, vivek.kulkarni@redwood.com wrote:
+> Update (09:05 PT):...

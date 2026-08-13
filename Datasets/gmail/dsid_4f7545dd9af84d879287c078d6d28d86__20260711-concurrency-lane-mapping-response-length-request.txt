@@ -1,0 +1,97 @@
+Concurrency lane mapping & response-length inventory for Nebula
+
+From: Samir Patel <sam.patel@nebulacorp.com>
+To: Grace O'Connor <grace@redwood.com>, Marissa Cole <marissa@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Sun, 11 Jul 2026 09:12:00 -0700
+Subject: Concurrency lane mapping & response-length inventory for Nebula
+
+Hi Grace / team,
+
+We're evaluating reserved capacity with Redwood for a new in-app assistant feature and want a pre-sales sizing run to understand the fleet impact. Attached is a small telemetry excerpt from a recent beta (sample_traffic_excerpt.jsonl) — it contains anonymized session ids, timestamps, prompt/response token counts and a simple response time column.
+
+High-level asks:
+- A recommended reserved GPU footprint to hit a 99th-percentile latency SLO of 700ms for our primary use-case.
+- Guidance on how to treat multi-turn chat vs single-turn generation for sizing (we have both).
+- What telemetry fields you need beyond the attached snippet to produce a confident sizing (time-window for peaks, percentiles, KV-cache hit-rate, embeddings volume).
+
+Practical constraints: we expect ~600k requests/day initially, with pronounced burst behavior during PST daytime peaks (roughly 1200 RPS 1-minute spikes); average session length is ~2.8 turns. We currently plan to use open models in the 13B–70B family; we are open to quantized variants.
+
+Can you confirm what template/format you prefer and how quickly you can turn this into a sizing recommendation? We're aiming to finalize a pilot footprint within two weeks.
+
+Thanks — happy to hop on a quick call if it helps.
+
+Samir Patel
+CTO, Nebula Corp
+[sample_traffic_excerpt.jsonl (jsonl, ~12KB) attached]
+
+From: Grace O'Connor <grace@redwood.com>
+To: Samir Patel <sam.patel@nebulacorp.com>
+Cc: Marissa Cole <marissa@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Sun, 11 Jul 2026 12:05:00 -0700
+Subject: Re: Concurrency lane mapping & response-length inventory for Nebula
+
+On Sun, Jul 11, 2026 at 09:12 AM Samir Patel <sam.patel@nebulacorp.com> wrote:
+> We're evaluating reserved capacity with Redwood for a new in-app assistant feature...
+
+Thanks Samir — this is exactly the kind of telemetry we like to start with. I've attached our pre-sales sizing template (redwood_pre-sales_sizing_template.csv) — it has fields for: request type (chat vs single-turn), prompt token histogram buckets, response token histogram buckets, session-turn distribution, 1-min/5-min/15-min peak windows, KV cache hit-rate estimate, embedding call rate, and model-family constraints.
+
+A few clarifying questions so we size conservatively:
+1) Are embeddings used synchronously in the same request path, or do you precompute/store vectors? (if synchronous, that changes GPU footprint significantly)
+2) For multi-turn chat, do you expect to send full conversation context every turn or rely on a rolling context window?
+3) Can you confirm the observed 1-minute peak RPS and whether those 1-minute spikes persist for >10 minutes or are sub-minute blips?
+4) Any strict model-family constraints (e.g., must be 70B or greater) or are 13B / quantized variants acceptable for pilot?
+
+If you can return the template with a small sample of aggregated percentiles (p50/p90/p99 for prompt/response token counts and per-request latency) we'll turn around an initial reserved-fleet recommendation within 48 hours.
+
+Proposing a quick 30-min call tomorrow (Mon) to walk the template if that works for you — available 10–11am PST.
+
+Regards,
+Grace O'Connor
+Solutions Lead, Redwood Inference
+[Attachment: redwood_pre-sales_sizing_template.csv (CSV template)]
+
+From: Marissa Cole <marissa@redwood.com>
+To: Grace O'Connor <grace@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Sun, 11 Jul 2026 14:20:00 -0700
+Subject: Re: Concurrency lane mapping & response-length inventory for Nebula
+
+Grace — quick internal sync before we send the filled template back to Samir.
+
+My initial assumptions (we can tighten once we see Nebula's histogram outputs):
+- Traffic mix: assume ~65–70% single-turn generation, ~30–35% multi-turn chat.
+- Token distribution guess: median prompt ~110–140 tokens, median response ~280–420 tokens.
+- KV-cache: assume ~40–50% effective hit-rate for typical assistant flows (affects incremental compute for multi-turn).
+- Burst shape: 1-min spikes up to 1200 RPS for ~5–15 minute windows during peak hours, baseline sustained ~120–200 RPS.
+
+With those assumptions a conservative pilot footprint to meet p99=700ms on 13B quantized-ish variants would be ~6–8 high-memory GPUs (A100 equivalent) with autoscale headroom to +50% for burst windows. For 70B materiel we'd recommend 12+ GPUs or a tenantized multiform pool; Karthik can comment on SKU mapping.
+
+Karthik — can you do a quick pass on whether we should recommend oversubscription (2x) vs strict 1:1 occupancy for their expected SLA? Also note any operator constraints for KV cache autoscaling.
+
+–Marissa
+
+From: Grace O'Connor <grace@redwood.com>
+To: Samir Patel <sam.patel@nebulacorp.com>
+Cc: Marissa Cole <marissa@redwood.com>, Karthik Iyer <karthik@redwood.com>
+Date: Mon, 12 Jul 2026 15:03:00 -0700
+Subject: Concurrency lane mapping & response-length inventory for Nebula — template and pilot recommendation
+
+Hi Samir — thanks for the sample. We've pulled together a short sizing summary and a filled template (nebulacorp_sizing_template_filled.csv) based on conservative defaults where fields were missing from your snippet. Also attached is a small aggregates CSV (traffic-snippet-aggregates.csv) that we used to compute burst profiles.
+
+Executive summary (pilot):
+- Recommended reserved pilot: 8x A100-class GPUs (reserved) with autoscale policy to 12 GPUs for sustained bursts.
+- Target SLO: p99 latency <= 700ms for the mix below using a quantized 13B variant.
+- Assumptions: 70% single-turn, 30% multi-turn; median prompt 120 tokens; median response 350 tokens; KV-cache hit-rate 45%.
+- If Nebula requires 70B-class models for the pilot, we recommend a different sizing (12–16 GPUs) — we can model this if you confirm model-family constraints.
+
+Next steps:
+1) Please review the attached filled template and add any percentile histograms you can. The most useful fields are: per-request prompt/response token histograms (p50/p90/p99), 1-min peak RPS, fraction of requests that include synchronous embeddings, and whether you send full context each turn.
+2) If that looks good, let's schedule a pilot kick-off; I can put together a 2-week canary plan (capacity, telemetry hooks, rollback triggers) and a rough cost estimate.
+
+I've opened HubSpot: NEB-2026-17 and attached the Drive samples link here: https://drive.google.com/nebulacorp/traffic-samples.
+
+Available for a 30-min call Tue/Wed 9–11am PST.
+
+Best,
+Grace O'Connor
+Solutions Lead, Redwood Inference
+[Attachments: nebulacorp_sizing_template_filled.csv (CSV, ~18KB); traffic-snippet-aggregates.csv (CSV, ~4KB)]

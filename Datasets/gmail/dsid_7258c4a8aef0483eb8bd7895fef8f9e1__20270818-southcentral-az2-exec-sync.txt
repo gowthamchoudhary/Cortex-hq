@@ -1,0 +1,103 @@
+[Urgent] SouthCentral AZ2 latency & 5xx spike — requested exec sync
+
+From: Daniel Park <daniel.park@brightwave.com>
+To: jasmine_liu@redwood.com
+Cc: ops@brightwave.com
+Date: Wed, 18 Aug 2027 09:12:37 -0700
+Subject: Production impact in SouthCentral AZ2 - 5xx and elevated latency
+
+Jasmine —
+
+We're seeing sustained 5xx errors and large tail latency across our SouthCentral AZ2 region starting ~08:45 PDT. The user-facing endpoints are timing out intermittently and retries are amplifying the load. Our SLOs are being violated and customers are reporting page errors. Can you escalate and confirm whether Redwood has a mitigation plan / cross-region steer we can use right now?
+
+Attached are a short trace sample and the error-rate spike screenshot. We're on call and can join a bridge.
+
+Thanks,
+Daniel Park
+Director, Platform Ops | BrightWave Solutions
+ops@brightwave.com
+---
+attachments: southcentral_error_rates.png (image/png), trace_sample.txt (text/plain)
+From: jasmine_liu@redwood.com
+To: Daniel Park <daniel.park@brightwave.com>, ops@brightwave.com
+Cc: rishi_malhotra@redwood.com, hannah_schmitt@redwood.com
+Date: Wed, 18 Aug 2027 09:24:12 -07:00
+Subject: Re: Production impact in SouthCentral AZ2 - 5xx and elevated latency
+
+Daniel — thanks for the heads up and the screenshots. I'm escalating now. Quick plan:
+- I've paged Rishi (SRE) to do immediate runbook steps (thundering herd mitigation, KV cache warm restart).
+- Can you confirm if you've already attempted client-side short-circuiting / 307 to US-West? If not, we can open a temp cross-region steer and throttle retries.
+- Opening a bridge (link below) in 5m; Rishi will lead diagnostics and Hannah will brief execs.
+
+Bridge: https://meet.redwood.com/incident-4721
+PagerDuty: pagerduty://incidents/PD-8892
+
+-Jasmine
+Customer Success Manager, Redwood Inference
+jasmine_liu@redwood.com
+---
+attachments: playbook_southcentral.pdf (application/pdf)
+From: rishi_malhotra@redwood.com
+To: jasmine_liu@redwood.com, hannah_schmitt@redwood.com, marissa_cole@redwood.com
+Cc: monica_patel@redwood.com
+Date: Wed, 18 Aug 2027 09:48:05 -07:00
+Subject: Re: Production impact in SouthCentral AZ2 - 5xx and elevated latency
+
+On Wed, Aug 18, 2027 at 9:24 AM jasmine_liu@redwood.com wrote:
+> Daniel — thanks for the heads up and the screenshots. I'm escalating now.
+
+I pulled the metrics and we have a correlated autoscaler oscillation on the dedicated pool serving BrightWave in AZ2 — it was trying to scale up but new nodes were failing health checks due to a library-level cold-start regression introduced in the 2027-08-17 runtime build. That causes transient 503s and backpressure that pushes latency out.
+
+Immediate actions taken (09:36-09:46):
+- Disabled autoscale for the affected pool and pinned to current capacity.
+- Rolled back runtime to 2027-08-15 stable build for the pool.
+- Activated a temporary router policy to steer 28% of traffic to US-West (usw2) for this customer while we validate rollback metrics.
+- Throttled client retry window via edge token TTL to reduce retry amplification.
+
+Next steps:
+- Monitor key metrics for 30 minutes; if error rate remains >2.5% we will escalate to full regional evacuation and route 60%+ traffic to alternate regions.
+- Hannah, recommend an exec note for leadership and customer-facing status page update.
+
+Rishi
+Senior SRE, Redwood Inference
+---
+attachments: corridor_kpi.csv (text/csv)
+From: hannah_schmitt@redwood.com
+To: jasmine_liu@redwood.com, rishi_malhotra@redwood.com, marissa_cole@redwood.com
+Date: Wed, 18 Aug 2027 10:15:58 -07:00
+Subject: Re: Production impact in SouthCentral AZ2 - 5xx and elevated latency
+
+Team —
+
+Thanks Rishi. Quick executive note draft below for awareness and possible distribution to sales leadership / CRO: feel free to iterate before I publish.
+
+Executive summary (draft):
+- Incident: Elevated 5xx rate and increased latency for BrightWave in SouthCentral AZ2 beginning 08:45 PDT. Cause: regression in 2027-08-17 runtime affecting new node health checks.
+- Impact: ~25% of BrightWave traffic experienced errors / high latency; customer SLOs impacted.
+- Mitigation: immediate rollback of runtime for affected pool, autoscale disabled, and a temporary 28% cross-region steer to US-West.
+- Residual risk: We will monitor for 60 minutes; if error rate does not drop below 2.5% we will escalate to wider traffic redistribution and request exec-level approval for extended capacity bursts or manual evacuation.
+
+Proposed ask of Execs: approval to consume burst capacity from the Dedicated reserve for up to 2 hours if rollback does not fully mitigate.
+
+I'll hold off publishing until Jasmine confirms customer messaging is aligned.
+
+-Hannah
+VP, Reliability & Ops
+Redwood Inference
+---
+> On Wed, Aug 18, 2027 at 9:48 AM rishi_malhotra@redwood.com wrote:
+> > Immediate actions taken (09:36-09:46): ...
+From: Daniel Park <daniel.park@brightwave.com>
+To: jasmine_liu@redwood.com, hannah_schmitt@redwood.com
+Cc: ops@brightwave.com
+Date: Wed, 18 Aug 2027 11:02:10 -07:00
+Subject: Re: Production impact in SouthCentral AZ2 - 5xx and elevated latency
+
+Thanks Jasmine/Rishi — the rollback cut the 5xx rate in half within 8 minutes, and the temporary steer to US-West removed most user-facing errors. We're seeing tail latency still a bit elevated (~p95 + 40%), but the impact is acceptable at present.
+
+We'll keep the bridge open and can take any additional routing if you decide to push more traffic west. Appreciate the rapid response.
+
+-Daniel
+---
+On Wed, Aug 18, 2027 at 9:24 AM Jasmine Liu <jasmine_liu@redwood.com> wrote:
+> Daniel — thanks for the heads up and the screenshots...

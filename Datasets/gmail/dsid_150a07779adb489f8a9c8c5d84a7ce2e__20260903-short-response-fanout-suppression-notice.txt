@@ -1,0 +1,110 @@
+Interim advisory: short-response fanout suppression impacting US-West hosted API
+
+From: Hannah Schmitt <hannah.schmitt@redwoodinference.com>
+To: Lydia Park <lydia.park@stalliontech.com>, engineers@stalliontech.com
+Cc: marissa.cole@redwoodinference.com, jonas.weber@redwoodinference.com
+Date: Thu, 3 Sep 2026 14:12:00 -0700
+Subject: Interim advisory: short-response fanout suppression impacting US-West hosted API
+
+Hi Lydia and Stallion ops team,
+
+We’re sending an interim advisory because we’ve detected a degradation affecting short-response (<=128 token) generation requests routed to our US-West hosted inference pool. Symptoms: elevated tail of streaming responses, occasional truncated chunks, and a reduction in downstream fanout throughput for endpoints that fan out many small requests (e.g., classification/batch-scorer endpoints).
+
+What we know so far:
+- Start time: ~14:00 PDT (2026-09-03)
+- A subset of requests experienced slower chunk delivery and occasional retries; overall success rate remained >97% for most customers but StallionTech saw increased retry amplification on your scoring pipeline.
+- Impacted routes: /v1/generate (short-response traffic), /v1/score (fanout workers).
+
+Immediate mitigations we’ve applied:
+- We’ve temporarily disabled a recent kernel rollout that changed KV cache eviction heuristics for short sequences.
+- Traffic routing policy adjusted to route affected tokens to neighboring pools (US-Central) for your account where compatible.
+- We enabled additional prefetching on fanout workers to reduce small-request latency.
+
+What we’re doing next:
+- Infra on-call (Jonas) is running a targeted rollback verification and will monitor p50/p95/p99 for your routes.
+- We’ll continue to scale prefetch and monitor for retry amplification; if we don’t see improvement in 30–45 minutes we’ll roll back the canary completely.
+
+We’ll post continuous updates to the incident status page: https://status.redwoodinference.com/incident/2026-09-03-fanout-suppression (live). I’ve attached a short snapshot with request traces for 14:00–14:10 PDT.
+
+Apologies for the disruption — I’ll keep you posted with tangible recovery milestones. If you’d like us to open a dedicated Slack channel or pager bridge, let me know.
+
+Thanks,
+Hannah Schmitt
+Senior Customer Reliability Manager
+Redwood Inference
+
+Attachments:
+- incident_snapshot-20260903.json (request traces & sample headers)
+
+From: Lydia Park <lydia.park@stalliontech.com>
+To: Hannah Schmitt <hannah.schmitt@redwoodinference.com>
+Date: Thu, 3 Sep 2026 14:45:12 -0700
+Subject: Re: Interim advisory: short-response fanout suppression impacting US-West hosted API
+
+Thanks Hannah — we saw the symptom in our pipeline around 14:05 and had to increase retries which spiked our costs. Two quick clarifications:
+
+1) Which of our API keys/route patterns were most affected? We have several scoring routes that behave differently (score-v2 vs batch-scorer).
+2) If this persists past 15:00 PDT, what’s the process for a formal credit request / SLA exception?
+
+Appreciate the snapshot. If you’re able to share a short list of affected request IDs we can correlate on our side. We’re standing by.
+
+— Lydia
+Head of Platform Reliability, StallionTech
+
+From: Hannah Schmitt <hannah.schmitt@redwoodinference.com>
+To: marissa.cole@redwoodinference.com, jonas.weber@redwoodinference.com, ben.carter@redwoodinference.com
+Cc: lydia.park@stalliontech.com
+Date: Thu, 3 Sep 2026 15:00:08 -0700
+Subject: Fwd: Interim advisory: short-response fanout suppression impacting US-West hosted API
+
+Marissa / Jonas / Ben — forwarding customer reply. Quick notes from triage:
+- Preliminary signal points to the KV eviction heuristic change in the 03:45 canary (kernel v2.9.1) that interacts poorly with sequences <128 tokens and high fanout ratios. Eviction churn appears to cause transient cache misses and extra host rehydrations which amplify retries.
+- Jonas: confirm whether the rollback disable we toggled reverted kernel load on all US-West nodes or if some canaries remained pinned. If any nodes still have v2.9.1, escalate to rollback-all.
+- Ben: collect counts for /v1/score and score-v2 for StallionTech’s API key(s) — they reported disproportionate retries. Attach the three request IDs Lydia requested (from snapshot) to the internal bridge.
+
+Goal: confirm full mitigation (p95 restored) before 15:30 PDT, otherwise plan to roll back the kernel across the pool.
+
+Hannah
+
+From: Hannah Schmitt <hannah.schmitt@redwoodinference.com>
+To: Lydia Park <lydia.park@stalliontech.com>, engineers@stalliontech.com
+Cc: marissa.cole@redwoodinference.com, jonas.weber@redwoodinference.com, ben.carter@redwoodinference.com
+Date: Fri, 4 Sep 2026 09:32:00 -0700
+Subject: Post-incident summary: short-response fanout suppression (US-West) — resolution and next steps
+
+Hi Lydia and Stallion ops team,
+
+Quick post-incident summary and immediate next steps. TL;DR: root cause identified, mitigation applied, full recovery confirmed, and next actions for prevention.
+
+Incident timeline (summary):
+- 14:00 PDT, 2026-09-03 — elevated tail and retry amplification observed for short-response fanout traffic in US-West.
+- 14:12 PDT — customer advisory sent; temporary routing and prefetch mitigations applied.
+- 14:28 PDT — evidence that some nodes still had kernel v2.9.1 loaded; we initiated a full rollback across US-West.
+- 15:07 PDT — p95 for affected routes returned to baseline; retry amplification subsided.
+
+Root cause (short):
+- A canary kernel rollout (v2.9.1) changed an eviction heuristic intended to optimize long-sequence memory usage. For very short sequences at high concurrency + heavy fanout, the change caused frequent KV cache evictions and host rehydration leading to extra small-tail latency and retry amplification in fanout scenarios.
+
+Mitigations completed:
+- Rollback of kernel v2.9.1 across US-West pool.
+- Temporary routing to US-Central for affected keys while we validated stability.
+- Rate-limit and prefetch tuning on high-fanout routes to avoid retry amplification during rehydration windows.
+
+Customer impact and remediation:
+- StallionTech: experienced increased retries and a short-term cost impact from 14:00–15:07 PDT; functional correctness was preserved.
+- We will proactively open an SLA remediation ticket with Billing and Customer Success. If you’d like to pursue a credit, we’ll expedite evaluation — I’ll CC Billing and your account rep.
+
+Next steps and prevention:
+- Full postmortem is available here: https://redwood.sharepoint.com/:u:/r/incident-postmortems/2026-09-03-fanout-postmortem (draft).
+- Engineering will add a short-sequence/fanout validation block to the kernel rollout gating checklist and add a synthetic that reproduces the fanout pattern for future canaries.
+- We’ll run a joint verification with StallionTech’s engineering team next week if you prefer — propose Mon 2026-09-07 10:00 PDT?
+
+Again, sincerely sorry for the disruption. We understand the cost sensitivity on high-volume fanout pipelines and will coordinate remediation for any verified excess charges. Please reply to this thread with any follow-ups or confirm the joint verification time and I’ll schedule it.
+
+Regards,
+Hannah Schmitt
+Senior Customer Reliability Manager
+Redwood Inference
+
+Attachments: postmortem-draft-20260904.pdf
+Status page: https://status.redwoodinference.com/incident/2026-09-03-fanout-suppression

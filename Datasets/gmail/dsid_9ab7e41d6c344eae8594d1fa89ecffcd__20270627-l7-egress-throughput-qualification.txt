@@ -1,0 +1,95 @@
+Post-call: L7 egress & throughput qualification for private inference
+
+From: Diego Fernandez <diego_fernandez@redwood.ai>
+To: Nina Patel <nina.patel@finexa.com>
+Cc: Priyom Das <priyom_das@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Sun, 27 Jun 2027 15:02:00 -0700
+Subject: Post-call: L7 egress & throughput qualification for private inference
+
+Hi Nina — thanks again for a productive call earlier. Quick recap and proposed next steps so we have alignment before we schedule the lab run: 
+
+Recap (as I captured it)
+- Goal: Private deployment (VPC peering + transit) to host low-latency streaming inference for Finexa's chat assistants.
+- Target SLOs you asked us to qualify against: 95th percentile segment latency <= 60 ms, p99 end-to-end reply <= 200 ms for typical 2–4 token streaming chunks.
+- Load profile: sustained peak = ~300 concurrent streaming sessions, average session = 1 request/minute but with bursts up to 2–3 rps for short windows; average request size ~512 tokens.
+- Egress constraint: must exit through your dedicated peering (no public internet egress), NAT instances sit in our VPC, egress bandwidth target per node ~200 Mbps.
+
+Open questions / asks for your team (needed for our lab):
+1) Can you share the network topology diagram showing: Transit Gateway/Peering, NAT instances, firewall appliance, and whether AWS PrivateLink is in the path? We noted you have a managed firewall (vendor + rules) that may terminate TLS.
+2) Would you be able to provide a sample VPN endpoint config or IKE parameters so our infra team can pre-configure the gateway?
+3) Do you enforce MTU < 1500 or jumbo frames on the peering path?
+4) Any outbound proxy (HTTP CONNECT) or TLS interceptors in front of your egress? If so, can you confirm support for TLS passthrough to our hosts for streaming?
+5) Can you confirm expected DSCP/QoS markings (or whether you will not preserve them)?
+
+Suggested next steps
+- If you can share the topology diagram and a sample VPN config today, we’ll spin up a perf lab and run a mid-week test (30–60 minute window) to validate p95/p99 under 300 concurrent streams.
+- Internal: Priyom / Monica — please prepare a perf runbook with: per-node token/sec targets, payload profile (512 tokens, 64-token chunking cadence), and synthetic client that simulates the burst patterns.
+
+Thanks — I’ll hold a 30-min slot on Wednesday for the test once we have the topology and VPN details.
+
+Best,
+Diego Fernandez
+Senior Solutions Engineer
+Redwood Inference
+
+Attachments: redwood-lab-runbook-template.pdf (referenced), expected-traffic-patterns.csv (referenced)
+From: Nina Patel <nina.patel@finexa.com>
+To: Diego Fernandez <diego_fernandez@redwood.ai>
+Cc: Finexa Network Ops <netops@finexa.com>
+Date: Mon, 28 Jun 2027 09:18:00 -07:00
+Subject: Re: Post-call: L7 egress & throughput qualification for private inference
+
+Diego — thanks for the summary and clear asks. Attaching a simplified network diagram and a sample VPN config we use for other vendor integrations. A few clarifications inline: 
+
+- Topology: we use an AWS Transit Gateway in us-east-1; peering happens via a managed Direct Connect partner into our VPC. NAT and firewall live in the same routing domain; firewall is a Palo Alto managed by our security team and performs TLS inspection by default.
+- TLS inspection: we can add an exception for your service IP range if needed so you get TLS passthrough; we’ll need the IP list before the test.
+- MTU: default is 1500 (no jumbo frames) on the peering path.
+- DSCP: markings are preserved across our transit but are rewritten at the egress appliance for public flows — since you’ll be on a private peering path, original DSCP should be preserved end-to-end.
+- Bandwidth: we can commit a 1 Gbps reserved circuit for the lab window; recommend we budget 200 Mbps sustained per inference node as you suggested and scale horizontally.
+
+We’re attaching: finexa-network-diagram-v2.png, vpn-sample-config.txt.
+
+Proposed time: Wednesday 29 Jun, 10:00–11:00 EDT for the lab. Please confirm.
+
+Thanks,
+Nina Patel
+Manager, Cloud Platform Operations
+Finexa Corp
+
+Attachments: finexa-network-diagram-v2.png (image), vpn-sample-config.txt (text)
+
+From: Diego Fernandez <diego_fernandez@redwood.ai>
+To: Monica Patel <monica_patel@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Cc: Nina Patel <nina.patel@finexa.com>
+Date: Mon, 28 Jun 2027 11:02:00 -07:00
+Subject: Fwd: Post-call: L7 egress & throughput qualification for private inference
+
+Monica/Priyom — forwarding Nina’s details. Key asks for the perf runbook and infra prep: 
+
+Action items for Redwood infra: 
+- Pre-provision a 3-node perf cluster (g4-equivalent) with streaming runtime; target per-node sustained throughput 5k tokens/sec (configurable).
+- Client simulator: 300 concurrent streaming clients, 64-token chunk cadence (1 chunk every 200 ms), average request 512 tokens. Burst pattern: ramp 0->300 in 30s, hold 5 min, burst 400 for 45s, then cool-down.
+- Network checks: validate TLS passthrough with Finexa; ensure TCP keepalive and TLS session reuse to avoid handshake overhead at 300+ concurrent flows.
+- Observability hooks: capture p50/p95/p99 for chunk latency, end-to-end reply time, per-node bandwidth (Mbps), and token/sec.
+
+Monica — can you confirm the lab runbook and whether the per-node token/sec target is feasible with our current build? Priyom — please pull a short checklist for NAT/peering IPs we’ll need to hand to Finexa.
+
+Diego
+
+Onwarded attachments: finexa-network-diagram-v2.png, vpn-sample-config.txt
+From: Nina Patel <nina.patel@finexa.com>
+To: Diego Fernandez <diego_fernandez@redwood.ai>
+Cc: Finexa Network Ops <netops@finexa.com>, Monica Patel <monica_patel@redwood.ai>, Priyom Das <priyom_das@redwood.ai>
+Date: Tue, 29 Jun 2027 09:10:00 -07:00
+Subject: Re: Post-call: L7 egress & throughput qualification for private inference
+
+Diego / team — confirmed for Wednesday 29 Jun 2027 10:00–11:00 EDT. We’ve provisioned a 1 Gbps reserved circuit for the window and added an exception on the firewall for the IP range you’ll share.
+
+We’ll need your final IP list and the VPN PSK prior to the test. Also, please note our security team will monitor for TLS inspection fallbacks — if we see significant retransmits during the ramp we may pause and request a config tweak.
+
+See you Wednesday.
+
+Best,
+Nina
+
+Note: Finexa Network Ops will provide a connectivity test doc during the morning of the run.

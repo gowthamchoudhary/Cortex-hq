@@ -1,0 +1,103 @@
+URGENT: HelixPay production latency + errors — dedicated pool contention
+
+From: HelixPay Ops <ops@helixpay.com>
+To: grace_oconnor@redwood.ai
+Date: 2028-03-19T09:12:00-07:00
+Subject: Re: Production errors starting 09:05 PT — possible GPU saturation
+
+Hi Grace,
+
+We're seeing a sustained spike in 5xx errors and token-level latency across our checkout inference calls since ~09:05 PT. Error sample attached (helixpay-err-sample-20280319.log). Key observations:
+- Error spike correlates with high queue depth on the dedicated GPU pool we reserved (pool-id helix-us-ded-03).
+- Average per-token latency up from 45ms -> 320ms for hot endpoints; retry storms observed from our side.
+- Throughput throttle messages in response headers: "reserved_capacity_exceeded".
+
+This is customer-impacting across all regions (primarily us-west). Can Redwood confirm if this is a provisioning issue or a broader scheduling/placement problem? We need an ETA for mitigation — customers are seeing payment flow timeouts.
+
+Thanks,
+John Doe
+Head of Platform, HelixPay
+ops@helixpay.com
+
+---
+Attachment: helixpay-err-sample-20280319.log (text)
+
+From: grace_oconnor <grace_oconnor@redwood.ai>
+To: John Doe <john.doe@helixpay.com>
+Cc: marissa_cole@redwood.ai, priyom_das@redwood.ai
+Date: 2028-03-19T09:28:00-07:00
+Subject: Re: Production errors starting 09:05 PT — possible GPU saturation
+
+John — thanks for the alert and the log bundle. We're on it. Immediate actions I'm initiating:
+1) I've asked ops to failover HelixPay routes to the hosted fallback model pool for latency-sensitive endpoints (will flip traffic incrementally at 09:35 PT).
+2) Engineering (cc'd priyom) to investigate dedicated pool headroom and scheduling backlog.
+3) I'll schedule a 1:00p PT bridge to walk through mitigation & longer-term capacity changes — joining link attached.
+
+Can you confirm which specific route(s) you're most concerned about (checkout.pay, authorizations.authorize)? Also confirm if there are any spike patterns in HelixPay traffic that started at 09:00 (batch jobs, midnight recalc, etc.).
+
+I'll update in-thread as we make changes. Apologies for the disruption — priority for us.
+
+- Grace
+Grace O'Connor
+Account Executive, Redwood Inference
+
+From: priyom_das <priyom_das@redwood.ai>
+To: grace_oconnor@redwood.ai, marissa_cole@redwood.ai, neha_kapoor@redwood.ai
+Cc: vivek_kulkarni@redwood.ai
+Date: 2028-03-19T09:45:00-07:00
+Subject: Re: Production errors starting 09:05 PT — possible GPU saturation
+
+Folks — quick status from infra:
+- Pool helix-us-ded-03 shows GPU utilization at 98% and a queue depth increase consistent with continuous batching hitting soft limits.
+- Autoscale did not trigger because the pool is at a reserved max for HelixPay (contracted cap).
+- We see placement thrashing for a subset of large-context requests; kernel selection path is also showing increased kernel preemption time (we're pulling logs).
+
+Immediate mitigations applied:
+- Traffic flip: partial routing to hosted fallback executed at 09:36 PT (about 30% of traffic). Early signs: error rate dropping on fallback routes, latency improved for those requests.
+- Increased token-level retry budget on our side to reduce client retries hitting the queue.
+
+Requests / asks:
+- Commercial: we will need short-term temporary burst capacity or make a one-off exception to the reserved throughput cap to avoid customer-visible degradation. @vivek_kulkarni — can you weigh in on authorization for emergency burst and credits?
+- Engineering: need kernel / sched trace (assigning to eng on-call) and to confirm whether a hot prefix cache issue is amplifying cost.
+
+I'll post fuller metrics to the Ops ticket.
+
+- Priyom
+
+From: vivek_kulkarni <vivek_kulkarni@redwood.ai>
+To: grace_oconnor@redwood.ai, marissa_cole@redwood.ai, priyom_das@redwood.ai
+Date: 2028-03-19T10:02:00-07:00
+Subject: Re: Production errors starting 09:05 PT — possible GPU saturation
+
+Team — escalating to executive track due to HelixPay SL impact and payment flow outages. Proposed immediate commercial & operational steps:
+1) Approve a 48-hour emergency burst to helix-us-ded-03 (add 2x capacity equivalent) to restore headroom. We'll do a post-mortem on billing/credits.
+2) Offer HelixPay a partial credit (suggest 20% of March invoice) to cover downtime and our ops effort — subject to finance review.
+3) Request CTO-level bridge if engineering cannot identify a root cause within 6 hours.
+
+Please prepare a one-page exec readout by 11:30a PT outlining timeline, customer impact (est. transactions failed), mitigations applied, and next steps. Grace — please coordinate with HelixPay about customer communication; Marissa — lead the post-incident QBR with customer.
+
+Vivek
+VP, Sales Operations
+
+From: grace_oconnor <grace_oconnor@redwood.ai>
+To: John Doe <john.doe@helixpay.com>
+Cc: marissa_cole@redwood.ai, priyom_das@redwood.ai, vivek_kulkarni@redwood.ai
+Date: 2028-03-19T17:45:00-07:00
+Subject: Re: Production errors starting 09:05 PT — possible GPU saturation
+
+John — quick update and next steps after today's bridge:
+- What we did: applied temporary burst capacity to helix-us-ded-03 at ~10:10 PT (2x capacity) and completed incremental routing to hosted fallback for the most latency-sensitive calls. We also tuned the retry budget and purged hot-prefix cache for the workload.
+- Impact observed: error rate reduced from ~4.5% -> 0.3% across checkout endpoints; median token latency improved to ~70ms for routed traffic. Attached metrics export: pool-metrics-20280319.csv.
+- Commercial: we're provisioning the burst now; Vivek has proposed a credit and we'll confirm amount with Finance.
+- Next steps: Marissa will schedule a focused QBR to review capacity planning and recommended changes (license for larger reserved pool vs. burst policy). Engineering will complete a full root cause analysis and deliver a remediation plan within 72 hours.
+
+Apologies again for the disruption — we understand the severity and you're our top priority. I'll remain your primary contact for the post-mortem. Join the notes & recording here: https://redwood.atlassian.net/browse/OPS-11234
+
+Best,
+Grace O'Connor
+Account Executive, Redwood Inference
+grace_oconnor@redwood.ai
+
+---
+Attachment: pool-metrics-20280319.csv (CSV)
+Attachment: call-joinlink-helixpay-20280319.txt (plain text)

@@ -1,0 +1,142 @@
+LumenPay pilot - TCO recap, budget constraints and next steps
+
+From: Alice Chen <alice@lumenpay.com>
+To: hannah_schmitt <hannah_schmitt@redwood.ai>, marissa_cole <marissa_cole@redwood.ai>
+Date: Fri, 22 May 2026 15:12:00 -0700
+Subject: Follow-up from today - pilot goals and top constraints
+
+Thanks for the call today — appreciate you walking through Redwood's runtime and the batching/caching levers. Quick recap from our side so we're aligned before the team sync next week:
+
+Pain points we raised
+- Token spend unpredictability: our nightly reconciliation shows 25% variance month->month tied to peak prompt sizes.
+- Latency at scale: checkout fraud scoring needs ~150ms p95; current infra occasionally spikes >400ms.
+- Ops complexity: engineering time to tune batching and cache across microservices is nontrivial.
+
+Goals for a pilot
+1) Get a TCO anchor for our most common payment verification flow (avg prompt ~220 tokens).
+2) Validate batching and KV cache can reduce per-request token cost by 25-40% without hurting latency.
+3) Confirm 99th percentile latency target for production path (<=200ms) on a 1-rack reserved capacity.
+
+Budget constraints
+- We have a hard pilot budget of ~$35k for the first quarter.
+- Procurement prefers a month-to-month pilot but open to 3-month commitments if savings demonstrably offset cost.
+
+Next asks (from LumenPay)
+- Can you provide a short TCO template we can fill with our usage slices?
+- Rough order-of-magnitude savings for batching + KV cache given our prompt sizes (examples welcome).
+- Pilot scope doc we can share with procurement.
+
+I'll loop in Tom (product) and procurement after we get the templated numbers.
+
+Best,
+Alice
+Product Ops — LumenPay
+
+Attachment: none
+
+From: hannah_schmitt <hannah_schmitt@redwood.ai>
+To: Alice Chen <alice@lumenpay.com>
+Cc: marissa_cole <marissa_cole@redwood.ai>
+Date: Fri, 22 May 2026 17:05:00 -0700
+Subject: Re: Follow-up from today - pilot goals and top constraints
+
+Thanks Alice — great to meet you and hear the specifics. Quick recap + what we can deliver by Monday: 
+
+Recap of scope (we heard)
+- Primary flow: payment verification prompts, ~220 tokens average, spikes to ~1.2k tokens for edge cases.
+- Target: reduce per-request token spend and hit p99/p95 latency targets while keeping model quality.
+- Budget: pilot budget ~$35k; procurement prefers short-term pilot with clear decision gates.
+
+What we'll send you by Monday
+- Redwood TCO template (attached: redwood_tco_template.xlsx) that maps your traffic slices to estimated token cost across model variants.
+- Pilot scope doc (attached: lumenpay_pilot_scope.pdf) with success criteria (latency, cost delta, quality checks) and timeline.
+- A short CSV with example savings assumptions for batching + KV caching (batching-cache-savings.csv).
+
+High-level levers we'll evaluate during the pilot (so procurement knows options)
+- Continuous batching (for synchronous flows): lowers per-token GPU overhead at cost of small added tail latency; we'll tune target batch sizes to meet p95 SLA.
+- Prefix/KV caching for repeated contexts (fraud signals): can reduce tokens sent and model compute if prompt overlaps are large.
+- Quantization and model variant routing: choose a quantized variant for lower-cost paths; route high-sensitivity cases to a higher-fidelity model.
+- Reserved capacity + burst pool: predictable throughput and lower unit cost for steady traffic.
+
+Pilot timeline suggestion
+- Week 0: finalize pilot scope & procurement paperwork
+- Week 1-2: baseline collection (you provide usage samples, 5k calls)
+- Week 3-6: tuning & measurement (batching/cache configs)
+- Week 7: write-up + decision meeting
+
+Action items for LumenPay
+- Fill the attached TCO template with last 30 days of traffic by EOD Tuesday.
+- Confirm whether procurement needs a PO or simple MSA addendum to start.
+
+Marissa will follow with a first-pass savings model; Ben can jump in on sizing if you want a quick dedicated capacity estimate.
+
+Thanks — we'll keep the numbers conservative and show the split of latency vs. cost tradeoffs.
+
+— Hannah
+Head of Solutions — Redwood Inference
+
+Attachments: redwood_tco_template.xlsx, lumenpay_pilot_scope.pdf, batching-cache-savings.csv
+
+From: marissa_cole <marissa_cole@redwood.ai>
+To: Alice Chen <alice@lumenpay.com>, hannah_schmitt <hannah_schmitt@redwood.ai>
+Cc: ben_carter <ben_carter@redwood.ai>
+Date: Sat, 23 May 2026 09:10:00 -0700
+Subject: Re: Follow-up from today - pilot goals and top constraints
+
+Following up with a rapid first-pass on economics based on the numbers you gave on the call (avg 220 tokens, ~10k calls/day on the verification flow). Note these are conservative estimates — we'll refine once we get samples.
+
+Rough first-pass numbers (monthly)
+- Baseline: 10k calls/day * 220 tokens * 30 days = 66M tokens/mo.
+- Current open model cost (estimate): $0.000015 / token -> ~$990 / mo for model compute (example, actual may differ).
+- With batching + cache assumptions (25% effective token reduction + 1.1x concurrency for batch grouping): model compute estimate -> ~$740 / mo (rough).
+- If we apply reserved capacity discounts + quantized variants for low-risk paths, unit cost could drop further (~30-45% in scenarios).
+
+Pilot fit within $35k?
+- 6-week pilot (including baseline collection + tuning) with our suggested reserved small pool + measurement instrumentation: estimated cost to LumenPay ~ $18k-$28k depending on reserved vs. burst usage. We can make this month-to-month with a clean measurement dashboard for procurement.
+
+Questions we need from you to tighten estimates
+1) Distribution of prompt lengths (we asked for 90th/99th percentiles).
+2) Percent of calls that include historically repeated context (candidate for KV cache).
+3) Whether latency requirement is strict at p95 or p99 (affects batching aggressiveness).
+
+Procurement note: if you want, we can produce a 1-page SOW and a short-term invoice option that fits your PO process. Happy to draft.
+
+— Marissa
+Solutions Engineer — Redwood Inference
+
+On Fri, May 22, 2026 at 5:05 PM hannah_schmitt <hannah_schmitt@redwood.ai> wrote:
+> Thanks Alice — great to meet you and hear the specifics. Quick recap + what we can deliver by Monday: 
+> 
+> [snip]
+
+From: Alice Chen <alice@lumenpay.com>
+To: hannah_schmitt <hannah_schmitt@redwood.ai>
+Cc: Tom Rivera <tom@lumenpay.com>, procurement@lumenpay.com
+Date: Sun, 24 May 2026 11:34:00 -0700
+Subject: Re: Follow-up from today - pilot goals and top constraints
+
+Thanks Hannah and Marissa — this is very helpful and the timing works. Quick answers below and a proposed kickoff date:
+
+Answers to your questions
+- Prompt length percentiles: p50=210, p90=480, p99=1,150 (we'll upload a sample file).
+- Repeated context: ~38% of calls include a reusable fraud session context that looks cacheable.
+- Latency target: p95 <= 200ms for the verification happy-path; p99 is softer but we'd like notifications when it spikes.
+
+Budget and procurement
+- We can commit up to $30k immediately; procurement prefers a 30-day pilot with an option to extend to another 60 days. PO process requires a short SOW + invoice.
+
+Kickoff proposal
+- Week of June 7th to start baseline collection (gives us time to fill the template and route to procurement).
+
+One quick ask: can you call out a conservative worst-case cost for the pilot if we rely entirely on on-demand capacity (no reserved) so procurement can see downside exposure?
+
+On Sun, May 24, 2026 at 11:34 AM, Alice Chen <alice@lumenpay.com> wrote:
+> Thanks Hannah and Marissa — this is very helpful and the timing works. Quick answers below and a proposed kickoff date:
+> 
+> [quoted message trimmed]
+
+Best,
+Alice
+Product Ops — LumenPay
+
+Attachment: sample_prompts_5k.json (to be uploaded to the Drive link)

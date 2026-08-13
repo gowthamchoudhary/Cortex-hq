@@ -1,0 +1,109 @@
+Access fabric decision: direct peering, service endpoint, or managed VPN — implications for pilot
+
+From: Naomi Feldman <naomi.feldman@redwood.ai>
+To: Kimberly Park <kimberly.park@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, EdgeCorp SRE <sre@edgecorp.com>
+Cc: NetOps <netops@edgecorp.com>
+Date: 2026-10-18T09:12:00-07:00
+Subject: Access fabric decision: direct peering, service endpoint, or managed VPN — quick ask
+
+Hi team,
+
+EdgeCorp is ramping their private deployment pilot next month and asked us to recommend an ingress/egress pattern. They want a short rationale (latency, maintenance, security posture) plus an ops checklist they can follow for onboarding. Attached: privatedeploy-network-matrix.xlsx (my draft), edgecorp-security-questionnaire.pdf.
+
+Context:
+- Pilot will run in us-west-2 (single AZ to start) with Redwood Private control plane in our managed region.
+- Traffic profile: steady 25 qps, occasional bursts up to 80 qps; tokens per request median ~600.
+- EdgeCorp is strict about source IP allowlisting, and they need auditability for outbound requests.
+
+Three candidate patterns we've discussed internally:
+1) VPC peering (direct route)
+2) AWS PrivateLink / interface endpoints (service endpoints)
+3) Site-to-site IPsec VPN (managed customer gateway)
+
+Please reply with a concise recommendation, the top 3 risks for that choice, and any required artifacts we need to hand them (runbook, firewall rules, certs, contact points). I'll synthesize and send a short recommendation to EdgeCorp by EOD tomorrow.
+
+Thanks,
+Naomi
+Naomi Feldman
+Senior Solutions Engineer, Redwood Inference
+redwood.ai
+
+--- Attachments: privatedeploy-network-matrix.xlsx (spreadsheet), edgecorp-security-questionnaire.pdf (PDF) ---
+From: Kimberly Park <kimberly.park@redwood.ai>
+To: Naomi Feldman <naomi.feldman@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, EdgeCorp SRE <sre@edgecorp.com>
+Cc: NetOps <netops@edgecorp.com>
+Date: 2026-10-18T11:03:00-07:00
+Subject: Re: Access fabric decision: direct peering, service endpoint, or managed VPN — quick ask
+
+Naomi — thanks for the clear brief. Quick summary/recommendation up front: go with AWS PrivateLink (interface endpoints) for the pilot; propose adding a peering option for production if they need cross-account native routing later.
+
+Why PrivateLink for the pilot (short):
+- Security: preserves a managed service surface; customer never needs to expose public endpoints and can keep tighter network controls (SGs + endpoint policies).
+- Operational isolation: less chance of route-table mistakes affecting other workloads compared with broad peering.
+- Auditability: CloudTrail logs for interface endpoint calls + flow logs give the audit trail EdgeCorp wants.
+
+Top 3 risks / mitigations:
+1) Cost for per-AZ ENIs if multi-AZ scale is later required — Mitigation: start single-AZ; quantify ENI cost in the matrix and set thresholds for when to transition to peering.
+2) Source IP preservation: PrivateLink changes source to ENI IPs, so EdgeCorp's allowlist must accept our endpoint ENIs or we must configure proxying — Mitigation: document ENI IP ranges and update their firewall runbook; include IP rotation cadence.
+3) Throughput contention on ENIs during bursts — Mitigation: size testing during POC, add autoscaling/burst policy on Redwood Dedicated side or fall back to peering for heavy sustained throughput.
+
+Required artifacts to hand over:
+- Runbook: interface endpoint creation checklist, required SG rules, example endpoint policy (I drafted redwood-privatedeploy-checklist.md).
+- IP list: initial ENI addresses (and update cadence) + CIDR ranges we will use.
+- Test plan: synthetic load test steps and acceptance thresholds.
+- Contacts: NetOps primary and escalation phone/email.
+
+I'll attach a trimmed matrix (see comments in your spreadsheet). If EdgeCorp needs source-IP-preservation guaranteed, the fallback is peering or an IP-in-IP proxy we operate (more operational cost).
+
+-Kim
+Kimberly Park
+Director, Solutions Engineering
+Redwood Inference
+
+> On 2026-10-18 09:12 Naomi Feldman wrote:
+> > EdgeCorp is ramping their private deployment pilot next month and asked us to recommend an ingress/egress pattern. ...
+From: Ben Carter <ben.carter@redwood.ai>
+To: Naomi Feldman <naomi.feldman@redwood.ai>, Kimberly Park <kimberly.park@redwood.ai>, EdgeCorp SRE <sre@edgecorp.com>
+Cc: NetOps <netops@edgecorp.com>
+Date: 2026-10-19T08:21:00-07:00
+Subject: Re: Access fabric decision: direct peering, service endpoint, or managed VPN — quick ask
+
+Short note from procurement/ops perspective: PrivateLink is the lowest-risk pilot path and keeps negotiations simple (no cross-account peering approvals). Two operational notes:
+- If EdgeCorp expects <100ms p95 for inference, validate path P95 during POC; PrivateLink adds a small hop but is usually fine for single-AZ.
+- VPN (site-to-site) is the slowest to iterate on — often involves firewall ticketing windows and cert rotations. Good for customers who cannot accept any cross-account endpoint at all, but heavy lift for a pilot.
+
+My vote: PrivateLink + documented escalation to peering if we see sustained high throughput or if EdgeCorp wants their origin IPs preserved for strict logging policies.
+
+Ben
+Ben Carter
+Enterprise Sales, Redwood Inference
+
+> On 2026-10-18 11:03 Kimberly Park wrote:
+> > Naomi — thanks for the clear brief. Quick summary/recommendation up front: go with AWS PrivateLink (interface endpoints) for the pilot; propose adding a peering option for production if they need cross-account native routing later. ...
+From: EdgeCorp SRE <sre@edgecorp.com>
+To: Naomi Feldman <naomi.feldman@redwood.ai>, Kimberly Park <kimberly.park@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: NetOps <netops@edgecorp.com>
+Date: 2026-10-20T15:42:00-07:00
+Subject: Re: Access fabric decision: direct peering, service endpoint, or managed VPN — quick ask
+
+Thanks Naomi / Kim / Ben — useful summary. A few clarifying items from EdgeCorp side before we lock in PrivateLink for the pilot:
+
+1) Source IP / logging: we need to preserve a mapping from original client to request for our SIEM. If PrivateLink rewrites source we will need either a header-based mapping from your sidecar proxy or a maintained ENI range we can correlate. Can you confirm which approach is less operationally risky for you?
+
+2) Flow diagrams: please provide a simple network diagram showing where our NAT / firewall sits relative to the interface endpoint and the Redwood host. We have a change window on 2026-11-03; want the runbook before that.
+
+3) Certificates and mutual auth: we prefer mTLS for control-plane operations; can you include a sample cert rotation cadence and an opinion on whether our TACACS integration is required for the first week of the pilot?
+
+We reviewed the attached matrix and had comments inline (shared a Drive link). If you can send the runbook and a short diagram by Monday (2026-10-25) we'll kick off change tickets.
+
+Cheers,
+Alex P.
+Alex Petrov
+SRE Lead, EdgeCorp
+sre@edgecorp.com
+
+--- Quoted earlier: ---
+> On 2026-10-19 08:21 Ben Carter wrote:
+> > Short note from procurement/ops perspective: PrivateLink is the lowest-risk pilot path ...
+
+--- End quoted ---

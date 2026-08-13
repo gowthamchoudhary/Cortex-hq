@@ -1,0 +1,140 @@
+Intermittent request timeouts — edge mapping & DNS timeouts (Greylock Retail)
+
+From: Stefan Cole <stefan.cole@greylockretail.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>
+Cc: ops@greylockretail.com
+Date: Wed, 28 Apr 2027 09:12:00 -0700
+Subject: High latency and intermittent 504s impacting checkout (US-east)
+
+Hi Marcus / Evelyn,
+
+We started seeing a sharp spike in checkout latency this morning around 08:45 UTC. Over the last 30 minutes we're seeing ~15% of requests return 504/timeouts and p99 token latency jump to 6.2s (normal p99 ~1.1s). This is only for traffic routed to the us-east edge; other regions look OK.
+
+Sample metrics attached (dashboard-export.csv). The errors are hitting our production checkout route and causing cart abandonment. Can Redwood investigate? We need visibility ASAP and an ETA for a mitigation.
+
+We've already tried restarting our sidecar proxies and confirmed no changes on our VPC side. Please escalate if this looks like a network path or upstream issue.
+
+Thanks,
+Stefan Cole
+Director, Platform Engineering
+Greylock Retail
+
+Attachments: dashboard-export.csv (CSV)
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Stefan Cole <stefan.cole@greylockretail.com>
+Cc: Evelyn Hart <evelyn_hart@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Wed, 28 Apr 2027 09:30:12 -0700
+Subject: Re: High latency and intermittent 504s impacting checkout (US-east)
+
+Hi Stefan — thanks for the heads up and for the dashboard export. We're treating this as an incident and I've looped in Karthik (network/runtime) and Vanessa (CS lead) to help triage.
+
+Immediate plan:
+- Quick sync in 30 minutes to review logs and request traces (I'll send a calendar invite).
+- Karthik will start an initial network path analysis and check VPC peering/edge mapping and DNS TTL behaviour.
+- Vanessa and I will coordinate comms and temporary mitigation (route fallback) if needed.
+
+Can you attach the pcap/sample request traces and share any ingress VPC flow logs you can? That will help us correlate path changes.
+
+I'll follow up after the first triage.
+
+—Marcus
+Marcus Lin
+Account Executive, Customer Escalations
+Redwood Inference
+
+From: Karthik Iyer <karthik_iyer@redwood.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Wed, 28 Apr 2027 10:05:47 -0700
+Subject: (internal) Initial triage: potential asymmetric peering + DNS caching mismatch
+
+Internal notes / earliest findings:
+- Correlated traces from edge logs (08:36–08:52 UTC) show a subset of requests timing out after TCP session establishment; RTTs jump and then connections are reset by an intermediate proxy cluster.
+- VPC peering metrics show increased retransmits on the peering attachment between us-east-2 (our edge) and GREYLOCK-VPC-PEER. Timing aligns with a partial route flap reported by the provider at ~08:34 UTC.
+- DNS: multiple clients observed an unusually low TTL being returned from a customer-managed DNS instance (TTL 30s) in combination with aggressive caching by an intermediate proxy. This creates TTL churn and inconsistent edge mapping.
+- Firewall/proxy: stateful connection table exhaustion on one of the provider's transit proxies is consistent with the 504 signature (stateful timeouts + SYN retries).
+
+Immediate mitigation suggestions (order matters):
+1) BUMP client-side DNS caching on our edge to prefer 300s for mapping lookups (reduces remapping churn).
+2) Route a small fraction (~10–15%) of traffic to a fallback edge pool that uses an alternate peering path (can be configured from our routing plane).
+3) Request Greylock to provide VPC flow logs and pcap for the 08:30–09:00 UTC window; if provider peering is flapping we need a ticket opened with them.
+
+I'll prepare a temporary routing policy and a one-click fallback to test in staging, then we can roll to prod if metrics improve.
+
+-Karthik
+Karthik Iyer
+Senior Network Engineer, Redwood Runtime
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Stefan Cole <stefan.cole@greylockretail.com>
+Cc: Evelyn Hart <evelyn_hart@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Wed, 28 Apr 2027 11:00:03 -0700
+Subject: Re: High latency and intermittent 504s impacting checkout (US-east)
+
+Hi Stefan — quick update and an interim mitigation we can try now: 
+
+What we saw: our initial triage points to an unstable peering path + proxy state exhaustion causing intermittent 504s for a subset of requests. Karthik's put together a short playbook.
+
+Actions we've taken/recommended (starting now):
+- We've prepared a routing policy that will divert 12% of your traffic from the affected edge pool to an alternate peering path. This should reduce the load on the flaky transit proxy.
+- We're increasing the edge DNS mapping cache TTL from 30s to 300s as an interim measure to reduce remapping churn.
+- Please upload the pcap and VPC flow logs to the Drive link we shared so our network team can correlate with provider metrics.
+
+Can you confirm a 10–15 minute maintenance window where we can flip the fallback route (we'll monitor closely and roll back if needed)? I'll coordinate the change and send an update as soon as the diversion is active.
+
+Thanks — we understand the impact and will stay on this until it's resolved.
+
+—Marcus
+Account Executive, Customer Escalations
+Redwood Inference
+
+From: Stefan Cole <stefan.cole@greylockretail.com>
+To: Marcus Lin <marcus_lin@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>
+Date: Thu, 29 Apr 2027 08:20:11 -0700
+Subject: Re: High latency and intermittent 504s impacting checkout (US-east)
+
+Marcus,
+
+Thanks — we've dropped the logs into the folder you provided and attached a small pcap (pcap_sample_1.pcap) as requested. I'm seeing the same spikes again between 08:05–08:22 UTC this morning. Attaching the logs (greylock_logs_20270429.zip).
+
+We can approve a 15-minute window anytime between 09:00–11:00 UTC today to test the fallback route. Also, FYI, our infra team opened a ticket with the cloud provider reporting peering instability around the same timestamp.
+
+-Stefan
+
+Attachments: greylock_logs_20270429.zip (zip), pcap_sample_1.pcap (pcap)
+
+From: Marcus Lin <marcus_lin@redwood.com>
+To: Stefan Cole <stefan.cole@greylockretail.com>
+Cc: Evelyn Hart <evelyn_hart@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>, Vanessa Ortiz <vanessa_ortiz@redwood.com>
+Date: Fri, 30 Apr 2027 14:45:00 -0700
+Subject: Executive summary & 72-hour mitigation plan — Greylock Retail incident
+
+Stefan / Greylock execs,
+
+Thanks again for the quick logs and the window. Below is a concise executive summary and the next steps we will execute over the next 72 hours: 
+
+Executive summary (tl;dr):
+- Root cause (probable): intermittent peering route instability between Greylock VPC peering and our us-east edge, compounded by aggressive DNS TTLs and proxy state exhaustion on the provider transit path.
+- Impact: ~10–20% of checkout requests experienced elevated latency or 504s during peering flaps; p99 token latency rose to ~6s at the worst points.
+
+72-hour mitigation & monitoring plan:
+1) Immediate (today): divert 12% of traffic to alternate peering path; bump DNS mapping TTL to 300s (already scheduled and monitored).
+2) 24 hours: full traffic shift to alternate path if metrics show >50% reduction in 504s; continue provider engagement ticket.
+3) 72 hours: permanent routing policy or peering remediation depending on provider resolution.
+
+We will host a cross-org call with our runtime, networking, and CS leads tomorrow to align on the contingency timeline and provide a standing status update for your execs. Please share an executive point of contact for Greylock so we can include them in the 24–72 hour briefs.
+
+Incident artifacts and links:
+- Investigation ticket: https://redwood.atlassian.net/browse/INF-2345
+- Workspace with logs: https://drive.google.com/drive/folders/incident-greylock-2027
+
+If you prefer, I can loop in our Head of Reliability for an executive-level briefing — otherwise we'll keep updates to this chain and the scheduled calls.
+
+We take this seriously and will continue to work until the issue is closed.
+
+Regards,
+Marcus Lin
+Account Executive, Customer Escalations
+Redwood Inference
+Phone: +1 (555) 212-0911
+

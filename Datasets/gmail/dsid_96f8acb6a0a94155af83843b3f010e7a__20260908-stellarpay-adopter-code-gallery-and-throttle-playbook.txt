@@ -1,0 +1,150 @@
+StellarPay integration: onboarding, SDK examples, and rate/timeout plan
+
+From: Sanjay Patel <sanjay@stellarpay.com>
+To: mina_haddad <mina_haddad@redwood.ai>
+Cc: DevOps Team <devops@stellarpay.com>
+Date: 2026-09-08T09:14:00-07:00
+Subject: StellarPay integration: kickoff + SDK samples
+
+Hi Mina,
+
+Thanks again for the demo yesterday — StellarPay's engineering and ops teams were impressed with Redwood's latency and the cost controls. We're ready to start the onboarding run and want to align on the engineering handoff items. Primary asks from our side:
+
+- A minimal SDK quickstart (node/python) we can drop into our test harness.
+- Endpoint migration guidance: how to switch from our current local LLM proxy to Redwood endpoints with zero downtime.
+- Recommended retry/timeouts and rate limit settings for our payment authorizations (avg request size ~450 tokens, peak concurrency ~120 qps).
+- Any sample config we can test in our staging environment.
+
+Do you have artifacts we can toggle through this week? If possible please include sample backoff policies (linear vs exponential), suggestions for cache TTLs for prefix prompts, and a brief SLA note for expected token latency. I've looped in Rachel from our platform team.
+
+Thank you,
+Sanjay
+VP Platform, StellarPay
+
+--
+Sanjay Patel
+S: +1 (415) 555-0182
+
+From: mina_haddad <mina_haddad@redwood.ai>
+To: Sanjay Patel <sanjay@stellarpay.com>
+Cc: monica_patel <monica_patel@redwood.ai>, vivek_kulkarni <vivek_kulkarni@redwood.ai>, grace_oconnor <grace_oconnor@redwood.ai>, DevOps Team <devops@stellarpay.com>
+Date: 2026-09-08T12:03:00-07:00
+Subject: Re: StellarPay integration: kickoff + SDK samples
+
+Hi Sanjay — great to hear you were happy with the demo. Welcome aboard.
+
+Quick plan so we have an execution path this week:
+
+1) Implementation pack: I'll share a small ZIP with Node/Python SDK quickstarts and a sample retry YAML for your staging tests (client_sdk_quickstart.zip).
+2) Endpoint migration: Monica will draft a zero-downtime cutover checklist — we typically recommend a brief dual-write period (1–2 hours) with traffic ramping and a health-check gate.
+3) Rate/timeout guide: Vivek will propose a conservative default config for you (initial qps target and backoff settings) and a few stress test targets so your SREs can validate.
+4) SLA note: Grace will include realistic tail-latency expectations and fallback behavior for degraded modes (model variant fallback and region failover).
+
+Can your team run a 2-hour staging soak with synthetic traffic Monday? If yes, we'll schedule a 30-min sync to review logs and tune retry/timeout thresholds.
+
+I'll attach the initial pack in the follow-up message.
+
+— Mina
+Head of Customer Success, Redwood Inference
+
+From: monica_patel <monica_patel@redwood.ai>
+To: Sanjay Patel <sanjay@stellarpay.com>
+Cc: mina_haddad <mina_haddad@redwood.ai>, vivek_kulkarni <vivek_kulkarni@redwood.ai>, grace_oconnor <grace_oconnor@redwood.ai>, DevOps Team <devops@stellarpay.com>
+Date: 2026-09-08T15:07:00-07:00
+Subject: Implementation checklist: zero-downtime cutover + staging plan
+
+Hi Sanjay / Rachel —
+
+Attached is a concise implementation checklist for the cutover. High-level highlights here so the team can act quickly:
+
+- Pre-cutover (staging):
+  • Deploy Redwood SDK to staging branch behind feature flag.
+  • Run traffic generator at 30%, 60%, 100% of expected peak for 30m each; capture token latency p95/p99.
+  • Validate prefix/KV cache hit rates and memory sizing on the agent (suggested TTL=10m for resume prompts).
+- Cutover steps (production):
+  • Enable dual-write mode (call Redwood + internal proxy), but continue to route responses to current path.
+  • Gradual traffic shift: 10% -> 40% -> 70% -> 100% (15–30m holds depending on error budget).
+  • Gate: p95 latency under 300ms and error rate <0.3% for two consecutive holds.
+- Rollback: immediate toggle to internal proxy, drain in-flight requests for <60s.
+
+Attachments included: client_sdk_quickstart.zip (with example code), sample_retry_config.yaml (suggested backoff & timeouts), sla_matrix.csv (latency expectations by model and sequence length).
+
+Node quickstart snippet (from the pack):
+
+const Redwood = require('redwood-sdk');
+const client = new Redwood({ apiKey: process.env.REDWOOD_KEY });
+
+async function generate(prompt) {
+  return client.chat.generate({
+    model: 'rwd-base-1',
+    messages: [{ role: 'user', content: prompt }],
+    timeout: 5000 // ms, client-side guard
+  });
+}
+
+If you'd like, we can provide a patch-ready sample showing exactly where to insert the SDK call in your existing authorizer microservice.
+
+Best,
+Monica
+CS Implementation Lead, Redwood Inference
+
+From: vivek_kulkarni <vivek_kulkarni@redwood.ai>
+To: Sanjay Patel <sanjay@stellarpay.com>, DevOps Team <devops@stellarpay.com>
+Cc: mina_haddad <mina_haddad@redwood.ai>, monica_patel <monica_patel@redwood.ai>
+Date: 2026-09-09T08:42:00-07:00
+Subject: Retry/timeout and rate-limit tuning suggestions
+
+Hi all — diving into the numbers you shared (avg 450 tokens, peak ~120 qps). My suggested conservative starting config for staging:
+
+- Client-side timeouts:
+  • socket timeout: 6s
+  • request timeout: 10s (application-level)
+- Retries (idempotent-ish calls only — for you, tokenization means treat safety checks as idempotent if they don't change state):
+  • Max attempts: 3
+  • Backoff: jittered exponential (base=200ms, factor=2). Example sequence: 200ms, 480ms (+jitter), 1.1s
+  • For 429s (rate limit): use server-provided Retry-After if present; otherwise apply exponential as above but cap to 5s.
+- Bulkhead & concurrency:
+  • Pool size per worker process: 8 concurrent in-flight requests to Redwood runtime.
+  • If you run N worker processes, aim global concurrency ~= pool_size * N <= 2x peak concurrency during staged ramp.
+- Token batching & caching:
+  • Where possible batch authorizations (group independent short prompts into single multi-turn call) to increase throughput efficiency.
+  • Prefix caching: TTL 600s for static human prompts; do not cache user-specific PII.
+
+Sample retry_config YAML (attached) — paste below for quick reference:
+
+# sample_retry_config.yaml
+max_attempts: 3
+backoff_strategy: exponential_jitter
+base_delay_ms: 200
+factor: 2.0
+max_delay_ms: 5000
+retry_on: [ 429, 502, 503, 504 ]
+idempotency_hint_header: X-Idempotency-Key
+
+Operational test plan (what to measure during the soak): p95/p99 latency, error-type breakdown (4xx vs 5xx vs timeouts), retry amplification (retries/sec), and token consumption.
+
+I'll join your staging sync Monday to walk through logs and tweak the backoff caps.
+
+— Vivek
+Principal Reliability Engineer, Redwood Inference
+
+From: Sanjay Patel <sanjay@stellarpay.com>
+To: mina_haddad <mina_haddad@redwood.ai>
+Cc: DevOps Team <devops@stellarpay.com>, monica_patel <monica_patel@redwood.ai>, vivek_kulkarni <vivek_kulkarni@redwood.ai>
+Date: 2026-09-10T15:28:00-07:00
+Subject: Re: StellarPay integration: onboarding, SDK examples, and rate/timeout plan
+
+Thanks Mina / Monica / Vivek — this is exactly what we needed. We'll run the 2-hour soak Monday (9/13) at 9am PT using your sample config and report back with p95/p99 and any anomalies.
+
+Actions from our side:
+- Rachel: will drop the feature-flagged staging deploy Friday EOD.
+- DevOps: will consume client_sdk_quickstart.zip and unpack the node/python samples.
+- We'll capture traffic traces and a short log dump to share during the Monday sync.
+
+Please send the ZIP and YAML as a Drive link (or I can get them from the attachment if that's easier).
+
+Appreciate the quick turnaround — talk Monday.
+
+Cheers,
+Sanjay
+VP Platform, StellarPay

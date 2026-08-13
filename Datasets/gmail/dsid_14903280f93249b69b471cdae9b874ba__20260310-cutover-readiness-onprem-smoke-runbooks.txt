@@ -1,0 +1,128 @@
+Cutover readiness: on-prem VPC deployment — final smoke plan & runbooks
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: John Dalton <john.dalton@finops.io>, ops-team@finops.io
+Cc: Dev Patel <dev.patel@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Sun, 8 Mar 2026 09:10:00 -07:00
+Subject: Cutover readiness: on-prem VPC deployment — final smoke plan & runbooks
+
+Hi John / FinOps ops team —
+
+We’re one business day out from the scheduled on-prem cutover (Mon 2026-03-09 / Tuesday for some zones). This thread is the single-source-of-truth for: the final smoke-test plan, network routing/ACL checks, and the runbook we will follow during the cutover window. Please review and ack the items below so we can lock the window.
+
+Key objectives for the window:
+- Validate control-plane connectivity (API, metrics, tracing) from customer VPC to Redwood private control plane.
+- Validate inference path: request -> routing -> Warmed GPU pool -> response within SLO.
+- Confirm KV/prefix caching persistence across restart and roll-forward fallback.
+- Confirm KMS integrations for model keys and HSM-based signing.
+
+Pre-cutover checklist (action owners in parentheses):
+1) Network prep: confirm BGP routes and firewall rules allow 443/2380/50051 (Dev).
+2) DNS: verify private DNS entries and TTLs; confirm split-horizon resolution (Vivek).
+3) Certificates & KMS: HSM certs staged and rotation tested (Neha).
+4) Load/Capacity: reserved Dedicated pools are healthy and autoscale policies set (Marissa/Dev).
+5) Monitoring/Alerts: runbook alert thresholds set and on-call rotation agreed (Marissa).
+
+Smoke tests (attached: smoke_tests_spec.yaml) are minimal-by-design and ordered to allow safe rollbacks:
+- Control-plane health checks (GET /health, metrics ingestion).
+- Auth check using service identity + KMS signing (short token).
+- Small inference calls: 2-3 tokens, then 256-token synthetic load.
+- Prefix cache hit verification (run kv_cache_verification.sh).
+
+Attachments: runbook_cutover_v2.pdf (full step-by-step), smoke_tests_spec.yaml (machine-readable test list). I’ve also attached the quick verification script for KV cache (kv_cache_verification.sh) for Dev to confirm before we begin.
+
+Cutover window proposal: Mon 2026-03-09 22:00 - 23:30 UTC (2h buffer). If you need a different window call it out now.
+
+Please reply with the following by EOD today:
+- Ack on the window (Yes/No)
+- Any outstanding network or procurement items blocking HSM/KMS access
+- Who will be primary on-call during the window (Redwood & FinOps)
+
+Thanks everyone —
+Marissa
+Marissa Cole
+Sr. Program Manager, Deployments
+Redwood Inference
+attachments: runbook_cutover_v2.pdf (PDF), smoke_tests_spec.yaml (YAML)
+
+From: John Dalton <john.dalton@finops.io>
+To: Marissa Cole <marissa.cole@redwood.ai>
+Cc: Dev Patel <dev.patel@redwood.ai>, Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Sun, 8 Mar 2026 10:05:00 -07:00
+Subject: Re: Cutover readiness: on-prem VPC deployment — final smoke plan & runbooks
+
+Marissa —
+
+Thanks for the summary. Window looks OK from our side, but two quick clarifications before we ack:
+1) Rollback plan: can you confirm the step that will switch traffic back to hosted endpoints if we see >5% error rates during the 256-token load? We want an automated fallback step in case autoscale/queueing doesn't stabilize.
+2) Maintenance notification: we'll need a 2-hour advance notification to our support staff and a stub message for our status page. Can you provide the message text we should post?
+
+Also adding: ops-team@finops.io (internal mailing list) — they’ll own post-cutover validation on the app side.
+
+On the rollback: if possible, please also share any metrics dashboards we should watch (latency, 5xx, queue length).
+
+—John
+John Dalton
+Head of Platform Ops, FinOps.io
+
+On Sun, Mar 8, 2026 at 09:10 AM Marissa Cole <marissa.cole@redwood.ai> wrote:
+> [previous message quoted]
+From: Dev Patel <dev.patel@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, John Dalton <john.dalton@finops.io>
+Cc: Vivek Kulkarni <vivek.kulkarni@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Mon, 9 Mar 2026 18:13:00 -07:00
+Subject: Re: Cutover readiness: on-prem VPC deployment — final smoke plan & runbooks
+
+Quick answers + actions from infra:
+
+Rollback approach (short):
+- Primary: smart routing policy will shift new traffic to hosted Redwood API if health checks fail for >5 minutes or 5xx rate exceeds threshold. This is an automated control-plane action.
+- Manual: engineers can flip the routing policy to Hosted via the private console (Runbook step 6.4).
+- We’ll stage a canary traffic tag first (5% traffic) then ramp to 25% before full cutover.
+
+Dashboards to watch (links in Jira INF-2147):
+- inference.latency.p50/p95
+- inference.errors.5xx
+- queue.length.per-pool
+
+Pre-cutover smoke commands (we will run these 30m before the window):
+1) curl -sSf https://private-control.finops.internal/health || exit 1
+2) ./kv_cache_verification.sh --endpoint private-control.finops.internal --key-prefix test-smoke
+3) openssl s_client -connect kafka.internal:9093 -showcerts (cert check)
+4) short inference: POST /v1/generate {"input":"smoke test"} (2 calls -> 256 token call)
+
+I pushed kv_cache_verification.sh to the attachments in the original email (stub). You’ll need the VPN token we requested yesterday to reach the customer private network. Neha — can you confirm HSM certs are staged and accessible to the private control-plane service account?
+
+I’ll be on-call in the window and will monitor the GPU pool logs and queue lengths. Vivek — please confirm DNS entries (split-horizon) are resolving from our test-bastion.
+
+- Dev
+Dev Patel
+Site Reliability Engineer, Redwood Inference
+attachments: kv_cache_verification.sh (shell script stub)
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: John Dalton <john.dalton@finops.io>, ops-team@finops.io
+Cc: Dev Patel <dev.patel@redwood.ai>, Vivek Kulkarli <vivek.kulkarni@redwood.ai>, Neha Kapoor <neha.kapoor@redwood.ai>
+Date: Tue, 10 Mar 2026 07:55:00 -07:00
+Subject: Re: Cutover readiness: on-prem VPC deployment — final smoke plan & runbooks
+
+Thanks all — final sign-off checklist below. We’ll treat the list as gating: any open item moves us to the next available window.
+
+Sign-off (please reply with your initials):
+- FinOps ops: ack window + on-call owner (John or ops-team)
+- Neha: certs/HSM staged and tested
+- Dev: KV script validated, canary plan in place
+- Vivek: DNS & BGP confirmed from test-bastion
+- Marissa: runbook published and on-call rotation set
+
+Status page blurb (John, feel free to copy/paste):
+"FinOps.io scheduled maintenance: brief interruption to inference traffic as we switch to a private on-prem endpoint for improved latency and compliance. Expected window: 22:00–23:30 UTC. We'll monitor and notify if rollback is required"
+
+I’ve also pasted final runbook and a link to the live doc for ephemeral changes: https://drive.google.com/open?id=1A2bCutoverRunbook and ticket INF-2147. DocuSign link for the agreed SLA amendment (simple signature) is here: https://app.docusign.com/link/exp/abcd1234
+
+If you’ve already validated your item, reply with just your initials. I’ll close the loop 2 hours before the window with final go/no-go.
+
+—Marissa
+Marissa Cole
+Sr. Program Manager, Deployments
+Redwood Inference

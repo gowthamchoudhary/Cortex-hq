@@ -1,0 +1,112 @@
+Audit log inventory & on-demand pull — custody and PII-minimization scope
+
+From: Martin Hsu <martin.hsu@greenline.health>
+To: sofia.ivanova@redwood.ai
+Cc: audits@greenline.health
+Date: Thu, 15 Apr 2027 09:12:00 -0700
+Subject: Audit log inventory & export questions (SOC 2 / SIG)
+
+Hi Sofia,
+
+We’re working through our SOC 2 evidence plan and need to confirm what Redwood can provide for admin/activity logging. Specifically:
+
+- Complete list of admin event types that are logged (create/delete/role-change/privilege-elevation, etc.)
+- Retention windows per event type and whether any are immutable/worm-style
+- On-demand export options (JSONL / Parquet / CSV), expected manifest/checksum, and chain-of-custody tooling (signed manifests/HMAC)
+- PII minimization options / redaction at export time (IP, user email hashes, resource names)
+- SLA for fulfilling an on-demand pull (we may need a 24–72 hour window)
+
+Can you share a short inventory and the preferred export process? If useful we can do a quick call with our security team.
+
+Thanks,
+Martin
+Martin Hsu
+Security Lead, Greenline Health
+[Attachment: greenline_sigs_req.pdf (PDF, 65KB)]
+From: Sofia Ivanova <sofia.ivanova@redwood.ai>
+To: Martin Hsu <martin.hsu@greenline.health>
+Cc: kimberly.park@redwood.ai, karthik.iyer@redwood.ai
+Date: Thu, 15 Apr 2027 11:03:00 -0700
+Subject: Re: Audit log inventory & export questions (SOC 2 / SIG)
+
+Hi Martin — thanks for the clear list. I’ve pulled together a concise inventory and attached a small schema snapshot (CSV) to show field names and sample retention. High-level answers below; we’ll follow up with a technical playbook.
+
+Summary (quick):
+- Event types: operator/admin actions (login, token create/revoke, grant/revoke role, change policy, console/API config changes), system-generated security events (auth failures, MFA events), model-deployment events (start/stop/rollback), and data-access alerts (operator view/export).
+- Retention: default 90 days for high-volume operator events; 365 days for security-sensitive events (auth failures, privilege escalations); custom retention available on Dedicated/Private plans.
+- Export formats: JSONL (preferred for fidelity), Parquet (cost-efficient), CSV (sampling / quick view). Exports include a signed manifest (SHA256) and optional HMAC attestation.
+- PII minimization: export-time scrubbing options include email hashing (sha256), IP truncation, and resource-name tokenization. Redaction is configurable per-request; we document trade-offs in the playbook.
+- SLA: standard on-demand pulls target 48 hours; 24-hour expedited option available for enterprise contracts.
+
+I attached a small file (log_schema_snapshot.csv) that shows canonical fields and which are redactable vs non-redactable.
+
+Next steps: I’ll loop in Karthik for technical export/runbook details and Kim to surface any contract/SLA bullets. Would you prefer SFTP, pre-signed S3, or an encrypted HTTPS push for delivery?
+
+Regards,
+Sofia Ivanova
+Senior Compliance Manager, Redwood Inference
+[Attachment: log_schema_snapshot.csv (CSV, 24KB)]
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Sofia Ivanova <sofia.ivanova@redwood.ai>, Martin Hsu <martin.hsu@greenline.health>
+Cc: kimberly.park@redwood.ai
+Date: Fri, 16 Apr 2027 08:26:00 -0700
+Subject: Re: Audit log inventory & export questions (SOC 2 / SIG)
+
+Martin, Sofia — adding the technical details so Greenline can assess feasibility and mapping to your evidence requests.
+
+Technical export playbook (high level):
+- Supported formats: line-delimited JSON (JSONL) with newline-separated events; Apache Parquet (partitioned by date) for large snapshots; CSV for sampled slices.
+- Manifest & integrity: each export includes manifest.jsonl with per-file SHA256 + overall manifest SHA256. Enterprise exports optionally signed with our HSM key and including an HMAC (customer-shared secret).
+- Time fidelity & TZ: timestamps are stored in RFC3339 UTC; exports preserve original timestamps plus an epoch field for deterministic sorting. We include timezone-normalized chunks if requested.
+- Sharding & size: large time windows are sharded by hour/date to keep file sizes < 20GB.
+- Redaction: fields marked in schema as redactable can be redacted server-side at export time. We support deterministic hashing (sha256 saltable) so you can still map identities across exports if needed. Note this hash is irreversible unless you provide the salt.
+- Chain of custody: we include an export events log (separate ledger) that records who requested the export, IP of retrieval, and delivery handshake (S3 presigned URL issuance or SFTP session id). Audit trail is included in the bundle.
+- Sampling caveats: when sampling is requested for performance, we mark the bundle with the sampling ratio and seed so it’s reproducible.
+
+Attachment: export-playbook-v1.pdf (PDF, 180KB) — contains endpoint examples, sample manifest, and recommended redaction recipes.
+
+If 48h SLA is tight for a multi-TB pull we’ll propose a streaming snapshot + incremental handoff cadence to meet deadlines without huge compute spikes.
+
+—Karthik
+Karthik Iyer
+Principal Infra Engineer, Redwood Inference
+[Attachment: export-playbook-v1.pdf (PDF, 180KB)]
+From: Martin Hsu <martin.hsu@greenline.health>
+To: sofia.ivanova@redwood.ai
+Cc: audits@greenline.health
+Date: Mon, 19 Apr 2027 10:01:00 -0700
+Subject: Re: Audit log inventory & export questions (SOC 2 / SIG)
+
+Thanks — that is very helpful. A couple quick clarifying questions from our auditors:
+
+1) For the HSM-signed manifest option, can you provide an example attestation and the public key fingerprint so our assessor can verify signatures?
+2) For redaction — will the export process remove PII from raw payload fields (payloads may include user-supplied metadata)? Or do you only redact the schema fields listed in the CSV?
+3) For delivery: preference is pre-signed S3; please confirm link TTL and whether we get a retry or re-issue procedure if an automated transfer fails.
+
+Also — confirm the 24-hour expedited SLA cost delta (or point me to the contract SLA addendum).
+
+Best,
+Martin
+From: Sofia Ivanova <sofia.ivanova@redwood.ai>
+To: Martin Hsu <martin.hsu@greenline.health>
+Cc: karthik.iyer@redwood.ai, kimberly.park@redwood.ai
+Date: Tue, 20 Apr 2027 11:17:00 -0700
+Subject: Re: Audit log inventory & export questions (SOC 2 / SIG)
+
+Martin — quick answers inline: 
+
+1) HSM attestation: yes — we’ll provide a sample signed manifest and the public key fingerprint (SHA256) from our signing key. I’ll attach the sample to the Drive folder and include the fingerprint in the handoff manifest.
+
+2) Redaction scope: two modes — schema-only redaction (fields explicitly listed in the CSV) and payload-scrub (removes/masks user-supplied metadata fields). Payload-scrub is a best-effort service (may increase export time) and we’ll document the exact regex/transform rules in the playbook.
+
+3) Presigned S3: default TTL is 72 hours. If transfer fails we re-issue up to 3 times automatically; after that we open a secure support ticket and can provide SFTP as a fallback.
+
+Expedited 24h SLA: available via an addendum. Typical uplift is a fixed service fee + overage on egress for very large bundles; Kim will follow up with exact pricing and contract language.
+
+We’ll publish the sample manifest and key fingerprint to: https://drive.google.com/drive/folders/1aBcD-example-logs-handshake and open a HubSpot task: https://app.hubspot.com/deal/4827.
+
+If that covers it we can schedule a short handoff call with your auditors this week.
+
+Regards,
+Sofia
+Senior Compliance Manager, Redwood Inference

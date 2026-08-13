@@ -1,0 +1,93 @@
+Urgent: Silverline canary — reserved QPS shortfall, P95 latency spike
+
+From: Alex Nguyen <alex@silverlinehealth.com>
+To: Irene Choi <irene_choi@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: procurement@silverlinehealth.com
+Date: Tue, 20 Apr 2027 09:12:00 -0700
+Subject: Canary outage: severe latency + throttling on Silverline canary
+
+Hi Irene / Marissa,
+
+We're seeing a sharp regression against the canary traffic we run on Redwood Dedicated for our Silverline integration. Quick summary:
+- P95 generation latency jumped from ~150ms -> ~520ms around 08:40 PDT.
+- 5xx rate increased to ~8% over the 09:00-09:10 window.
+- Reserved QPS metric (per contract) shows effective throughput ~60 QPS but our canary needs ~200 QPS — tokens are queuing and hitting headroom.
+
+This is affecting our staging->prod promotion tomorrow. We need immediate remediation or a rollback window. I'm attaching a snapshot of the error screen and request logs. Can you confirm whether this is on Redwood's side (pool saturation / reserved capacity shortfall) or if something changed in our canary config?
+
+Alex
+Alex Nguyen
+Head of Integrations, Silverline Health
+
+Attachment: silverline_error_snapshot.png
+From: Irene Choi <irene_choi@redwood.ai>
+To: Alex Nguyen <alex@silverlinehealth.com>, Marissa Cole <marissa_cole@redwood.ai>
+Cc: jonas_weber@redwood.ai, rishi_malhotra@redwood.ai, procurement@silverlinehealth.com
+Date: Tue, 20 Apr 2027 09:25:00 -0700
+Subject: Re: Canary outage: severe latency + throttling on Silverline canary
+
+Alex, thanks — we see the alert and are triaging now.
+
+Immediate asks:
+- Marissa / Ops: can you collect GPU pool headroom, reservation usage, and model-variant routing for the 08:30-09:15 window and paste initial findings here?
+- Jonas / Runtime: if there's a noisy neighbor or burst that consumed the reserved pool, list quick mitigations (burst authorization, fallback model, or per-route throttling).
+
+Alex: we'll keep you updated every 15 minutes. If we need permission for emergency burst capacity or temporary failover to a lower-cost variant, we'll list the ask and timeline explicitly.
+
+Irene
+Senior AM, Redwood Inference
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Irene Choi <irene_choi@redwood.ai>, jonas_weber@redwood.ai, rishi_malhotra@redwood.ai
+Cc: Alex Nguyen <alex@silverlinehealth.com>, procurement@silverlinehealth.com
+Date: Tue, 20 Apr 2027 09:34:00 -0700
+Subject: Re: Canary outage: severe latency + throttling on Silverline canary
+
+Irene — initial diagnostics below (pulled at 09:32):
+- Dedicated GPU pool "dedicated-c-us-west-2-3" showed sustained CUDA compute at 96% across the cluster between 08:38-09:10.
+- KV-cache check: hit ratio dropped 12% as canary traffic increased; lookups added latency.
+- Reservation telemetry: Silverline's reserved capacity contractually set at 200 QPS but effective allocated headroom dropped to ~60 QPS due to an autoscaler race condition + contiguous burst from a different tenant (tenant-id obscured).
+- Error pattern: majority are 429/503 proxying from saturated batch queues; a small percent are model OOM retries.
+
+Recommended immediate mitigations (0-60 min):
+1) Enable emergency burst pool for Silverline (+150 QPS) — requires manager approval; we can gate by a 1-hour auto-disable.
+2) Route Silverline canary to the smaller-quantized variant (gptx-small-q) to reduce per-token cost and free headroom; expected latency improvement ~2x.
+3) Backpressure per-route at Silverline client to smooth spikes (we can push a temporary recommendation and a proxy rule).
+
+Attaching pool metrics export. I'll spin up a canary routing change now if I get quick approval from Jonas or Rishi.
+
+Attachment: pool_metrics_0420.csv
+Marissa
+Lead, Customer Reliability
+From: Jonas Weber <jonas_weber@redwood.ai>
+To: Irene Choi <irene_choi@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, rishi_malhotra@redwood.ai
+Date: Tue, 20 Apr 2027 09:46:00 -0700
+Subject: Re: Canary outage: severe latency + throttling on Silverline canary
+
+Agree with Marissa's triage. Quick operational plan and asks for approval:
+- Action A (t=0-5m): Apply per-route soft-throttle recommendation to Silverline canary and enable temporary routing to gptx-small-q for canary traffic only. Impact: reduces tail latency, avoids model OOMs.
+- Action B (t=5-30m): Authorize emergency burst capacity +150 QPS on dedicated-c-us-west-2-3. Finance/Sales: we should capture the approval as an emergency addendum (Irene, please flag to Silverline procurement).
+- Action C (t=30-120m): Run root-cause — confirm whether autoscaler race allowed cross-tenant spillover and harden autoscaler and embargo noisy tenant.
+
+I approve Action A and will execute immediately. Marissa, please confirm you pushed the routing change and we’ll monitor P95 and 5xx. If P95 doesn't improve by 25% in 10m, trigger Action B.
+
+Jonas
+Director, Runtime Engineering
+From: Irene Choi <irene_choi@redwood.ai>
+To: Alex Nguyen <alex@silverlinehealth.com>, procurement@silverlinehealth.com
+Cc: Marissa Cole <marissa_cole@redwood.ai>, jonas_weber@redwood.ai, rishi_malhotra@redwood.ai
+Date: Wed, 21 Apr 2027 17:03:00 -0700
+Subject: Re: Canary outage: severe latency + throttling on Silverline canary — next steps and credits
+
+Alex — quick status and next steps:
+- We applied a canary-only routing switch to gptx-small-q at 09:49 PDT; P95 dropped from ~520ms -> ~210ms within 6 minutes and 5xx fell under 1.2% by 09:58.
+- We have opened an ops incident to harden the autoscaler and investigate noisy-tenant spillover (internal ticket: OPS-7239). Root-cause analysis is expected in 72 hours.
+- For immediate protection during tomorrow's promotion window we can authorize a one-hour emergency burst (+150 QPS) if Silverline approves; otherwise we recommend a scheduled failover to the quantized variant for the promotion window.
+
+Commercial note for procurement: given the customer impact and the fact this hit reserved throughput, we propose a one-time service credit equal to 3 days of reserved capacity while we complete the RCA and resolution actions. Happy to take this to legal/finance to formalize.
+
+Attachments: sla_report_qps.pdf
+
+I'll coordinate the formal addendum with your procurement contact if you approve the credit. Also copying Marissa and Jonas so we can keep you updated on the RCA timeline.
+
+Irene
+Senior AM, Redwood Inference

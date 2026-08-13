@@ -1,0 +1,97 @@
+Oakridge AZ2: routing mitigation & exec update
+
+From: Maya Singh <maya.singh@oakridgehealth.com>
+To: Dylan Brooks <dylan_brooks@redwood.com>
+Cc: Oakridge SRE <sre@oakridgehealth.com>
+Date: 2026-02-13T17:58:00Z
+Subject: High latency and 5xxs from AZ2 (Oakridge production)
+
+Dylan,
+
+We started getting elevated tail latency and a spike in 5xx responses around 17:45 UTC. Our users are reporting slow page loads and some failed actions in the portal. Attaching a short error rollup and a snippet of ingress logs. Can you tell us if this is streaming from your side or something in the region? We need an ETA and any short-term routing suggestion.
+
+Thanks,
+Maya Singh
+Lead PM, Oakridge Health
+Attachments: oakridge-frontend-errors-20260213.csv (attachment stub), az2-ingress-snippet.log (attachment stub)
+From: Dylan Brooks <dylan_brooks@redwood.com>
+To: Maya Singh <maya.singh@oakridgehealth.com>, Oakridge SRE <sre@oakridgehealth.com>
+Cc: Evelyn Hart <evelyn_hart@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: 2026-02-13T18:10:22Z
+Subject: Re: High latency and 5xxs from AZ2 (Oakridge production)
+
+Maya,
+
+Thanks for the data — we're investigating. Initial telemetry shows increased queue depth and connection resets from one AZ2 ingress LB. I'm looping in SRE and Support. Short plan: evaluate fast reroute to nearby AZ and prepare a ramp play to avoid session midflight disruptions. Will update in 15 minutes with recommendation.
+
+— Dylan
+Account Executive, Redwood Inference
+
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Dylan Brooks <dylan_brooks@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Laura Bennett <laura_bennett@redwood.com>
+Date: 2026-02-13T18:24:45Z
+Subject: Ops triage: AZ2 ingress flaps + autoscaler smoothing
+
+Triage notes:
+- Observed a step increase in request fanout to serving pool in AZ2 at ~17:40 UTC. Several serving nodes hit sustained GPU utilization and request queues grew (p99 latency spiked).
+- Autoscaler smoothing parameter prevented immediate scale-out for ~6 minutes.
+- One ingress LB instance reported port flaps and connection resets that correlate with the worst tail latencies.
+
+Immediate action: prepare controlled routing shift for new sessions to AZ3 (10min ramp to 50%), keep active sessions pinned, enable fallback for streaming RPCs. Draft ramp plan attached. If ramp fails to stabilize within 25-30 minutes, recommend emergency burst pool allocation for Oakridge.
+
+Jonas
+SRE Lead
+Attachments: routing-ramp-plan-v1.md (attachment stub), az2-ingress-snippet.log (attachment stub)
+From: Evelyn Hart <evelyn_hart@redwood.com>
+To: Dylan Brooks <dylan_brooks@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Markus Klein <markus_klein@redwood.com>
+Date: 2026-02-13T18:42:10Z
+Subject: Executive escalation & customer communication
+
+Team,
+
+Oakridge is a priority healthcare customer and their execs are monitoring. We need a brief customer-facing note that: 1) explains the immediate mitigation, 2) sets expectations for impact during ramp, and 3) promises a post-incident summary within 72 hours. Dylan, please prepare and send once Jonas confirms ramp timing. Markus, please standby for approval for a temporary pool bump if needed.
+
+Evelyn
+Head of Support
+
+From: Markus Klein <markus_klein@redwood.com>
+To: Dylan Brooks <dylan_brooks@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: 2026-02-13T18:50:30Z
+Subject: Re: Executive escalation & customer communication
+
+Approved to send the customer note. Also approve an emergency burst pool up to the daily spend cap if Jonas reports no stabilization within 30 minutes. Notify me before we exceed the daily cap.
+
+Markus Klein
+VP, Product Operations
+
+From: Dylan Brooks <dylan_brooks@redwood.com>
+To: Maya Singh <maya.singh@oakridgehealth.com>, Oakridge SRE <sre@oakridgehealth.com>
+Cc: Evelyn Hart <evelyn_hart@redwood.com>, Jonas Weber <jonas_weber@redwood.com>, Markus Klein <markus_klein@redwood.com>
+Date: 2026-02-13T19:05:00Z
+Subject: Short note: immediate routing mitigation for Oakridge
+
+Maya / Oakridge leadership,
+
+We identified congestion in AZ2 that caused elevated latency and intermittent 5xxs for a subset of your traffic. Immediate mitigation: we are redirecting new sessions to AZ3 with a controlled ramp (target: 10 minutes to 50% new sessions) and keeping existing sessions bound to AZ2 to prevent mid-request disruption. We will enable graceful fallbacks for long-running streams.
+
+Monitoring: We'll watch 5-minute windows and share live dashboards. If error rates do not return to SLA within 30 minutes we will provision a temporary dedicated burst pool and notify you. A formal RCA and hardening plan will follow within 72 hours.
+
+Please reply to confirm acceptance.
+
+— Dylan Brooks
+Account Executive, Redwood Inference
+Attachments: prod-latency-quickchart.png (attachment stub)
+From: Jonas Weber <jonas_weber@redwood.com>
+To: Dylan Brooks <dylan_brooks@redwood.com>, Evelyn Hart <evelyn_hart@redwood.com>, Markus Klein <markus_klein@redwood.com>
+Date: 2026-02-15T21:48:10Z
+Subject: Follow-up: preliminary findings and next steps
+
+Follow-up summary (prelim):
+- We executed the ramp at 19:12 UTC (ramp to ~50% new sessions over 9 minutes). Oakridge error rate dropped from ~1.9% to ~0.2% within 8 minutes; p99 latency recovered to baseline within ~15 minutes.
+- Preliminary root cause: combination of a sudden fanout increase and an autoscaler smoothing config that delayed scale-out; an ingress LB instance experiencing intermittent port resets worsened tail latency.
+- Actions taken: tightened autoscaler smoothing windows for serving pools, health-check tuning on ingress LBs, and published an emergency cross-region reroute runbook.
+- Next: full RCA within 48 hours, config rollouts, and customer goodwill credit proposal (Evelyn to confirm). Logs and dashboards attached to RCA.
+
+Jonas Weber
+SRE Lead, Redwood Inference
+Attachments: az2-ingress-snippet.log, prod-latency-quickchart.png

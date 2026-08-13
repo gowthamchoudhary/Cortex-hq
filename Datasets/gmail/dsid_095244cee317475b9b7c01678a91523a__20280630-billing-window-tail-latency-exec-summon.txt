@@ -1,0 +1,108 @@
+Billing-window tail latency causing missed cutoffs — urgent triage & exec readout
+
+From: Ellen Park <ellen.park@limepay.com>
+To: Jordan Blake <jordan.blake@redwood.ai>
+Cc: billing_ops@limepay.com
+Date: 2028-06-28T08:42:00-07:00
+Subject: Re: Unexplained billing window failures / long completion tails
+
+Hi Jordan,
+
+We started seeing widespread failures during our nightly billing cutoff at ~01:00 UTC this morning. Our observability shows an increase in p99 and p99.9 completion times starting ~00:52 UTC — p99 moved from ~700ms to ~6.2s and p99.9 spikes as high as ~22s. Several of our cutoff jobs timed out and retried, which pushed us past the billing window and caused inconsistent ledger snapshots.
+
+Logs attached (limepay_p99_spike_logs.tar.gz). The errors are a mix of 504 timeouts and a rise in 429s from your API. We also saw repeated "concurrency cap reached" warnings in the response headers. Can your team confirm whether any routing changes, concurrency cap adjustments, or batching config changes were rolled out this morning? This is causing direct revenue reconciliation disruption for us.
+
+We need an immediate triage and timeline to resolution. Our CFO is asking for an executive update within the hour.
+
+Thanks,
+Ellen Park
+Head of Billing Operations
+LimePay
+
+[attachment: limepay_p99_spike_logs.tar.gz (log bundle, 8.7MB)]
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Ellen Park <ellen.park@limepay.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>
+Date: 2028-06-28T09:05:00-07:00
+Subject: Re: Unexplained billing window failures / long completion tails
+
+Ellen — sorry you hit this. Thanks for the log bundle. We're pulling an emergency triage now.
+
+Immediate plan:
+- Marissa (CS) will coordinate impact comms and collect the exact billing windows + affected jobs.
+- Karthik (SRE) will run a fast root-cause pass on queueing/backpressure indicators and check recent routing/config rollouts.
+- I will convene a 30-min exec readout at 11:00 PT (14:00 ET) with you and our leadership if that works.
+
+Ask: can you confirm the exact time range of affected cutoff jobs and share the job IDs? Also, please keep the logs you pulled unchanged for forensic purposes.
+
+We may temporarily increase your concurrency cap for the next two hours while we triage, but we need to validate the safety impact on our shared pools. Karthik, please advise fastest mitigations we can use without a full deploy.
+
+Jordan Blake
+Senior Account Lead, Redwood Inference
+
+[inline: runbook excerpt link: https://redwood-internal.playbooks/triage/long-tail-latency]
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Ellen Park <ellen.park@limepay.com>
+Cc: Hannah Schmitt <hannah.schmitt@redwood.ai>
+Date: 2028-06-29T02:12:00-07:00
+Subject: RE: Unexplained billing window failures / long completion tails
+
+Quick findings from initial triage (logs + telemetry):
+- During the 00:50–01:10 UTC window we saw a sudden token-volume burst from LimePay (batched invoice generations). That coincided with a config that increased max_batch_size for a small percentage of requests (A/B rollout: 10% traffic) to reduce per-token costs.
+- Increased batching produced a longer queuing tail under peak arrivals. With existing concurrency caps and our autoscale cooldown, inflight queue length rose and we hit the per-tenant concurrency threshold repeatedly -> 429s observed.
+- KV prefix cache showed elevated miss rates (cache thrash) for some invoice templates, amplifying per-request compute and extending latency variance.
+
+Fast mitigations (can be done now):
+1) Revert the max_batch_size rollout for affected model variant (rollback at routing layer) — immediate effect on queue depth.
+2) Temporarily increase LimePay's per-tenant concurrency cap by +30% for the next 3 hours (manual override) while we stabilize.
+3) Force smaller batching for identified routes (route-level override) and enable our prefix-aggregation prefetch to reduce compute variance.
+
+I have a candidate emergency patch (proposed-mitigation-pr.patch) that makes the per-route override low-risk and togglable; it requires a 15-min deploy. If we want a hotfix deploy now we can schedule it within the next 40 minutes.
+
+Risk notes: doing a blanket concurrency increase could raise contention in shared GPU pools if other high-volume tenants peak. Prefer the route-level overrides + rollback.
+
+Karthik
+SRE Lead, Serving Runtime
+
+[attachment: proposed-mitigation-pr.patch (text, 12KB)]
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Jordan Blake <jordan.blake@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Ellen Park <ellen.park@limepay.com>
+Date: 2028-06-29T10:30:00-07:00
+Subject: Re: Unexplained billing window failures / long completion tails
+
+Ellen — thanks for flagging. We've been tracking customer impact and I pulled a quick summary (attached: limepay_billing-impact-06-28.pdf). Key points:
+- 17 of 62 nightly jobs experienced timeouts or retries tied to delayed completions.
+- Estimated reconciliation delay window: median 18 minutes, some jobs >45 minutes.
+- Customer-visible errors: intermittent 504s in the billing UI (observed by two finance users).
+
+Suggested commercial remediation (subject to approval):
+- Offer a service credit equal to 25% of last month's usage for the affected billing product and 2 weeks of priority support dedicated to LimePay's cutover windows.
+- If the hotfix deploy is executed within the hour, escalate to a standing 24/7 bridge until next Tuesday.
+
+Ellen — are you able to confirm whether the reconciliation jobs attempted automatic retries, or were they manually retriggered by your team? That impacts reported cost and credit calculation.
+
+Marissa Cole
+Customer Success Manager, Redwood Inference
+
+[attachment: limepay_billing-impact-06-28.pdf (report, 780KB)]
+From: Jordan Blake <jordan.blake@redwood.ai>
+To: Ellen Park <ellen.park@limepay.com>, Doug Mitchell <doug.mitchell@limepay.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Hannah Schmitt <hannah.schmitt@redwood.ai>, support@redwood.ai
+Date: 2028-06-30T15:05:00-07:00
+Subject: Exec readout confirmed and mitigation plan — LimePay billing window incident
+
+Ellen / Doug — thank you for your patience. Exec quick readout scheduled for 17:00 PT (20:00 ET) today — link in calendar invite. Summary and commitments ahead of the call:
+- Root cause (prelim): A/B rollout of larger batching combined with token-burst pattern at your billing window caused queueing and hit per-tenant concurrency caps, amplifying p99/p99.9 tails. Cache misses on certain invoice templates increased per-request work.
+- Immediate actions taken: Rolled back the batching rollout for the affected variant (23:10 UTC deploy), applied route-level smaller-batch overrides, and enabled prefix prefetch for invoice routes. We also applied a temporary +30% per-tenant concurrency override for LimePay between 17:00–20:00 PT today.
+- Next steps and timeline:
+  * 40-min hotfix deploy validated in staging -> production rollout (completed at 23:10 UTC).
+  * Extended observability retention for your routes for 72 hours and a post-mortem in 48 hours.
+  * Commercial proposal under review (Marissa): 25% credit + 2 weeks priority support pending approvals.
+
+We will go into more detail on the exec call; Karthik will present telemetry and the SRE mitigation plan. Please add any job IDs or examples to the calendar thread so we can reference them in the post-mortem.
+
+Jordan Blake
+Senior Account Lead, Redwood Inference
+Redwood Inference
+
+[related links: https://redwood-internal.atlassian.net/browse/INF-7432, https://github.com/redwood/inference/compare/emergency-routing-fix]

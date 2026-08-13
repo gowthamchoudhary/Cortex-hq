@@ -1,0 +1,137 @@
+Coordination: SignalForge SDK breaking-change mitigation & runtime shim plan
+
+From: Elena Petrova <elena@signalforge.com>
+To: tessa_morgan <tessa.morgan@redwood.com>
+Cc: SignalForge Partner Success <partner-success@signalforge.com>
+Date: Thu, 19 Jul 2028 09:12:00 -0700
+Subject: Heads-up: SignalForge SDK v3 - legacy gateway endpoints removal (impact, ask)
+
+Hi Tessa,
+
+Quick heads-up from the SignalForge engineering team: we plan to remove two legacy gateway endpoints used by some partners as part of SDK v3 (target date: 2028-10-01). The endpoints are: /v1/gateway/legacy and /v1/gateway/auth-proxy.
+
+We recognize Redwood integrates with these via a small adapter in your partner-connector layer. From our telemetry, about ~6% of Redwood accounts call the legacy endpoints; for SignalForge partners it’s concentrated in a few integrations (we've attached a short matrix).
+
+Ask: can Redwood commit to one of the following so partners have time to migrate?
+- Option A: runtime compatibility shim on Redwood side for 6 months after v3 GA (recommended)
+- Option B: extended deprecation window (90 days) and clear migration guidance
+
+If neither is feasible, we’d like to coordinate a targeted canary with a sandbox user list and a mutual action plan (MAP) with milestones.
+
+We can share the full change spec and a sandbox account. Also note: v3 introduces a small auth header change (x-sf-auth -> x-sf-authorization) which will require adapter updates.
+
+Attached: compatibility-matrix.csv (short).
+
+Thanks — can we set up a 30-min sync next week to align?
+
+Best,
+Elena Petrova
+Head of Partner Engineering
+SignalForge
+
+Attachments: compatibility-matrix.csv (CSV summary)
+
+From: tessa_morgan <tessa.morgan@redwood.com>
+To: Elena Petrova <elena@signalforge.com>
+Cc: jonas_weber <jonas.weber@redwood.com>, vanessa_ortiz <vanessa.ortiz@redwood.com>
+Date: Thu, 19 Jul 2028 10:30:00 -0700
+Subject: Re: Heads-up: SignalForge SDK v3 - legacy gateway endpoints removal (impact, ask)
+
+Thanks for the early notice, Elena — this is exactly the sort of heads-up we need.
+
+High level response: we can support a short-term compatibility shim, but we need to validate the technical surface and the rollout gating (canary constraints) with runtime. Proposed MAP we can start with:
+- Day 0: Redwood/SignalForge RFC (engineering sync) -> confirm shim feasibility and auth handshake.
+- Day 3: Redwood provides a test harness and sampling telemetry requirements.
+- Day 10: Redwood deploys a non-default shim behind feature flag in staging for partner sandbox.
+- Day 21: Partner canary with 5 pilot tenants.
+- Day 45: Rollout to all impacted tenants with observed metrics and rollback plan.
+
+Please share the change spec and a sandbox account (credentials via secure channel). I've attached a baseline usage CSV from our side to help prioritize.
+
+I’ll loop in Jonas (runtime lead) and Vanessa (partner ops) — Jonas, can you confirm whether a shim that translates x-sf-auth -> x-sf-authorization is doable and what the perf impact would be?
+
+If that looks acceptable we'll schedule the RFC for Monday (30-min).
+
+Thanks,
+Tessa Morgan
+Director, Partner Programs
+Redwood Inference
+
+Attachments: baseline-usage-telemetry.csv (summarized token and endpoint counts)
+
+From: Jonas Weber <jonas.weber@redwood.com>
+To: tessa_morgan <tessa.morgan@redwood.com>
+Cc: vanessa_ortiz <vanessa.ortiz@redwood.com>
+Date: Fri, 20 Jul 2028 11:05:00 -0700
+Subject: Re: Heads-up: SignalForge SDK v3 - legacy gateway endpoints removal (impact, ask)
+
+Tessa,
+
+Quick technical take after a rapid review:
+- The adapter layer we ship for partners sits in our ingress path as a lightweight translation filter (not on the GPU runtime). Translating the auth header and re-mapping the endpoint path is straightforward from a code-change perspective.
+- Perf: for our p50 tokenized requests the latency delta is negligible (~3-6ms) if we keep the shim minimal (no heavy crypto). If we implement token exchange flows we would expect higher delta.
+- Stability: adding a feature-flagged shim behind the routing layer is the lowest-risk approach. We can gate by customer, account, or HubSpot deal id.
+
+Constraints / asks from infra/runtime:
+1) Sandbox credentials + sample signed requests (so we can create fixtures).
+2) Compatibility matrix (list of affected endpoints + auth variants) — the CSV Elena sent is a good start but we need request/response examples.
+3) Clear rollback signal (error rates, 5xx threshold + latency SLA breach) — we will supply a minimal SLO template for the canary.
+
+If SignalForge is comfortable with a 6-month compatibility shim behind a feature flag, we can schedule the shim for staging in 10 business days and a production dark canary in 3 weeks. If they insist on 90-day deprecation without a shim, we’ll likely have to prioritize which tenants to migrate first (based on usage telemetry).
+
+I will sketch a minimal shim implementation plan and share it in the RFC.
+
+— Jonas
+Engineering Lead, Serving Runtime
+Redwood Inference
+
+From: Elena Petrova <elena@signalforge.com>
+To: tessa_morgan <tessa.morgan@redwood.com>
+Cc: SignalForge Partner Success <partner-success@signalforge.com>
+Date: Sun, 22 Jul 2028 08:18:00 -0700
+Subject: Re: Heads-up: SignalForge SDK v3 - legacy gateway endpoints removal (impact, ask)
+
+Thanks Jonas — that approach sounds workable and is in line with what we hoped for. We can provide:
+- Sandbox tenant and API keys (we'll send secure creds to your security mailbox)
+- Full change spec and request/response examples (attached).
+- A proposed comms timeline for partner-facing notices (we want to coordinate marketing).
+
+Two notes:
+1) We will need a short legal acknowledgment around the shim (clarifying this is a temporary compatibility measure). Our legal team will send a short one-pager.
+2) Partner Success would like a joint announcement slot during the migration window; they propose a co-branded migration guide.
+
+Attached: SignalForge_API_Change_Spec.pdf (full spec).
+
+Elena
+
+Attachments: SignalForge_API_Change_Spec.pdf (API spec, examples, migration checklist)
+
+From: vanessa_ortiz <vanessa.ortiz@redwood.com>
+To: tessa_morgan <tessa.morgan@redwood.com>, jonas_weber <jonas.weber@redwood.com>
+Cc:   
+Date: Tue, 25 Jul 2028 00:03:00 +0000
+Subject: Action items and negotiation posture for SignalForge shim request
+
+Team — recapping and proposing our negotiation posture before the RFC:
+
+Summary: SignalForge requests a 6-month compatibility shim (preferred) or a 90-day extension. They supplied a spec and sandbox. Jonas has confirmed a low-risk shim is possible with minimal perf impact.
+
+Negotiation asks for Redwood:
+- We accept a 6-month shim but request a limited liability acknowledgment (legal one-pager).
+- Ask SignalForge for co-funding of the implementation effort if the shim requires more than 3 engineer-weeks (they likely won't, but we should ask).
+- Request a joint migration playbook and a comms window (partner success will coordinate PR/marketing dates).
+- Consider a small credits package for any customers forced to use the shim in perpetuity (escalation path).
+
+Next steps (owners):
+- Tessa: schedule the RFC + technical sync (owner: tessa) — target: Mon 2028-07-30 11:00 PT (meet link above).
+- Jonas: draft shim implementation outline + canary SLO template (owner: jonas) — due EOD 2028-07-24.
+- Legal: coordinate one-pager ask to SignalForge (I'll open a ticket with legal).
+
+I'll prepare a short internal slide (1-2 slides) to summarize cost/benefit for leadership if we need to escalate.
+
+Vanessa Ortiz
+Head of Partner Ops
+Redwood Inference
+
+Related: HubSpot deal: https://app.hubspot.com/deals/47821
+Meeting: https://meet.google.com/xxx-signalforge-compat

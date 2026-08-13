@@ -1,0 +1,136 @@
+Dedicated capacity playbook — proposal, isolation, scaling & SLA confirmation
+
+From: Rafael Mendes <rafael.mendes@redwood.inference>
+To: Lydia Chan <lydia.chan@neuradrive.com>, Samir Khan <samir.khan@neuradrive.com>
+Cc: Monica Patel <monica.patel@redwood.inference>, Karthik Iyer <karthik.iyer@redwood.inference>
+Date: Thu, 26 Feb 2026 15:10:00 -0800
+Subject: Dedicated capacity playbook — proposal, isolation, scaling & SLA confirmation
+
+Thanks again for the time today — appreciate the clear context on where NeuraDrive is with productionizing on-device + cloud inference. Below is a short recap of what we heard, the dedicated-capacity proposal we discussed, and clear next steps so procurement and engineering can move the pilot forward.
+
+Recap — primary pain points you described
+- Inconsistent tail latency during peak transcode workloads; customer-facing inference occasionally spikes above p95 targets.
+- Regulatory/data-sovereignty requirement: all model inference and logs must remain inside your US VPC for initial pilots.
+- Current on-prem stack is fragile for 70B+ models (memory pressure + burst traffic).
+- Need predictable unit economics for planning; spikes drive cost unpredictability.
+
+Goals you stated
+- Launch a 6-week pilot for user-facing recommendation service (70B model family) with predictable latency and isolation.
+- 99.95% availability target for serving endpoint; p95 latency <= 250ms for typical requests; burst handling up to 3x baseline QPS for up to 60s.
+- Procurement timeline: intent to have a PO within 4–6 weeks post-technical validation.
+
+Proposed dedicated capacity (initial) — high level
+- Reservation: 8x H100-equivalent GPUs in a dedicated, customer-isolated GPU pool (single-tenant within your VPC via Private deployment).
+- Isolation & security: VPC peering, customer-managed KMS keys, host-level tenancy, audit log forwarding to your SIEM.
+- Performance: configured runtime with KV prefix caching and dynamic batching; expected baseline 120 QPS for the recommended quantized 70B variant (quantization guidance attached).
+- Autoscale/burst policy: reserved baseline + automatic short-term burst (up to 3x) throttled by fallbacks to a latency-optimized 13B variant if sustained for >2 minutes.
+- SLA targets: 99.95% uptime; latency SLO target p95 <= 250ms for the pilot workload (measured at the edge); error budget and rollback policies included in SOW.
+
+Options (for budgeting)
+- Option A (recommended pilot): 8x H100 reserved + 2x burst slots — faster time-to-pilot, lower commit.
+- Option B (headroom): 12x H100 reserved — supports higher sustained QPS and multi-model serving without fallbacks.
+
+Attachments sent with this note:
+- RD-NeuraDrive-capacity-calc-v1.xlsx — capacity math and QPS projections by model variant.
+- Draft_SOW_Redwood_Dedicated.docx — SOW + rollout milestones (pilot -> ramp).
+- network_diagram_stub.png — high-level network/VPC pattern we propose.
+
+Immediate next steps (clear, accountable)
+1) Technical deep-dive (monica.patel) — propose Tues 3/2 or Wed 3/3, 60–90m (benchmarks + model sizing).
+2) Security packet: we’ll share SOC2 artifacts + KMS integration checklist (Samir, please confirm security contact).
+3) Procurement: Rafael to send a pricing/term summary and PO template for review (procurement@neuradrive.com).
+
+If the above aligns, I’ll move the draft SOW into DocuSign and loop in our provisioning team. Any clarifications, I’m available — thanks again.
+
+Regards,
+Rafael Mendes
+Account Exec, Dedicated Capacity
+Redwood Inference
+rafael.mendes@redwood.inference | +1 (415) 555-0136
+
+Attachments: RD-NeuraDrive-capacity-calc-v1.xlsx, Draft_SOW_Redwood_Dedicated.docx, network_diagram_stub.png
+
+From: Lydia Chan <lydia.chan@neuradrive.com>
+To: Rafael Mendes <rafael.mendes@redwood.inference>
+Cc: Samir Khan <samir.khan@neuradrive.com>, procurement@neuradrive.com
+Date: Fri, 27 Feb 2026 09:18:00 -0800
+Subject: Re: Dedicated capacity playbook — proposal, isolation, scaling & SLA confirmation
+
+Thanks Rafael — this is a helpful summary. A few quick clarifications from our side:
+
+- Security: Samir is our security lead (copied). For the pilot we require US-only data residency and customer-managed KMS; can you confirm those controls are supported in the Private deployment?
+- SLA: our internal bar is 99.99% for availability for this service at launch — is there a path to that in the pilot or would that be a ramp target?
+- Models: the recommendation service will run a 70B model family plus smaller fallbacks. Can you confirm you support quantized 70B variants and provide perf numbers?
+- Procurement: procurement@neuradrive.com will expect a pricing appendix and standard PO/contract language.
+
+Timeline: we want to kick the pilot in ~6 weeks if technical validation lines up. Please include a ballpark on lead time to provision the reserved pool.
+
+Also looping in Samir for any security must-haves we should add before the deep tech session.
+
+— Lydia
+Head of Product, NeuraDrive
+lydia.chan@neuradrive.com
+
+From: Rafael Mendes <rafael.mendes@redwood.inference>
+To: Lydia Chan <lydia.chan@neuradrive.com>, Samir Khan <samir.khan@neuradrive.com>, procurement@neuradrive.com
+Cc: Monica Patel <monica.patel@redwood.inference>, Karthik Iyer <karthik.iyer@redwood.inference>
+Date: Fri, 27 Feb 2026 16:40:00 -0800
+Subject: Re: Dedicated capacity playbook — proposal, isolation, scaling & SLA confirmation
+
+Lydia — great notes, thanks. Short answers and a few concrete options below. I’ll expand in the tech session but wanted to be explicit for procurement/security.
+
+Security & residency
+- Yes: Private deployment supports US-only tenancy and customer-managed KMS. We will deliver SOC2 summary + audit logs pipeline. Samir — I’ll send the KMS integration checklist and log-forwarding example before the deep-dive.
+
+SLA
+- Pilot baseline: 99.95% is our standard for reserved pools during pilot. We can commit to a written 99.99% availability SLA after we complete 2-week stability validation and agree on the error budget and high-availability configuration (cross-az redundancy). We’ll capture this ramp milestone in the SOW.
+
+Model support & perf
+- We support quantized 70B variants; attached capacity calc includes projected p95/p99 for the quantized path. For production headroom, Option B (12x) reduces fallback frequency and improves sustained throughput. We’ll run a perf benchmark during the session to validate your exact request mix.
+
+Lead time to provision
+- Estimated 2–3 weeks to provision reserved baseline (8x) once PO and completed security paperwork are signed. Additional GPUs / cross-az redundancy add ~1 week.
+
+Ballpark commercial notes (high level)
+- Option A (8x H100 reserved): pilot monthly commit estimate: $XXk–$YYk (we’ll provide a pricing appendix for procurement).
+- Option B (12x H100 reserved): premium commit, headroom for multi-model serving.
+
+Proposed immediate actions
+- Schedule technical deep-dive: Monica is available Tue 03/02 10:00–11:30 PT or Wed 03/03 09:00–10:30 PT. Please confirm preferred slot.
+- Procurement: Rafael to send pricing appendix and PO template by EOD Mon 03/01.
+- Security: Samir — please provide the name and contact for the person who will handle evidence collection (SOC2, network diagrams).
+
+Thanks — happy to iterate.
+
+Rafael
+
+On Fri, Feb 27, 2026 at 09:18 AM Lydia Chan <lydia.chan@neuradrive.com> wrote:
+> Thanks Rafael — this is a helpful summary. A few quick clarifications from our side:
+>
+> - Security: Samir is our security lead (copied). For the pilot we require US-only data residency and customer-managed KMS; can you confirm those controls are supported in the Private deployment?
+> - SLA: our internal bar is 99.99% for availability for this service at launch — is there a path to that in the pilot or would that be a ramp target?
+> - Models: the recommendation service will run a 70B model family plus smaller fallbacks. Can you confirm you support quantized 70B variants and provide perf numbers?
+> - Procurement: procurement@neuradrive.com will expect a pricing appendix and standard PO/contract language.
+>
+> Timeline: we want to kick the pilot in ~6 weeks if technical validation lines up.
+>
+> — Lydia
+
+From: Rafael Mendes <rafael.mendes@redwood.inference>
+To: Monica Patel <monica.patel@redwood.inference>, Karthik Iyer <karthik.iyer@redwood.inference>
+Date: Sat, 28 Feb 2026 10:55:00 -0800
+Subject: Internal: NeuraDrive pilot prep — benchmarks + capacity playbook
+
+Monica / Karthik — quick internal note to prep for the Tue deep-dive with NeuraDrive:
+
+Ask list (prep before 03/02 session)
+- Monica: run the quantized 70B baseline perf on a representative request mix (attached calc has sample mix). Capture p50/p95/p99 and memory/KV-cache behavior.
+- Monica: prepare a short slide with fallback behavior and autoscale policy explanation (how we fall back to 13B, how KV caching reduces cost).
+- Karthik: validate the network diagram and KMS integration pattern in the attached network_diagram_stub.png and write a 1-page checklist for SAM/ops.
+- Rafael: I’ll draft the pricing appendix and share the PO template Monday.
+
+We’ll use the Drive link in the thread to keep artifacts organized. If you need infra access, I’ll request provisioning for the benchmark lane.
+
+Rafael
+Account Exec — Redwood Inference
+

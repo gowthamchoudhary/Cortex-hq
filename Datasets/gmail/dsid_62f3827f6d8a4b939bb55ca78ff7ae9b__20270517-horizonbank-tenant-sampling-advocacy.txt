@@ -1,0 +1,106 @@
+HorizonBank: request for tenant-level telemetry slicing & export — prioritize for close
+
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Irene Choi <irene.choi@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>
+Date: Mon, 17 May 2027 09:12:00 -0700
+Subject: HorizonBank ask — tenant-level telemetry slicing + export (requesting product advocacy)
+
+Irene / Ben — quick one. Horizon Bank (Liam / Meera) are pushing hard on producing tenant-scoped logs and an audited export for PCI-in-scope traffic. They want two things before procurement signs:
+
+- Ability to define "sampling slices" at tenant-level (i.e., keep 100% traces for tenant IDs flagged as in-scope, sample others at configurable %).
+- Filtered export to S3/Log Archive with per-tenant ACLs and retention controls (they require 7 years for certain evidence).
+
+They've attached the security questionnaire and a draft SOW. Procurement said this feature is a gating item for signing (they'll put it in the contract). Liam told me they can move to signature this week if we can commit to a timeline and scope.
+
+Ask: can product/eng prioritize a scoped implementation (feature flag + limited export hook) for Horizon as a shiproom/priority dev task? We can trade credits / shorten onboarding timeline. Ben — can you add customer impact notes. Karthik — curious about rollout risk and QA burden.
+
+Thanks,
+Marissa
+
+--
+Marissa Cole
+Account Executive, Redwood Inference
+marissa.cole@redwood.ai | +1 415-555-0198
+Attached: Horizon_Security_Questionnaire_filled.xlsx, Horizon_SOW_draft_v3.pdf
+From: Irene Choi <irene.choi@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Karthik Iyer <karthik.iyer@redwood.ai>, Jonas Weber <jonas.weber@redwood.ai>
+Date: Mon, 17 May 2027 11:03:00 -0700
+Subject: Re: HorizonBank ask — tenant-level telemetry slicing + export (requesting product advocacy)
+
+Thanks Marissa — tagging Jonas and Karthik for engineering intake. High level notes from sales: Horizon is an enterprise SaaS bank (pilot -> enterprise roll) and the feature is contract-level; procurement will include it as an acceptance criterion. They expect a non-calendarized commitment: "deliver a scoped export/config in our environment before go-live."
+
+A few asks for product/eng to help sales:
+1) Candidate acceptance criteria (what minimal surface gets them unstuck for procurement?)
+2) Rough ETA (weeks) and whether this requires infra work (S3 connectors, ACL changes).
+3) Any security sign-offs we need (SOC2 control owners, PM doc).
+
+If we can give a reasonable ETA and minimal scope we can close HB-2345 by EOW.
+
+Irene
+Director, Strategic Accounts
+Redwood Inference
+From: Jonas Weber <jonas.weber@redwood.ai>
+To: Irene Choi <irene.choi@redwood.ai>, Karthik Iyer <karthik.iyer@redwood.ai>, Ben Carter <ben.carter@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>
+Date: Tue, 18 May 2027 10:08:00 -0700
+Subject: Re: HorizonBank ask — tenant-level telemetry slicing + export (requesting product advocacy)
+
+Quick engineering readout after a 30-min sync with infra and runtime leads:
+
+Summary: Feasible with a scoped implementation, estimated 3 sprints (6 weeks) for an MVP that covers:
+- A tenant predicate in the runtime that allows per-tenant sampling policies (0-100%) and a whitelist for "full capture" IDs.
+- A filtered export hook to S3 with tenant metadata and per-export manifest. We would reuse existing export pipeline but need ACL metadata and retention flags.
+
+Risks / caveats:
+- Backfill/retention plumbing for 7-year retention is heavy; for MVP we can provide export guarantees and hand the export object to the customer's archive (they manage long-term storage).
+- Need security review for ACLs & KMS usage (2-3 business days).
+- This will require a canary rollout and extra e2e telemetry tests (adds ~1 sprint for QA).
+
+Option A (fast): 6 weeks, limited support for backfill; we deliver a feature-flagged path for Horizon only, with on-prem-like export to their S3 and handover docs. We mark it as "partner-exception" rollout.
+Option B (robust): 10-12 weeks, includes integration with long-term retention and audit automation.
+
+If sales is willing to accept Option A + a short-term credits/CS package for migration, we can prioritize this in the next sprint plan. Need product to sign off on acceptance criteria and Karthik to shepherd prioritization.
+
+Jonas
+Engineering Manager, Runtime
+Redwood Inference
+From: Karthik Iyer <karthik.iyer@redwood.ai>
+To: Jonas Weber <jonas.weber@redwood.ai>, Irene Choi <irene.choi@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Date: Tue, 18 May 2027 13:45:00 -0700
+Subject: Re: HorizonBank ask — tenant-level telemetry slicing + export (requesting product advocacy)
+
+Thanks Jonas — that aligns with my expectations. Proposed acceptance criteria for Option A (scoped minimal):
+- Runtime supports per-tenant sampling policy with API to set tenant IDs to 100% capture.
+- Export pipeline exposes a filtered export job that includes tenant_id in manifest and supports S3 target with KMS-encrypted objects.
+- Security sign-off obtained for KMS usage and ACL approach (Security to validate within 3 business days).
+- Documentation + runbook for CS to validate exports and confirm retention handshake with Horizon's archive.
+
+Product asks to sales/CS:
+- Sales to confirm which tenant IDs are "PCI in-scope" and the expected per-tenant sample rates (we need exact list).
+- CS to provide test dataset and acceptance test plan (validation criteria).
+- Legal to confirm contractual language we can accept for "partner-exception" rollout (Irene, loop legal if needed).
+
+If Horizon can provide the tenant list and sign the SOW addendum requesting Option A, I will put this into the next sprint prioritization review and advocate for a slot.
+
+Karthik
+Sr. Product Manager, Platform
+From: Liam O'Connor <liam.oconnor@horizonbank.com>
+To: Irene Choi <irene.choi@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Ben Carter <ben.carter@redwood.ai>
+Cc: Meera Patel <meera.patel@horizonbank.com>, Procurement <procurement@horizonbank.com>
+Date: Thu, 20 May 2027 16:40:00 -0700
+Subject: Re: HorizonBank ask — tenant-level telemetry slicing & export — confirmation and timeline
+
+Thanks everyone — appreciate the speedy responses. Horizon can accept Option A with the following conditions:
+
+- We'll provide the list of PCI tenant IDs by EOD tomorrow.
+- We need a written commitment: delivery into our sandbox environment within 6 weeks and a Go/No-Go demo for procurement to sign.
+- We'll attach the SOW addendum and are willing to provide a 6-month onboarding credit in exchange for the priority slot.
+
+Attached is the SOW addendum we referenced. Let us know if legal needs any changes. Our procurement contact will be on the follow-up call Friday.
+
+Regards,
+Liam O'Connor
+Head of Platform Risk, Horizon Bank
+liam.oconnor@horizonbank.com
+Attached: Horizon_SOW_addendum_signed.pdf

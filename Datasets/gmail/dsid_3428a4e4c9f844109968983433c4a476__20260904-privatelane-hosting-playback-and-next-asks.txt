@@ -1,0 +1,116 @@
+Post-call playback: PrivateLane hosting & compliance alignment
+
+From: Connor O'Brien <connor.obrien@redwoodinference.com>
+To: Elena Ruiz <elena@privatelane.health>, Tom Park <tom.park@privatelane.health>
+Cc: Lauren Bishop <lauren.bishop@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: 2026-09-04T17:08:00Z
+Subject: Post-call playback: PrivateLane hosting & compliance alignment
+
+Thanks again for your time today — quick written playback so we have the same list of constraints and next actions. If anything below is off, flag and I’ll update.
+
+Summary of conversation (high level)
+- Use case: PrivateLane will run PHI-sensitive extraction and classification jobs as part of their intake pipeline (real-time assistant + nightly batch).
+- Primary drivers: HIPAA+state privacy rules, long-term audit retention (7+ years), and internal security/compliance wanting an isolated hosting model.
+- Desired outcome: Private deployment (VPC or on-prem appliance) with strict egress controls, key management via customer-managed HSM/KMS, and maintainability for canary/staging testing.
+
+Key technical constraints we heard
+- Air-gap requirement for production: no outbound internet egress from inference hosts. All model updates must be pushed from PrivateLane-controlled network or via an approved staging gateway.
+- Data residency: US-only, with log retention policies surfaced to their audit team (7 years).
+- Networking: private peering to their VPC preferred; if peering not possible, a transit VPC with strict ACLs is acceptable. No public IPs on inference instances.
+- Certificate/KMS: customer will provide KMS/HSM; Redwood needs to support key wrapping and bring-your-own-keys for model encryption and symmetric token signing.
+- Monitoring/Audit: they need access to immutable audit logs (API calls, model-version rollouts, and admin actions) and periodic reports for SOC/SaaS auditors.
+
+Immediate follow-ups / asks from PrivateLane
+1) Can Redwood provide an architecture note showing how an air-gapped deployment looks end-to-end (control plane vs data plane separation)?
+2) What are the minimal network ports/protocols we need opened for a transit-gateway pattern (we requested a one-page port list)?
+3) Confirmation that customer-managed HSM is supported (we should list supported vendors) and any latency implications for token/key calls.
+4) Cost/throughput baseline: we agreed Redwood will propose two sizing options (steady-state + burst) for the recommended GPU footprint.
+
+Proposed next steps (from Redwood)
+- I will share: 1) an air-gap architecture sketch, 2) a slim port/egress checklist, 3) a short quickstart for Private deployments. Attached: redwood-private-quickstart.pdf and a sanitized SOC summary for context.
+- Technical deep-dive: propose Wed 2026-09-09 11:00 AM ET for an infra session with PrivateLane infra + our infra/serving team (Karthik is available).
+- Procurement: we will prepare a high-level SOW and an estimated committed throughput quote for review.
+
+If that looks right, Elena/Tom — can you confirm the September 9 window and share any procurement timelines (e.g., PO cycles, legal review lead times)?
+
+Thanks,
+Connor
+Connor O'Brien
+Solutions Engineer | Redwood Inference
+---
+Attachments: redwood-private-quickstart.pdf (PDF, 1.2MB), privatelane-internal-soc-summary.pdf (PDF, 480KB)
+From: Elena Ruiz <elena@privatelane.health>
+To: Connor O'Brien <connor.obrien@redwoodinference.com>, Tom Park <tom.park@privatelane.health>
+Cc: Lauren Bishop <lauren.bishop@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: 2026-09-04T21:30:00Z
+Subject: Re: Post-call playback: PrivateLane hosting & compliance alignment
+
+Connor — thanks for the clear write-up. High level is correct; a couple clarifications from our side: 
+
+Clarifications / additions
+- Air gap: production must not have direct internet access. We can support a one-way pull model for model updates if you can describe the signed bundle process.
+- KMS/HSM: we use Azure Key Vault with HSM-backed keys today. We’ll share an excerpt of our KM policy — see attached (privatelane-km-excerpt.pdf). Please confirm Redwood supports Azure KMS options or whether a dedicated HSM appliance is required.
+- Audit retention: 7 years for logs, but the compliance team will want an exportable format (S3 or on-prem archive) and proof of immutability.
+- Canary/testing: we need a staging canary that mirrors production networking (no egress) before any model rollout. Our ops team will require a checklist for pre-rollout signoff.
+
+Procurement timeline
+- We are targeting an internal Security Review by 2026-09-22 and hope to have budget approval by early October. Legal typically negotiates SLA/limits and wants to see evidence of SOC2 + a vendor-run MOP.
+
+Confirmations
+- The proposed 9/9 deep-dive works for me. Tom will invite our infra lead (Isaac) to the session.
+
+Elena Ruiz
+Director, Platform & Security
+PrivateLane Health
+---
+Attachment: privatelane-km-excerpt.pdf (PDF, 160KB)
+
+On 2026-09-04 17:08, Connor O'Brien <connor.obrien@redwoodinference.com> wrote:
+> Thanks again for your time today — quick written playback so we have the same list of constraints and next actions. If anything below is off, flag and I’ll update.
+>
+From: Connor O'Brien <connor.obrien@redwoodinference.com>
+To: Elena Ruiz <elena@privatelane.health>, Tom Park <tom.park@privatelane.health>
+Cc: Lauren Bishop <lauren.bishop@redwoodinference.com>, Karthik Iyer <karthik.iyer@redwoodinference.com>
+Date: 2026-09-05T16:45:00Z
+Subject: Re: Post-call playback: PrivateLane hosting & compliance alignment
+
+Elena — perfect, thank you for the clarifications. Quick replies inline: 
+
+- Signed bundle / model update process: Redwood can provide a signed model bundle workflow. We’ll document the bundle format and verification steps (sha256 + signature) and include a sample signing script. That supports a one-way pull from your staging gateway.
+- Azure Key Vault: Redwood supports Azure Key Vault with HSM-backed keys today. We also support AWS CloudHSM and vendor appliances. I’ll include a short matrix of supported key backends and any operational caveats.
+- Audit exports: we can push audit logs to an S3-compatible bucket or an SFTP endpoint in a time-partitioned, gzipped format. We’ll also wire in immutability markers for the bucket (versioning + WORM).
+- Canary staging: we will build a staging plan that mirrors production networking. Action: Isaac (or your infra lead) will need to provide a test subnet and a list of ACLs we must mirror.
+
+Deliverables I’m attaching to this thread (see links & attachments):
+- Architecture sketch (attached) — shows control-plane separation and the transit-gateway pattern.
+- Port/egress checklist (inline in the doc).
+- HubSpot opportunity: https://app.hubspot.com/contacts/1234567/company/98765 (for your procurement team).
+- DocuSign PowerForm (SOW template) link: https://www.docusign.net/Member/PowerFormSigning.aspx?PowerFormId=abc-1234
+
+Proposed infra deep-dive participants: Connor (solutions), Karthik (serving/runtime), Isaac (PrivateLane infra), Elena (security). Proposed time remains Wed 2026-09-09 11:00 AM ET. I’ll send the calendar invite once Isaac confirms.
+
+Next asks for PrivateLane before the deep-dive: 
+- Share a single-page network diagram or a list of subnets/peering contacts (so we can size routing).
+- Confirm your preferred KMS vendor and whether you need a dedicated HSM appliance in the rack.
+
+Thanks — I’ll follow up with the architecture sketch and the port checklist in a separate note.
+
+Connor
+---
+Attachments included: redwood-private-quickstart.pdf
+
+On 2026-09-04 21:30, Elena Ruiz <elena@privatelane.health> wrote:
+> Connor — thanks for the clear write-up. High level is correct; a couple clarifications from our side:
+>
+> [See inline replies above]
+
+From: Lauren Bishop <lauren.bishop@redwoodinference.com>
+To: Connor O'Brien <connor.obrien@redwoodinference.com>
+Cc: Karthik Iyer <karthik.iyer@redwoodinference.com>, Elena Ruiz <elena@privatelane.health>
+Date: 2026-09-06T09:10:00Z
+Subject: Re: Post-call playback: PrivateLane hosting & compliance alignment
+
+Thanks Connor — good recap. Looping Karthik for the deep-dive and noting procurement timeline. LGTM from my side; I’ll help with SOW language for the canary/rollout guardrails.
+
+Lauren Bishop
+Senior Manager, Developer Success | Redwood Inference

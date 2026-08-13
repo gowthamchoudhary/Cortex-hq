@@ -1,0 +1,126 @@
+Dedicated capacity sizing & $/1M token estimate for Acme Health
+
+From: Laura Chen <laura@acmehealth.com>
+To: Logan Wright <logan_wright@redwood.ai>
+Cc: Daniel Park <daniel.park@acmehealth.com>, procurement@acmehealth.com
+Date: Tue, 15 Jun 2027 09:12:00 -0700
+Subject: Follow-up: sizing for dedicated capacity + budget range
+
+Hey Logan —
+
+Thanks again for the demo earlier. Quick recap from our side and a few clarifying asks so we can get procurement moving:
+
+- Workload: real-time clinical summarization and triage. Typical prompt/response pair ~600 tokens output (average), input varies.
+- Volume: rough internal estimate 1.2M requests/month -> ~720M output tokens/month, plus prompts and system tokens puts us around ~1.1B total tokens/month. (CSV attached with sample traffic buckets).
+- Latency SLO: p95 generation under 350ms for single-request flows.
+- Budget: finance signaled a target of $7k–$10k / month initially for inference spend; they asked for $/1M token guidance so they can compare to other vendors.
+- Questions:
+  1) For this profile, do you recommend A100-80GB or H100 instances for Reserved/Dedicated?
+  2) What reserved capacity size (GPU count / lanes) would meet the throughput while staying near the budget?
+  3) Can you provide a target $/1M tokens estimate with the two hardware options (including any uplift for SLAs/priority)?
+
+I attached the traffic CSV so you can sanity-check the token math. Procurement wants a short proposal they can internalize.
+
+Thanks — Laura
+Laura Chen
+Director, Clinical AI
+Acme Health
+
+Attachment: Acme_traffic_profile.csv (CSV, 38KB)
+From: Logan Wright <logan_wright@redwood.ai>
+To: Laura Chen <laura@acmehealth.com>
+Cc: Camila Reyes <camila_reyes@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 15 Jun 2027 12:04:00 -0700
+Subject: Re: Follow-up: sizing for dedicated capacity + budget range
+
+Laura —
+
+Appreciate the clear summary and the CSV. High-level answers below; Camila and I will follow up with a short proposal PDF and benchmarking notes.
+
+Immediate takeaways:
+- Token math looks consistent with ~1.1B total tokens/month. We'll dimension reserved lanes to meet p95 latency 350ms with headroom for spikes.
+- Two viable reserved configs:
+  Option A (cost-optimized): 4x A100-80GB GPUs (continuous reserved lanes) -> good for batching and quantized models; estimated blended unit cost ~ $1,900 / 1M tokens (includes reserved discount, baseline SLA).
+  Option B (performance SLO): 3x H100 GPUs (higher single-request throughput) -> fewer GPUs due to faster kernels, estimated blended unit cost ~ $2,600 / 1M tokens (includes priority SLO and burst lanes).
+
+Notes and assumptions (short):
+- Estimates assume using a 70B-class open model with 4-bit quantization and Redwood's KV prefix caching for common prompts.
+- We included typical autoscale headroom to keep p95 under 350ms; true cost varies with actual sequence length distribution and request concurrency.
+- Pricing includes dedicated capacity fee + token unit economics; final quote will break this out.
+
+Next steps I propose:
+1) Camila to produce a 1-page SKU proposal with explicit GPU counts, throughput targets (tokens/sec per lane), and $/1M token breakout.
+2) If that looks OK, schedule a procurement call (procurement@acmehealth.com) to go over terms and lead times.
+
+Camila — assigning you the action to create the PDF proposal. Marissa, FYI in case we need to surface an approval for the reserved discount band.
+
+— Logan
+Logan Wright
+Account Executive | Redwood Inference
+
+(Quoted message below)
+On Tue, 15 Jun 2027 at 09:12, Laura Chen <laura@acmehealth.com> wrote:
+> Thanks again for the demo earlier. Quick recap from our side and a few clarifying asks so we can get procurement moving:
+> ...
+From: Camila Reyes <camila_reyes@redwood.ai>
+To: Laura Chen <laura@acmehealth.com>
+Cc: Logan Wright <logan_wright@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Wed, 16 Jun 2027 10:22:00 -0700
+Subject: Re: Follow-up: sizing for dedicated capacity + budget range (proposal attached)
+
+Laura —
+
+Attached is a concise proposal (dedicated-sku-proposal.pdf) with two recommended configurations and explicit throughput targets. Short technical notes here so procurement understands tradeoffs:
+
+Option A — 4x A100-80GB (cost-optimized)
+- Target steady throughput: ~14k tokens/sec aggregate (across 4 GPUs)
+- Expected p95 latency ~300–400ms depending on burst concurrency
+- Optimizations: 4-bit quant + continuous batching and prefix KV cache; best fit if you expect high batching (many short chats).
+
+Estimated economics: ~$1,900 / 1M tokens (this includes reserved capacity discount + base SLA). We can tighten this number after a 48-hour sample workload run.
+
+Option B — 3x H100 (performance)
+- Target steady throughput: ~18k tokens/sec aggregate (across 3 GPUs)
+- Expected p95 latency ~220–320ms for typical single-request loads
+- Optimizations: float16 kernels where latency matters; fewer GPUs required for the same single-request performance.
+
+Estimated economics: ~$2,600 / 1M tokens (includes priority SLO + burst lanes).
+
+Operational notes:
+- We recommend a 30-day pilot with a light commit (monthly) to validate real traffic shape; we'll instrument per-route cost and per-token latency so your finance and SRE teams can reconcile spend.
+- Lead times: A100 reserved pools are available sooner; H100 reserved capacity may require a 4–6 week lead depending on region and slot availability.
+
+Attachments: dedicated-sku-proposal.pdf
+Related link: https://drive.google.com/drive/fake-benchmark-report (internal perf sweep)
+
+If procurement wants a single-line summary for the purchase order, I can produce that after we pick Option A or B.
+
+Cheers,
+Camila Reyes
+Senior Sales Engineer | Redwood Inference
+
+(Quoted messages below)
+On Tue, 15 Jun 2027 at 12:04, Logan Wright <logan_wright@redwood.ai> wrote:
+> Laura —
+> Appreciate the clear summary and the CSV. High-level answers below; Camila and I will follow up with a short proposal PDF and benchmarking notes.
+> ...
+From: Laura Chen <laura@acmehealth.com>
+To: Logan Wright <logan_wright@redwood.ai>
+Cc: Camila Reyes <camila_reyes@redwood.ai>, Daniel Park <daniel.park@acmehealth.com>, procurement@acmehealth.com
+Date: Thu, 17 Jun 2027 14:05:00 -0700
+Subject: Re: Follow-up: sizing for dedicated capacity + budget range
+
+Logan / Camila —
+
+Thanks for the fast turn. The 1-pager is exactly what procurement needed. Procurement asked that we:
+- Start with Option A (A100) as the preferred path to hit the $7k–$10k monthly target while we validate accuracy.
+- Schedule a procurement call next week (I propose Tue 21 Jun at 10am PT).
+
+Daniel (cc) is our procurement lead and will own PO logistics. Can you confirm availability for Tue 21 and send a short PO-friendly line item (we only need GPU SKU, qty, monthly reserved rate, and one-line SLA summary) before EOD Monday?
+
+Thanks — Laura
+Laura Chen
+Director, Clinical AI
+Acme Health
+
+(End of thread)

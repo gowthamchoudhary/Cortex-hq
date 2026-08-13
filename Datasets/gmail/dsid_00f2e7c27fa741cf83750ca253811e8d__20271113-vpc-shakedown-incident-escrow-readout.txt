@@ -1,0 +1,118 @@
+Greencheck: VPC shakedown & incident-escrow readout for go-live
+
+From: Samuel Nguyen <samuel.nguyen@acme-corp.com>
+To: Irene Choi <irene_choi@redwood.com>
+Cc: ops@acme-corp.com
+Date: 2027-11-13T09:12:00-08:00
+Subject: RE: final prep — short list of last-minute asks
+
+Irene — thanks for the call earlier. We wanted to capture three quick items before your cutover tonight: 
+
+1) Can you confirm the exact time window you will shift production traffic and whether you will throttle during the first 20 minutes?
+2) We need the runbook we should follow if the BGP session between our edge and Redwood fails during cutover (we have an internal escalation path that must be triggered).
+3) Please provide a short post-deploy checklist we can run from our side (basic health checks + where to look for traces/latency regressions).
+
+We have an internal on-call rotation so include whoever will be reachable for L2/L3. Appreciate a one-page snapshot with the essential commands — we want to embed it in our incident playbook.
+
+— Samuel
+Senior SRE, Acme Corp
+[attachment: none]
+
+From: Irene Choi <irene_choi@redwood.com>
+To: Samuel Nguyen <samuel.nguyen@acme-corp.com>
+Cc: Marissa Cole <marissa_cole@redwood.com>, Kimberly Park <kimberly_park@redwood.com>, Connor O'Brien <connor_obrien@redwood.com>
+Date: 2027-11-13T09:45:00-08:00
+Subject: Re: Greencheck: VPC shakedown & incident-escrow readout for go-live
+
+Samuel — thanks, here’s the concise plan and artifacts. Attaching the final shakedown runbook and a small KV-cache priming script we’ll use on the first run. Key points below: 
+
+Window and throttling:
+- Cutover start: 2027-11-13 23:00 UTC (scheduled maintenance window already approved).
+- Traffic steering: ramp 10% -> 40% -> 100% at 0, 7, 20 minutes. If any P99 latency or error-rate exceed thresholds (see thresholds table in runbook) we’ll hold and revert to the pre-cutover route.
+
+BGP failure play:
+- Primary detection: our probe alerts + Acme edge BFD flaps.
+- Immediate action: runbook Step 4 (manual route withdraw + set origin-preference), open joint bridge (Zoom/Slack), escalate to L3 (Marissa, Connor).
+- Escrow: we’ll keep an incident-escrow slot open for 2 hours post-cutover where Redwood L3 will hold reduced-change mode.
+
+Post-deploy checks (what Acme runs):
+- curl -I https://api.acme.example/status (expect 200 + header X-Redwood-Region: us-west-2).
+- query trace IDs via observability link (see attached checklist CSV) for p50/p95 latency comparisons.
+- Verify KV cache hit-rate > 60% on first hour. If < 40%, contact Redwood L3 to apply prefix priming.
+
+On-call and contacts:
+- Redwood L2: Kimberly Park (kimberly_park@redwood.com)
+- Redwood L3: Marissa Cole (marissa_cole@redwood.com), Connor O'Brien (connor_obrien@redwood.com)
+
+Attachments: final-shakedown-runbook.pdf (detailed steps, rollback triggers), kv-cache-prime-script.sh (small script), postdeploy-checklist.csv (one-page checks).
+
+I’ll join the bridge at T-30 and stay for T+60. If you want a shorter one-page extract for your own incident book, I’ll send it in a separate email.
+
+— Irene
+Principal Solutions Architect, Redwood Inference
+[attachment: final-shakedown-runbook.pdf (pdf, 272KB); kv-cache-prime-script.sh (shell, 4KB); postdeploy-checklist.csv (csv, 6KB)]
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Irene Choi <irene_choi@redwood.com>, Samuel Nguyen <samuel.nguyen@acme-corp.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>, Connor O'Brien <connor_obrien@redwood.com>
+Date: 2027-11-13T11:20:00-08:00
+Subject: Re: Greencheck: VPC shakedown & incident-escrow readout for go-live
+
+Quick confirmations from infra/ops side: 
+- We will pre-warm KV cache using the attached script at T-10m with small, sampled traffic to reach ~65% hit rate before 23:00 UTC. Script logs will be posted to the bridge.
+- L7 ingress checks: TLS certs validated 2h prewindow; we will publish cert thumbprint to bridge at T-30.
+- Telemetry: expect p50 latency baseline ~38ms, p99 baseline ~210ms. Thresholds in runbook are: p50 + 40% and p99 + 25% as red lines.
+- Fail-open behavior: if we detect a sustained error rate >2% for 5 minutes we will snapshot and roll traffic back to pre-cutover routing.
+
+Also adding one item for Acme to validate: confirm MTU 1500 on the customer-facing transit — mismatches cause fragmentation and odd latency spikes.
+
+I’ll be primary L3 on the bridge until the 60-minute post window. Connor will own rollback automation if we need to flip routes quickly.
+
+— Marissa
+Director, Infrastructure Operations, Redwood Inference
+[attachment: none]
+
+From: Irene Choi <irene_choi@redwood.com>
+To: Samuel Nguyen <samuel.nguyen@acme-corp.com>, Marissa Cole <marissa_cole@redwood.com>, Kimberly Park <kimberly_park@redwood.com>, Connor O'Brien <connor_obrien@redwood.com>
+Date: 2027-11-13T16:02:00-08:00
+Subject: CUTOVER READOUT: post-deploy shakedown summary (T+90m)
+
+Team — final readout from tonight’s go/no-go and shakedown. Posting short, actionable summary so Acme ops can import directly into your incident playbook. 
+
+Timeline:
+- 2027-11-13 23:00 UTC — cutover start (10% ramp)
+- 23:07 UTC — 40% ramp
+- 23:22 UTC — 100% ramp
+- 00:02 UTC (T+62) — held 15s due to transient p99 spike during a large prefix announcement from an upstream; auto-hold engaged, rollback avoided by applying origin-preference tweak in runbook Step 4. Bridge closed at T+90 with green.
+
+Checks performed (pass/fail):
+- BGP session stability: PASS (no session drops).
+- MTU and path MTU discovery: PASS (1500 verified at both edges).
+- KV cache warm: PASS (hit-rate 68% at T+10m).
+- Latency: p50 measured 35ms (baseline 38ms), p99 measured 225ms (slightly above threshold — transient spike logged and root-cause traced to upstream).
+- Error-rate: average 0.4% during ramp (below 2% threshold).
+
+Actions taken during incident window:
+- Applied origin-preference tweak to mitigate transient upstream route behavior (see runbook Step 4).
+- Ran kv-cache-prime-script.sh twice to re-establish prefix priming for cold keys — appended logs to the drive folder.
+- Opened INC-7842 with Acme; root-cause analysis collecting upstream BGP announcements affecting one PoP.
+
+Post-deploy items for Acme (import into your playbook):
+1) Run the CURL health check: curl -I https://api.acme.example/status (validate X-Redwood-Region header and 200).
+2) Pull the p99 traces from the observability link and compare against baseline timeframe (link in CSV).
+3) If KV hit-rate drops below 50% in the first 2h, run prefix priming (kv-cache-prime-script.sh) and call Redwood L3.
+4) For any BGP anomalies: follow runbook Step 4, then escalate to our Bridge if automated mitigations do not stabilize within 5 minutes.
+
+Attachments and artifacts (location):
+- final-shakedown-runbook.pdf — step-by-step + thresholds (Drive: https://drive.redwood-inference.com/drive/folders/1aB2cShakedownDocs)
+- kv-cache-prime-script.sh — script we ran and logs uploaded to the same Drive folder.
+- postdeploy-checklist.csv — one-page checks for your runbook.
+- Incident ticket: https://support.acme-corp.com/tickets/INC-7842 (created during T+62).
+
+Final status: GREEN — production stable after T+90m. We will stay on the bridge in read-only monitoring mode until T+180m in case of delayed regressions. If Acme wants, I will prepare a 1-page condensed playbook excerpt for your on-call rotation.
+
+Thanks everyone for the coordinated execution.
+
+— Irene
+Principal Solutions Architect, Redwood Inference
+[attachment: final-shakedown-runbook.pdf; kv-cache-prime-script.sh; postdeploy-checklist.csv]

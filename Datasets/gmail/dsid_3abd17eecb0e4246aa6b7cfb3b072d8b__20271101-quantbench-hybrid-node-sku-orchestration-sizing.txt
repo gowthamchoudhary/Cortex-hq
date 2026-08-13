@@ -1,0 +1,117 @@
+QuantBench — hybrid node SKU orchestration & sizing for Dedicated commitment
+
+From: Sam Torres <sam.torres@quantbench.ai>
+To: naomi_feldman@redwood.ai, procurement@quantbench.ai
+Date: Mon, 1 Nov 2027 09:12:00 -0800
+Subject: Dedicated sizing ask — workload profile attached
+
+Hi Naomi —
+
+Thanks again for the intro call last week. We pulled together a short compute profile (attached) and a few questions as we think about a 12-month reserved commitment for Redwood Dedicated. Our main asks: predictable latency for live user queries (95th < 120ms for short chat flows), support for occasional long-context batch jobs (30k tokens) and large-batch embedding throughput for nightly analytics.
+
+Two quick constraints:
+- We must keep PII on private capacity (so we'll use Dedicated in our VPC).
+- Our finance team prefers a blended per-hour cost target that is no more than 60% above cloud spot baseline across the year.
+
+Can you recommend a SKU mix (H100 / A100 / L4) and rough slotting that balances memory needs for long contexts and cost for high-throughput embedding jobs? Also curious about fallback behavior if reserved pool is saturated.
+
+Appreciate it —
+Sam
+VP Product, QuantBench
+
+Attachment: quantbench_compute_profile.xlsx (spreadsheet)
+
+From: naomi_feldman@redwood.ai
+To: Sam Torres <sam.torres@quantbench.ai>, kimberly_park@redwood.ai, karthik_iyer@redwood.ai
+Cc: procurement@quantbench.ai
+Date: Mon, 1 Nov 2027 11:03:00 -0800
+Subject: Re: Dedicated sizing ask — workload profile attached
+
+Sam —
+
+Thanks for the profile. I skimmed the numbers and pasted the highlights below; Kim and Karthik are looping in to translate this into a concrete slotting plan and a fallback policy for peak traffic. High-level thinking from product:
+
+- Long-context batches (30k tokens) are memory-bound; H100-class GPUs or large-memory A100 variants are the usual fit when we need a single-GPU KV cache for decoding without excessive tiling.
+- For steady-state short-chat (95th < 120ms), A100 is a strong latency/cost sweet spot if you can partition into multi-slot replicas; L4s are compelling for stateless embedding-heavy and high-concurrency routing when memory per-request is small.
+- A hybrid pool (predominantly A100 + a smaller H100 reserve for long-context jobs + L4s for embeddings/low-cost fallthrough) typically minimizes blended cost and meets tight latency SLOs.
+
+Kim / Karthik — could you put together a 3-node proposal (slot counts + approximate RPS/concurrency per slot) and a recommended canary/fallback flow (e.g., route to L4-batch queue for non-interactive embedding jobs, and to A100 with LRU prefix-cache for chat)? I added procurement on cc so they can flag any contractual constraints.
+
+Thanks —
+Naomi
+Senior Sales Engineer, Redwood Inference
+
+On Mon, Nov 1, 2027 at 09:12 AM Sam Torres <sam.torres@quantbench.ai> wrote:
+> Hi Naomi —
+> 
+> Thanks again for the intro call last week...
+> 
+> Attachment: quantbench_compute_profile.xlsx
+
+From: kimberly_park@redwood.ai
+To: naomi_feldman@redwood.ai, karthik_iyer@redwood.ai, Sam Torres <sam.torres@quantbench.ai>
+Date: Tue, 2 Nov 2027 10:28:00 -0800
+Subject: Re: Dedicated sizing ask — workload profile attached
+
+Quick pass with a few concrete numbers. I ran a conservative projection using their nightly embedding throughput and peak chat RPS:
+
+Proposal (month 1 baseline):
+- 6 x A100-80GB slots (primary chat surface): each slot tuned for ~80 concurrent short-chat sessions (512 token typical), target p95 latency 60–110ms depending on prompt length.
+- 2 x H100-80GB slots (long-context reserve): reserved for 30k-token decoding + RLHF-style evals; avoid tiling across GPUs where possible to keep decoding fast.
+- 8 x L4 nodes (accelerators for embeddings + low-cost inference): configured as many thin slots for high QPS embedding batches; nightly jobs batched to maximize throughput.
+
+Notes on configurations:
+- Quantization: run short-chat models on 4-bit quantized A100 paths; long-context jobs should prefer 8-bit or FP16 on H100 to avoid accuracy regressions.
+- Caching: enable prefix/KV cache on A100s for chat to reduce repeated token work. Put a small shared cache on H100s for resumed long sessions.
+- Autoscale/burst: recommend short burst pool (2 x A100 pre-warmed) to handle 20–25% traffic spikes; if reserved pool exhausted, implement policy:
+   * Interactive short-chat => failover to A100 burst or, if latency budget tight, degrade model (smaller variant) on A100 slots.
+   * Embeddings => spill to L4 fleet batched (higher latency acceptable).
+
+I'll simulate token-hour economics with Karthik tonight and send a sliding-cost table (reserved vs burst) tomorrow.
+
+Attachments referenced: hybrid-sku-simulations-2027-11-02.pdf (sim snapshots)
+
+Thanks,
+Kimberly
+Principal Solutions Architect, Redwood Inference
+
+From: karthik_iyer@redwood.ai
+To: naomi_feldman@redwood.ai, kimberly_park@redwood.ai, Sam Torres <sam.torres@quantbench.ai>, Procurement <procurement@quantbench.ai>
+Date: Wed, 3 Nov 2027 14:43:00 -0800
+Subject: Re: QuantBench — hybrid node SKU orchestration & sizing for Dedicated commitment
+
+Looping the final sizing simulation and a recommended SLA/rollback pattern. Summary of simulation assumptions is below, followed by the recommended slot allocation and fallbacks. Full sim PDF attached.
+
+Simulation assumptions (TL;DR):
+- Short-chat average request: 512 tokens in + 64 tokens out. Peak concurrent short-chat users: 480 across region.
+- Long-context batches: 6 jobs/day, average 25k tokens, low concurrency but require single-GPU memory to avoid cross-GPU tiling overhead.
+- Embedding jobs: nightly batches totaling ~50M vectors, can be aggressively batched and tolerate >5s latency.
+
+Recommended baseline slotting (month 1):
+- A100-80GB: 6 slots (primary), prioritized for interactive chat. Use per-slot concurrency of ~60–90 depending on prompt mix; enable KV prefix caching and async batching for throughput.
+- H100-80GB: 2 slots (memory headroom). Reserve these for long-context decodes and heavy evals; configure admission control to gate multi-GPU tiling where possible.
+- L4: 10 nodes (embedding throughput): highly parallel, autoscale-friendly, cheap per-token. Plan for nighttime scaling to 2x nodes for embedding windows.
+
+Cost & performance tradeoffs (high level):
+- H100 gives best single-GPU long-context performance but highest cost; keep footprint minimal and use only for jobs that truly need large contiguous memory.
+- A100 is the best middle ground for latency-sensitive chat when you can shard sessions across slots and leverage caching; quantize short-chat models to 4-bit safely in many cases.
+- L4 is the most cost-efficient for embeddings and stateless workloads; latency/precision tradeoffs are acceptable for batch embeddings.
+
+Operational recommendations:
+- Canary rollout: start with 50% traffic on the A100 primary pool, monitor p95/p99 and token-unit cost for 72 hours, then ramp.
+- Fallback policy: if A100 saturation risk > 10% for > 3 mins, run immediate routing rules: degrade to smaller chat model on A100 burst or queue to L4-batched embeddings for non-interactive work.
+- Contractual: propose a 12-month reserved commitment with flexible burst credits (40% monthly) so QuantBench can absorb seasonal spikes without over-committing capex. Procurement, please review the burst-credit wording.
+
+Next steps:
+- Naomi: confirm commercial constraints and preferred commit size.
+- Sam: confirm whether long-context batch jobs can tolerate tiling (i.e., splitting across two GPUs) as that could reduce H100 need.
+- Procurement (QuantBench): we will send a draft SOW + reserved pricing table once Naomi confirms the commit band.
+
+Regards,
+Karthik Iyer
+Director, Applied Inference — Redwood Inference
+
+On Tue, Nov 2, 2027 at 10:28 AM kimberly_park@redwood.ai wrote:
+> Quick pass with a few concrete numbers...
+> 
+> Attachment: hybrid-sku-simulations-2027-11-02.pdf

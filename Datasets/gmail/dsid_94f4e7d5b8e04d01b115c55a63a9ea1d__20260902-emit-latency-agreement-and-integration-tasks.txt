@@ -1,0 +1,111 @@
+Emit latency agreement & streaming integration tasks
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Alex Rivera <alex.rivera@helixpay.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-09-01T15:32:00-07:00
+Subject: Emit latency agreement & streaming integration tasks
+
+Alex — thanks for the time earlier. Quick call recap and where we landed on TTFT/streaming items so we have a single source of truth before the pilot kickoff:
+
+What we agreed (recap):
+- TTFT targets: 90th percentile TTFT target of <= 250ms for interactive short-prompts (<= 150 tokens). For longer multi-turn prompts (~300 tokens) baseline 95th <= 400ms during steady-state.
+- Streaming: primary path SSE for browser and webhooks; WebSocket recommended for mobile SDK customers where connection reliability is better. Plan: start pilot on SSE with WS fallback.
+- Chunk cadence: client-visible chunks every 200–400ms for natural typing UX; server-side batch windows sized to preserve latency SLOs (we'll propose batching config).
+- Throughput/concurrency: you called out expected avg QPS ~30–50 and burst concurrency up to ~200 simultaneous streams during bulk events (e.g., batch invoice generation).
+
+Attachments: I’ve attached the initial SLO worksheet (redwood-ttft-slo-worksheet-v1.pdf) — fills in config knobs we discussed. Please share a 5–10 minute telemetry sample (headers + payload sizes) so we can simulate realistic batching.
+
+Next steps (asks / owners):
+1) HelixPay: share a ~30s sample of representative streaming requests (sample payload + typical prompt lengths) — Alex (by EOD 9/2) — includes any auth headers/payload sizes.
+2) Redwood infra: run a capacity simulation for the profile above and propose batching/quantization options and an estimated cost delta for Dedicated vs Hosted pilot — Marissa (deliverable 9/4).
+3) Schedule pilot kickoff (30–45m tech sync): propose 9/7 or 9/8 — Ben to coordinate availability and send calendar invite.
+
+If any of the numbers above look off or you want tighter TTFT at launch (e.g., 95th <= 200ms), flag that now — that’ll change our recommended config.
+
+Thanks — looking forward to the pilot.
+
+—Ben
+Ben Carter
+Senior Solutions Engineer, Redwood Inference
+Attachments: redwood-ttft-slo-worksheet-v1.pdf (PDF, 120KB)
+
+From: Alex Rivera <alex.rivera@helixpay.com>
+To: Ben Carter <ben.carter@redwood.ai>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, HelixPay Procurement <procurement@helixpay.com>
+Date: 2026-09-01T18:07:00-07:00
+Subject: Re: Emit latency agreement & streaming integration tasks
+
+Ben — thanks for the clear recap. Confirming on our side:
+- We’re comfortable with the 90th <= 250ms target for short prompts. For longer flows we can tolerate up to 450ms at 95th if it materially reduces cost.
+- Streaming will be ~80% of calls once live (most customer-facing chat flows).
+- Throughput: average 35 QPS; expected normal concurrency ~50; peak concurrency during marketing pushes could hit ~200 as you noted.
+
+I’m attaching a small telemetry snippet (helix-telemetry-sample.json) showing 120–160 token prompts, average payload ~3.2KB, and median RTT from our side ~60ms.
+
+Pilot kickoff: 9/8 10:00am PT works for our engineering lead (Nina).
+
+Two follow-up questions:
+1) For SSE, do you recommend a heartbeat interval? We want to avoid idle connection churn on mobile.
+2) If you need us to strip or normalize prompt priming before sending samples, tell me and we’ll prepare that.
+
+Appreciate it — Alex
+Alex Rivera
+Head of Integrations, HelixPay
+Attachments: helix-telemetry-sample.json (JSON, 9KB)
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>
+Date: 2026-09-01T20:05:00-07:00
+Subject: Fwd: Emit latency agreement & streaming integration tasks — internal ops list
+
+Marissa — forwarding the Helix thread. Key asks for infra/solutions team: 
+
+1) Capacity sim: run a synthetic with avg QPS 35, steady concurrency 50, peak concurrency 200, prompt distribution: 60% short (<=150 tokens), 40% long (~300 tokens). Use payload sizes ~3.2KB. Provide estimates for:
+   - Hosted pilot (multi-tenant) with our tuned batching + KV cache rules
+   - Dedicated pilot (single-tenant reserve) with quantized weights suggestion (int8/FP16)
+
+2) Latency config: propose an SSE heartbeat recommendation (client keepalive every 30s; server-side idle timeout 120s) and chunk cadence plan (emit at 200ms min cadence, coalesce small frames for cost).
+
+3) Cost delta: estimate cost per 1M tokens for both modes and call out where TTFT tightening to 95th <= 200ms would increase burn.
+
+4) Pilot runbook: short checklist (traffic ingest endpoint, auth, observability traces, fallback path to WS, regression test prompts).
+
+Let’s discuss in tomorrow’s triage — assigning initial work to you. I’ll confirm the 9/8 kickoff with Helix once we have the sim results.
+
+—Ben
+
+From: Ben Carter <ben.carter@redwood.ai>
+To: Alex Rivera <alex.rivera@helixpay.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, HelixPay Procurement <procurement@helixpay.com>
+Date: 2026-09-02T10:12:00-07:00
+Subject: Re: Emit latency agreement & streaming integration tasks
+
+Alex — got the telemetry sample, thanks. Forwarding to infra for simulation. Quick answers to your questions (copied from internal):
+
+1) Heartbeat: recommend client -> server ping every 30s, server idle close at 120s. This avoids excessive re-connects and keeps backends from holding pages open too long.
+2) Prompt normalization: no need to strip priming for the sim; the sample is fine. For production we can provide a helper lib to trim large system prompts client-side if you want.
+
+I’ve scheduled the pilot kickoff for 2026-09-08 10:00am PT and sent a calendar invite to Nina and your team. I’ll include the proposed runbook and our initial sim results ahead of the call.
+
+If anything changes on timing or the traffic profile, please let me know.
+
+Onwards — Ben
+
+On Tue, Sep 1, 2026 at 3:32 PM Ben Carter <ben.carter@redwood.ai> wrote:
+> Alex — thanks for the time earlier. Quick call recap and where we landed on TTFT/streaming items so we have a single source of truth before the pilot kickoff:
+> 
+> What we agreed (recap):
+> - TTFT targets: 90th percentile TTFT target of <= 250ms for interactive short-prompts (<= 150 tokens). For longer multi-turn prompts (~300 tokens) baseline 95th <= 400ms during steady-state.
+> - Streaming: primary path SSE for browser and webhooks; WebSocket recommended for mobile SDK customers where connection reliability is better. Plan: start pilot on SSE with WS fallback.
+> - Chunk cadence: client-visible chunks every 200–400ms for natural typing UX; server-side batch windows sized to preserve latency SLOs (we'll propose batching config).
+> - Throughput/concurrency: you called out expected avg QPS ~30–50 and burst concurrency up to ~200 simultaneous streams during bulk events (e.g., batch invoice generation).
+> 
+> Attachments: I’ve attached the initial SLO worksheet (redwood-ttft-slo-worksheet-v1.pdf) — fills in config knobs we discussed. Please share a 5–10 minute telemetry sample (headers + payload sizes) so we can simulate realistic batching.
+> 
+> Next steps (asks / owners):
+> 1) HelixPay: share a ~30s sample of representative streaming requests (sample payload + typical prompt lengths) — Alex (by EOD 9/2) — includes any auth headers/payload sizes.
+> 2) Redwood infra: run a capacity simulation for the profile above and propose batching/quantization options and an estimated cost delta for Dedicated vs Hosted pilot — Marissa (deliverable 9/4).
+> 3) Schedule pilot kickoff (30–45m tech sync): propose 9/7 or 9/8 — Ben to coordinate availability and send calendar invite.
+> 
+> Thanks — Ben

@@ -1,0 +1,139 @@
+Follow-up: location-binding & warm-standby options — Horizon Health
+
+From: Soojin Lee <soojin.lee@redwoodinference.com>
+To: Alice Stevens <alice.stevens@horizonhealth.com>
+Cc: Ben Carter <ben.carter@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Thu, 21 Jun 2028 14:03:00 -0700
+Subject: Follow-up: location-binding & warm-standby options — Horizon Health
+
+Hi Alice —
+
+Thanks again for joining the call earlier today. Quick recap and the items we promised to follow up on related to data placement and failover: 
+
+- Scope: PII categories you mentioned (patient identifiers + billing metadata) and our options for keeping primary processing within the US.
+- Options discussed: strict pinning to a US region (single-primary), US primary + warm-standby in EU/APAC for DR, and fully cross-region active/passive with journaling.
+- Ask from you: confirmation of required retention windows for logs and backups, and whether cross-region DR is permitted from a regulatory standpoint.
+
+Action items we committed to:
+1) Provide a short note on how warm-standby works operationally (RTO/RPO, what’s replicated vs what’s cached).
+2) Call out what audit/logging controls are available and retention configuration.
+3) Share a recommended configuration that balances cost and residency for your compliance team.
+
+Attachments: 
+- Horizon_Data_Reqs.xlsx (your initial fields list) [Attachment: Horizon_Data_Reqs.xlsx (xlsx)]
+
+Next steps: can you confirm the required retention for audit logs (you mentioned 7 years as a possibility) and whether you need any data to ever leave the US for processing? Once we have that, Ben will propose a warm-standby pattern and an approximate SLA/RTO estimate.
+
+If it helps, I can schedule a 30-min technical follow-up with our infra lead (Ben) and Marissa (solutions) on Friday. Which window works for you — 9:00–11:00 PT or 13:00–15:00 PT?
+
+Thanks,
+
+Soojin Lee
+Account Exec — Healthcare
+Redwood Inference
+soojin.lee@redwoodinference.com
++1 (415) 555-0198
+
+[Attachment: Horizon_Data_Reqs.xlsx (xlsx)]
+From: Alice Stevens <alice.stevens@horizonhealth.com>
+To: Soojin Lee <soojin.lee@redwoodinference.com>
+Cc: security@horizonhealth.com
+Date: Thu, 21 Jun 2028 16:21:00 -0700
+Subject: Re: Follow-up: location-binding & warm-standby options — Horizon Health
+
+Hi Soojin —
+
+Thanks for the recap — that captures the call well. A few clarifying items from security and engineering: 
+
+1) Residency constraint: our legal team requires that all PHI processing and derived models remain inside the US. We are open to a warm-standby in another jurisdiction for disaster recovery as long as no live PHI is processed outside the US — backups must be encrypted and only used for failover under our control.
+
+2) Logs & retention: audit logs (access logs + admin actions) need to be retained for 7 years. Application telemetry can be retained for 1 year.
+
+3) Replication semantics: if we pin to us-west-2 as the primary, will Redwood replicate token caches or model KV cache to the standby region? We’re concerned about inadvertent replication of sensitive context.
+
+4) Access to plaintext: who at Redwood (if anyone) would have access to plaintext data during a failover event? We need assurances on key personnel and controls.
+
+I attached our security questionnaire; if you can flag the sections related to residency and key access that would be great. Also Friday works — 13:00 PT is best.
+
+Alice
+Director, Cloud Security
+Horizon Health
+[Attachment: Horizon_Security_Questionnaire.pdf (pdf)]
+From: Ben Carter <ben.carter@redwoodinference.com>
+To: Alice Stevens <alice.stevens@horizonhealth.com>, Soojin Lee <soojin.lee@redwoodinference.com>
+Cc: Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Fri, 22 Jun 2028 09:02:00 -0700
+Subject: Re: Follow-up: location-binding & warm-standby options — Horizon Health
+
+Hi Alice —
+
+Thanks for the detail, very helpful. Short answers up-front, followed by a recommended pattern and next steps.
+
+Quick answers: 
+- Warm-standby pattern: Primary remains in the US (we can pin to us-west-2). Warm-standby regions can be provisioned in EU/APAC but configured as passive; no live PHI processing occurs there unless you explicitly trigger failover. Backups and replicated state are encrypted at rest and in transit.
+
+- KV cache & token cache: we do not automatically replicate in-memory KV or session caches across regions for pinned deployments. By default only persistent snapshots and append-only logs required for recovery are replicated (encrypted). This avoids accidental propagation of sensitive conversational context.
+
+- RTO/RPO: typical warm-standby with pre-provisioned instances gives an RTO in the order of 10–20 minutes for request routing + model load if caches are warmed; cold failover (no warm VMs) is hours. We’ll provide a table with exact numbers per model class.
+
+- Access to plaintext: Redwood’s control plane engineers do not have routine access to customer plaintext. During a failover we rely on customer-controlled KMS or our HSM integrations; we can produce a runbook that specifies who is allowed to perform key rotation or manual decrypt steps. We can also provide an inventory of roles that could be involved during incident response.
+
+Recommended configuration for Horizon (minimum friction + compliance):
+1) Pin primary processing to us-west-2.
+2) Configure a warm-standby in us-east-1 (US warm-standby) rather than a non-US region — this satisfies the PHI-in-US requirement while keeping DR latency low.
+3) If you still want an international DR copy, use encrypted snapshot replication to an EU project that remains locked under your control and is only used for cold restore.
+
+Cost note: warm-standby in-region (us-east-1) increases committed capacity costs versus pure cold backups; we’ll run a cost delta for the options so you can present to procurement.
+
+Next steps I’ll take:
+- Draft a short DR playbook (2–3 pages) describing failover triggers, roles, and runbook steps (deliver by Tue EOD).
+- Prepare an RTO/RPO table per model family and example cost delta for warm-standby vs cold snap (deliver by Wed).
+- Join the Friday 13:00 PT call to walk through technical details.
+
+Soojin — I’ll coordinate with Marissa to include an SOW stub for the runbook and options. Alice — can you share a list of the specific endpoints/workflows that must remain in-US (e.g., ingestion, model inference, logs)? That will let us give precise replication guidance.
+
+—Ben
+Ben Carter
+Principal Solutions Engineer
+Redwood Inference
+ben.carter@redwoodinference.com
+[Attachment: None]
+
+On Thu, 21 Jun 2028 at 16:21, Alice Stevens <alice.stevens@horizonhealth.com> wrote:
+> Hi Soojin —
+>
+> Thanks for the recap — that captures the call well. A few clarifying items from security and engineering: 
+>
+> 1) Residency constraint: our legal team requires that all PHI processing and derived models remain inside the US. We are open to a warm-standby in another jurisdiction for disaster recovery as long as no live PHI is processed outside the US — backups must be encrypted and only used for failover under our control.
+>
+> 2) Logs & retention: audit logs (access logs + admin actions) need to be retained for 7 years. Application telemetry can be retained for 1 year.
+>
+> 3) Replication semantics: if we pin to us-west-2 as the primary, will Redwood replicate token caches or model KV cache to the standby region? We’re concerned about inadvertent replication of sensitive context.
+>
+> 4) Access to plaintext: who at Redwood (if anyone) would have access to plaintext data during a failover event? We need assurances on key personnel and controls.
+>
+> I attached our security questionnaire; if you can flag the sections related to residency and key access that would be great. Also Friday works — 13:00 PT is best.
+>
+> Alice
+> Director, Cloud Security
+> Horizon Health
+From: Soojin Lee <soojin.lee@redwoodinference.com>
+To: Ben Carter <ben.carter@redwoodinference.com>, Marissa Cole <marissa.cole@redwoodinference.com>
+Date: Sun, 24 Jun 2028 09:42:00 -0700
+Subject: Internal: next steps / procurement note for Horizon Health (DEAL-HT-4821)
+
+Ben / Marissa —
+
+Thanks for the write-up, Ben. A couple of procurement and timeline notes to include in the SOW stub: 
+
+- Horizon prefers all PHI processing in the US. Recommend we propose the US primary + US warm-standby (us-west-2 primary, us-east-1 warm). Call out an alternative cold EU archive option if legal wants an out-of-country DR copy (encrypted, customer-owned keys).
+- Procurement: Horizon asked for an estimated monthly delta for warm-standby vs cold backups so they can raise the procurement ticket — include 3 scenarios (minimal warm, standard warm, cold-only).
+- Compliance deliverables: DR playbook, role inventory for incident response, and a short residency assurance doc for their legal team.
+
+I’ve put a SOW stub and a shared folder here: https://drive.google.com/drive/folders/1A2b3C_Horizon (SOW filename: Horizon_SOW_Stub.docx). Please draft the SOW language by Tue COB so I can advance to procurement.
+
+Soojin
+Soojin Lee
+Account Exec — Healthcare
+Redwood Inference
+[Attachment: Horizon_SOW_Stub.docx (docx)]

@@ -1,0 +1,82 @@
+Request: temporary p95 measurement relaxation (epsilon-scaling) — Brightline
+
+From: Sarah Miller <sarah@brightline.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>
+Cc: ops+contracts@brightline.com
+Date: Wed, 9 May 2028 09:14:00 -0700
+Subject: Re: latency questions & short-term relief request
+
+Hi Karthik —
+
+Thanks again for the call this morning. To summarize Brightline's ask: we are seeing multi-hour burst events from an external webhook cascade that creates a transient increase in tail latency for the hosted API (p95 spikes to ~1.2s for a 30–45 minute window). Our engineering team needs a short-term exception window while we patch the upstream fanout and implement request-side rate-limiting.
+
+Specifically: would Redwood consider a one-week temporary amendment allowing an elevated p95 threshold (1.2s -> 1.4s) for the affected region during 03:00–07:00 PT, subject to a mitigation plan and an agreed canary & rollback procedure? We can provide a short incident timeline and the burst traces (attached).
+
+We need a response by EOD Friday so we can coordinate with procurement for an amendment.
+
+Attachments: burst-evidence.csv
+
+—Sarah
+Sarah Miller
+SRE Lead, Brightline, Inc.
+
+From: Karthik Iyer <karthik.iyer@redwood.com>
+To: Sarah Miller <sarah@brightline.com>
+Cc: Lauren Bishop <lauren.bishop@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Wed, 9 May 2028 11:02:00 -07:00
+Subject: Re: latency questions & short-term relief request
+
+Sarah — thanks for the clear summary and the CSV. We can accommodate a controlled exception but need to lock down the measurement & mitigation commitments so this doesn't become a rolling SLA hole. Proposed guardrails (high level):
+
+1) Exception window: 2028-05-15 00:00 UTC -> 2028-05-22 00:00 UTC (one week).
+2) Elevated p95 cap: 1.4s for the specified measurement window 03:00–07:00 PT only. All other windows remain at standard commitments.
+3) Canary policy: Brightline to run a capped-volume canary (5% of production traffic) for 48 hours before we flip the exception. Redwood will run parallel telemetry and a canary log capture (we will share canary-run-log.txt).
+4) Autoscaling & fallback: If p95 exceeds 1.6s for >30m during the exception, Redwood reserves the right to trigger a mitigation (temporary routing to a regional variant or rate-limit backpressure).
+5) Evidence & audit: both parties will exchange telemetry snapshots daily; exception void if Brightline fails to deliver mitigation patch within 72 hours of the event start.
+
+Lauren/Ben — can you review and confirm we can operationalize the canary telemetry and the 1.6s emergency threshold? Sarah, if you agree in principle I'll draft an amendment for procurement and a short runbook for the canary/rollback.
+
+Best,
+Karthik
+Karthik Iyer
+Head of Customer Reliability, Redwood Inference
+
+From: Lauren Bishop <lauren.bishop@redwood.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>, Ben Carter <ben.carter@redwood.com>
+Date: Thu, 10 May 2028 08:27:00 -07:00
+Subject: Re: latency questions & short-term relief request
+
+Quick notes on telemetry and measurement windows — I expanded Karthik's draft into specifics so procurement has a deterministic definition. Attaching a short PDF (proposed-exception-amendment.pdf) with exact metric math. Highlights: 
+
+- Measurement basis: p95 calculated on production request start->response-complete across the hosted-api in region=us-west-2, sampled continuously.
+- Window alignment: we will apply the 03:00–07:00 PT carveout to the UTC clock (10:00–14:00 UTC) for the amendment text to avoid ambiguity.
+- Sampling: enable 100% measurement for Brightline during the week but only persistent metrics will be used for compliance decisions (no sampling truncation).
+- Evidence upload: Brightline uploads daily CSV by 10:00 PT; Redwood uploads aggregated telemetry to the Confluence page by 14:00 PT.
+
+Operational steps I will take if we approve:
+- Spin up a canary job that replays production traces at 5% volume for 48h; capture full trace spans and tail latencies.
+- Wire the emergency detector to alert to the SRE channel and trigger automated lane shift to dedicated-capacity fallback.
+
+Ben — can you confirm we have capacity headroom for the canary and the transient lane shift? If yes, Karthik can send the amendment to Brightline legal.
+
+—Lauren
+Lauren Bishop
+Director, Customer Operations, Redwood Inference
+
+From: Ben Carter <ben.carter@redwood.com>
+To: Karthik Iyer <karthik.iyer@redwood.com>, Lauren Bishop <lauren.bishop@redwood.com>, Sarah Miller <sarah@brightline.com>
+Date: Mon, 13 May 2028 17:42:00 -07:00
+Subject: Re: latency questions & short-term relief request
+
+All: I ran a quick cap check with infra — we have the headroom to run a 5% canary and the automation for a lane shift. A couple operational clarifications before we finalize: 
+
+- Canary start: schedule for 2028-05-14 16:00 UTC (that's 09:00 PT) to allow overlap with Brightline's engineering day. We'll need the replay bundle and the list of webhook endpoints you believe triggered the cascade.
+- Rollback metric: the 30-minute >1.6s rule Karthik proposed stands. If triggered, we perform an automated lane shift and notify Brightline SRE within 10 minutes.
+- Contract amendment: procurement will accept the week-long amendment, but they want explicit wording that the exception is timeboxed and non-precedential. I can prep the precise clause.
+
+Sarah — if you can confirm the replay bundle and sign the canary start time, I'll prepare the amendment PDF and route to procurement.
+
+Thanks — Ben
+Ben Carter
+Principal Account Lead, Redwood Inference
+

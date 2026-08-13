@@ -1,0 +1,177 @@
+Private vs Reserved GPU: MedReg scaling strategy and timeline
+
+From: Ana Gomez <ana.gomez@medreg.com>
+To: Marissa Cole <marissa_cole>
+Cc: procurement@medreg.com
+Date: 2027-01-10T09:12:00-08:00
+Subject: Initial ask: private vs reserved GPU for PHI workload
+
+Hi Marissa,
+
+Thanks again for the demo yesterday. As discussed, MedReg needs a clear recommendation between Redwood Private (VPC/on-prem) and Redwood Dedicated (reserved GPU pools) for our PHI-regulated imaging inference workload. High level constraints:
+- Must remain within our VPC and meet our SOC2 + regional data residency controls.
+- Peak inference: ~600 concurrent sessions, 150K tokens/minute aggregate, median response SLA 350ms token latency target.
+- Models: ensemble of a 13B production model and a reranker.
+- Budget: initial committed spend target $180k/month for first year but open to justified adjustments if efficiency gains can be shown.
+
+We need: sizing recommendation (GPU types/count), expected latency and QPS, fallbacks, and a suggested rollout timeline and procurement steps we can share with our infra and procurement teams.
+
+Can you produce a short sizing sketch and a mutual action plan we can review this week?
+
+Best,
+Ana
+Ana Gomez
+VP Engineering, MedReg Health
+
+---
+
+
+From: Marissa Cole <marissa_cole>
+To: Ana Gomez <ana.gomez@medreg.com>
+Cc: jonas_weber; aditya_rao; evelyn_hart
+Date: 2027-01-10T11:05:00-08:00
+Subject: Re: Initial ask: private vs reserved GPU for PHI workload
+
+Ana — thanks for the clear constraints. Attaching a short workbook and our SOC2 highlight doc.
+
+Quick clarifying questions before we finalize numbers:
+1) Typical inference prompt length distribution? (p50/p95 tokens)
+2) How bursty are the 600 concurrent sessions — sustained or spiky?
+3) Any hard cutover date for production go-live?
+
+High-level view I expect to deliver by EOD tomorrow: a side-by-side capacity sketch (dedicated vs private), expected latency/QPS ranges, and a proposed 8-week rollout MAP with procurement milestones.
+
+I’m copying Jonas for the deep GPU sizing and Aditya for commercial cadence. Evelyn from CS will help with migration/runbook items.
+
+Cheers,
+Marissa Cole
+Director, Solutions — Redwood Inference
+marissa@redwood.com
++1 415-555-0192
+
+Attachments: redwood-dedicated-sizing.xlsx, soc2-evidence-overview.pdf
+
+---
+
+
+From: Jonas Weber <jonas_weber>
+To: Marissa Cole <marissa_cole>
+Cc: aditya_rao; evelyn_hart
+Date: 2027-01-11T08:34:00-08:00
+Subject: RE: Initial ask: private vs reserved GPU for PHI workload
+
+Marissa / team — digging into the numbers. Assumptions (please confirm):
+- p50 prompt = 120 tokens, p95 = 820 tokens
+- Ensemble inference: generation (13B) + reranker per user request => ~1.45x token work vs single model
+- Target steady concurrency to support = 600 sessions, allow 2.5x headroom for spikes
+
+Sizing sketches (ballpark):
+Option A — Redwood Dedicated (reserved GPU pools, managed by Redwood but single-tenant capacity):
+- Optimal hardware: 4 x A100 80GB per serving pod (NVL or equivalent) with continuous batching + KV cache
+- Pod throughput: ~1800 tokens/sec (when batched efficiently)
+- To support 150K tokens/min (2500 tokens/sec) sustained + 2.5x headroom => target capacity 6250 tokens/sec => ~4 pods => 16 A100 80GB GPUs
+- Latency range (median token): ~180-380ms depending on batching; token-latency SLA target feasible with preferred request routing and priority lanes.
+- Pros: faster to provision than on-prem, Redwood manages software/optimizations; supports isolated single-tenant scheduling.
+- Cons: data egress and control model slightly less prescriptive than full Private deployment; requires contractual isolation clauses.
+
+Option B — Redwood Private (VPC or on-prem managed by customer):
+- Recommended hardware for on-prem: 16 x A100 80GB (same GPU count) ideally in 4-node groups for redundancy; or 24 x A10G for cost-led option but higher latency and lower batch density.
+- Pod placement: co-located inside customer VPC; Redwood control plane integrates with KMS/HSM for keying and audit logs.
+- Latency: similar at peak if networking and NVLink per-node configuration match; operational responsibility shifts to customer for hardware maintenance and capacity scaling.
+- Pros: full control over data residency and network; easier for procurement to justify from a compliance standpoint.
+- Cons: longer lead time for hardware procurement (~8-12 weeks), higher ops overhead initially, potential for lower utilization without Redwood-managed bursting options.
+
+Operational recommendations common to both:
+- Start with Dedicated reserved capacity sized for 80% of expected peak while enabling Private readiness (hardware spec & runbook) — gives faster time-to-production and a path to migrate if compliance requires.
+- Enable KV prefix caching for common prompt prefixes to reduce token work by estimated 12-18%.
+- Deploy canary route with smaller replica set (2 pods) to validate perf and scaling.
+
+I’ll put a short slide with these numbers and an 8-week phased MAP. Need Ana to confirm prompt length and spike profile.
+
+— Jonas
+Senior SRE, Redwood Inference
+jonas@redwood.com
+
+---
+
+
+From: Aditya Rao <aditya_rao>
+To: Ana Gomez <ana.gomez@medreg.com>; Marissa Cole <marissa_cole>
+Cc: jonas_weber; evelyn_hart
+Date: 2027-01-12T13:21:00-08:00
+Subject: Re: Private vs Reserved GPU: MedReg scaling strategy and timeline
+
+Ana — thanks for the details. A couple commercial notes to help procurement:
+- For Dedicated we can offer a 12-month reserved commitment with a baseline of 16x A100 80GB equivalent for $165k/month. This includes Redwood-managed OS/kernel/config updates, 99.9% availability SLA for the pool, and burst credits for overflow traffic (subject to advance notice).
+- For Private (on-prem), pricing is a platform + support fee: one-time onboarding + $120k/month platform support, plus recommended hardware capex. We can offer a hybrid procurement where Redwood procures hardware on your behalf with a capitated purchase and transfer option at year-end.
+- If security/compliance is the gating factor, we can include a contractual addendum for control plane isolation, detailed SOC2 artifacts, and quarterly audits.
+
+Suggested mutual action plan milestones:
+1) Confirm prompt/profile and spike window (Ana) — 2 business days.
+2) Sign NDA / Contract Addendum (Procurement) — 5 business days after sizing confirmation.
+3) Provision Dedicated reserved pool (if chosen) — 7-10 business days after contract.
+4) Private hardware procurement (if chosen) — procurement lead time 8-12 weeks; parallelize runbook & security reviews.
+
+I’ll prepare a single-page commercial summary and a draft MAP for procurement to sign.
+
+Best,
+Aditya Rao
+Enterprise Account Executive — Redwood Inference
+aditya@redwood.com
++1 212-555-0420
+
+---
+
+
+From: Ana Gomez <ana.gomez@medreg.com>
+To: Marissa Cole <marissa_cole>, Aditya Rao <aditya_rao>
+Cc: procurement@medreg.com, s.reyes@cloudpartners.dev
+Date: 2027-01-13T09:06:00-08:00
+Subject: Re: Private vs Reserved GPU: MedReg scaling strategy and timeline
+
+Thanks — this is helpful. Answers to clarifying q's:
+- p50: 110 tokens, p95: 760 tokens (slightly less than assumed).
+- Spikiness: we have predictable clinical batch windows (10-15 minute spikes) and occasional unexpected load from triage events; planning for 3x headroom on spikes is prudent.
+- Go-live target: internal pilot in 6 weeks, full production in 14 weeks.
+
+Procurement prefers Dedicated as the near-term path if Redwood can provide a binding addendum on data segregation and a documented fallback to Private if a compliance review requires on-prem hardware. Please include a short MAP we can attach to our vendor review.
+
+Also including Sergio from CloudPartners — they may consult on hardware procurement if we choose Private.
+
+Regards,
+Ana
+
+---
+
+
+From: Marissa Cole <marissa_cole>
+To: Ana Gomez <ana.gomez@medreg.com>
+Cc: aditya_rao; jonas_weber; evelyn_hart; s.reyes@cloudpartners.dev
+Date: 2027-01-14T16:47:00-08:00
+Subject: Re: Private vs Reserved GPU: MedReg scaling strategy and timeline
+
+Ana — great, thanks for the detail. Attaching the MAP doc and an updated sizing tab that reflects p95=760 and 3x spike headroom. Highlights and next steps below: 
+
+Highlights:
+- Short-term recommendation: provision Redwood Dedicated reserved pool sized at 16x A100-80GB equivalent (4 serving pods) with burst credits enabled; projected steady-state cost $165k/mo. Expected median token latency 160-340ms with batching and priority lanes enabled.
+- Compliance ask: we will provide a contract addendum covering logical isolation, separate tenant scheduling, and quarterly SOC2 artifact delivery. That satisfies most procurement checks up-front; fallback option to Private (on-prem) is documented with 8-12 week procurement timeline if needed.
+- Efficiency levers: KV-prefix caching (est. 15% token reduction), quantized model variant for non-PII low-sensitivity paths (optional) — could bring effective cost down by ~10-20%.
+
+Immediate next steps (MAP):
+1) Ana: confirm final prompt distribution doc (attached) — 24 hours.
+2) Procurement: sign addendum + SOW (we’ll push a draft) — target 5 business days.
+3) Redwood: provision Dedicated pool upon signatures — 7-10 business days.
+4) Pilot run: 2-week pilot, measure latency and KV cache hit rate, then ramp to prod.
+
+We’ll also share the DocuSign link for the schedule-of-commitments and a procurement-ready commercial summary. If procurement wants Redwood to source hardware for a Private path, Sergio and our procurement team can coordinate next week.
+
+I’ll send the DocuSign + MAP now.
+
+Thanks — looking forward to getting MedReg into pilot.
+
+— Marissa
+Director, Solutions — Redwood Inference
+marissa@redwood.com
+
+Attachments: medreg-mutual-action-plan.docx
+DocuSign: https://www.docusign.com/sign/REDW-7349

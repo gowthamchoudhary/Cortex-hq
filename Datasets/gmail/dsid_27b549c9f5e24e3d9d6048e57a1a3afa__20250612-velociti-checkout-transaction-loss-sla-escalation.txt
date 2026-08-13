@@ -1,0 +1,96 @@
+Velociti checkout gap — transaction loss and credit request
+
+From: Samira Khan <samira.khan@velociti.com>
+To: diego_fernandez@redwood.com
+Date: Tue, 10 Jun 2025 09:22:00 -0700
+Subject: Checkout transaction loss - Jun 9 02:10-02:37 UTC
+
+Diego,
+
+We're seeing a failure window overnight (Jun 9) where a subset of checkout requests returned 502/503s and we observed a number of lost transactions — customers report card declines and duplicate payment attempts. Velocity metrics: ~120 failed checkouts, payment provider saw 96% of them fail to complete. The spike starts ~02:10 UTC and appears to taper by ~02:37 UTC.
+
+I've attached a small excerpt of our transaction logs (transaction_log_excerpt.csv) showing order ids, timestamps and failure codes. Can you confirm whether this maps to a Redwood service interruption and whether Velociti is eligible for SLA remedy/credit? We need the following ASAP:
+- Confirmation of downtime window and affected regions
+- SLO/credit eligibility and provisional amount
+- Any interim mitigations we should apply to reduce customer impact
+
+We're preparing an internal incident postmortem and will share more traces if helpful.
+
+Thanks,
+Samira Khan
+Director of Engineering, Velociti Payments
+samira.khan@velociti.com
+
+Attachment: transaction_log_excerpt.csv (CSV, 2 KB)
+From: diego_fernandez <diego_fernandez@redwood.com>
+To: Samira Khan <samira.khan@velociti.com>
+Cc: laura_bennett@redwood.com, karthik_iyer@redwood.com
+Date: Tue, 10 Jun 2025 10:05:00 -0700
+Subject: Re: Checkout transaction loss - Jun 9 02:10-02:37 UTC
+
+Hi Samira — thanks for the heads up and for the log excerpt. I'm escalating this to our SRE and product teams to validate impact and gather traces. Laura and Karthik are looped in to pull the raw telemetry and check routing/failover behavior for your tenant and the us-west region around that window.
+
+Action items we will take immediately:
+- Pull Redwood ingress and pod-level traces for 2025-06-09 02:00-03:00 UTC
+- Confirm whether autoscaler/preemption or model routing fallback contributed to elevated 5xx rates
+- Produce a provisional timeline and an eligibility assessment for SLA remedy (we'll reference your contract terms)
+
+Laura/Karthik — can you pull the raw traces and the KV cache hit rates for Velociti during the window? Also include any controller events and eviction logs. Samira — we'll share an initial status within 24 hours.
+
+Regards,
+Diego Fernandez
+Account Lead, Redwood Inference
+Diego.Fernandez@redwood.com
+
+
+From: laura_bennett <laura_bennett@redwood.com>
+To: diego_fernandez@redwood.com
+Cc: karthik_iyer@redwood.com
+Date: Wed, 11 Jun 2025 08:15:00 -0700
+Subject: Re: Checkout transaction loss - Jun 9 02:10-02:37 UTC
+
+Diego / Samira — initial pull complete. Highlights:
+- Ingress metrics: small but sharp spike in 503s at 02:11:20 UTC; peak lasted ~18 minutes.
+- Autoscaler log shows a transient pod eviction around 02:10:55 UTC in us-west-2 due to a scheduling pressure event tied to a noisy neighbor.
+- We observed a KV cache miss storm coincident with retries from a dependent payment microservice which amplified tokenization latency.
+
+Attachments: svc_downtime_traces.zip (contains controller events, pod logs, and ingress traces).
+
+Proposed next steps:
+1) Confirm exact affected customers list (Samira — can you confirm whether all Velociti tenants/customers were routed through the same region?)
+2) Schedule a post-incident call tomorrow to walk through timeline and RCA.
+3) Prepare a provisional credit calc: if we qualify under our SLO (99.95% availability), we'll calculate prorated credits per your contract; I can share a draft after we finalize the impact window and tenant scoping.
+
+I'll prepare an evidence bundle for legal and billing once we agree the scope.
+
+- Laura Bennett
+SRE Lead, Redwood Inference
+laura_bennett@redwood.com
+Attachment: svc_downtime_traces.zip (45 MB)
+From: Samira Khan <samira.khan@velociti.com>
+To: diego_fernandez <diego_fernandez@redwood.com>
+Cc: laura_bennett@redwood.com, karthik_iyer@redwood.com
+Date: Thu, 12 Jun 2025 07:40:00 -0700
+Subject: Re: Checkout transaction loss - Jun 9 02:10-02:37 UTC
+
+Diego / Laura — thanks for the quick turnaround and for pulling traces.
+
+A few clarifications: Velociti serves multi-region checkout traffic but we had a tranche of customers tied to us-west-2 during that maintenance window — so yes, the affected set is only a subset. I've attached a short list of impacted customer ids to our internal ticket (not included here).
+
+Requesting two things to move forward:
+- A single-page provisional credit estimate (ballpark) so our finance team can start the reconciliation process; include calculation assumptions and the prorating method used.
+- A postmortem meeting (30–45 mins) with SRE + Product to finalize root cause and remediation timeline. Can you propose slots tomorrow (Jun 13) morning PT?
+
+Quote: "On Wed, Jun 11, 2025 at 08:15 AM Laura Bennett <laura_bennett@redwood.com> wrote:
+> Proposed next steps:
+> 1) Confirm exact affected customers list...
+> 2) Schedule a post-incident call tomorrow to walk through timeline and RCA.
+> 3) Prepare a provisional credit calc...
+
+We're ready to cooperate and will provide any additional logs you need. Please mark this as Priority: High on the incident tracker.
+
+Best,
+Samira Khan
+Director of Engineering, Velociti Payments
+samira.khan@velociti.com
+

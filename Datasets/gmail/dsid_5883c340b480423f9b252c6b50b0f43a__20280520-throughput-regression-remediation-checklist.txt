@@ -1,0 +1,157 @@
+Throughput regression post-mortem & exec remediation checklist
+
+Customer experienced intermittent throughput regressions and elevated 5xx error rates across US region during May 12-13. This thread contains the customer alert, internal triage, RCA deliverable, an executive-facing remediation checklist, and follow-through commitments with owners and dates.
+From: Elena Torres <elena@copperline.com>
+To: soojin_lee@redwood.com
+Cc: Support Eng <support@copperline.com>, Procurement <procurement@copperline.com>
+Date: Sun, 12 May 2028 08:23:12 -0700
+Subject: sudden throughput drop impacting checkout API
+
+Hi Soojin —
+
+We started seeing a surge in failed checkout completions and elevated latency around 02:10 UTC this morning. Throughput to your hosted /generate endpoint fell by ~40% for ~45 minutes and we observed 5xx spikes. This hit a flash sale window and affected ~1500 user sessions.
+
+Can you confirm whether this is related to any rolling deploys, model swaps, or infra maintenance? We need a timeline, immediate mitigations, and to understand what guarantees we can expect during promotions.
+
+Thanks — Elena
+Elena Torres
+Head of Engineering, Copperline Retail
+elena@copperline.com
+
+Attachment: (perf_snapshot_may12.json stub)
+From: Support Eng <support@copperline.com>
+To: soojin_lee@redwood.com
+Cc: Elena Torres <elena@copperline.com>
+Date: Sun, 12 May 2028 08:40:05 -0700
+Subject: Re: sudden throughput drop impacting checkout API
+
+On Sun, May 12, 2028 at 08:23 AM Elena Torres <elena@copperline.com> wrote:
+> We started seeing a surge in failed checkout completions and elevated latency around 02:10 UTC this morning.
+
+We collected some logs and traces; I'm attaching an overview. Let us know if you want a shared call.
+
+--
+Support Engineering
+Copperline Retail
+Attachment: (copperline-traces-0210.zip stub)
+From: soojin_lee@redwood.com
+To: Elena Torres <elena@copperline.com>, Support Eng <support@copperline.com>
+Cc: kimberly_park@redwood.com, rachel_kim@redwood.com, aditya_rao@redwood.com
+Date: Sun, 12 May 2028 09:05:44 -07:00
+Subject: Re: sudden throughput drop impacting checkout API
+
+Thanks for the heads-up, Elena —
+
+Immediate notes: no scheduled deploys or model swaps at 02:10 UTC. Our initial signals show a sudden shift in request size distribution (large batched prompts) plus an increase in KV cache miss rate for the tenant shard handling Copperline. That combination led to CPU saturation on a subset of the Dedicated pool which increased queuing and triggered our safety fallback to a smaller-model variant for some requests. That fallback preserved correctness but increased latency for batched workloads and elevated 5xx due to a transient limiter mismatch.
+
+I'm escalating to the on-call infra group now and will pull token-level slices. Proposing an immediate mitigation: pin Copperline traffic to a dedicated routing pool (short-term), and broaden the safety fallback to include a warmed warm-up path to avoid cold KV-cache misses.
+
+Can we hop on a 20-min sync now to align on mitigations and comms?
+
+Thanks,
+Soojin Lee
+Support Lead, Customer Reliability
+Redwood Inference
+soojin_lee@redwood.com
++1 (415) 555-0182
+From: kimberly_park@redwood.com
+To: soojin_lee@redwood.com, rachel_kim@redwood.com, aditya_rao@redwood.com
+Cc: Elena Torres <elena@copperline.com>
+Date: Sun, 12 May 2028 09:32:10 -07:00
+Subject: Re: sudden throughput drop impacting checkout API
+
+We joined the call. Quick triage summary for the thread:
+
+- Root cause (prelim): KV-cache miss amplification when larger-than-expected batched prompts hit a subset of nodes that had recently rebalanced shards. The miss rate increased backend work per request by ~3x for affected sequences.
+- Contributing factors: recent autoscaler tweak that reduced buffer headroom; safety fallback routing that didn't warm KV caches; request-size distribution spike due to Copperline's promotion.
+- Immediate mitigations taken: temporarily routed Copperline to a dedicated CPU/GPU slice; temporarily increased autoscaler headroom; manually warmed caches for the tenant shard.
+- Customer impact: throughput drop ~35-45% for 40-50 minutes; elevated 5xx during fallback; no data loss.
+
+Attaching extracted token-level slices and runtime logs. Next steps: full RCA doc, exec one-pager for Copperline leadership, and an internal checklist for changes to autoscaler safety thresholds.
+
+Attachments: perf_slices_may12-18.csv; runtimes_kvcache_snapshot.log
+
+Kimberly Park
+Senior Ops Manager, Redwood Inference
+From: rachel_kim@redwood.com
+To: Elena Torres <elena@copperline.com>, soojin_lee@redwood.com, kimberly_park@redwood.com
+Cc: aditya_rao@redwood.com
+Date: Tue, 14 May 2028 10:14:07 -07:00
+Subject: Post-incident deliverable: RCA + prioritized remediation checklist
+
+Elena / Copperline team —
+
+Thanks again for your patience while we completed the analysis. Please find the executive summary below and attached slides for your leadership review (exec_readout_slides.pdf).
+
+Executive summary (key points):
+- What happened: A rare alignment of large batched prompts from your promotion and a transient KV-cache miss amplification on 6 nodes caused backend work per request to increase ~3x for affected sequences. Our safety fallback routed some requests to a smaller-model variant which reduced correctness risk but increased latency and produced 5xx spikes when the limiter thresholds were crossed.
+- Impact: ~45% throughput reduction for 47 minutes (02:10–02:57 UTC). Estimated affected checkout attempts: ~1,450. No PII exposure or data corruption.
+- Immediate mitigations: dedicated routing slice for Copperline; increased autoscaler headroom; manual KV-cache priming.
+- Corrective actions (prioritized):
+  1) Autoscaler policy rollback to increase buffer headroom (owner: aditya_rao, ETA: 2028-05-18)
+  2) Safety fallback changes to include warm-warm path and pre-warming logic (owner: kimberly_park, ETA: 2028-05-22)
+  3) Tenant-specific request-size guardrails and quota bursts for promotional windows (owner: soojin_lee, ETA: 2028-05-31)
+  4) Post-deploy KV-cache health monitor and early-warning alert (owner: engineering-infra, ETA: 2028-05-25)
+
+Request: please review the attached exec slides and confirm whether Copperline wants a joint readout with their CTO and our execs next week.
+
+Thanks — Rachel
+Rachel Kim
+Director, Customer Success
+Redwood Inference
+Attachment: exec_readout_slides.pdf
+From: Elena Torres <elena@copperline.com>
+To: rachel_kim@redwood.com, soojin_lee@redwood.com, kimberly_park@redwood.com
+Cc: Procurement <procurement@copperline.com>
+Date: Tue, 14 May 2028 12:02:53 -07:00
+Subject: Re: Post-incident deliverable: RCA + prioritized remediation checklist
+
+Thanks Rachel — this is helpful and clear. We do want a joint readout with our CTO (available Wed 21st) and would like the remediation items tracked against firm dates. Two asks before the readout:
+
+1) Can Redwood provide a one-page SL summary of expected availability behavior for promotional windows (we need to include this in our operations runbook)?
+2) Procurement requests a written note confirming no SLA credit is requested at this time while remediation is underway — we will revisit at renewal if regressions repeat.
+
+Elena
+
+On Wed, May 14, 2028 at 10:14 AM rachel_kim@redwood.com wrote:
+> Executive summary (key points):
+> - What happened: ...
+
+
+From: soojin_lee@redwood.com
+To: Elena Torres <elena@copperline.com>, rachel_kim@redwood.com, kimberly_park@redwood.com
+Cc: aditya_rao@redwood.com
+Date: Mon, 20 May 2028 15:47:02 -07:00
+Subject: Re: Post-incident deliverable: RCA + prioritized remediation checklist
+
+Elena —
+
+Following up with firm commitments ahead of the joint readout on Wed 21st:
+
+- Autoscaler rollback (aditya_rao): rolled back to previous headroom; monitoring confirms steady state — complete on 2028-05-18.
+- Safety-fallback warm path (kimberly_park): implementation merged and staged; canary release scheduled for 2028-05-21 with rollback guard — targeting full rollout by 2028-05-25.
+- Tenant promo guardrails (soojin_lee): initial burst quota and request-size alerting in place; policy doc and runbook update in progress — ETA 2028-05-31.
+- Post-deploy KV-cache monitor (engineering-infra): monitoring dashboard live; alert configured — ETA 2028-05-25.
+
+Attached: brief one-page SL summary for promotional windows and the closure checklist (perf_slices_may12-18.csv included for transparency). We will present the exec slides and the checklist on Wed; Rachel will lead the readout and Kimberly will cover the fallback changes.
+
+Thanks for working with us on this, and please flag any outstanding concerns before the readout.
+
+Best,
+Soojin Lee
+Support Lead, Customer Reliability
+Redwood Inference
+
+-----Original Message-----
+From: Elena Torres <elena@copperline.com>
+Sent: Tuesday, May 14, 2028 12:02 PM
+To: rachel_kim@redwood.com; soojin_lee@redwood.com; kimberly_park@redwood.com
+Cc: Procurement <procurement@copperline.com>
+Subject: Re: Post-incident deliverable: RCA + prioritized remediation checklist
+
+> Thanks Rachel — this is helpful and clear. We do want a joint readout with our CTO (available Wed 21st) and would like the remediation items tracked against firm dates. Two asks before the readout:
+>
+> 1) Can Redwood provide a one-page SL summary of expected availability behavior for promotional windows (we need to include this in our operations runbook)?
+> 2) Procurement requests a written note confirming no SLA credit is requested at this time while remediation is underway — we will revisit at renewal if regressions repeat.
+
+Attachments: exec_readout_slides.pdf; perf_slices_may12-18.csv; runtimes_kvcache_snapshot.log

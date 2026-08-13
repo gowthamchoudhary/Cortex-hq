@@ -1,0 +1,138 @@
+Residency rollback trigger language for DPA
+
+From: Sarah Hart <sarah.hart@acme-payments.com>
+To: Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: contracts@acme-payments.com
+Date: Mon, 10 Jun 2029 15:22:00 -0700
+Subject: Residency rollback trigger language — proposed DPA clause
+
+Hi Priya,
+
+Thanks again for the walkthrough earlier. Legal has one remaining ask on the DPA: we need clearer language around the "rollback trigger" for residency and deletion when a geo-fallback or DR replication has occurred. Specifically, if Redwood temporarily replicates a customer tenant to a non-EU region for failover, we need an auditable process for removing those copies when the customer triggers deletion or at contract termination.
+
+I've attached our suggested clause (acme_dpa_proposed_clause.docx) — the key callouts:
+- Time-to-delete expectations after a customer deletion request when DR copies exist
+- A process for certifying deletion of replicated copies and backups
+- Exceptions for lawful-hold and active litigation
+
+Can you confirm whether Redwood can: 1) commit to a single combined timeline for both primary and replicated copies, and 2) provide a attestation cert once completed? If not, what operational language would be acceptable?
+
+Appreciate a short answer we can take back to Legal today.
+
+Best,
+Sarah
+Sarah Hart
+Senior Counsel — Privacy & Compliance
+Acme Payments
+
+Attachment: acme_dpa_proposed_clause.docx (word, 45 KB)
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Sarah Hart <sarah.hart@acme-payments.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Mon, 10 Jun 2029 17:03:00 -07:00
+Subject: Re: Residency rollback trigger language — proposed DPA clause
+
+Hi Sarah,
+
+Thanks for the clause. Looping in Marissa (legal) and Ben (infrastructure) — I want to surface a realistic middle ground. Quick answers up front: 1) We can provide a commitment to delete primary and replicated copies, but the timelines differ by storage tier and backup retention; 2) We can provide an attestation once deletion is completed for all recoverable copies we control.
+
+Follow-ups for you so we can propose redline language:
+- Is Acme asking for deletion certification that includes third-party backup providers (if we use them), or just Redwood-managed copies?
+- Do you have a preferred window (30/60/90 days) for the rollback after a deletion trigger?
+
+We have a proposed operational compromise: Redwood will initiate deletion across all active replicas within 30 days of a verified deletion request; for immutable backups/snapshots that require vendor retention, Redwood will coordinate a staged purge and provide certification within 90 days unless a legal hold applies. Marissa — I'll let you propose formal wording. Ben — please call out any backend constraints.
+
+Priya Natarajan
+Manager, Product Compliance
+Redwood Inference
+
+---
+On Mon, Jun 10, 2029 at 3:22 PM Sarah Hart <sarah.hart@acme-payments.com> wrote:
+> (original message and attachment omitted)
+
+From: Marissa Cole <marissa_cole@redwood.ai>
+To: Sarah Hart <sarah.hart@acme-payments.com>, Priya Natarajan <priya_natarajan@redwood.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>
+Date: Tue, 11 Jun 2029 09:14:00 -07:00
+Subject: Re: Residency rollback trigger language — proposed DPA clause
+
+Hi Sarah / team,
+
+Thanks for the clear ask — I suggest the following redline language as an operationally achievable compromise (high level here; I'll attach a marked-up PDF):
+
+Proposed (high-level):
+"Upon a Customer's verified deletion request or contract termination, Redwood will: (a) initiate deletion of Customer Data in primary production locations and any active replicas within thirty (30) calendar days; (b) for non-rewritable backups or snapshots maintained for disaster recovery by Redwood or its subprocessors, Redwood will use commercially reasonable efforts to purge or render inaccessible such backups and will provide Customer a written attestation that deletion efforts have been completed within ninety (90) calendar days. In the event of lawful hold, litigation, or regulatory requirement, Redwood shall delay deletion and notify Customer with the applicable basis and estimated timeframe.
+
+Alternative tighter language (if Acme requires):
+- Combine the two timelines into a single 60-day window if Acme prefers one SLA, but Redwood will need explicit carveouts for subprocessor-controlled immutable backups and for DR processes that require coordinated rollback with cloud providers.
+
+Operational notes for Acme:
+- We can provide an attestation certificate that lists the replica locations and the steps performed (delete API calls, snapshot purge requests, confirmation from subprocessor APIs).
+- We cannot guarantee immediate purging of immutable snapshots held by a subprocessor beyond our control; we will, however, escalate with the subprocessor and provide evidence of purge requests and their confirmations.
+
+See attached: marissa_redline_v1.pdf (proposed DPA text) and internal impact notes (redwood_operational_impact_notes.txt).
+
+Marissa Cole
+Senior Counsel, Privacy & Security
+Redwood Inference
+
+Attachment: marissa_redline_v1.pdf (pdf, 18 KB)
+Attachment: redwood_operational_impact_notes.txt (text, 6 KB)
+
+> On Mon, Jun 10, 2029 at 5:03 PM Priya Natarajan <priya_natarajan@redwood.ai> wrote:
+> > (Priya's acknowledgement)
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Priya Natarajan <priya_natarajan@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Sarah Hart <sarah.hart@acme-payments.com>
+Date: Tue, 11 Jun 2029 10:02:00 -07:00
+Subject: Re: Residency rollback trigger language — proposed DPA clause
+
+Quick technical summary from infra:
+
+- Active replicas (running VMs / persistent disks in other zones/regions): we can schedule synchronous delete jobs once the legal/ops ticket is opened; 30 days is workable.
+- Cloud provider immutable snapshots / long-term backups: depends on provider SLA — some providers only allow snapshot retention until the next lifecycle truncation and may require up to 90 days to fully purge depending on snapshot chains.
+- K/V caches and ephemeral stores: typically cleared within 48-72 hours once the deletion job runs.
+
+Operational suggestion:
+1) Create a single SLO sentence for the contract: "Redwood will initiate deletion of all active and replicated copies within 30 days and complete purge of backups and snapshots within 90 days, subject to lawful hold and subprocessor constraints."
+2) Add an Appendix describing the purge playbook (steps, what evidence we provide, expected subprocessor confirmation windows). I uploaded a short ops playbook here: https://redwood.internal/ops/geo-rollback-playbook (internal).
+
+We should be explicit about what "attestation" contains (API logs, ticket references, subprocessor confirmations).
+
+Ben Carter
+Principal Infra Engineer, Serving Runtime
+Redwood Inference
+
+From: Priya Natarajan <priya_natarajan@redwood.ai>
+To: Sarah Hart <sarah.hart@acme-payments.com>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Wed, 12 Jun 2029 11:05:00 -07:00
+Subject: Final proposal: rollback/erase timelines and attestation (DPA)
+
+Sarah — thanks for the quick turnaround. Based on Legal + Infra feedback, here's a concise proposal for the DPA redline we hope Acme can accept:
+
+1) Timeline: "Redwood will initiate deletion of Customer Data in primary production locations and any active replicas within thirty (30) calendar days of a verified deletion request or contract termination. Redwood will use commercially reasonable efforts to purge or render inaccessible backup snapshots and immutable copies and will provide written attestation of completion within ninety (90) calendar days, subject to lawful hold or regulatory obligations.
+
+2) Attestation: Redwood's attestation will include (a) list of affected replica regions, (b) deletion job IDs and timestamps, (c) confirmation status from any subprocessors involved, and (d) statement of any remaining items retained for lawful hold.
+
+3) Appendix / Playbook: We will attach an Appendix describing the purge playbook and what evidence is provided. This Appendix is operational and may be updated with prior notice.
+
+Next steps: If Acme can confirm acceptance of the 30/90 split and the attestation contents, we'll circulate a marked-up DPA (redline) for signature. Otherwise, if Acme requires a single-window SLA, please indicate preferred days (we recommended 60 earlier) and we'll escalate.
+
+I've attached Marissa's marked redline and our internal notes for your review. If this looks good, can you confirm by close of day Friday so Contracts can prepare the final doc?
+
+Thanks,
+Priya
+Priya Natarajan
+Manager, Product Compliance
+Redwood Inference
+
+Attachments: marissa_redline_v1.pdf (pdf, 18 KB); redwood_operational_impact_notes.txt (text, 6 KB)
+
+> -----Original Message-----
+> From: Sarah Hart <sarah.hart@acme-payments.com>
+> Sent: Monday, June 10, 2029 3:22 PM
+> To: Priya Natarajan <priya_natarajan@redwood.ai>
+> Subject: Residency rollback trigger language — proposed DPA clause
+>
+> (quoted for context)

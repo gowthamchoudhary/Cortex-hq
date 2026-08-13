@@ -1,0 +1,127 @@
+FP8/INT8 perf sprint — exec update + risk plan (needs capacity + priority alignment)
+
+From: Mateo Alvarez <mateo.alvarez@redwoodinference.com>
+To: Neha Kapoor <neha.kapoor@redwoodinference.com>, Dr. Maya Srinivasan <maya.srinivasan@redwoodinference.com>
+Cc: 
+Date: Thu, Feb 12, 2026 at 9:14 AM PST
+Subject: FP8/INT8 perf sprint — exec update + risk plan (needs capacity + priority alignment)
+
+Neha, Maya — quick mid-sprint exec update + the risk plan. We’re on track technically, but we need two decisions today to avoid either (a) slipping the matrix coverage or (b) taking on unacceptable rollout risk.
+
+Where we are (as of this morning)
+- Harness: FP8/INT8 modes are wired end-to-end for both microbench and serving runs; artifacts include SHA/CUDA/driver/clocks metadata.
+- First calibrated runs: H100 + A100 baseline vs FP8 attention + INT8 matmul are stable after warmup changes and clock pinning.
+- Early signal (directional):
+  - H100: FP8 attention is a clear throughput win in decode-heavy regimes; mixed workloads show smaller wins due to scheduling/launch overhead.
+  - A100: INT8 matmul wins are shape-dependent; we need guardrails to avoid correctness + perf cliffs.
+
+Key risks + mitigations (what could bite us)
+1) Quality regressions under quantization (highest risk)
+   - We have one long-context regression flagged on a long-form summarization prompt set (model-family specific). Not catastrophic, but it’s visible in eval deltas.
+   - Mitigation: require eval sign-off + keep FP8/INT8 default off for the impacted model until we have either (a) a calibration tweak or (b) an auto-fallback policy for long-context.
+   - Ask for Maya: alignment that “default enablement” is gated on the quick sanity suite + one targeted long-context subset, not just kernel correctness.
+
+2) Benchmark reproducibility / noise (medium risk)
+   - Variance spikes were correlated with clocks not locking on shared nodes + driver mismatch across a subset of H100 clusters.
+   - Mitigation: runner pins container/driver; we route runs only to approved pools; rerun policy on outlier variance.
+
+3) Customer-impact risk during rollout (medium risk)
+   - We’ve already seen that kernel wins can disappear (or invert) when prefill/decode interleaving changes.
+   - Mitigation: per-model/per-region flags + perf canary gates on TTFT/TPOT with auto rollback; SRE on point.
+
+What we need today (two decisions)
+A) Capacity alignment (Neha)
+- We need an additional 220 H100-hours (spread across 2 regions) to complete the full matrix for top hosted models and to rerun any high-variance cases with pinned drivers.
+- If we don’t get this by EOD, we’ll either drop L4 coverage or reduce run counts (which weakens defensibility).
+- Guardrail proposal: hard block against Dedicated customer pools; all runs in reserved benchmark partitions; no opportunistic spillover.
+
+B) Quality gate / default policy alignment (Maya)
+- Proposed default enablement policy for hosted catalog:
+  1) No default enablement without: correctness + quick quality sanity suite pass + targeted long-context check.
+  2) If quality delta > threshold or long-context regression present: keep quantized mode behind opt-in flag + implement auto-fallback for long contexts.
+  3) For “safe” models: enable FP8 on H100 first (limited regions), then expand; INT8 stays opt-in until we finish calibration guidance.
+
+Attachments
+- fp8-int8-sprint-exec-onepager-2026-02-12.pdf
+- h100-reservation-asks-and-costs-2026-02-12.xlsx
+
+Pointers (for reference)
+- Linear: ENG-7421 (epic), ENG-7428 (run full matrix)
+- Drive: fp8-int8-benchmark-matrix-v1
+- Confluence: kernel benchmarking methodology (top hosted models)
+
+If you reply-all with approval/edits on A and B, we can keep the sprint on its current timeline and still ship behind flags with a defensible benchmark story.
+
+— Mateo
+Mateo Alvarez
+Engineering (Serving Runtime)
+Redwood Inference
+
+
+From: Neha Kapoor <neha.kapoor@redwoodinference.com>
+To: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Dr. Maya Srinivasan <maya.srinivasan@redwoodinference.com>
+Cc: 
+Date: Thu, Feb 12, 2026 at 10:02 AM PST
+Subject: Re: FP8/INT8 perf sprint — exec update + risk plan (needs capacity + priority alignment)
+
+Approved on the additional 220 H100-hours with the guardrails you proposed.
+
+Conditions (please confirm):
+1) No impact to customer Dedicated pools — reservation must be isolated (benchmark partition only).
+2) Use the pinned driver/container runner only; if a cluster can’t meet the pin, we don’t run there.
+3) Daily update in #eng-infra with: hours consumed vs plan + any contention incidents.
+
+Mateo — please work with Irene/Vanessa to lock the reservation windows today.
+
+Neha
+Neha Kapoor
+VP Infrastructure
+Redwood Inference
+
+On Thu, Feb 12, 2026 at 9:14 AM Mateo Alvarez <mateo.alvarez@redwoodinference.com> wrote:
+> Neha, Maya — quick mid-sprint exec update + the risk plan...
+
+
+From: Dr. Maya Srinivasan <maya.srinivasan@redwoodinference.com>
+To: Mateo Alvarez <mateo.alvarez@redwoodinference.com>, Neha Kapoor <neha.kapoor@redwoodinference.com>
+Cc: 
+Date: Thu, Feb 12, 2026 at 11:26 AM PST
+Subject: Re: FP8/INT8 perf sprint — exec update + risk plan (needs capacity + priority alignment)
+
+Aligned on gating. Please do NOT default-enable any quantized mode purely off kernel correctness.
+
+What I’m comfortable signing off on for “default on”:
+- Passes quick sanity suite (the one tied to the benchmark suite prompt sets), AND
+- No statistically meaningful regression on the targeted long-context subset, OR we have a deterministic fallback (e.g., long-context route to baseline) that is tested + canary’d.
+
+For the model-family with the long-context regression:
+- Keep opt-in only.
+- I want the mitigation documented (what workloads are impacted + how we detect it) before we flip anything beyond a small canary.
+
+If you can add one line item in the exec readout that makes the policy explicit (default-on criteria + what stays opt-in), I’ll own the messaging internally.
+
+Maya
+Dr. Maya Srinivasan
+Head of Applied ML
+Redwood Inference
+
+On Thu, Feb 12, 2026 at 9:14 AM Mateo Alvarez <mateo.alvarez@redwoodinference.com> wrote:
+> B) Quality gate / default policy alignment (Maya)
+> - Proposed default enablement policy for hosted catalog...
+
+
+From: Mateo Alvarez <mateo.alvarez@redwoodinference.com>
+To: Neha Kapoor <neha.kapoor@redwoodinference.com>, Dr. Maya Srinivasan <maya.srinivasan@redwoodinference.com>
+Cc: 
+Date: Thu, Feb 12, 2026 at 1:02 PM PST
+Subject: Re: FP8/INT8 perf sprint — exec update + risk plan (needs capacity + priority alignment)
+
+Thanks — confirmed on all conditions.
+
+Neha: we’ll coordinate the reservation windows with Irene/Vanessa today and post daily hours vs plan in #eng-infra. We’ll also hard-fail the runner if the pin checks don’t match.
+
+Maya: agreed. We’ll make the default-on criteria explicit in the exec readout and keep the long-context-regression model opt-in only until we have either calibration improvements or a tested long-context fallback route.
+
+Next update from me will be tomorrow EOD with (a) matrix completion status and (b) any quality deltas that change gating.
+
+— Mateo

@@ -1,0 +1,110 @@
+Audit sampling proposal for staged log deletions
+
+From: Amanda Lee <amanda.lee@aureliatx.com>
+To: Lukas Meyer <lukas_meyer@redwood.com>
+Cc: compliance@aureliatx.com
+Date: Sat, 28 Nov 2026 09:12:00 -0800
+Subject: Audit sampling approach for staged log deletions
+
+Hi Lukas,
+
+Thanks for the call yesterday. As we prepare for our SIG/CAIQ evidence review next month, the audit team asked for a concrete sampling and acceptance plan for the staged log deletion process you described (specifically tenant-scoped log pruning where older debug traces are removed in phases).
+
+Two specific asks from our reviewers:
+- A sampling methodology that demonstrates repeatable proof-of-delete for a subset of tenant logs (how samples are chosen, how exports are retained for verification).
+- Clear acceptance criteria (what artifacts we provide, retention window for exported evidence, and any keystore/crypto items that must be preserved).
+
+I attached an initial workbook (audit_sampling_proposal_v1.xlsx) with our suggested sample sizes. Can you confirm whether Redwood can deliver:
+1) a one-time exported sample of deleted records for up to 3 tenant IDs;
+2) an audit trail linking delete actions to the storage lifecycle (timestamps, job ids); and
+3) a short statement on whether keystore objects tied to those tenants will be preserved for the review window or rotated/deleted.
+
+We'd like to finalize the approach by Dec 3 to include it in the CAIQ pack.
+
+Thanks,
+Amanda
+Amanda Lee
+Head of Compliance, Aurelia Therapeutics
+---
+Attachment: audit_sampling_proposal_v1.xlsx (spreadsheet)
+From: Lukas Meyer <lukas_meyer@redwood.com>
+To: Amanda Lee <amanda.lee@aureliatx.com>
+Cc: Kimberly Park <kimberly_park@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Sun, 29 Nov 2026 11:04:00 -0800
+Subject: Re: Audit sampling approach for staged log deletions
+
+Amanda —
+
+Appreciate the clear asks and the workbook. We can support a staged-sampling approach that preserves an auditable export for reviewer verification. High-level proposal (scope: tenant-scoped debug + transaction traces):
+
+1) Sampling methodology (what we'll deliver):
+   - We will extract a deterministic sample using the tenant ID + daily-seed hash (documented) so samples are reproducible across runs.
+   - For each selected tenant we will provide: exported JSON lines of deleted entries, a deletion job manifest (job id, operator id, start/end timestamps), and a checksum manifest.
+
+2) Acceptance criteria (what you can include in CAIQ/SIG):
+   - Export contains >= 250 records per tenant OR the full deletion set if fewer than 250 records.
+   - Each export accompanies a job manifest and a signed delivery statement from Redwood operations.
+   - Evidence retention: exported samples will be available for 90 days from export delivery unless you request a different window.
+
+3) Keystore handling:
+   - By default we do not delete tenant keystore objects as part of staged log pruning. Keystore rotation/removal is a separate lifecycle action and we will preserve referenced keystore metadata for the 90-day evidence window. If Aurelia requires keystore key material to be escrowed for the review, we can provide a metadata-only package (key IDs, creation/rotation timestamps) but cannot export private key material.
+
+4) Timeline and next steps:
+   - We can produce sample exports for 3 tenant IDs by Dec 2 if you confirm the tenant list by EOD Nov 30.
+   - I'll pull in Security/Controls to produce the signed delivery statement.
+
+I've attached a short keystore hold description (keystore_hold_description.pdf) and linked our internal playbook. Kimberly/Jonas — can you confirm the export script and whether there are any downstream compliance flags for the 90-day evidence retention?
+
+Best,
+Lukas
+Director, Customer Security
+Redwood Inference
+---
+Attachment: keystore_hold_description.pdf (PDF)
+From: Kimberly Park <kimberly_park@redwood.com>
+To: Lukas Meyer <lukas_meyer@redwood.com>, Amanda Lee <amanda.lee@aureliatx.com>
+Cc: Jonas Weber <jonas_weber@redwood.com>
+Date: Mon, 30 Nov 2026 08:23:00 -0800
+Subject: Re: Audit sampling approach for staged log deletions
+
+Thanks Lukas — technically this is doable but a few clarifications and constraints from engineering/security: 
+
+- Export mechanics: we'll run an export job that snapshots the records marked for deletion and write a gzipped ndjson file to a secure share. The sample-extract-script.sh (attached) is a thin wrapper that selects records deterministically and produces the manifest you requested.
+
+- PII handling: exports will include the same fields as the internal forensics export. If Aurelia prefers redacted exports, we can redact PII fields but that will limit reviewer ability to trace end-to-end. Please state a preference.
+
+- Evidence retention: 90 days is fine operationally. If you need a longer window, we can negotiate but we may need to extend the keystore metadata retention and capture an internal hold ticket.
+
+- Audit signing: I will coordinate a signed delivery statement (PDF) from Controls; we will include a SHA256 checksum and S3 object version metadata.
+
+On the keystore question: we never export private key material. We can provide metadata and proof of non-deletion for the 90-day window. If your audit requires cryptographic escrow of key material, we need Legal approval and a separate agreement.
+
+Jonas — I flagged SEC-1423 to ensure the export job is run in a read-only mode and to capture immutable hashes.
+
+Kimberly
+Sr. Manager, Security Controls
+Redwood Inference
+---
+Attachment: sample-extract-script.sh (text)
+From: Amanda Lee <amanda.lee@aureliatx.com>
+To: Lukas Meyer <lukas_meyer@redwood.com>
+Cc: compliance@aureliatx.com, Kimberly Park <kimberly_park@redwood.com>, Jonas Weber <jonas_weber@redwood.com>
+Date: Tue, 1 Dec 2026 16:45:00 -0800
+Subject: Re: Audit sampling approach for staged log deletions
+
+Thanks — this aligns with our reviewers' expectations. A few quick confirmations so we can close the CAIQ entry:
+
+- We accept the deterministic sampling approach and the >=250 records per tenant threshold.
+- Please deliver redacted exports by default (remove direct identifiers) but include a redaction map so our auditor can validate linkage.
+- 90-day evidence retention is acceptable.
+- Keystore: we only need metadata and non-deletion attestation (no key material).
+
+Can you produce the first delivery (3 tenant samples + manifests + signed delivery statement) by Dec 2 as proposed? If so we'll mark the CAIQ section as RESPONDED and reference your artifacts. If there are any legal paperwork items for keystore attestation, please flag them.
+
+Appreciate the quick turnaround — feel free to send the S3 link or Drive with the checksums when ready.
+
+Best,
+Amanda
+Head of Compliance, Aurelia Therapeutics
+---
+Referenced attachments: audit_sampling_proposal_v1.xlsx, keystore_hold_description.pdf, sample-extract-script.sh

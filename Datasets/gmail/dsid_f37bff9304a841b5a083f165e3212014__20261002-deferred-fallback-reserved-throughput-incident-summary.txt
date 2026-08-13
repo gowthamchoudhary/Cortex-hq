@@ -1,0 +1,118 @@
+Production latency & 5xx surge — reserved-capacity throughput shortfall
+
+From: Alice Murray <alice@finexa.com>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>
+Cc: Sam O'Neill <sam.ops@finexa.com>
+Date: 2026-10-01T09:12:00-07:00
+Subject: Production: sustained latency & 5xx during morning window
+
+Hannah —
+
+We started seeing a sustained latency/5xx spike across our inference endpoints starting around 08:45 PT this morning. P50 is fine (~120ms) but p95 jumped from 520ms to ~3.9s and we started getting intermittent 502/504s; approx 8–12% of requests are failing for our production model route. Our monitoring shows a drop in reserved capacity throughput (tokens/sec) at the same time and that a subset of requests were routed to a hosted fallback.
+
+This is impacting peak checkout flows (checkout retry window shrank) — a handful of orders timed out and one support ticket has already escalated to our ops team. We need two things immediately:
+- Confirmation this is being treated as a priority incident and an ETA for a corrective action that restores our reserved throughput.
+- Short-term mitigation to prevent further customer-facing errors (either priority routing or temporary capacity bump).
+
+I attached our error_extract and a short dashboard snapshot. Please loop in anyone who needs to own this on Redwood's side.
+
+Thanks,
+Alice Murray
+Head of Platform Reliability
+Finexa
+
+Attachments: clearstream_error_log.txt, finexa_metrics_snapshot.csv
+From: Hannah Schmitt <hannah.schmitt@redwood.ai>
+To: Alice Murray <alice@finexa.com>, Sam O'Neill <sam.ops@finexa.com>
+Cc: David Kim <david.kim@redwood.ai>, Marissa Cole <marissa.cole@redwood.ai>, Jordan Blake <jordan.blake@redwood.ai>
+Date: 2026-10-01T09:25:00-07:00
+Subject: Re: Production: sustained latency & 5xx during morning window
+
+Alice — thanks for the heads up and for the logs. I’m escalating to our on-call infra and engineering leads now.
+
+Immediate plan (first 30 minutes):
+- David (cc'ed) is going to validate pool health and reserved-capacity assignment and confirm if any scheduled maintenance, preemption, or autoscaler activity coincided with 08:45.
+- We’ll open an incident bridge and attach PagerDuty (PD123456).
+- As a short-term mitigation we can enable priority routing for your production route and allow a controlled burst from our hosted capacity if you authorize it (this will be billed as emergency burst unless covered by a credit).
+
+Marissa — can you prep a brief note for the account team about possible credit/contract impacts? I’ll keep Alice and Sam updated on timeline and next steps.
+
+I’ll post triage updates here.
+
+— Hannah
+Hannah Schmitt
+Director, Customer Reliability
+Redwood Inference
+
+Attachment: mutual_action_plan.docx
+From: David Kim <david.kim@redwood.ai>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>, Alice Murray <alice@finexa.com>, Sam O'Neill <sam.ops@finexa.com>
+Cc: Marissa Cole <marissa.cole@redwood.ai>, Jordan Blake <jordan.blake@redwood.ai>
+Date: 2026-10-01T09:43:00-07:00
+Subject: Re: Production: sustained latency & 5xx during morning window
+
+Adding a quick engineering triage summary (what we see on our side):
+- At 08:41 PT we observed a reduction in available GPUs in Finexa's dedicated pool: delta = -18% (3 nodes cycled due to out-of-band host reboots). No planned maintenance shows up for those hosts.
+- Queue depth increased from baseline ~40 to ~420; continuous batching was unable to keep up which drove token-generation latency higher and resulted in gateway timeouts as upstream LB retries exhausted.
+- Error breakdown: 502 (upstream gateway) + 504 (timeout) increase to ~10% combined between 08:45–09:15. P95 moved to ~3.9s, p99 ~8.6s.
+
+Immediate mitigations executed (09:30):
+- Rebalanced active sessions across remaining nodes to avoid hot shards.
+- Temporarily allowed controlled burst to Redwood hosted pool for low-priority routes (we excluded critical Finexa models; confirmed with Hannah).
+- Increased per-customer concurrency limit for Finexa routes from 20 -> 30 to drain the backlog.
+
+Next actions (owners):
+- Reprovision the 3 failed hosts or cold-start replacement nodes (David, infra) — ETA 60–90m.
+- Post-mortem to determine cause of host reboots (David + infra).
+- Customer-facing credit/contract ask (Marissa).
+
+We attached a slice of the throughput dashboard and the extracted error log. I’ll keep this bridge open and post when the new hosts are in.
+
+— David
+Staff Software Engineer, Serving Runtime
+Redwood Inference
+
+Attachments: throughput_dashboard.png, clearstream_error_log.txt
+From: Marissa Cole <marissa.cole@redwood.ai>
+To: Hannah Schmitt <hannah.schmitt@redwood.ai>, David Kim <david.kim@redwood.ai>
+Cc: Jordan Blake <jordan.blake@redwood.ai>
+Date: 2026-10-01T10:10:00-07:00
+Subject: FW: Production: sustained latency & 5xx during morning window — commercial impact and exec ask
+
+Hannah/David —
+
+Looping in a short commercial note for leadership visibility: Finexa is a fast-growing enterprise on a reserved capacity contract (Deal FIN-2026-Q4-8472). They are seeing customer checkout failures which puts immediate retention and renewal risk on the table. Specific asks we should be prepared to approve quickly:
+- Short-term token credit to offset customer impact (suggestion: 100k token credit)
+- Authorization to approve an emergency burst charge if infra recommends (David) while replacement nodes come online.
+
+I’m tracking this as a high-priority commercial escalation and can draft a one-paragraph executive summary for Kristin/CTO if we want to escalate now. Please advise if you want me to push to leadership.
+
+— Marissa
+Account Executive, Strategic Accounts
+Redwood Inference
+From: Hannah Schmitt <hannah.schmitt@redwood.ai>
+To: Marissa Cole <marissa.cole@redwood.ai>, David Kim <david.kim@redwood.ai>, Jordan Blake <jordan.blake@redwood.ai>, Alice Murray <alice@finexa.com>, Sam O'Neill <sam.ops@finexa.com>
+Date: 2026-10-02T16:45:00-07:00
+Subject: Incident summary & exec bridge invite — Finexa reserved-capacity shortfall
+
+Summary (final update before exec bridge at 17:00 PT):
+- Root cause (working): three dedicated pool hosts unexpectedly rebooted around 08:41 PT on 10/01, removing ~18% of Finexa's reserved headroom. This triggered queueing and generated elevated p95/p99 latency and 502/504 errors.
+- Mitigations executed: rebalancing, temporary controlled burst to hosted pool, concurrency increase, infra reprovision in progress. Two replacement nodes are up; one remaining host is in cold-start (ETA 30m). Error rate has reduced to ~1.8% and p95 is trending down to ~720ms.
+- Commercial: Marissa to prepare credit proposal (100k tokens recommended) for leadership approval; Jordan to coordinate renewal impacts.
+
+Bridge details: 17:00 PT — Zoom (PD bridge linked in PagerDuty incident PD123456)
+Action owners:
+- David Kim: reprovision last node, full post-mortem (owner)
+- Hannah Schmitt: customer communications and exec brief
+- Marissa Cole: commercial proposal and leadership note
+- Jordan Blake: renewal risk assessment and CS coordination
+
+Alice/Sam — appreciate your patience. We’ll open the bridge for leadership attendance and share a one-page incident readout during the 17:00 call.
+
+Best,
+Hannah
+Director, Customer Reliability
+Redwood Inference
+
+Related links: https://redwood.pagerduty.com/incidents/PD123456 | https://app.hubspot.com/deal/67890
+Attachments: incident_readout_v1.pdf

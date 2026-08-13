@@ -1,0 +1,125 @@
+Post-call: performance & SLA wording follow-up (streaming, concurrency, measurement)
+
+From: Marcus Lin <marcus@redwood.com>
+To: Oliver Grant <oliver@healthgrid.ai>, Emma Chen <emma@healthgrid.ai>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>, Tessa Morgan <tessa_morgan@redwood.com>
+Date: Wed, 01 Jul 2026 22:08:00 -0700
+Subject: Post-call recap + clarifications on streaming/concurrency measurement
+
+Thanks again for the demo earlier — great conversation. Quick written recap so we have alignment and clear next steps.
+
+Summary of asks from HealthGrid: 
+- Target P95 end-to-end latency for text streaming responses: 250ms per incremental chunk (they use small token chunking for live inference).
+- Sustained throughput target: 1200 streaming connections concurrently at 200 tokens/min average (mixed short prompts + contextual history).
+- Concurrency spikes: ability to absorb 2.5x for up to 10 minutes with graceful degradation.
+- Measurement: they want latency measured from request ingress at Redwood edge to first-byte of the stream, excluding client-side network (they will run synthetic probes).
+
+Open questions I promised to follow up on: 
+1) Can we guarantee first-byte streaming P95 at 250ms under the dedicated profile they described (r6g-like CPU front-end + 8xA100 pool)? Any known exclusions?
+2) How do we document the measurement window and tooling in the SLA (reporting cadence, synthetic probes vs. observed production)?
+3) Remedies: request for explicit credits for sustained SLO breach vs. single short incidents.
+
+Attachments: I attached the call recording and an initial SLO draft (SLO-draft-v1.docx) with suggested measurement language; please review and suggest edits.
+
+Next steps: 
+- HealthGrid: confirm whether 250ms P95 is for first-byte only or for per-chunk completion.
+- Redwood: share short doc describing measurement points (edge ingress, model invocation, first-byte), and a proposed SLA paragraph for exclusions (maintenance, force majeure, customer misconfiguration).
+
+Will follow up internally to get legal + reliability input.
+
+Thanks,
+Marcus
+Sr. Solutions Engineer, Redwood Inference
+marcus@redwood.com
+(415) 555-0193
+
+--
+Attachment: SLO-draft-v1.docx (docx, 37KB)
+Attachment: perf-call-recording-20260701.mp4 (mp4, 8.2MB)
+From: Emma Chen <emma@healthgrid.ai>
+To: Marcus Lin <marcus@redwood.com>
+Cc: Oliver Grant <oliver@healthgrid.ai>
+Date: Thu, 02 Jul 2026 08:14:00 -0700
+Subject: Re: Post-call recap + clarifications on streaming/concurrency measurement
+
+Thanks Marcus — quick clarifications from our side: 
+- The 250ms P95 ask is for first-byte of each streaming chunk (we chunk at ~32 tokens). We care most about initial interactive feel (first-byte) rather than full completion latency.
+- The 2.5x spike requirement is for bursts coming from peak-times only (weekday mornings). If you have standard burst-protection/queued-degradation behavior, describe it — we need to know whether requests will be queued, rejected, or downgraded to text-only responses during overload.
+- On remedies: we prefer an SLA that separates short outages (credit capped) from sustained SLO misses (larger credit multiplier).
+
+Also, can you confirm whether Redwood's monitoring will expose P95 on a per-route basis and whether we can run our own synthetic probes that will be accepted as input for SLA audits?
+
+Oliver and I will review the SLO draft and get back with comments by EOD Friday.
+
+—Emma
+Head of Platform Engineering, HealthGrid AI
+emma@healthgrid.ai
+
+--
+Quoted from previous message:
+> Attachment: SLO-draft-v1.docx (docx, 37KB)
+From: Lauren Bishop <lauren_bishop@redwood.com>
+To: Marcus Lin <marcus@redwood.com>, Tessa Morgan <tessa_morgan@redwood.com>
+Date: Thu, 02 Jul 2026 08:46:00 -0700
+Subject: Fwd: Post-call recap + clarifications on streaming/concurrency measurement
+
+Looping in for SLA/legal/ops input. Key points I think we should address in the response: 
+- Measurement definition: precise ingress point (edge LB) timestamp and first-byte at delivery to connection; exclude client network and downstream partners.
+- Exclusions: scheduled maintenance windows (with >=72h notice for non-emergency), region-wide cloud provider incidents, customer misconfig (malformed requests, unsupported headers), and experiments (canary deploys) during defined windows.
+- Remedies: propose tiered credit table: single-incident (<1h) = 5% credit; sustained SLO miss (24h rolling window with P95 above threshold) = 20% credit; repeat offenses escalate to contract-level remedies.
+- Reporting cadence: automated daily SLO dashboard, weekly digest for enterprise customers, and an on-demand SLA report generation (PDF) within 3 business days.
+
+Marcus — see inline suggestions on the attached SLO template I uploaded (SLO-draft-v2.docx). Ops/infra: is there any scenario where we cannot instrument first-byte at the edge for streaming (legacy proxy paths)?
+
+-Lauren
+Director, Product Operations, Redwood Inference
+lauren_bishop@redwood.com
+
+--
+Attachment: SLO-draft-v2.docx (docx, 42KB)
+From: Tessa Morgan <tessa_morgan@redwood.com>
+To: Lauren Bishop <lauren_bishop@redwood.com>, Marcus Lin <marcus@redwood.com>
+Date: Thu, 02 Jul 2026 09:12:00 -0700
+Subject: Re: Fwd: Post-call recap + clarifications on streaming/concurrency measurement
+
+Quick ops note: we can instrument first-byte at the edge for all hosted and dedicated front-ends except for very old private connectors customers might self-host. For dedicated pools behind our new front-end (deployed last quarter) we already emit first-byte timing in the telemetry.
+
+A couple of technical clarifications to include in our reply to HealthGrid: 
+- Measurement point: timestamp A = request arrival at Redwood edge LB; timestamp B = first-byte of response emitted to client connection. Latency = B - A.
+- Reporting window: Rolling 30-day for SLA compliance; we can provide daily P50/P90/P95 time series and monthly compliance summary.
+- Spike handling: 2.5x short-term surges are handled by short-term autoscale + queued-requests; if queue depth exceeds threshold we'll return 503 with Retry-After. We can describe graceful degradation: partial streaming (smaller chunk sizes) or downgrade to non-streamed text mode if requested.
+
+I'll attach a short ops note (SLO-ops-note.txt) with exact metric names and the telemetry query we will use.
+
+-Tessa
+Sr. Reliability Engineer, Redwood Inference
+tessa_morgan@redwood.com
+
+--
+Attachment: SLO-ops-note.txt (text, 3.4KB)
+From: Marcus Lin <marcus@redwood.com>
+To: Oliver Grant <oliver@healthgrid.ai>, Emma Chen <emma@healthgrid.ai>
+Cc: Lauren Bishop <lauren_bishop@redwood.com>, Tessa Morgan <tessa_morgan@redwood.com>
+Date: Thu, 02 Jul 2026 11:23:00 -0700
+Subject: Re: Post-call: performance & SLA wording follow-up (streaming, concurrency, measurement)
+
+Oliver / Emma — thanks for the quick clarifications and for reviewing the draft. Attached: SLO-draft-v2.docx (updated per Lauren), and an ops note with exact metric names. Highlights & proposed next steps: 
+
+What we can commit to (hosted + Redwood Dedicated profile discussed):
+- Measurement: first-byte latency P95 measured at edge LB (timestamp A -> B). We will exclude customer network and third-party downstream providers.
+- Reporting: daily metrics (P50/P90/P95), weekly digest, and monthly SLA compliance PDF. You can run synthetic probes; we will accept probe results for audit if they follow the documented probe methodology (probe endpoints, time-synchronized NTP, and sample distribution).
+- Burst behavior: short 2.5x spikes will be absorbed by autoscale where available; when hitting hard capacity limits we will return 503 with Retry-After and prioritized queuing. We will document expected behavior clearly in the SLA.
+- Remedies: propose the tiered credits Lauren drafted. For contract language: single incident credits capped at 5% of monthly host usage; sustained 24h rolling-window breaches trigger 20% credit. Repeat sustained failures open escalation to leadership.
+
+Questions for you: 
+1) Are you comfortable with the proposed credit tiers or do you need a different structure for procurement?
+2) Do you want us to add explicit per-route SLOs in the contract (e.g., control-plane vs. large-embedding routes)?
+
+If HealthGrid is comfortable, next steps from Redwood: we will circulate a redline-ready SLA paragraph by EOD Monday and schedule a short 30-min call with Reliability to run through the telemetry and probe methodology.
+
+Thanks — Marcus
+Sr. Solutions Engineer, Redwood Inference
+marcus@redwood.com
+
+--
+Attachments: SLO-draft-v2.docx (docx, 42KB); SLO-ops-note.txt (text, 3.4KB); perf-call-recording-20260701.mp4 (mp4, 8.2MB)

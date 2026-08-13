@@ -1,0 +1,147 @@
+Mutual Action Plan: performance benchmarks + concurrency queueing study
+
+From: Kate Liao <kate@acmeretail.com>
+To: Laura Bennett <laura_bennett@redwood.com>
+Date: 2026-02-11T09:12:00-08:00
+Subject: MAP + perf guardrails — Acme pilot questions
+
+Laura —
+
+Thanks again for the demo last week. We’re narrowing the shortlist and need a concise MAP and the performance expectations so our infra and SRE teams can sign off. High level asks from my side:
+
+- Baseline latency (p50/p95) for our expected payloads (avg 350 tokens output, 512 token prompt)
+- TTFT for first-token under burst conditions (10–50 concurrent users)
+- Steady-state throughput with 200 concurrent requests sustained for 30 minutes
+- Behavior when we exceed rate limits — queueing vs immediate 429s and suggested backoff pattern
+- Any recommended rate-limit buckets and per-tenant limits for POC
+
+Could you put this into the MAP with a suggested close timeline? Legal needs an outline for procurement too.
+
+Kate
+Kate Liao
+Head of ML Platforms, Acme Retail
+
+---
+
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Kate Liao <kate@acmeretail.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Date: 2026-02-11T11:05:00-08:00
+Subject: Re: MAP + perf guardrails — Acme pilot questions
+
+Kate —
+
+Appreciate the clear asks. I’ve sketched a mutual action plan focused on the perf metrics you listed and a short evaluation cadence so SRE can validate. Attaching the MAP (MAP_Acme_v2.pdf) and a high-level test plan below.
+
+Proposed MAP highlights (short):
+- Week 0: Kickoff, data access, and test account provisioning
+- Week 1: Baseline runs (single-tenant, synthetic traffic) — capture latency and TTFT
+- Week 2: Concurrency experiments (burst vs steady-state) and rate-limit tuning
+- Week 3: Final quality check, operational handoff, and SOW signature
+
+Evaluation plan summary to hand to SRE: 
+1) Latency matrices: p50/p95/p99 across sequence lengths (256/512/1024)
+2) TTFT: cold KV cache vs warmed KV cache for first-token under bursts
+3) Concurrency: two modes — burst (spikes to 50 reqs/s sustained 30s) and steady (200 concurrent sustained 30m)
+4) Queueing model: instrument queue depth, request wait time, and tail latencies; try both immediate 429 and queue-with-timeout policies
+5) Success criteria: p95 < 400ms for typical 350-token outputs; TTFT < 200ms in warmed-cases; graceful 429 fallbacks under overload
+
+I’ll coordinate lab runs with Rishi and Marissa. If that looks good I’ll convert this to the formal MAP PDF and add timelines.
+
+Best,
+Laura Bennett
+Enterprise Sales, Redwood Inference
+laura_bennett@redwood.com
+Phone: +1 415-555-0199
+
+Attachment: MAP_Acme_v2.pdf
+
+---
+
+
+From: Rishi Malhotra <rishi_malhotra@redwood.com>
+To: Laura Bennett <laura_bennett@redwood.com>, Marissa Cole <marissa_cole@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>
+Date: 2026-02-12T08:30:00-08:00
+Subject: Re: MAP + perf guardrails — Acme pilot questions
+
+Thanks Laura — quick internal note with the lab plan and constraints.
+
+We’ll run the following experiments in our private lab region (us-west-2):
+- Baseline (single request stream) with both 16-bit quantized and fp16 flavors to show tradeoffs. Capture p50/p95/p99 over 1k requests.
+- Burst scenario: synthetic client ramps to 50 concurrent active requests for 60s, repeated 5x with 2m spacing. Measure TTFT on the first token and overall tail latency.
+- Steady-state: maintain 200 concurrent requests for 30 minutes using our continuous-batching runtime. Log queue depth and token-per-second throughput.
+- Rate-limit experiments: three policies to test: immediate 429, server-side queue with 10s timeout, and adaptive throttling (drop lowest-priority requests).
+
+Notes / constraints:
+- We’ll need Acme test key and sample prompt dataset (anonymized) by EOD Monday to mirror prompt lengths.
+- Some model variants will require quantization-specific kernels; expect small p50 regressions but cost savings.
+- I’ll attach the raw CSV of results after runs.
+
+Rishi
+Sr. Perf Eng, Redwood Inference
+
+---
+
+
+From: Marissa Cole <marissa_cole@redwood.com>
+To: Laura Bennett <laura_bennett@redwood.com>, Rishi Malhotra <rishi_malhotra@redwood.com>
+Cc: Karthik Iyer <karthik_iyer@redwood.com>
+Date: 2026-02-17T14:02:00-08:00
+Subject: Re: MAP + perf guardrails — Acme pilot questions
+
+Quick update — lab runs completed this morning. Summary below (full CSV attached).
+
+Executive summary (short):
+- Baseline (fp16): p50=120ms, p95=360ms, p99=780ms for 350-token outputs (512 prompt).
+- Quantized (int8): p50=145ms, p95=420ms, p99=900ms — ~18% cost reduction, small tail impact
+- Burst (50 concurrent spikes): TTFT cold=520ms, TTFT warmed=160ms. We observed transient queueing; peak queue depth ~12 requests, average wait 320ms during spike windows.
+- Steady (200 sustained concurrency): throughput stable at 380 tokens/s per shard, p95 drifted up to 410ms at 22–24 minute mark under sustained KV load (cache warming matters).
+- Rate-limit policy tests:
+  * immediate 429: lowest operational impact but poor UX for client (no retry coordination)
+  * queue-with-timeout (10s): best tradeoff — 80% of requests complete, average wait 600ms; tail latencies better than immediate drops
+  * adaptive throttling: good for prioritized traffic but requires client hints and orchestration
+
+Recommendation for POC MAP: enable server-side queue with 8s timeout + client-specified priority header for interactive sessions. Suggested per-tenant soft limit = 250 concurrent requests, hard limit = 320. Backoff: exponential with jitter, max retries 3.
+
+I’ve attached concurrency_lab_results.csv and rate_limit_tuning_notes.md. I’ll drop a short SLDP (single-page) for the MAP packaging.
+
+-Marissa
+Perf Eng, Redwood Inference
+
+Attachment: concurrency_lab_results.csv, rate_limit_tuning_notes.md
+
+---
+
+
+From: Laura Bennett <laura_bennett@redwood.com>
+To: Kate Liao <kate@acmeretail.com>, Tom Reed <tom.reed@acmeretail.com>
+Cc: Rishi Malhotra <rishi_malhotra@redwood.com>, Marissa Cole <marissa_cole@redwood.com>, Karthik Iyer <karthik_iyer@redwood.com>
+Date: 2026-02-18T16:45:00-08:00
+Subject: Re: MAP + perf guardrails — Acme pilot questions
+
+Kate / Tom —
+
+Attached is the updated MAP and lab results. Key callouts for your SRE and procurement teams: 
+
+1) Performance summary (POC config, fp16): p95=360ms for typical 350-token outputs; TTFT warmed < 200ms.
+2) Concurrency behavior: we saw brief queueing during bursts; server-side queue-with-timeout reduces 429 exposure and is our recommended policy for a better user experience.
+3) Rate-limit recommendation: soft per-tenant concurrency 250, hard 320. We’ll enable client priority header to protect interactive flows.
+4) Timeline: if Acme provides test key and anonymized prompt set by 2026-02-22, we can complete final validation and procurement-ready MAP by 2026-02-28.
+
+Next steps (asks):
+- Acme: share test credentials + sample prompts by 2026-02-22
+- Acme SRE: review the attached CSV and confirm acceptance criteria for p95/TTFT
+- Redwood: we’ll prepare a short runbook for the queue policy and a contract addendum for rate limits
+
+If that schedule works I’ll update the HubSpot milestones and send a calendar invite for the final validation review.
+
+Thanks — looking forward to wrapping this up.
+
+Laura Bennett
+Enterprise Sales, Redwood Inference
+Attachment: MAP_Acme_v2.pdf, concurrency_lab_results.csv, rate_limit_tuning_notes.md
+
+---
+

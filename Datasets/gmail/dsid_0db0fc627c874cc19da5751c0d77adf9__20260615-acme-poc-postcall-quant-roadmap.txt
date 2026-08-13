@@ -1,0 +1,140 @@
+Post-call: Acme.ai model-fit findings + quantization options and next steps
+
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Sarah Lin <sarah@acme.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Date: Mon, 15 Jun 2026 16:10:00 -0700
+Subject: Post-call: Acme.ai model-fit findings + quantization options and next steps
+
+Thanks for the time today, Sarah — good conversation and clear priorities. Short recap and proposed next steps so we stay aligned.
+
+Call highlights (what we heard)
+- Primary goal: embed high-quality summarization + entity extraction into Acme Support with 8–12 token summary length targets and strict hallucination bounds.
+- Expected Q3 volume: 50 sustained RPS at peak for summaries (text inputs ~400 tokens avg).
+- Security: SOC2 required; data residency in US.
+- Success metrics: ROUGE/semantic similarity > 0.86 on our holdout, false-entity rate < 1.5%.
+
+Model-fit summary (quick recommendations)
+Option A — Latency-first, cost-friendly (hosted): redwood/rlm-13b-awq
+- Pro: best throughput at low cost after AWQ; estimated p50 generation latency ~120ms (400-token input, streaming disabled).
+- Con: small quality delta vs FP16 on edge cases (named-entity fidelity).
+
+Option B — Balanced accuracy/throughput (dedicated): redwood/llama3-13b-gptq
+- Pro: closer fidelity to FP16 for entity preservation, supports FP8 fallback on dedicated GPUs.
+- Con: ~1.3x higher per-token cost than AWQ.
+
+Option C — Max quality (private/dedicated): redwood/galactica-13b-fp8
+- Pro: near FP16 quality for difficult prompts, recommended for audit/regulatory outputs.
+- Con: throughput lower and higher compute cost.
+
+Quantization trade notes (AWQ vs GPTQ vs FP8)
+- AWQ (our assembly-quant): best throughput improvements in hosted mode; typical quality drop concentrated on long-tail entity formats (invoice IDs, nested amounts).
+- GPTQ: good middle ground — preserves more weight structure; slightly higher memory footprint than AWQ but better on hallucination metrics.
+- FP8: closest to native FP16/32 quality on modern GPUs but requires dedicated capacity and updated drivers.
+
+Benchmarks & artifacts attached
+- I attached 3 files: prompt set v1 (CSV), AWQ vs GPTQ brief (PDF), and a 50RPS latency csv with simulated batching.
+- Full benchmark run (20k prompts) is in the shared Drive link in metadata; I highlighted failure modes in the PDF.
+
+Proposed next steps (pick 2)
+1) Run a focused 2k-example eval from your production prompt set (we can host in 48h) — goal: measure semantic similarity + entity precision across AWQ/GPTQ/FP8. (Owner: Redwood eng)
+2) Scope a Dedicated pilot with 1x reserved 8xA100-equivalent node for 2 weeks to validate p95 latency at 50 RPS. (Owner: Sales/Deploy)
+3) Quick procurement estimate for Dedicated vs Hosted with expected monthly cost ranges. (Owner: Sales)
+
+Action items from us:
+- I’ll spin the eval harness and provide a side-by-side table with ROUGE / exact-match entity rates.
+- Ben will follow up on commercial options and projected TCO in a separate note.
+
+Would you prefer we start with the 2k eval or go straight to a Dedicated pilot? I can book the eval-run window as early as Wednesday.
+
+Thanks again — Rishi
+
+--
+Rishi Malhotra
+Senior Solutions Engineer, Redwood Inference
+rishi_malhotra@redwood.ai | +1 (415) 555-0198
+
+Attachments: acme_poc_promptset_v1.csv (CSV, 2.1 KB); awq_vs_gptq_brief.pdf (PDF, 420 KB); latency_benchmarks_50rps.csv (CSV, 8 KB)
+From: Sarah Lin <sarah@acme.ai>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>
+Cc: Tom Jacobs <tom.j@acme.ai>, Acme Infra <infra@acme.ai>
+Date: Tue, 16 Jun 2026 09:04:00 -0700
+Subject: Re: Post-call: Acme.ai model-fit findings + quantization options and next steps
+
+Thanks, Rishi — this is super helpful. A couple quick clarifications before we lock the eval window:
+
+1) Data handling: for the 2k eval, can Redwood run the eval in hosted but with our retention policy (24 hours) and SOC2 controls, or do we need Private? Tom from procurement is cc’d — he may push for Dedicated if retention controls are hard to enforce in hosted.
+2) Throughput goal: the 50 RPS is our steady target with occasional spikes to 75 RPS. What are the expected p95 latencies for AWQ vs GPTQ under that load?
+3) Cost delta: our CFO will want an apples-to-apples monthly cost delta between AWQ-hosted and FP8-dedicated (ballpark).
+
+We’re leaning to start with the 2k eval first. Please include a short runbook for sharing results and redlines for entity hallucinations.
+
+— Sarah
+
+On Mon, Jun 15, 2026 at 4:10 PM Rishi Malhotra <rishi_malhotra@redwood.ai> wrote:
+> (previous message)
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Tue, 16 Jun 2026 11:15:00 -0700
+Subject: internal: Acme asks and commercial framing
+
+Quick internal note — copying the ask into our playbook:
+- Customer wants: 2k eval, retention 24h SOC2, throughput 50RPS steady / 75 spike, cost comps AWQ vs FP8.
+- Recommendation: propose 2-step: (1) Hosted eval with strict retention + ephemeral buckets (2) If they require guaranteed retention controls, propose Dedicated pilot (2 weeks) with FP8 option.
+- Pricing: quick back-of-envelope: hosted AWQ ~$0.015/token processed-equivalent; FP8-dedicated effective unit cost ~0.028/token assuming reserved capacity. (Marissa — need your procurement numbers to validate).
+
+I’ll draft the commercial note and include a simple 2-line contract addendum for a 2-week pilot.
+
+Ben
+From: Rishi Malhotra <rishi_malhotra@redwood.ai>
+To: Sarah Lin <sarah@acme.ai>
+Cc: Marissa Cole <marissa_cole@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Monica Patel <monica_patel@redwood.ai>
+Date: Wed, 17 Jun 2026 08:32:00 -0700
+Subject: Re: Post-call: Acme.ai model-fit findings + quantization options and next steps
+
+Thanks Sarah — answers inline below plus a short technical appendix: 
+
+1) Data handling / retention- Hosted eval: we can run the 2k eval on Redwood hosted with a 24h retention SLA and SOC2 controls (we use ephemeral storage and log redaction for eval runs). If Procurement requires cryptographic control of keys, we’ll need Dedicated/Private with KMS integration.
+
+2) Expected latencies at 50RPS (approx, p95 includes queueing at steady RPS with default batching)- AWQ (hosted): p50 ~120ms, p95 ~420ms (with dynamic batching, input 400 tokens).- GPTQ (dedicated): p50 ~150ms, p95 ~300ms.
+- FP8 (dedicated, optimized kernels): p50 ~110ms, p95 ~250ms.
+
+Notes on those numbers: AWQ shows the best mean throughput because of smaller memory footprint and tighter kernels, but p95 suffers under bursty spikes due to batch assembly delays. FP8 on dedicated hardware gives the best tail behavior. We included simulated CSV in the attachments.
+
+3) Ballpark cost delta (monthly, assume 50RPS sustained across a 30d month, 100M tokens processed):
+- Hosted AWQ estimate: ~$17k/month (metered per-token + infra overhead).
+- Dedicated FP8 estimate: ~$32k/month (reserved capacity amortized + per-token compute).
+
+Technical appendix (short)
+- Failure modes we observed in AWQ: unusual invoice ID formats and concatenated reference strings sometimes get truncated or rewritten by the model; we flagged those in the AWQ brief.
+- Mitigations: (a) targeted prompt engineering (guard-rails + canonicalization) reduces false-entity rate by ~60%; (b) small-hybrid approach — keep critical entity-extraction on FP8 variant while summarization runs on AWQ via smart routing (we can set route by response-type).
+
+Proposed next-step plan
+A) Run the 2k eval in hosted with 24h retention (start Wed 6/18). Deliverable: side-by-side table (ROUGE, cosine sim, entity exact-match, latency p50/p95) and example failure set.
+B) If results show entity FPR > 1.5% on AWQ, run a 3-day Dedicated mini-pilot with FP8 variant for comparison.
+
+I’ll queue the eval run for Thursday morning unless you want Wednesday; Ben and Marissa — can you confirm resource commit and a light commercial note? Monica — please include CS runbook for how we share flagged failures back to Acme.
+
+Thanks — Rishi
+
+--
+Rishi Malhotra
+Senior Solutions Engineer, Redwood Inference
+
+Attachments referenced: awq_vs_gptq_brief.pdf; latency_benchmarks_50rps.csv
+From: Tom Jacobs <tom.j@acme.ai>
+To: Rishi Malhotra <rishi_malhotra@redwood.ai>, Sarah Lin <sarah@acme.ai>
+Date: Thu, 18 Jun 2026 09:40:00 -0700
+Subject: Re: Post-call: Acme.ai model-fit findings + quantization options and next steps
+
+Hi Rishi — thanks for the quick turnaround. We’re good to start the 2k hosted eval with 24h retention and SOC2 controls. A couple asks before you kick it off:
+1) Please include a one-page runbook that explains how you’ll mark personally identifiable information (PII) and how results will be redacted before we see examples.
+2) Please cc our procurement contact on the Dedicated pilot pricing when Ben/Marissa send the note (tom.j@acme.ai).
+
+We’ll plan to review results on Friday afternoon — please send calendar invite.
+
+Tom
+
+On Wed, Jun 17, 2026 at 8:32 AM Rishi Malhotra <rishi_malhotra@redwood.ai> wrote:
+> (previous message)

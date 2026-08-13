@@ -1,0 +1,130 @@
+Pilot request: deterministic inflight budget & queue shaping for transaction-scoring (HeliosPay)
+
+From: Sophie Lang <sophie.lang@heliospay.com>
+To: neha_kapoor@redwood.com
+Cc: eng@heliospay.com
+Date: Thu, 03 Sep 2026 09:12:00 -0700
+Subject: Reducing tail latency for scoring — pilot request
+
+Hi Neha,
+
+Quick note from the engineering side at HeliosPay. Our transaction-scoring path is sensitive to 99.9th percentile latency — occasional 300–400ms tails are causing downstream failures during peak batch processing windows. We love Redwood's dedicated capacity offering, but we need to validate a configuration that guarantees tighter tail behavior for ~4 weeks before we commit to a reserved pool.
+
+Specifically we'd like:
+- A short pilot on dedicated capacity with deterministic inflight token budget per connection (to bound queueing)
+- Queue shaping rules to prevent head-of-line blocking (suggested max-inflight 6 per model instance, with strict FIFO per tenant)
+- Observability: per-tenant tail-latency histograms + KV cache hit rate exported to our DataDog account
+
+Can Redwood support a pilot that includes a temporary carveout to the default queueing behavior and a one-time SLA exception for the pilot window? We can sign an MOU and provide sample traffic patterns. Also curious if you offer credits if the pilot requires engineering time for runtime tuning.
+
+Thanks — Sophie
+Sophie Lang
+Head of Engineering, HeliosPay
+
+
+
+From: neha_kapoor@redwood.com
+To: Sophie Lang <sophie.lang@heliospay.com>
+Cc: karthik_iyer@redwood.com, marissa_cole@redwood.com
+Date: Thu, 03 Sep 2026 10:03:00 -07:00
+Subject: Re: Reducing tail latency for scoring — pilot request
+
+Hi Sophie — thanks for the clear ask and sample targets. Short answer: yes, we can run a bounded pilot with deterministic inflight budgeting + queue shaping rules, but we'll need to outline the exact acceptance criteria, metrics to monitor, and any temporary SLA carveouts during the pilot.
+
+I'm looping in Karthik (runtime/product) and Marissa (customer success / pilot ops) to scope feasibility and resource needs. Karthik — can you confirm runtime constraints for a 4-week pilot at the requested concurrency (we should be explicit about model size, token rates, and expected qps)? Marissa — I'll need the pilot runbook + billing/credit policy if we decide to provide uplifted support.
+
+Sophie — we'll draft a short pilot proposal (tech config, observability hooks, success criteria, proposed credit) by EOD Monday. Is it OK if we start with a 2x peak QPS replay for 48h as a smoke test, then roll to live traffic?
+
+— Neha
+Customer Success Lead, Redwood Inference
+
+
+
+From: karthik_iyer@redwood.com
+To: neha_kapoor@redwood.com, marissa_cole@redwood.com
+Date: Fri, 04 Sep 2026 08:22:00 -07:00
+Subject: Re: Reducing tail latency for scoring — pilot request
+
+Folks — reading Sophie's note, a few quick thoughts and hard limits from the runtime side: 
+
+1) Deterministic inflight budget: we can enforce a per-tenant inflight cap at the proxy layer. Suggested starting point: max-inflight=6 (matches their ask). That will bound queueing but increases risk of fairness preemption under saturation; we should pair with a token-bucket admission policy and backpressure TTL.
+
+2) Queue shaping / FIFO per tenant: we can implement strict per-tenant FIFO queues for the pilot. We'll need to pin to a compatible model variant (no dynamic KV evictions or quantization changes) to reduce variability. Recommend we use one stable model (gpt-2.7b-classic) they already validated locally.
+
+3) Observability: we can push 99/99.9/100 latency histograms and KV cache hit metrics to a HeliosPay DataDog endpoint via our metrics exporter. Need an API key and contact.
+
+4) Resource estimate: for HeliosPay's projected peak (they sent sample: 350 qps at median 12 tokens/request) we'd provision 4 reserved GPUs for the pilot with autoscaling disabled. That means a small infra delta for ops. 48h smoke replay + 4-week live window is doable but requires 1.5 FTE infra + 0.5 FTE runtime engineer for the pilot duration to tune admission/eviction thresholds.
+
+5) SLA carveout: we can agree to a temporary 'pilot SLO' (latency target with a relaxed penalty structure) and commit to weekly checkpoints rather than standard credits. If HeliosPay wants formal credits, commercial should weigh in.
+
+I'll draft a brief technical appendix for the pilot runbook. Marissa — can you own the customer facing doc and credit language? If legal wants an MOU template, we can attach a simple pilot MOU (no long-term SLA changes, only temporary pilot carveouts).
+
+— Karthik
+Principal Product Manager, Runtime
+
+
+
+From: neha_kapoor@redwood.com
+To: Sophie Lang <sophie.lang@heliospay.com>
+Cc: karthik_iyer@redwood.com, marissa_cole@redwood.com
+Date: Mon, 07 Sep 2026 09:18:00 -07:00
+Subject: Pilot proposal: deterministic inflight budget + queue shaping (HeliosPay) — Redwood proposal attached
+
+Hi Sophie — thanks again for the ask and the sample traffic. Attached is a one-page pilot runbook (redwood_pilot_runbook_v1.pdf) and a sample metrics export (heliospay_queueing_metrics_sample.csv) so you can confirm the observability fields. Summary below: 
+
+Pilot scope and duration
+- 48-hour smoke replay on a dedicated 4-GPU pool (start date mutually agreed, recommended Sept 14)
+- Followed by a 4-week live pilot with the same dedicated pool and autoscaling disabled
+
+Technical config
+- Model: pinned to gpt-2.7b-classic (no dynamic quantization)
+- Inflight budget: enforced at proxy layer, max-inflight=6 per connection
+- Queue shaping: strict per-tenant FIFO + token-bucket admission with 200ms enqueue TTL
+- Backpressure: early-reject at 95% queue depth with 503 + Retry-After header
+
+Observability & success criteria
+- Metrics: 99th and 99.9th latency histograms, request qps, KV cache hit rate exported to your DataDog instance (we need an API key + target).
+- Success criteria: 99.9th percentile tail <= 180ms for production-like traffic (sample window) and no more than 0.1% request error rate over pilot window.
+
+Operational commitments and credits
+- Redwood will provide 1.5 FTE infra + 0.5 FTE runtime eng for the pilot tuning and weekly checkpoint calls.
+- We propose a pilot support credit of 20% of one month of expected reserved GPU costs if HeliosPay proceeds to a 12-month reserved pool within 30 days of pilot completion.
+- Pilot requires an MOU that documents the temporary SLO and the rollback plan; legal will prepare a 2-page MOU.
+
+Next steps
+1) Confirm you can provide a DataDog API key and target collection endpoint.
+2) Approve the proposed smoke test start date (week of Sept 14) or propose alternatives.
+3) We'll send a short MOU and the runbook PDF (attached).
+
+I've attached the runbook and a sample metrics export as stubs: redwood_pilot_runbook_v1.pdf, heliospay_queueing_metrics_sample.csv.
+
+On Thu, 03 Sep 2026 at 09:12, Sophie Lang <sophie.lang@heliospay.com> wrote:
+> Hi Neha,
+> 
+> Quick note from the engineering side at HeliosPay. Our transaction-scoring path is sensitive to 99.9th percentile latency — occasional 300–400ms tails are causing downstream failures during peak batch processing windows. We love Redwood's dedicated capacity offering, but we need to validate a configuration that guarantees tighter tail behavior for ~4 weeks before we commit to a reserved pool.
+> 
+> Specifically we'd like: ...
+>
+— Neha
+Customer Success Lead, Redwood Inference
+
+
+From: Sophie Lang <sophie.lang@heliospay.com>
+To: neha_kapoor@redwood.com
+Cc: eng@heliospay.com
+Date: Mon, 07 Sep 2026 11:03:00 -07:00
+Subject: Re: Pilot proposal: deterministic inflight budget + queue shaping (HeliosPay) — Redwood proposal attached
+
+Neha — this looks great and very thoughtful, thanks. A few quick clarifications before we sign the MOU: 
+
+1) The success criteria target of 99.9th <= 180ms is in line with our internal goals; if we can achieve that in the smoke replay we will be comfortable.
+2) For DataDog ingestion we'll send an API key and a short list of required metrics by EOD Tuesday.
+3) Regarding credits: 20% pilot support credit is acceptable pending the MOU language — we just want clarity on how credits are applied to the invoice if we convert.
+
+We approve the smoke test window starting Sept 14. Please send the MOU and any pre-flight checklist we need to complete (IPs to whitelist, sample payloads).
+
+I'll loop our procurement lead (cc'd separately) when the MOU is ready.
+
+Sophie
+Head of Engineering, HeliosPay
+

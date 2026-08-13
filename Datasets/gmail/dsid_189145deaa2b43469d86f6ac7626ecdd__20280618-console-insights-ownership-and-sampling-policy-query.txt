@@ -1,0 +1,124 @@
+Console insights: ownership model + sampling/retention policy questions
+
+From: Kimberly Park <kimberly@redwood.com>
+To: Soojin Lee <soojin@redwood.com>, Dylan Brooks <dylan@redwood.com>, Grace O'Connor <grace@redwood.com>
+Cc: Karthik Iyer <karthik@redwood.com>, Sam Reynolds <sam@atlashealth.com>
+Date: Mon, 18 Jun 2028 09:12:00 -0700
+Subject: Console insights: ownership model + sampling/retention policy questions
+
+Team —
+
+Quick ask to align before the weekly infra/product sync. Atlas Health (Sam, cc'd) flagged a short list of questions about our per-route observability tiles: they want consistent cost/latency attribution on a per-endpoint basis, and they expect a way to debug high-cost chat flows that only happen ~0.1% of the time.
+
+Two problems I want us to decide on this sprint:
+1) Ownership & discovery: who owns a tenant's per-route slices in the console? product (observability) or runtime (infra)? We need a clear owner for SLA exceptions and for running deep trace collection.
+2) Sampling & retention policy: tradeoffs between keeping raw traces for 30 days vs. storing sampled structured metrics at higher fidelity. Atlas's compliance team is sensitive to retention windows.
+
+I've attached a quick policy proposal (console-sample-policy-proposals.xlsx) and a mockup for a per-route tile (per-route-tile-v2.png). High-level asks:
+- Decision on default sampling rate for tail-call trace capture (suggested: 0.5% for high-cost tokens, 5% for error traces).
+- A short playbook for escalating SLA-exception routes (who to ping, expected TTR).
+- Whether we expose a tenant-level toggle for full-trace mode (billing implications spelled out).
+
+Atlas also asked for a one-page explanation of how sampling affects cost attribution — we should be able to produce that from the console without manual queries.
+
+Please reply with: owner proposal, sampling defaults you're comfortable shipping, and any blockers for implementing a tenant toggle (e.g., storage, security approvals).
+
+Thanks —
+Kimberly
+Kimberly Park
+Head of Product — Console & Observability
+Redwood Inference
+
+---
+Attachment: console-sample-policy-proposals.xlsx (spreadsheet, 12KB)
+Attachment: per-route-tile-v2.png (image, 98KB)
+From: Soojin Lee <soojin@redwood.com>
+To: Kimberly Park <kimberly@redwood.com>, Dylan Brooks <dylan@redwood.com>, Grace O'Connor <grace@redwood.com>
+Cc: Karthik Iyer <karthik@redwood.com>
+Date: Mon, 18 Jun 2028 11:03:00 -0700
+Subject: Re: Console insights: ownership model + sampling/retention policy questions
+
+Kimberly —
+
+Thanks for the summary and the attachments. Quick responses inline: 
+
+Ownership & discovery
+- My recommendation: Observability/product should own the console experience (tiles, UX, escalation playbook). Runtime/infra should own data collection, storage, and APIs that surface raw traces/metrics. We define clear SLAs on data freshness, and an ownership matrix for on-call routing.
+
+Sampling & retention
+- Proposed defaults (initial):
+  * Default sampling: 0.5% full-trace for normal traffic.
+  * Tail/error sampling: 5% for requests that exceed cost threshold or hit 5xxs.
+  * For customers who opt-in to full-trace, enable 100% for a configurable window (default 1 hour), with a hard cap on retained bytes.
+
+Tenant toggle considerations
+- Blockers: storage costs (we need quota/billing enforcement), and KMS/PII review for retained payloads. From infra side, we can implement an opt-in flag that routes traces to a higher-retention bucket with a billing tag.
+
+Action items I'm comfortable with for this sprint:
+- Dylan / Infra: surface an API that returns per-route cost and sampled trace references (not raw payloads) by Thu.
+- Product: finalise escalation owner list and provide UI copy for the tenant toggle.
+
+Sidenote for Atlas: we should prepare the one-pager that explains how sampling affects billing and debugging — I'll draft a short note.
+
+Soojin
+Soojin Lee
+Director, Observability Product
+Redwood Inference
+
+---
+On Mon, Jun 18, 2028 at 09:12 AM Kimberly Park <kimberly@redwood.com> wrote:
+> Team —
+>
+> Quick ask to align before the weekly infra/product sync. Atlas Health (Sam, cc'd) flagged a short list of questions about our per-route observability tiles: they want consistent cost/latency attribution on a per-endpoint basis, and they expect a way to debug high-cost chat flows that only happen ~0.1% of the time.
+>
+> Two problems I want us to decide on this sprint:
+> ...
+
+From: Dylan Brooks <dylan@redwood.com>
+To: Kimberly Park <kimberly@redwood.com>, Soojin Lee <soojin@redwood.com>, Grace O'Connor <grace@redwood.com>
+Date: Tue, 19 Jun 2028 10:27:00 -0700
+Subject: Re: Console insights: ownership model + sampling/retention policy questions
+
+Kim / Soojin —
+
+We can deliver the per-route summary API by Thu, but a few implementation notes / constraints: 
+- Full-trace retain/route: we must enforce an upper bound on total bytes per-tenant/day. I'd propose a default 10GB/day cap for opt-in full-trace, with billing tags if they exceed.
+- Sampling metadata: we'll include trace_id, route_id, timestamp, cost_estimate, and a pointer to the storage location (GCS path) rather than the raw payload. That lets product link the tile to the trace without moving large payloads through the console.
+- For the 0.5% baseline, it's fine. We will need a rate-limiter to ensure tail spikes don't generate burst storage beyond quota — I'll add that to the PR.
+
+Blocking items:
+- Karthik: we need a sign-off on the KMS policy (are we allowed to keep snippets of prompt/response in a higher-retention bucket for debugging?)
+- Grace / CS: we need guidance on whether to surface billing impact in the UI or require an explicit billing agreement for opt-in.
+
+I'll start the API branch and share the spec link by EOD.
+
+—Dylan
+Dylan Brooks
+Staff Software Engineer, Serving Runtime
+Redwood Inference
+
+From: Grace O'Connor <grace@redwood.com>
+To: Kimberly Park <kimberly@redwood.com>, Soojin Lee <soojin@redwood.com>, Dylan Brooks <dylan@redwood.com>
+Cc: Karthik Iyer <karthik@redwood.com>
+Date: Tue, 20 Jun 2028 15:03:00 -0700
+Subject: Re: Console insights: ownership model + sampling/retention policy questions
+
+Thanks everyone — quick update from CS and next steps for Atlas: 
+
+- CS Position: We should surface the billing impact in the UI as a clear estimated delta (monthly) whenever a tenant enables full-trace mode. For compliance-minded customers like Atlas, they also want an exportable evidence bundle (sampling rate, snapshot of traces, and the retention window) for audits.
+- Action for Product: Kimberly / Soojin — please produce the one-pager for Atlas and a short UI tooltip string explaining the estimated cost delta.
+- Action for Infra: Dylan / Karthik — start with the API prototype and include a simple CSV export endpoint for the evidence bundle. Ensure the KMS question is flagged for legal.
+
+I'll loop Sam once we have the one-pager.
+
+Grace
+Grace O'Connor
+Customer Success Lead, Enterprise Accounts
+Redwood Inference
+
+---
+On Tue, Jun 19, 2028 at 10:27 AM Dylan Brooks <dylan@redwood.com> wrote:
+> Kim / Soojin —
+>
+> We can deliver the per-route summary API by Thu, but a few implementation notes / constraints: 
+> ...

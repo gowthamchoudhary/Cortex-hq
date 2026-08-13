@@ -1,0 +1,122 @@
+Novapulse POC — follow-up: traffic profile, acceptance criteria, and owners
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Sienna Park <sienna@novapulse.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Wed, 10 Mar 2027 15:12:00 +0000
+Subject: Novapulse POC — follow-up: traffic profile, acceptance criteria, and owners
+
+Hi Sienna — thanks again for the call earlier. Quick recap and proposed next steps so we have a single source of truth before we kick off the POC: 
+
+1) POC objective (agreed): validate Redwood can meet interactive-chat SLAs for your customer-facing assistant and hold cost per 1k tokens below your threshold for 95% of production-like traffic.
+
+2) Traffic/Workload snapshot (what we discussed):
+   - Peak sustained RPS: 180 reqs/sec for 30–45 min windows
+   - Typical sustained RPS: 35–50 reqs/sec
+   - Burst pattern: high-frequency spikes up to 2.2x peak for 2–5 minute bursts (office hours promotions)
+   - Avg prompt length: 120 tokens (user) / 320 tokens (model response) — 440 tokens roundtrip median
+   - 95th percentile token length (responses): ~900 tokens for long help sessions
+   - Concurrency (parallel users): 220 concurrent open websocket/chat sessions at peak
+
+3) Success criteria (proposal) — please confirm these look right:
+   - Latency: median <1200ms, p95 <2000ms for single-turn responses at typical payloads
+   - Availability: 99.9% during test windows (excluding scheduled maintenance)
+   - Quality: match baseline scoring on your internal eval set (we'll receive 100 sample prompts) — quality regressions flagged if >5% of responses fall below threshold
+   - Cost guardrail: tokens/1k cost improvement target or parity with your current provider (we'll baseline after you share billing sample)
+
+4) Ownership & roles:
+   - Novapulse (customer): Sienna Park (primary), Ethan Zhou (platform lead), Novapulse Legal (contract)
+   - Redwood: Priyom Das (AE, POC owner), Ben Carter (SE — load & ops), Marissa Cole (CS — onboarding & success)
+
+5) Timeline (proposed):
+   - Fri 3/12: exchange sample prompts + billing baseline (you)
+   - Tue 3/16: Redwood provides preliminary capacity map + ingestion plan
+   - Mon 3/22: pilot run (48 hours) with one production-like feature set
+   - Mon 3/29: evaluation readout and decisioning
+
+6) Ask: please confirm traffic numbers above and attach any historical 24hr token-by-minute or 1-min RPS logs you can share. If you have any hard constraints on p95 latency or concurrency ceilings, flag them now.
+
+Attachments: I’ll drop a short POC scope & traffic matrix after you confirm — attaching a draft in the next message.
+
+Thanks — looking forward to getting this scheduled.
+
+— Priyom
+Priyom Das | Account Executive | Redwood Inference
+priyom_das@redwood.ai | +1 (415) 555-0193
+
+From: Sienna Park <sienna@novapulse.ai>
+To: Priyom Das <priyom_das@redwood.ai>
+Cc: Ethan Zhou <ethan.z@novapulse.ai>, Novapulse Legal <legal@novapulse.ai>
+Date: Thu, 11 Mar 2027 09:34:00 -0700
+Subject: Re: Novapulse POC — follow-up: traffic profile, acceptance criteria, and owners
+
+Thanks Priyom — this is helpful and mostly matches our internal view. A couple of clarifications: 
+
+- The 2.2x bursts are occasionally higher during promos — we've seen up to 2.8x but those last <2 minutes. Can we size for 3x briefly?
+- 95th token length: we have a long-tail for transcripts; expect occasional ~1200 token responses (rare).
+- For quality eval: we'll provide 150 prompts across 3 personas (support, sales assistant, billing) by end of day Friday (3/12).
+
+Legal has been looped in for the NDA/scoping doc we talked about. Ethan will share a lightweight billing extract (last 60 days aggregated) by EOD tomorrow.
+
+One request: we need an explicit p99 latency target for critical flows — can Redwood provide guidance on p99 for the proposed configuration and whether the SV app can fallback to a lower-cost model automatically?
+
+Appreciate the timeline — please send the draft scope + traffic matrix and Ben, feel free to weigh in on autoscaling suggestions.
+
+Best,
+Sienna
+Sienna Park | Head of Product | Novapulse
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Priyom Das <priyom_das@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>
+Date: Fri, 12 Mar 2027 14:05:00 +0000
+Subject: RE: Novapulse POC — follow-up: traffic profile, acceptance criteria, and owners
+
+Priyom / Marissa — quick technical readout to address Sienna’s ask and propose an initial probe configuration: 
+
+- p99 guidance: with a 2–3x burst headroom and dynamic autoscaling (fast spin-up on reserve pool), expect p99 for typical requests (<=500 tokens) ~3.2s on NVidia A100-equivalent instances; for long responses (900–1200 tokens) p99 can go up to ~6–8s depending on model size and quantization.
+- Autoscaling options:
+   * Fast path: pre-warm a small reserved pool sized for 1.5x sustained peak + automated burst buffer that can absorb 3x for up to 3 minutes.
+   * Fallback path: route to a slightly smaller/cheaper model variant (quantized) if queue growth exceeds 10s median queueing.
+- Probe config for pilot run (48h):
+   * Model: open-model-x-latest (recommended) quantized FP16 -> 8-bit quantized for stigma flows as fallback
+   * Target pilot window: run two 1-hour ramp windows at peak (180 rps) and one 15-min 3x burst test
+   * Instrumentation: token-level latency logging, per-route p95/p99, KV cache hit rate, and cost per 1k tokens calculation
+
+I’ll prepare a short runbook for the ops handoff. Attaching a draft traffic matrix we can use to generate synthetic load that mirrors your 24‑hour patterns.
+
+— Ben
+Ben Carter | Solutions Engineer | Redwood Inference
+ben_carter@redwood.ai
+Attachment: novapulse_traffic_matrix_20270316.xlsx
+
+From: Priyom Das <priyom_das@redwood.ai>
+To: Sienna Park <sienna@novapulse.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Marissa Cole <marissa_cole@redwood.ai>, Novapulse Legal <legal@novapulse.ai>
+Date: Wed, 17 Mar 2027 18:07:00 +0000
+Subject: Re: Novapulse POC — follow-up: traffic profile, acceptance criteria, and owners
+
+Sienna / team — thanks for the quick replies and for looping legal. Actions and attachments below: 
+
+Attachments (sent):
+- novapulse_poc_scope_20270316.pdf — POC scope, roles, data controls, and proposed evaluation rubric
+- novapulse_traffic_matrix_20270316.xlsx — synthetic load spec and minute-level RPS/token mapping
+
+Confirmed adjustments based on your notes:
+- We’ll allow for brief 3x bursts in the pilot probe tests (will run 15m stress windows at 3x and 2m spike tests at 2.8x to reproduce promo behavior).
+- Instrumentation will explicitly capture p99 per route; Ben’s baseline numbers above are conservative estimates — we’ll measure and iterate.
+
+Concrete next steps (owners & dates):
+- Sienna / Ethan: share 150 sample prompts + billing extract by EOD 2027-03-12 (status: received 2027-03-12 22:03 by Ethan — confirmed)
+- Redwood (Ben): finalize probe runbook and synthetic load script by 2027-03-18
+- Redwood (Marissa): schedule onboarding call with Novapulse ops for 2027-03-19 (30–45 min)
+- Joint: pilot run (48h) scheduled 2027-03-22 to 2027-03-24; readout meeting 2027-03-29
+
+Please confirm acceptance of the scope doc once legal is comfortable. If legal requests redlines, route them to me and I’ll loop in our contracts team (cc Rishi if we need escalation).
+
+If anything looks off, flag it here — otherwise we’ll treat this as the working plan and proceed with Ben’s runbook prep.
+
+Thanks — Priyom
+Priyom Das | Account Executive | Redwood Inference
+priyom_das@redwood.ai | +1 (415) 555-0193
+
+-- End of thread --

@@ -1,0 +1,154 @@
+MirrorAI reserve: SKU selection and memory binning playbook
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Ben Carter <ben_carter@redwood.ai>, Irene Choi <irene_choi@redwood.ai>, Jasmine Liu <jasmine_liu@redwood.ai>
+Date: Tue, 14 Apr 2026 09:12:00 -0700
+Subject: MirrorAI reserve: SKU selection and memory binning playbook
+
+Team —
+
+MirrorAI (contact: Claire Park) is moving toward a 12-month reserved capacity commitment. High-level ask from Sales: recommend a SKU mix and a short playbook for fallthroughs. Key inputs attached (mirrorai-workload-profile.csv). Quick context:
+- Expected steady-state qps: 1.2k requests/s (avg) with 95th bursts to ~2.8k for short windows.
+- 30% of requests are embeddings-only (short), 60% are short-text generation (<512 tokens), 10% are long-context summarization (4k+ tokens).
+- Latency SLOs: p95 < 180ms for short-gen; p95 < 800ms for long-context.
+- Target: prioritize reliability and memory headroom for long-context pipelines; cost sensitivity is medium.
+
+Ask: can we put together a recommended reserve:burst split across H100/A100/L4, including memory binning guidance (which models/variants to pin to which SKU), fallback policy (e.g., L4 fallthrough for non-long-context), and any ops caveats (lead times, burst gating, telemetry we need to expose).
+
+Please keep the recommendation succinct — sales wants a 1-page summary and a procurement-ready count estimate.
+
+Thanks,
+Marcus
+Senior Solutions Engineer
+Redwood Inference
+
+Attachment: mirrorai-workload-profile.csv (CSV, 42KB)
+
+From: Ben Carter <ben_carter@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Irene Choi <irene_choi@redwood.ai>, Jasmine Liu <jasmine_liu@redwood.ai>
+Date: Tue, 14 Apr 2026 13:45:00 -07:00
+Subject: Re: MirrorAI reserve: SKU selection and memory binning playbook
+
+Folks —
+
+Quick read of the CSV and my recommended approach below. High-level: treat this as a memory-first deal with a cost-aware mid tier.
+
+Proposal (short):
+- Reserve mix: 55% H100 (memory-heavy pools), 30% A100 (general purpose), 15% L4 (high-concurrency, embedding/short-gen).
+- Binning rules:
+  - Long-context models (>= 4k tokens running full KV cache): H100 only — we need 80+GB device memory to avoid tiling and remote KV hits. Pin large checkpoints & enable 8-bit quant if model validated.
+  - Mid-range generation (512-4096 tokens): A100 preferred — good throughput per dollar and larger batch headroom than L4. Use quantized FP16/INT8 where we have validation.
+  - Embeddings & prompt-only APIs (<512 tokens, small batch latency-sensitive): L4 — very cheap per-token, minimal KV caching, great QPS.
+- Fallback policy: slot-request routing by model tag + sequence-length heuristic: short requests -> L4; if L4 capacity saturated, route to A100 with strict token cap and lower max tokens; long-context always to H100; if H100 full, queue/backpressure with a fast-failover to A100 with degraded quality + explicit client signal.
+
+Sizing heuristics (back-of-envelope):
+- Using the provided QPS shape and assuming typical token-per-request: short-gen ~60 tokens, mid-gen ~220, long-gen ~2.8k tokens. Expected avg token/s ~= 1.2M tokens/s.
+- Conservative concurrency headroom: assume 25% extra for burst and model warmups.
+- Preliminary reserve counts (units):
+  - H100: 18 GPUs (handles long-context at target p95 latency with room for 1.2x growth)
+  - A100: 10 GPUs (handles mid-gen and overflow from L4)
+  - L4: 8 GPUs (embeddings & short-gen)
+
+Ops notes (for the playbook):
+- KV cache & warm pool: pre-warm H100 slots for long-context flows; track warm-cache hit ratio by client-id.
+- Quantization: validate 8-bit quality for the long-context models before pinning — saves 30-40% memory; document model/quant combos per sku.
+- Autoscaling: prefer instant burst on A100/L4; H100 reserved and small burst window only.
+
+I put the one-page summary in sku-reco-summary.pdf (attached). If we want formal cost numbers, Irene, can you run a reserve rate card + burst pricing calc?
+
+—Ben
+Principal Solutions Engineer
+Redwood Inference
+
+Attachment: sku-reco-summary.pdf (PDF, 210KB)
+
+From: Irene Choi <irene_choi@redwood.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Ben Carter <ben_carter@redwood.ai>, Jasmine Liu <jasmine_liu@redwood.ai>
+Cc: sales@mirror.ai
+Date: Wed, 15 Apr 2026 10:20:00 -07:00
+Subject: Re: MirrorAI reserve: SKU selection and memory binning playbook
+
+Thanks Ben — good summary. Numbers below are preliminary but procurement-ready enough for initial contract language.
+
+Procurement & ops checklist:
+- Lead time: H100 procurement + dedicated pool provisioning usually 6-8 weeks for reserved slots; A100/L4 closer to 2-4 weeks. Call this out for timeline in SOW.
+- Suggested reserve sizing and monthly cost estimate (USD, approximate):
+  - H100 (18 units reserved): ~$183k/month (reserve pricing assumption)
+  - A100 (10 units reserved): ~$72k/month
+  - L4 (8 units reserved): ~$28k/month
+  - Total reserved run-rate ~ $283k/month (before discounts).
+- Burst gating: allow auto-burst to A100/L4 with an allocated burst budget; recommend a 25% burst pool on top of reserved for first 3 months to absorb onboarding spikes.
+- Headroom: keep 10% spare slots in H100 pool for long-context tail — prevents queuing and OOMs.
+- Telemetry hooks to include in contract: per-model kv-cache-hit, device memory pressure alerts, p95 token-latency per model-version, throttling events. Expose these to MirrorAI via a read-only dashboard for the duration of the pilot.
+- Compliance asks: Mirror asked for SOC2 evidence and the ability to rotate KMS keys for private logs. We can provide SOC2 report and draft a KMS integration plan; add this as an appendix.
+
+I'm attaching a quick cost spreadsheet (mirrorai-cost-estimate.xlsx) with line items. If Sales needs tighter margins, we can adjust the reserve mix (swap some H100 -> A100) but caution: long-context quality & latency will degrade if we under-provision memory.
+
+I'll formalize these numbers into a short SOW draft once Marcus confirms the model/quant choices.
+
+—Irene
+Head of Dedicated Ops
+Redwood Inference
+
+Attachment: mirrorai-cost-estimate.xlsx (XLSX, 95KB)
+
+From: Marcus Lin <marcus_lin@redwood.ai>
+To: Claire Park <claire@mirror.ai>
+Cc: Ben Carter <ben_carter@redwood.ai>, Irene Choi <irene_choi@redwood.ai>, Jasmine Liu <jasmine_liu@redwood.ai>, sales@mirror.ai
+Date: Thu, 16 Apr 2026 09:02:00 -07:00
+Subject: MirrorAI reserve: SKU recommendation & next steps
+
+Claire —
+
+Thanks for the productive conversations last week. Internal team assembled a recommended reserve mix and a short ops playbook for fallthroughs. TL;DR: memory-first posture with H100 for long-context, A100 as the balanced mid-tier, and L4 for high-concurrency embeddings/short-gen. Preliminary reserve counts & estimated run-rate are attached.
+
+Action items for MirrorAI to confirm:
+- Model variants we want pinned to H100 (please list production model names + expected max context per model).
+- Whether Mirror wants a 25% burst buffer for the first 90 days.
+- Priority: If you choose cost-first instead, we can propose a hybrid with fewer H100 and more A100 but will need you to accept degraded long-context p95.
+
+Link to the one-page playbook and cost sheet: https://drive.redwood.com/drive/folders/DEAL-4092-MIR/sku-playbook
+
+If you approve, Irene will turn this into an SOW and procurement timeline.
+
+Best,
+Marcus
+Senior Solutions Engineer
+Redwood Inference
+
+From: Claire Park <claire@mirror.ai>
+To: Marcus Lin <marcus_lin@redwood.ai>, Irene Choi <irene_choi@redwood.ai>, Ben Carter <ben_carter@redwood.ai>
+Cc: sales@mirror.ai
+Date: Thu, 16 Apr 2026 15:03:00 -07:00
+Subject: Re: MirrorAI reserve: SKU recommendation & next steps
+
+Marcus / team —
+
+Appreciate the clear writeup. We reviewed the playbook with our infra leads and prefer the memory-first approach: please proceed with the H100-heavy pilot as recommended (we'll send a short list of model names by EOD Monday). Two quick asks before SOW:
+1) Can you include SOC2 attestation + a short KMS rotation plan in the SOW appendix?
+2) We want a 2-week pilot window where you lock in the H100 warm-pool & we ramp traffic gradually.
+
+On the fallback note, we accept A100 fallthrough with degraded quality for non-critical requests. For embeddings-heavy endpoints, please ensure cold-start latency is tracked separately.
+
+Thanks — Claire
+Head of Infrastructure
+MirrorAI
+
+On Thu, Apr 16, 2026 at 09:02 Marcus Lin <marcus_lin@redwood.ai> wrote:
+> Claire —
+> 
+> Thanks for the productive conversations last week. Internal team assembled a recommended reserve mix and a short ops playbook for fallthroughs. TL;DR: memory-first posture with H100 for long-context, A100 as the balanced mid-tier, and L4 for high-concurrency embeddings/short-gen. Preliminary reserve counts & estimated run-rate are attached.
+> 
+> Action items for MirrorAI to confirm:
+> - Model variants we want pinned to H100 (please list production model names + expected max context per model).
+> - Whether Mirror wants a 25% burst buffer for the first 90 days.
+> - Priority: If you choose cost-first instead, we can propose a hybrid with fewer H100 and more A100 but will need you to accept degraded long-context p95.
+> 
+> Link to the one-page playbook and cost sheet: https://drive.redwood.com/drive/folders/DEAL-4092-MIR/sku-playbook
+> 
+> If you approve, Irene will turn this into an SOW and procurement timeline.
+> 
+> Best,
+> Marcus
+> Senior Solutions Engineer
+> Redwood Inference

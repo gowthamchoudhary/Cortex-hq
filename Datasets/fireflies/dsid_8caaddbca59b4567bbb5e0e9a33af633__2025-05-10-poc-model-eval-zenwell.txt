@@ -1,0 +1,100 @@
+POC: model evaluation & scoping - ZenWell shortlist
+
+Discovery/POC scoping focused on selecting an open-model shortlist for a medical note summarization POC. Discussed success criteria (accuracy, hallucination rate, latency SLO), workload sizing, benchmark design, multilingual needs (EN + ES + PT), and operational constraints (VPC, SOC2, KMS). Agreed next steps: Redwood to run benchmarks on 4 candidate models and share results by 2025-05-17; customer to provide 2k de-identified sample notes and a priority eval rubric.
+success criteria
+workload sizing & qps
+benchmark design & eval sets
+open-model shortlist
+multilingual/domain needs
+security & deployment constraints
+timeline & next steps
+Redwood to run latency + generation-quality benchmark on shortlist and deliver spreadsheet by 2025-05-17
+ZenWell to upload 2,000 de-identified clinical notes and priority rubric to shared S3 by 2025-05-13
+Schedule a follow-up to review results and pick model for 4-week POC (target week of 2025-05-19)
+Aisha Kapoor: send SOC2 + security checklist + example SSO SAML flow by 2025-05-12
+Marco Diaz: prepare benchmark harness (latency, top-k hallucination probes, rouge/bleu-ish automatic metrics) and baseline scripts by 2025-05-16
+Priya Raman: produce de-identified sample set (2k notes) and target labels + evaluation rubric by 2025-05-13
+Sam Ortiz: confirm network/VPC peering feasibility for private deployment by 2025-05-14
+[00:00] Aisha Kapoor: Hey everyone, thanks for joining. Quick roll call?
+[00:03] Priya Raman: Priya here – Head of ML at ZenWell.
+[00:05] Sam Ortiz: Sam, backend.
+[00:06] Lena Cho: Lena, PM.
+[00:08] Marco Diaz: Marco from Redwood (SE).
+[00:09] Aisha Kapoor: Great. Goal for today: scope the POC and pick a small open-model shortlist. We want to confirm success criteria, dataset, and timeline.
+[00:20] Priya: Cool. High level — use case is clinical note summarization: take visit notes and produce SOAP-friendly summaries and patient-facing lay summaries. Must be accurate, low hallucination, support English and Spanish, possible Portuguese later. Latency target 99th <= 1s for interactive editor, and throughput about 10 qps during business hours, burst to 50.
+[00:40] Sam: Also important — data can't leave our VPC for the Dedicated/private POC. We'll need to evaluate private deployment or at least VPC peering.
+[00:48] Marco: Ok noted. We can do Dedicated or Private (VPC). We'll scope both options in parallel but the initial benchmark can run on hosted infra then port to private.
+[00:56] Lena: Timeline — we'd like to pick the model in two weeks, run a 4-week POC after that.
+[01:02] Aisha: Makes sense. Let's talk success criteria. Marco — from an SE perspective?
+[01:06] Marco: For summarization we'd look at: automated metrics (ROUGE-L or adapted ones), but more importantly an hallucination rate measured by targeted probes, factuality checks against patient fields, and human acceptability. Target numbers: automated metric bump vs current baseline (we'll need baseline numbers — Priya?), and hallucination under 2% on our probe set for the POC to be compelling. Latency: p50 < 150ms token generation and 99th under 1s as Priya mentioned, cost per 1k tokens comparable to X (we'll show numbers).
+[01:36] Priya: Our current baseline is an internal seq2seq model — roughly ROUGE-L 32 on our dev set, hallucination probes around 8-10%. Latency for our self-hosted model is erratic at scale.
+[01:48] Aisha: Ok so we need models that increase quality and drop hallucinations. Now model shortlist. We recommend open models to start: Mistral-7B-Instruct, Falcon-40B-Instruct, Llama2-70B (if licensed), and MPT-30B-Instruct. Any constraints on size?
+[02:10] Priya: We prefer smaller if they meet quality because infra cost matters. But accuracy and hallucination reduction is primary. Spanish support is a must.
+[02:19] Marco: Quick notes on tradeoffs — Mistral 7B is very cost-effective and good on code/structured tasks but sometimes underperforms on nuanced clinical reasoning. Falcon-40B tends to be good for instruction-following, but historically shows more hallucinations unless tuned. Llama2-70B generally strong but heavier infra; licensing for commercial use needs to be checked. MPT 30B is a wildcard on clinical.
+[02:45] Priya: What about 4-bit quantized int4 runs? We want to see latency/cost tradeoffs.
+[02:51] Marco: Yes we'll run quantized runs (int8/int4) in the benchmark; expect some quality delta with int4 on some models. We'll include CPU fallback numbers too for cost comparison.
+[03:00] Sam: Any mention of Red- uh Redwood's own optimizations e.g., KV cache improvements?
+[03:04] Marco: Yeah we have continuous batching and KV cache strategies; note the transcript auto-gen sometimes shows K V cash — (laughs) — but yes those optimizations reduce per-token latency and cost in production.
+[03:16] Lena: For the benchmark, what metrics do you plan to run?
+[03:18] Marco: We'll do: ROUGE-L, ROUGE-1, a bespoke clinical factuality probe suite (we'll design ~300 targeted questions that check attributes like med lists, dosages, medications present/absent), hallucination scoring, latency percentiles (p50/p95/p99) under our target loads, throughput at batch sizes 1/4/8, and memory footprint. We'll also do multilingual quality slices: EN, ES, PT where present.
+[03:45] Priya: About the clinical probes — we'll need to map what counts as hallucination vs acceptable paraphrase. We'll provide a rubric with categories: hallucination (adds wrong med), omission (drops key med), paraphrase acceptable, privacy redaction.
+[03:58] Aisha: Great. Data handling — Priya, can you confirm samples will be de-identified?
+[04:03] Priya: Yes will be de-identified. We'll use our internal masker and then give synthetic IDs. We'll still want to ensure Redwood's handling is compliant with our DPA.
+[04:10] Aisha: We'll send the security pack, SOC2 evidence, KMS options.
+[04:14] Sam: For the private deployment, we need KMS integration (we use AWS KMS) and audit logs to S3 with retention policy.
+[04:22] Marco: We support KMS and can stream logs to your S3 with configurable retention. We'll include that in the security checklist.
+[04:30] Priya: Back to model shortlist — could we include a fine-tuned variant candidate? Maybe open instruction-finetuned Llama2 or a Llama-based tuned checkpoint?
+[04:40] Marco: We can bench vanilla checkpoints and also a tuned lightweight LoRA-style candidate if you want to include a small supervised fine-tune step during the POC. That adds time (1 week) but often helps hallucination.
+[04:51] Lena: That sounds interesting. Our product team might prefer a small supervised fine-tune if it reduces hallucinations.
+[04:56] Priya: What's the expected compute footprint for a 4-week POC if we run a 2-model pilot at ~10 qps?
+[05:03] Marco: Rough estimate: for a dedicated private pool for 2x 40B-ish models, you'd want 8x A100-80GB equivalents for steady 10 qps and burst to 50 with headroom; or we can do shared hosted dedicated with autoscaling. For smaller 7-30B models, you can get away with 2-4 GPUs depending on quantization. We'll provide a sizing spreadsheet.
+[05:26] Sam: Cost estimates please — we need to present to execs.
+[05:29] Aisha: We'll include ballpark numbers for hosted vs dedicated vs private.
+[05:32] Marco: For the benchmark we'll provide normalized cost per 1k tokens and cost per inference at observed latency.
+[05:37] Priya: Multilingual support — how do you surface language-specific regressions in the dashboard?
+[05:42] Marco: Console can slice evals by language; we can add custom tags for your samples (en_es_pt). Also we support per-model per-route dashboards with token-level cost.
+[05:50] Lena: Any concerns around HIPAA?
+[05:53] Aisha: We have enterprise compliance options, SOC2, and contractual DPA — we'll send legal templates. For PHI in the POC, private deployment is the safest path and avoids egress issues.
+[06:05] Priya: Regarding benchmarks — can we include a human evaluation slice? Maybe a small panel to rate 300 summaries for factuality and usefulness?
+[06:12] Marco: Yes. We'll set up a human evaluation workflow and can run an initial 300-sample panel. Cost is separate but reasonable.
+[06:19] Sam: For tooling — do you provide a harness to reproduce the test locally?
+[06:23] Marco: We'll provide a reproducible harness (scripts + docker images) that you can run in your env or ours. Also we'll share seed prompts, sampling configs (top-p vs top-k), temperature sweeps, and deterministic eval settings.
+[06:39] Priya: On prompt design — we have two output formats (clinical SOAP and patient-facing). Will that require separate evals?
+[06:44] Marco: Yes, we recommend separate eval buckets per output format and treat them as distinct tasks because the constraints differ (length, tone, precision).
+[06:52] Lena: Any immediate red flags on our side?
+[06:54] Marco: None besides licensing checks for Llama2-70B for commercial use and the VPC network questions Sam raised. We'll clarify both.
+[07:03] Aisha: Model shortlist we'll test: Mistral-7B-Instruct, Falcon-40B-Instruct, Llama2-70B (license permitting), MPT-30B-Instruct. We'll also include a tuned LoRA candidate for one of them if Priya's team approves.
+[07:20] Priya: Sounds good. Can you rank them for multilingual capability quickly?
+[07:24] Marco: Quick verbal rank: Llama2-70B > Falcon-40B > MPT-30B ~ Mistral-7B for Spanish, but this changes with finetune. We'll validate in the bench.
+[07:35] Sam: Will you test hallucination probes that check for fabricated medications? That's our main worry.
+[07:40] Marco: Absolutely — we'll create probes that obfuscate some fields and check if models invent data. We'll instrument precision/recall metrics for entity mention.
+[07:50] Priya: We care about deterministic behavior — e.g., same prompt should yield same med list. How will you control randomness?
+[07:55] Marco: We'll run deterministic decoding for evaluation (greedy or low-temp beam) and controlled sampling for production-like outputs. We'll record seeds and sampling settings so results are reproducible.
+[08:06] Aisha: On deployment modes — initial bench on hosted infra is fastest. Then port winning model to your VPC for a private POC. Does that align?
+[08:12] Sam: Yes but network policies must be validated first.
+[08:15] Priya: Also license: if Llama2-70B commercial license is an issue, we may deprioritize it.
+[08:20] Marco: We'll check licensing and present alternatives (e.g., Llama 2 via appropriate license or MetaContact).
+[08:26] Lena: Any performance tradeoffs with LoRA?
+[08:29] Marco: LoRA adds small runtime overhead for adapters but usually negligible; it can dramatically reduce hallucinations if trained well. Training time is short for a few epochs on 2-4 A100s.
+[08:40] Priya: What about evaluation throughput — we have 2k samples, how long will the bench run?
+[08:44] Marco: Depends on model and batch size. Rough estimate: for a 40B model at batch 8, the full run across metrics and language slices might take 6-8 hours on adequate infra. For multiple models plus quantizations maybe a day. We'll parallelize.
+[08:58] Sam: Can you commit to finishing the bench in one week?
+[09:01] Marco: We'll aim for a prioritized bench within 5 business days for the four models in the shortlist (hosted runs). Full swept runs (quantization + human eval) might extend to two weeks.
+[09:11] Aisha: Ok targets: Redwood delivers initial bench spreadsheet by 2025-05-17. Customer provides the de-id dataset and rubric by 2025-05-13. Follow-up meeting week of 2025-05-19 to choose the POC model and deployment approach.
+[09:27] Priya: Agreed. A couple of quick technical Qs — does your runtime support fused attention kernels and custom CUDA ops for Mistral?
+[09:33] Marco: Yes we have kernel selection and compile-time optimizations. We'll test kernel set per model in the bench.
+[09:39] Lena: Anything else on compliance?
+[09:41] Aisha: We'll get legal templates. Also we'll include an SOC2 attestation excerpt.
+[09:47] Sam: Network — we'll share our VPC CIDR and networking contact, but need to know what open ports Redwood needs for peering.
+[09:53] Marco: We'll send a short network checklist.
+[09:56] Priya: One last thing — can you include an evaluation of the models on redaction safety (PII/PHI leakage)?
+[10:00] Marco: Yes we'll include probes that check for hallucinated PHI and verify model doesn't introduce specific PII.
+[10:06] Aisha: Perfect. Any other questions? (brief silence)
+[10:10] Lena: No.
+[10:11] Sam: Not for now.
+[10:12] Priya: Thanks.
+[10:13] Aisha: Recap: Redwood to run host bench across four models and quant configurations, share spreadsheet by 2025-05-17; customer to provide de-id samples + rubric by 2025-05-13; next meeting week of 2025-05-19. Action items and owners on the recap email after this call.
+[10:30] Marco: I'll put the benchmark plan and initial config in the shared drive and tag Priya.
+[10:36] Aisha: Thanks everyone. Meeting adjourned.
+
+Notes on transcript quality: transcription has a few word swaps (e.g., "K V cash" for KV cache), occasional run-on sentences, and speaker overlaps.

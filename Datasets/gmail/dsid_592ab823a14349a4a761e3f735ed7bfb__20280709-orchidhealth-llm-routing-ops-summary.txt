@@ -1,0 +1,139 @@
+Post-demo: Orchid Health integration & routing / policy summary
+
+From: Ben Carter <ben@redwood.com>
+To: Elena Moroz <elena@orchidhealth.com>, Sam Turner <sam.turner@orchidhealth.com>
+Cc: Kimberly Park <kimberly@redwood.com>
+Date: Mon, 09 Jul 2028 15:04:00 -0700
+Subject: Post-demo: Orchid Health integration & routing / policy summary
+
+Hi Elena / Sam — thanks again for joining the demo this morning. Quick recap while it's fresh and a proposal for next steps so engineering can land on an integration plan. Attaching the recording and a draft spec.
+
+TL;DR (asks):
+- Confirm data residency requirement (PHI scope) and approval for Private vs Dedicated.
+- Confirm primary integration path: Embeddings + Reranker for search, Generation for appointment flow (structured output + tool-calling).
+- Initial throughput target: 25 qps peak for production search, 5 qps for booking flow; latency SLOs: 200ms p50 for reranker, 600ms p95 for generator.
+
+Integration notes from the call:
+- SDK: we suggested using our Node + Python SDKs; the quickstart in the repo will wire up auth and streaming.
+- Auth: Orchid prefers customer-managed keys (KMS) and SCIM for SSO. If PHI is in scope we'll move the control plane to Private (VPC).
+- Routing: recommended model routing per route (search -> embedding-hosted model, rerank -> dedicated higher-accuracy variant). Fallback chain: primary hosted cost-optimized model -> dedicated-reserved -> private inference pool.
+- Structured output: we prototyped a tool-calling pattern for appointment creation (slot lookup -> confirmation message). We'll provide the schema + sample prompts.
+
+Next actions (proposed):
+1) Elena: confirm PHI/data residency and if Orchid will sign the BAA (target this week).
+2) Engineering sync: Kimberly + Priyom to propose a concrete routing policy and auth flow (delivery by Wed 07/11).
+3) Pilot: 2-week sandbox with limited data and synthetic load to validate latencies and embedding quality.
+4) Commercial: I'll put a proposed committed capacity estimate once we confirm the fallback policy and region.
+
+Attachments: orchid_integration_spec.pdf, demo-recording.mp4
+
+Thanks — Ben
+Ben Carter
+Enterprise Solutions | Redwood Inference
+
+From: Elena Moroz <elena@orchidhealth.com>
+To: Ben Carter <ben@redwood.com>, Sam Turner <sam.turner@orchidhealth.com>
+Cc: Kimberly Park <kimberly@redwood.com>
+Date: Mon, 09 Jul 2028 17:26:00 -07:00
+Subject: Re: Post-demo: Orchid Health integration & routing / policy summary
+
+Thanks Ben — great demo. A few clarifications from our side:
+
+1) Data residency / PHI: yes, we'll need a BAA. Any inference that uses identifiable patient data must remain in our VPC/Private deployment. Non-PHI telemetry for observability is OK to land in hosted if anonymized.
+2) Throughput: 25 qps for semantic search is accurate for our peak windows; we can start lower for the pilot.
+3) Reranker: accuracy is priority for search; we're willing to trade a bit of latency for fewer false positives on clinical content.
+
+Constraints:
+- Procurement needs a one-page T&amp;C summary and an initial SOW estimate for a Private deployment.
+- Security: we require SOC2 evidence and a list of who at Redwood will have access to audit logs.
+
+We'll confirm internal PD by Tue EOD. Once we confirm the BAA stance I can push procurement to engage on the SOW.
+
+—Elena
+CTO, Orchid Health
+
+From: Kimberly Park <kimberly@redwood.com>
+To: Elena Moroz <elena@orchidhealth.com>, Ben Carter <ben@redwood.com>, Sam Turner <sam.turner@orchidhealth.com>
+Cc: Priyom Das <priyom@redwood.com>
+Date: Tue, 10 Jul 2028 09:12:00 -07:00
+Subject: Re: Post-demo: Orchid Health integration & routing / policy summary
+
+Elena — thanks for the quick note. From a tech-ops standpoint I wanted to surface a few implementation details so your engineers can eyeball feasibility before we draft the SOW:
+
+Auth / SDK setup:
+- We support two auth flows for Private: 1) customer-managed API keys provisioned into your KMS + mTLS between your VPC and agent nodes; 2) OIDC with SCIM provisioning for user-level access.
+- SDKs: Node (>=16) and Python (>=3.9) have a built-in streaming client and structured-output helper. We'll share the example repo (link in related_links).
+
+Embedding / Reranker path:
+- Indexing: our recommended flow is on-the-fly embeddings at ingest (using a cost-optimized embedding model) with a nightly re-embed job for changed content.
+- Reranker: use a dedicated higher-capacity model pinned to the rerank route. We'll recommend a quantized 8-bit variant for cost if you tolerate marginal quality difference; otherwise we can run a 16-bit fallthrough.
+
+Model routing / policy considerations (high level):
+- Route-level policy: map routes to model classes (search-embed, search-rerank, booking-gen).
+- Cost policy: per-route unit-cost threshold that triggers routing to a cheaper model variant when average cost/token exceeds X over a 5-minute window.
+- Latency policy: p95 latency SLO configured per route; if p95 exceeds threshold and fallback capacity exists, automatic shift to lower-latency model variants or regionally closer nodes.
+- Fallback chain example: primary (hosted-accurate) -> cost-fallback (hosted-quantized) -> reserved-dedicated -> private-onprem. Fail-open behavior can be disabled for PHI routes.
+
+Attachments: I'll push a draft routing-policy-draft.yaml with concrete thresholds to the thread by tomorrow morning.
+
+Kimberly Park
+Principal Solutions Engineer | Redwood Inference
+
+From: Priyom Das <priyom@redwood.com>
+To: Elena Moroz <elena@orchidhealth.com>, Kimberly Park <kimberly@redwood.com>, Ben Carter <ben@redwood.com>
+Date: Tue, 10 Jul 2028 13:46:00 -07:00
+Subject: Re: Post-demo: Orchid Health integration & routing / policy summary
+
+Elena / team — following up with a concise architecture proposal (summary below) to make the integration operational for a 2-week pilot. I'll drop the YAML and a sample Helm chart in the repo.
+
+Architecture summary:
+- Ingress: SDK clients call Redwood SDK; SDK authenticates with short-lived keys (rotated via your KMS) for Private.
+- Inference plane: split by model-function: embeddings cluster (cpu+gpu mixed), rerank cluster (gpu-accelerated, reserved capacity), generator cluster (gpu, burst autoscale).
+- Cache: prefix / KV cache for session-level tokens and common embeddings; TTL = 24h for embeddings cache in pilot.
+
+Model routing policy (concrete):
+- Routes:
+  * /search/embed -> model: emb-small-v1 (hosted)
+  * /search/rerank -> model: rerank-xxl (dedicated)
+  * /booking/create -> model: gen-structured-v2 (private allowed)
+- Policy triggers:
+  * cost_threshold_usd_per_minute: 50 (per-route) -> switch to emb-small-q8
+  * latency_p95_ms: 650 -> if exceeded for 2 consecutive windows, route to regional-closest pool or dedicated fallback
+  * PHI_flag: true/false per-route (if true, fail-open = false and routing restricted to dedicated/private pools)
+- Fallback chain (priority order): primary -> quantized-hosted -> reserved-dedicated -> private.
+
+Observability & evals:
+- We'll ship an eval harness that replays a 5k sample of your queries to compare reranker precision/recall across model variants.
+- Cost reporting: token-level billing and per-route cost aggregation; set alerts at $X/day for pilot.
+
+Pilot timeline (proposed):
+- Wed 07/11: deliver routing-policy-draft.yaml + Helm chart.
+- Thu 07/12: onboarding call with Orchid infra (30m) to wire KMS and network peering.
+- Mon 07/16: begin 2-week pilot traffic (synthetic ramp to 10 qps then to 25 qps).
+
+I'll attach the routing-policy-draft.yaml to the repo (and to this thread). Happy to iterate on thresholds.
+
+— Priyom
+Senior Solutions Engineer | Redwood Inference
+
+From: Ben Carter <ben@redwood.com>
+To: Elena Moroz <elena@orchidhealth.com>, Priyom Das <priyom@redwood.com>, Kimberly Park <kimberly@redwood.com>
+Date: Thu, 11 Jul 2028 09:18:00 -07:00
+Subject: Re: Post-demo: Orchid Health integration & routing / policy summary
+
+Perfect — thanks everyone. Elena, appreciate the PHI confirmation note earlier. Two quick commercial/ops items before we lock the pilot: 
+
+1) I'll send a one-page SOW + BAA summary to procurement (DocuSign link will be live today). Please confirm the procurement contact for Orchid so I can add them to the envelope.
+2) For the pilot commitment: we estimate a nominal reserved capacity token (~$3k/mo equivalent) while you're in Private pilot to ensure deterministic latency. I'll include a pricing appendix in the SOW for the different fallback behaviors (quantized fallback vs reserved-dedicated).
+
+Action list (final):
+- Ben: send SOW + DocuSign (today).
+- Priyom: push routing-policy-draft.yaml and Helm chart to the GitHub quickstart (by EOD Wed).
+- Kimberly: send SOC2 evidence link and names for audit-log access (for procurement).
+- Elena: procurement contact and BAA confirmation (by Tue EOD).
+
+I'll follow up with a calendar invite for the Thu onboarding call once the repo artifacts are live.
+
+Thanks — Ben
+
+
