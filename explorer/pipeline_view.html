@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Cortex HydraDB Pipeline</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: #202124;
+      background: #f6f7f9;
+    }
+    header {
+      padding: 24px 32px 12px;
+      background: #ffffff;
+      border-bottom: 1px solid #dfe3e8;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 28px;
+      font-weight: 700;
+    }
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 24px 20px 40px;
+    }
+    section {
+      background: #ffffff;
+      border: 1px solid #dfe3e8;
+      border-radius: 8px;
+      padding: 20px;
+      margin-bottom: 18px;
+    }
+    h2 {
+      margin: 0 0 12px;
+      font-size: 18px;
+    }
+    code {
+      background: #eef1f4;
+      border-radius: 4px;
+      padding: 2px 5px;
+    }
+    pre {
+      overflow-x: auto;
+      background: #111827;
+      color: #f9fafb;
+      border-radius: 8px;
+      padding: 14px;
+      line-height: 1.45;
+    }
+    .note {
+      color: #5f6368;
+      margin: 0;
+    }
+    .mermaid {
+      display: flex;
+      justify-content: center;
+      overflow-x: auto;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Cortex HydraDB Pipeline</h1>
+    <p class="note">A runnable map of the ingestion, resolution, temporal, reasoning, and inspection flow.</p>
+  </header>
+  <main>
+    <section>
+      <h2>Pipeline Diagram</h2>
+      <div class="mermaid">
+flowchart LR
+  A[EnterpriseRAG-Bench Raw Sources<br>Fireflies / Gmail / Slack / Jira / GitHub] --> B[ingestion/normalize.py<br>RawDocument]
+  B --> C[extraction/extract.py<br>Entities / Relations / Facts]
+  C --> D[graph/ingest_to_hydradb.py<br>HydraDB graph_payload]
+  D --> E[(HydraDB<br>Entity / FactState / Relations)]
+
+  E --> F[resolution/dedup.py<br>Near-duplicate docs]
+  E --> G[resolution/entity_resolution.py<br>Merge candidate entities]
+  E --> H[temporal/truth_discovery.py<br>Learn authority_weight]
+  H --> I[temporal/conflict_cascade.py<br>Current / Superseded / Disputed]
+  G --> I
+  I --> E
+
+  E --> J[reasoning/answer_question.py<br>Graph-grounded answers]
+  J --> K[reasoning/calibrate_threshold.py<br>Calibrated abstention]
+  K --> J
+
+  E --> L[explorer/knowledge_explorer.py<br>Inspect entity facts/history]
+  E --> M[eval/baseline.py<br>Partial-corpus baseline]
+      </div>
+    </section>
+
+    <section>
+      <h2>Typical Run Order</h2>
+      <pre><code>python ingestion/normalize.py Datasets/gmail --source gmail
+python extraction/extract.py --sample-file path\to\normalized_sample.json --source gmail --limit 10
+python graph\ingest_to_hydradb.py path\to\extraction_output.json --limit 30
+
+python resolution\entity_resolution.py
+python temporal\truth_discovery.py --iterations 8
+python temporal\conflict_cascade.py --use-learned-authority
+
+python reasoning\answer_question.py "Why is Atlas delayed?" --verbose
+python -m streamlit run explorer\knowledge_explorer.py</code></pre>
+    </section>
+
+    <section>
+      <h2>Ablation Toggles</h2>
+      <pre><code>python resolution\entity_resolution.py --disabled
+python temporal\conflict_cascade.py --disabled
+python reasoning\answer_question.py "Why is Atlas delayed?" --disable-abstention
+python reasoning\answer_question.py "Why is Atlas delayed?" --disable-graph-reasoning --disable-abstention</code></pre>
+    </section>
+  </main>
+  <script type="module">
+    import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+    mermaid.initialize({ startOnLoad: true, theme: "default", securityLevel: "loose" });
+  </script>
+</body>
+</html>

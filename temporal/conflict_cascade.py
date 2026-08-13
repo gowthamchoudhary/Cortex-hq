@@ -32,6 +32,7 @@ AUTHORITY_WEIGHTS: dict[str, dict[str, float]] = {
 }
 AUTHORITY_MARGIN = 0.15
 VALID_TO_SENTINEL = 9_999_999_999
+USE_LEARNED_AUTHORITY = False
 
 
 @dataclass
@@ -180,6 +181,8 @@ def source_doc_id(fact: dict[str, Any]) -> str:
 
 def authority_weight(fact: dict[str, Any]) -> float:
     meta = metadata(fact)
+    if USE_LEARNED_AUTHORITY:
+        return float(meta.get("authority_weight") or 0.3)
     source_type = doc_source_type(fact)
     predicate = str(meta.get("predicate") or "").lower()
     source_weights = AUTHORITY_WEIGHTS.get(source_type, {})
@@ -399,7 +402,15 @@ def apply_decision(
             )
 
 
-def run_cascade(database: str, dry_run: bool, limit_groups: int | None, disabled: bool = False) -> dict[str, Any]:
+def run_cascade(
+    database: str,
+    dry_run: bool,
+    limit_groups: int | None,
+    disabled: bool = False,
+    use_learned_authority: bool = False,
+) -> dict[str, Any]:
+    global USE_LEARNED_AUTHORITY
+    USE_LEARNED_AUTHORITY = use_learned_authority
     client = HydraDB(token=get_api_key())
     all_sources = list_all_sources(client, database)
     fact_states = [
@@ -427,7 +438,14 @@ def run_cascade(database: str, dry_run: bool, limit_groups: int | None, disabled
         method_counts.increment(decision.method)
         if len(facts) > 1:
             conflict_groups += 1
-        apply_decision(client, database, decision, facts_by_id, dry_run, apply_authority_weight=not disabled)
+        apply_decision(
+            client,
+            database,
+            decision,
+            facts_by_id,
+            dry_run,
+            apply_authority_weight=not disabled and not use_learned_authority,
+        )
 
     return {
         "fact_states_processed": len(fact_states),
@@ -439,6 +457,7 @@ def run_cascade(database: str, dry_run: bool, limit_groups: int | None, disabled
         "resolved_via_last_write_wins": method_counts["last_write_wins"],
         "single_fact_groups_marked_current": method_counts["single"],
         "disputed_groups": method_counts["disputed"],
+        "use_learned_authority": use_learned_authority,
         "examples": [asdict(decision) for decision in decisions if decision.method != "single"][:3],
     }
 
@@ -457,10 +476,17 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit-groups", type=int, default=None)
     parser.add_argument("--disabled", action="store_true")
+    parser.add_argument("--use-learned-authority", action="store_true")
     args = parser.parse_args()
 
     try:
-        summary = run_cascade(args.database, args.dry_run, args.limit_groups, args.disabled)
+        summary = run_cascade(
+            args.database,
+            args.dry_run,
+            args.limit_groups,
+            args.disabled,
+            args.use_learned_authority,
+        )
         print("Temporal conflict cascade summary:")
         print(f"- FactStates processed: {summary['fact_states_processed']}")
         print(f"- groups processed: {summary['groups_processed']}")
@@ -471,6 +497,7 @@ def main() -> int:
         print(f"- resolved via last-write-wins: {summary['resolved_via_last_write_wins']}")
         print(f"- left disputed: {summary['disputed_groups']}")
         print(f"- single FactState groups marked current: {summary['single_fact_groups_marked_current']}")
+        print(f"- using learned authority weights: {summary['use_learned_authority']}")
         print("Examples:")
         print(json.dumps(summary["examples"], indent=2, default=str))
         return 0

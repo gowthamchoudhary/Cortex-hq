@@ -39,6 +39,7 @@ GROQ_CHAT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 ENTITY_MATCH_THRESHOLD = 0.75
 ABSTENTION_THRESHOLD = 0.4
+CALIBRATION_PATH = PROJECT_ROOT / "reasoning" / "calibration.json"
 
 
 @dataclass
@@ -70,6 +71,17 @@ def get_api_key() -> str:
     if not api_key:
         raise RuntimeError("HYDRADB_API_KEY environment variable is required.")
     return api_key
+
+
+def calibrated_abstention_threshold(path: Path = CALIBRATION_PATH) -> float:
+    if not path.exists():
+        return ABSTENTION_THRESHOLD
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        threshold = float(data.get("recommended_threshold", ABSTENTION_THRESHOLD))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        return ABSTENTION_THRESHOLD
+    return max(0.0, min(1.0, threshold))
 
 
 def to_plain_data(value: Any) -> Any:
@@ -545,8 +557,9 @@ def answer_question(
     confidence, breakdown = compute_confidence(links, subgraph)
     packet = context_packet(question, links, subgraph, confidence)
     evidence = packet["evidence_doc_ids"] or fallback_doc_ids
+    abstention_threshold = calibrated_abstention_threshold()
 
-    if not disable_abstention and (confidence < ABSTENTION_THRESHOLD or not subgraph["facts"]):
+    if not disable_abstention and (confidence < abstention_threshold or not subgraph["facts"]):
         result = {
             "answer": "I couldn't find sufficient evidence in the connected data to answer this.",
             "evidence": [],
@@ -566,6 +579,7 @@ def answer_question(
             "query_understanding": understanding,
             "links": [asdict(link) for link in links],
             "confidence_breakdown": breakdown,
+            "abstention_threshold": abstention_threshold,
             "context_packet": packet,
             "disable_abstention": disable_abstention,
             "disable_graph_reasoning": disable_graph_reasoning,
