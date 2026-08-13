@@ -345,11 +345,19 @@ def choose_canonical(cluster: list[str], entities_by_id: dict[str, dict[str, Any
     return max(cluster, key=lambda entity_id: metadata_completeness(entities_by_id[entity_id]))
 
 
-def update_source_metadata(client: HydraDB, database: str, source_id: str, meta: dict[str, Any], extra: dict[str, Any]) -> None:
+def update_source_metadata(
+    client: HydraDB,
+    database: str,
+    source_id: str,
+    meta: dict[str, Any],
+    extra: dict[str, Any],
+    collection: str | None,
+) -> None:
     try:
         client.context.update_source_metadata(
             source_id,
             database=database,
+            collection=collection,
             database_metadata=meta,
             additional_metadata=extra,
         )
@@ -357,6 +365,7 @@ def update_source_metadata(client: HydraDB, database: str, source_id: str, meta:
         client.context.update_source_metadata(
             source_id,
             database=database,
+            collection=collection,
             tenant_metadata=meta,
             additional_metadata=extra,
         )
@@ -368,7 +377,7 @@ def mark_entity_resolved(client: HydraDB, database: str, entity: dict[str, Any],
     meta["state"] = "resolved"
     extra["merged_into"] = canonical_id
     if not dry_run:
-        update_source_metadata(client, database, entity["id"], meta, extra)
+        update_source_metadata(client, database, entity["id"], meta, extra, entity.get("sub_tenant_id"))
 
 
 def repoint_fact_state(client: HydraDB, database: str, fact: dict[str, Any], canonical_id: str, dry_run: bool) -> None:
@@ -376,7 +385,7 @@ def repoint_fact_state(client: HydraDB, database: str, fact: dict[str, Any], can
     extra = additional_metadata(fact)
     meta["subject_id"] = canonical_id
     if not dry_run:
-        update_source_metadata(client, database, fact["id"], meta, extra)
+        update_source_metadata(client, database, fact["id"], meta, extra, fact.get("sub_tenant_id"))
 
 
 def ingest_pending_merge(client: HydraDB, database: str, score: PairScore, entities_by_id: dict[str, dict[str, Any]], dry_run: bool) -> str:
