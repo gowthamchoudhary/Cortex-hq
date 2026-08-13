@@ -15,6 +15,7 @@ DATABASE_METADATA_SCHEMA = [
     {"name": "subject_id", "data_type": "VARCHAR", "max_length": 256, "enable_match": True},
     {"name": "predicate", "data_type": "VARCHAR", "max_length": 256, "enable_match": True},
     {"name": "source_doc_id", "data_type": "VARCHAR", "max_length": 256, "enable_match": True},
+    {"name": "doc_source_type", "data_type": "VARCHAR", "max_length": 256, "enable_match": True},
     {"name": "record_type", "data_type": "VARCHAR", "max_length": 256, "enable_match": True},
     {"name": "valid_from", "data_type": "INT64"},
     {"name": "valid_to", "data_type": "INT64"},
