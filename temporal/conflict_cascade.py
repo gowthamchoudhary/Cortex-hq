@@ -306,6 +306,21 @@ def decide_group(key: tuple[str, str], facts: list[dict[str, Any]]) -> CascadeDe
     )
 
 
+def decide_last_write_wins(key: tuple[str, str], facts: list[dict[str, Any]]) -> CascadeDecision:
+    sorted_facts = sorted(facts, key=fact_valid_from)
+    current = sorted_facts[-1]
+    superseded = [fact for fact in sorted_facts if fact["id"] != current["id"]]
+    return CascadeDecision(
+        group_key=key,
+        method="single" if len(sorted_facts) == 1 else "last_write_wins",
+        current_ids=[current["id"]],
+        superseded_ids=[fact["id"] for fact in superseded],
+        disputed_ids=[],
+        reasoning=f"{current['id']} wins by latest valid_from={fact_valid_from(current)}.",
+        fact_summaries=[summarize_fact(fact) for fact in sorted_facts],
+    )
+
+
 def update_source_metadata(
     client: HydraDB,
     database: str,
@@ -338,25 +353,28 @@ def apply_decision(
     decision: CascadeDecision,
     facts_by_id: dict[str, dict[str, Any]],
     dry_run: bool,
+    apply_authority_weight: bool = True,
 ) -> None:
     current_id = decision.current_ids[0] if decision.current_ids else None
     group_facts = [facts_by_id[fact_id] for fact_id in decision.current_ids + decision.superseded_ids + decision.disputed_ids]
     corroboration_by_value: dict[str, int] = {}
     buckets: list[str] = []
-    value_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
-    for fact in group_facts:
-        value_groups[value_bucket(fact_value(fact), buckets)].append(fact)
-    for bucket, facts in value_groups.items():
-        corroboration_by_value[bucket] = independent_source_count(facts)
+    if apply_authority_weight:
+        value_groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for fact in group_facts:
+            value_groups[value_bucket(fact_value(fact), buckets)].append(fact)
+        for bucket, facts in value_groups.items():
+            corroboration_by_value[bucket] = independent_source_count(facts)
 
     for fact in group_facts:
         meta = metadata(fact)
         extra = additional_metadata(fact)
-        meta["authority_weight"] = authority_weight(fact)
-        meta["corroboration_count"] = corroboration_by_value.get(
-            value_bucket(fact_value(fact), buckets),
-            1,
-        )
+        if apply_authority_weight:
+            meta["authority_weight"] = authority_weight(fact)
+            meta["corroboration_count"] = corroboration_by_value.get(
+                value_bucket(fact_value(fact), buckets),
+                1,
+            )
 
         if fact["id"] in decision.current_ids:
             meta["state"] = "current"
@@ -381,7 +399,7 @@ def apply_decision(
             )
 
 
-def run_cascade(database: str, dry_run: bool, limit_groups: int | None) -> dict[str, Any]:
+def run_cascade(database: str, dry_run: bool, limit_groups: int | None, disabled: bool = False) -> dict[str, Any]:
     client = HydraDB(token=get_api_key())
     all_sources = list_all_sources(client, database)
     fact_states = [
@@ -404,12 +422,12 @@ def run_cascade(database: str, dry_run: bool, limit_groups: int | None) -> dict[
     for key, facts in sorted(grouped.items()):
         if limit_groups is not None and len(decisions) >= limit_groups:
             break
-        decision = decide_group(key, facts)
+        decision = decide_last_write_wins(key, facts) if disabled else decide_group(key, facts)
         decisions.append(decision)
         method_counts.increment(decision.method)
         if len(facts) > 1:
             conflict_groups += 1
-        apply_decision(client, database, decision, facts_by_id, dry_run)
+        apply_decision(client, database, decision, facts_by_id, dry_run, apply_authority_weight=not disabled)
 
     return {
         "fact_states_processed": len(fact_states),
@@ -418,6 +436,7 @@ def run_cascade(database: str, dry_run: bool, limit_groups: int | None) -> dict[
         "resolved_via_authority": method_counts["authority"],
         "resolved_via_corroboration": method_counts["corroboration"],
         "resolved_via_recency": method_counts["recency"],
+        "resolved_via_last_write_wins": method_counts["last_write_wins"],
         "single_fact_groups_marked_current": method_counts["single"],
         "disputed_groups": method_counts["disputed"],
         "examples": [asdict(decision) for decision in decisions if decision.method != "single"][:3],
@@ -437,10 +456,11 @@ def main() -> int:
     parser.add_argument("--database", default=DATABASE_NAME)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit-groups", type=int, default=None)
+    parser.add_argument("--disabled", action="store_true")
     args = parser.parse_args()
 
     try:
-        summary = run_cascade(args.database, args.dry_run, args.limit_groups)
+        summary = run_cascade(args.database, args.dry_run, args.limit_groups, args.disabled)
         print("Temporal conflict cascade summary:")
         print(f"- FactStates processed: {summary['fact_states_processed']}")
         print(f"- groups processed: {summary['groups_processed']}")
@@ -448,6 +468,7 @@ def main() -> int:
         print(f"- resolved via authority: {summary['resolved_via_authority']}")
         print(f"- resolved via corroboration: {summary['resolved_via_corroboration']}")
         print(f"- resolved via recency: {summary['resolved_via_recency']}")
+        print(f"- resolved via last-write-wins: {summary['resolved_via_last_write_wins']}")
         print(f"- left disputed: {summary['disputed_groups']}")
         print(f"- single FactState groups marked current: {summary['single_fact_groups_marked_current']}")
         print("Examples:")

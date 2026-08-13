@@ -392,6 +392,23 @@ def fallback_links(question: str, entities: list[dict[str, Any]]) -> tuple[list[
     ], retrieved_doc_ids
 
 
+def fallback_documents(question: str) -> tuple[list[dict[str, Any]], list[str]]:
+    documents = load_documents([("fireflies", DEFAULT_FIRE_FLIES_DIR), ("gmail", DEFAULT_GMAIL_DIR)])
+    doc_frequencies = build_doc_frequencies(documents)
+    retrieved = retrieve(question, documents, doc_frequencies, top_k=5)
+    docs = [
+        {
+            "source_id": document.source_id,
+            "source": document.source,
+            "timestamp": document.timestamp,
+            "content": document.content[:2500],
+            "score": score,
+        }
+        for document, score in retrieved
+    ]
+    return docs, [doc["source_id"] for doc in docs]
+
+
 def compute_confidence(links: list[LinkResult], subgraph: dict[str, Any]) -> tuple[float, dict[str, Any]]:
     facts = subgraph["facts"]
     relations = subgraph["relations"]
@@ -451,6 +468,7 @@ def context_packet(question: str, links: list[LinkResult], subgraph: dict[str, A
         "current_state": facts,
         "entities": entities,
         "relations": subgraph["relations"],
+        "fallback_documents": subgraph.get("fallback_documents", []),
         "evidence_doc_ids": sorted({fact["source_doc_id"] for fact in facts if fact["source_doc_id"]}),
         "confidence": confidence,
     }
@@ -479,6 +497,8 @@ def answer_question(
     model: str | None,
     timeout_seconds: int,
     verbose: bool,
+    disable_abstention: bool = False,
+    disable_graph_reasoning: bool = False,
 ) -> dict[str, Any]:
     load_dotenv()
     client = HydraDB(token=get_api_key())
@@ -488,25 +508,45 @@ def answer_question(
     mentions = understanding["target_entity_mentions"] or [question]
     links = link_entity_mentions(mentions, entities)
     fallback_doc_ids: list[str] = []
+    fallback_context: list[dict[str, Any]] = []
 
-    if all(link.no_anchor for link in links):
+    if disable_graph_reasoning:
+        fallback_context, fallback_doc_ids = fallback_documents(question)
+        fallback, _ = fallback_links(question, entities)
+        if fallback:
+            links = fallback
+        subgraph = {
+            "entities": [],
+            "facts": [],
+            "relations": [],
+            "fallback_documents": fallback_context,
+        }
+    elif all(link.no_anchor for link in links):
         fallback, fallback_doc_ids = fallback_links(question, entities)
         if fallback:
             links = fallback
-
-    subgraph = expand_subgraph(
-        client,
-        database,
-        links,
-        all_sources,
-        understanding["time_scope"],
-        hops=2,
-    )
+        subgraph = expand_subgraph(
+            client,
+            database,
+            links,
+            all_sources,
+            understanding["time_scope"],
+            hops=2,
+        )
+    else:
+        subgraph = expand_subgraph(
+            client,
+            database,
+            links,
+            all_sources,
+            understanding["time_scope"],
+            hops=2,
+        )
     confidence, breakdown = compute_confidence(links, subgraph)
     packet = context_packet(question, links, subgraph, confidence)
     evidence = packet["evidence_doc_ids"] or fallback_doc_ids
 
-    if confidence < ABSTENTION_THRESHOLD or not subgraph["facts"]:
+    if not disable_abstention and (confidence < ABSTENTION_THRESHOLD or not subgraph["facts"]):
         result = {
             "answer": "I couldn't find sufficient evidence in the connected data to answer this.",
             "evidence": [],
@@ -527,6 +567,8 @@ def answer_question(
             "links": [asdict(link) for link in links],
             "confidence_breakdown": breakdown,
             "context_packet": packet,
+            "disable_abstention": disable_abstention,
+            "disable_graph_reasoning": disable_graph_reasoning,
         }
     return result
 
@@ -539,6 +581,8 @@ def main() -> int:
     parser.add_argument("--model", default=None)
     parser.add_argument("--timeout-seconds", type=int, default=90)
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument("--disable-abstention", action="store_true")
+    parser.add_argument("--disable-graph-reasoning", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -549,6 +593,8 @@ def main() -> int:
             model=args.model,
             timeout_seconds=args.timeout_seconds,
             verbose=args.verbose,
+            disable_abstention=args.disable_abstention,
+            disable_graph_reasoning=args.disable_graph_reasoning,
         )
         print(json.dumps(result, indent=2))
         return 0

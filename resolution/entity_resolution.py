@@ -550,7 +550,12 @@ def main() -> int:
     parser.add_argument("--database", default=DATABASE_NAME)
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--disabled", action="store_true")
     args = parser.parse_args()
+
+    if args.disabled:
+        print("Entity resolution disabled; candidate entities left unmerged.")
+        return 0
 
     try:
         summary = run_resolution(args.database, args.limit, args.dry_run)
