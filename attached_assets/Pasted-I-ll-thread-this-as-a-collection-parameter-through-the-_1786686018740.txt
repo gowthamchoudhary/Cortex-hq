@@ -1,0 +1,76 @@
+I’ll thread this as a collection parameter through the existing helper functions first, then wire each CLI/UI entry point. I’m going to inspect the HydraDB call sites so the patch stays purely about scoping and doesn’t reshape behavior.
+
+
+
+
+I see the main call sites: context.ingest, context.status, context.list, context.relations, context.update_source_metadata, plus one client.query in reasoning maybe none? I’m checking the SDK surface for collection creation so schema/create_collection.py uses the actual method name if available.
+
+
+
+
+The SDK exposes databases.collections(...) for listing, but not an obvious create_collection helper. I’m peeking at the installed SDK package to see whether collection creation is available under raw endpoints or created implicitly by ingest.
+
+
+
+
+PowerShell doesn’t like bash-style heredocs, but I’ve got the package path. I’ll use rg over the installed SDK source for collection endpoints.
+
+
+
+
+Good, the SDK supports collection= on every call we need. For collection creation, it appears collections are listed via databases.collections and likely created lazily by first scoped ingest, so I’ll make create_collection.py idempotently ensure the collection by writing a tiny marker record if it isn’t listed.
+
+
+
+
+The existing update functions were often reusing each source’s returned sub_tenant_id; I’m replacing that with the explicit selected collection so cross-collection operations can’t accidentally bleed into the wrong brain.
+
+
+
+
+Edited file
+
+ingest_to_hydradb.py+8-6
+
+
+
+
+
+
+
+
+
+
+Ingestion is now scoped for both POST and status polling. Next I’m threading the collection through entity resolution’s listing, pair scoring, merge logging, and metadata updates.
+
+
+
+
+Edited entity_resolution.py+25-18
+
+
+
+
+
+
+Entity resolution is patched. I’m moving through dedup and the temporal scripts now; dedup only needs collection for the HydraDB-backed mode, while local mode remains file-based.
+
+
+
+
+Edited files
+
+
+
+
+
+Edited 7 files+78-46Review changesUndoReview
+
+graph/ingest_to_hydradb.pygraph/ingest_to_hydradb.py+8-6
+resolution/entity_resolution.pyresolution/entity_resolution.py+25-18
+resolution/dedup.pyresolution/dedup.py+13-10
+temporal/conflict_cascade.pytemporal/conflict_cascade.py+9-3
+temporal/truth_discovery.pytemporal/truth_discovery.py+7-3
+reasoning/answer_question.pyreasoning/answer_question.py+12-6
+reasoning/calibrate_threshold.pyreasoning/calibrate_threshold.py+4-0
+Collapse files

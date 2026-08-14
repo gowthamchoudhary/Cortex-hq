@@ -110,11 +110,17 @@ def valid_from(fact: dict[str, Any]) -> int:
         return 0
 
 
-def list_all_sources(client: HydraDB, database: str) -> list[dict[str, Any]]:
+def list_all_sources(client: HydraDB, database: str, collection: str) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
     page = 1
     while True:
-        response = client.context.list(database=database, type="knowledge", page=page, page_size=PAGE_SIZE)
+        response = client.context.list(
+            database=database,
+            collection=collection,
+            type="knowledge",
+            page=page,
+            page_size=PAGE_SIZE,
+        )
         data = to_plain_data(response.data)
         sources.extend(data.get("sources") or [])
         pagination = data.get("pagination") or {}
@@ -125,9 +131,9 @@ def list_all_sources(client: HydraDB, database: str) -> list[dict[str, Any]]:
 
 
 @st.cache_data(ttl=60)
-def cached_sources(database: str, api_key: str) -> list[dict[str, Any]]:
+def cached_sources(database: str, collection: str, api_key: str) -> list[dict[str, Any]]:
     client = HydraDB(token=api_key)
-    return list_all_sources(client, database)
+    return list_all_sources(client, database, collection)
 
 
 def entity_terms(entity: dict[str, Any]) -> list[str]:
@@ -175,9 +181,21 @@ def fact_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return rows
 
 
-def relation_triplets(client: HydraDB, database: str, entity_id: str, limit: int = 50) -> list[dict[str, Any]]:
+def relation_triplets(
+    client: HydraDB,
+    database: str,
+    collection: str,
+    entity_id: str,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
     try:
-        response = client.context.relations(database=database, id=entity_id, type="knowledge", limit=limit)
+        response = client.context.relations(
+            database=database,
+            collection=collection,
+            id=entity_id,
+            type="knowledge",
+            limit=limit,
+        )
     except Exception:
         return []
     data = to_plain_data(response.data)
@@ -240,13 +258,14 @@ def main() -> None:
     st.title("Knowledge Explorer")
 
     database = st.sidebar.text_input("Database", DATABASE_NAME)
+    collection = st.sidebar.text_input("Collection", "benchmark-eval")
     refresh = st.sidebar.button("Refresh data")
     if refresh:
         cached_sources.clear()
 
     try:
         api_key = get_api_key()
-        all_sources = cached_sources(database, api_key)
+        all_sources = cached_sources(database, collection, api_key)
     except Exception as exc:
         st.error(f"Could not load HydraDB data: {exc}")
         return
@@ -304,7 +323,7 @@ def main() -> None:
     st.subheader("1-Hop Related Entities")
     client = HydraDB(token=api_key)
     related = []
-    for triplet in relation_triplets(client, database, entity_id):
+    for triplet in relation_triplets(client, database, collection, entity_id):
         source_id, target_id = relation_entities(triplet)
         neighbor_id = target_id if source_id == entity_id else source_id if target_id == entity_id else None
         if not neighbor_id:
