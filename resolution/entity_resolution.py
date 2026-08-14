@@ -13,8 +13,9 @@ from collections import defaultdict
 from dataclasses import dataclass
 from itertools import combinations
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
+import httpx
 from hydra_db import HydraDB
 
 
@@ -30,6 +31,8 @@ PENDING_THRESHOLD = 0.60
 VALID_TO_SENTINEL = 9_999_999_999
 POLL_INTERVAL_SECONDS = 5
 POLL_TIMEOUT_SECONDS = 300
+RATE_LIMIT_RETRIES = 3
+RATE_LIMIT_BACKOFF_SECONDS = 5.0
 EMAIL_RE = re.compile(r"\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b", re.IGNORECASE)
 USERNAME_RE = re.compile(r"(?<!\w)@[A-Z0-9._-]+", re.IGNORECASE)
 
@@ -228,6 +231,42 @@ def block_entities(entities: list[dict[str, Any]]) -> list[set[str]]:
     return deduped_blocks
 
 
+def doc_source_type(entity: dict[str, Any]) -> str:
+    return str(
+        metadata(entity).get("doc_source_type")
+        or additional_metadata(entity).get("doc_source_type")
+        or ""
+    ).lower()
+
+
+def split_oversized_blocks(
+    blocks: list[set[str]],
+    entities_by_id: dict[str, dict[str, Any]],
+    max_block_size: int,
+) -> list[set[str]]:
+    safe_blocks: list[set[str]] = []
+    for block in blocks:
+        if len(block) <= max_block_size:
+            safe_blocks.append(block)
+            continue
+
+        print(f"Block too large ({len(block)} entities), applying stricter sub-blocking")
+        strict_groups: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for entity_id in block:
+            entity = entities_by_id[entity_id]
+            strict_groups[(first_token(canonical_name(entity)), doc_source_type(entity))].add(entity_id)
+
+        for strict_group in strict_groups.values():
+            if len(strict_group) <= 1:
+                continue
+            ordered_ids = sorted(strict_group)
+            for start in range(0, len(ordered_ids), max_block_size):
+                chunk = set(ordered_ids[start : start + max_block_size])
+                if len(chunk) > 1:
+                    safe_blocks.append(chunk)
+    return safe_blocks
+
+
 def jaro_similarity(left: str, right: str) -> float:
     if left == right:
         return 1.0
@@ -296,21 +335,75 @@ def fact_signature(fact: dict[str, Any]) -> tuple[str, str]:
     return str(meta.get("predicate") or ""), str(meta.get("source_doc_id") or "")
 
 
-def fact_states_for_subject(client: HydraDB, database: str, collection: str, subject_id: str) -> list[dict[str, Any]]:
-    response = client.context.list(
-        database=database,
-        collection=collection,
-        type="knowledge",
-        filters={"metadata": {"type": "FactState", "subject_id": subject_id}},
-        page_size=PAGE_SIZE,
-    )
-    data = to_plain_data(response.data)
-    return list(data.get("sources") or [])
+def is_rate_limit_error(exc: Exception) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code == 429
+    message = str(exc).lower()
+    return "429" in message or "rate limit" in message or "too many requests" in message
 
 
-def graph_overlap(client: HydraDB, database: str, collection: str, entity_a_id: str, entity_b_id: str) -> float:
-    facts_a = {fact_signature(fact) for fact in fact_states_for_subject(client, database, collection, entity_a_id)}
-    facts_b = {fact_signature(fact) for fact in fact_states_for_subject(client, database, collection, entity_b_id)}
+def with_rate_limit_retry(
+    operation: str,
+    callback: Callable[[], Any],
+    retries: int = RATE_LIMIT_RETRIES,
+    backoff_seconds: float = RATE_LIMIT_BACKOFF_SECONDS,
+) -> Any:
+    attempt = 0
+    while True:
+        try:
+            return callback()
+        except Exception as exc:
+            if attempt >= retries or not is_rate_limit_error(exc):
+                raise
+            sleep_for = backoff_seconds * (2**attempt)
+            print(f"Rate limited on {operation}, retrying in {sleep_for:.1f}s...")
+            time.sleep(sleep_for)
+            attempt += 1
+
+
+def fact_states_for_subject(
+    client: HydraDB,
+    database: str,
+    collection: str,
+    subject_id: str,
+    facts_cache: dict[str, list[dict[str, Any]]] | None = None,
+) -> list[dict[str, Any]]:
+    if facts_cache is not None and subject_id in facts_cache:
+        return facts_cache[subject_id]
+
+    def fetch_facts() -> list[dict[str, Any]]:
+        response = client.context.list(
+            database=database,
+            collection=collection,
+            type="knowledge",
+            filters={"metadata": {"type": "FactState", "subject_id": subject_id}},
+            page_size=PAGE_SIZE,
+        )
+        data = to_plain_data(response.data)
+        return list(data.get("sources") or [])
+
+    facts = with_rate_limit_retry(f"subject_id={subject_id}", fetch_facts)
+    if facts_cache is not None:
+        facts_cache[subject_id] = facts
+    return facts
+
+
+def graph_overlap(
+    client: HydraDB,
+    database: str,
+    collection: str,
+    entity_a_id: str,
+    entity_b_id: str,
+    facts_cache: dict[str, list[dict[str, Any]]] | None = None,
+) -> float:
+    facts_a = {
+        fact_signature(fact)
+        for fact in fact_states_for_subject(client, database, collection, entity_a_id, facts_cache)
+    }
+    facts_b = {
+        fact_signature(fact)
+        for fact in fact_states_for_subject(client, database, collection, entity_b_id, facts_cache)
+    }
     facts_a.discard(("", ""))
     facts_b.discard(("", ""))
     if not facts_a and not facts_b:
@@ -318,10 +411,24 @@ def graph_overlap(client: HydraDB, database: str, collection: str, entity_a_id: 
     return len(facts_a & facts_b) / len(facts_a | facts_b)
 
 
-def score_pair(client: HydraDB, database: str, collection: str, entity_a: dict[str, Any], entity_b: dict[str, Any]) -> PairScore:
+def score_pair(
+    client: HydraDB,
+    database: str,
+    collection: str,
+    entity_a: dict[str, Any],
+    entity_b: dict[str, Any],
+    facts_cache: dict[str, list[dict[str, Any]]] | None = None,
+) -> PairScore:
     exact_id_match = bool(identifiers(entity_a) & identifiers(entity_b))
     name_similarity = best_name_similarity(entity_a, entity_b)
-    overlap = graph_overlap(client, database, collection, entity_a["id"], entity_b["id"])
+    overlap = graph_overlap(
+        client,
+        database,
+        collection,
+        entity_a["id"],
+        entity_b["id"],
+        facts_cache,
+    )
     combined_score = (0.6 if exact_id_match else 0.0) + 0.25 * name_similarity + 0.15 * overlap
     return PairScore(
         entity_a_id=entity_a["id"],
@@ -448,13 +555,16 @@ def ingest_pending_merge(client: HydraDB, database: str, collection: str, score:
         }
     }
     if not dry_run:
-        client.context.ingest(
-            type="knowledge",
-            database=database,
-            collection=collection,
-            upsert=True,
-            app_knowledge=json.dumps(app_knowledge),
-            graph_payload=json.dumps(graph_payload),
+        with_rate_limit_retry(
+            f"merge_id={merge_id}",
+            lambda: client.context.ingest(
+                type="knowledge",
+                database=database,
+                collection=collection,
+                upsert=True,
+                app_knowledge=json.dumps(app_knowledge),
+                graph_payload=json.dumps(graph_payload),
+            ),
         )
     return merge_id
 
@@ -481,7 +591,16 @@ def apply_auto_merges(
     return merged_count
 
 
-def run_resolution(database: str, collection: str, limit: int | None, dry_run: bool) -> dict[str, Any]:
+def run_resolution(
+    database: str,
+    collection: str,
+    limit: int | None,
+    dry_run: bool,
+    max_block_size: int = 100,
+) -> dict[str, Any]:
+    if max_block_size < 1:
+        raise ValueError("--max-block-size must be at least 1")
+
     client = HydraDB(token=get_api_key())
     all_sources = list_all_sources(client, database, collection)
     candidate_entities = [
@@ -501,10 +620,22 @@ def run_resolution(database: str, collection: str, limit: int | None, dry_run: b
 
     entities_by_id = {entity["id"]: entity for entity in candidate_entities}
     blocks = block_entities(candidate_entities)
+    largest_block_size = max((len(block) for block in blocks), default=0)
+    print(
+        f"Blocking complete: {len(candidate_entities)} candidate entities -> "
+        f"{len(blocks)} blocks, largest block size = {largest_block_size}"
+    )
+    blocks = split_oversized_blocks(blocks, entities_by_id, max_block_size)
     union_find = UnionFind(list(entities_by_id))
     auto_merge_examples: list[PairScore] = []
     pending_examples: list[PairScore] = []
     compared_pairs: set[tuple[str, str]] = set()
+    total_pairs: set[tuple[str, str]] = {
+        tuple(sorted(pair))
+        for block in blocks
+        for pair in combinations(sorted(block), 2)
+    }
+    facts_cache: dict[str, list[dict[str, Any]]] = {}
     pending_count = 0
 
     for block in blocks:
@@ -520,7 +651,11 @@ def run_resolution(database: str, collection: str, limit: int | None, dry_run: b
                 collection,
                 entities_by_id[entity_a_id],
                 entities_by_id[entity_b_id],
+                facts_cache,
             )
+            comparison_count = len(compared_pairs)
+            if comparison_count % 500 == 0:
+                print(f"Compared {comparison_count}/{len(total_pairs)} pairs...")
             if score.combined_score >= AUTO_MERGE_THRESHOLD:
                 union_find.union(entity_a_id, entity_b_id)
                 auto_merge_examples.append(score)
@@ -544,6 +679,7 @@ def run_resolution(database: str, collection: str, limit: int | None, dry_run: b
         "total_entities_processed": len(candidate_entities),
         "blocks": len(blocks),
         "pairs_compared": len(compared_pairs),
+        "fact_states_cached": len(facts_cache),
         "auto_merges_made": auto_merged_count,
         "pending_candidates_logged": pending_count,
         "example_merges": [score.__dict__ for score in auto_merge_examples[:3]],
@@ -556,6 +692,7 @@ def main() -> int:
     parser.add_argument("--database", default=DATABASE_NAME)
     parser.add_argument("--collection", default="default")
     parser.add_argument("--limit", type=int, default=None)
+    parser.add_argument("--max-block-size", type=int, default=100)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--disabled", action="store_true")
     args = parser.parse_args()
@@ -565,7 +702,13 @@ def main() -> int:
         return 0
 
     try:
-        summary = run_resolution(args.database, args.collection, args.limit, args.dry_run)
+        summary = run_resolution(
+            args.database,
+            args.collection,
+            args.limit,
+            args.dry_run,
+            max_block_size=args.max_block_size,
+        )
         print("Entity resolution summary:")
         print(f"- total entities processed: {summary['total_entities_processed']}")
         print(f"- blocks: {summary['blocks']}")
