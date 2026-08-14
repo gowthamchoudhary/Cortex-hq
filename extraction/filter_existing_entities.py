@@ -19,7 +19,10 @@ INPUT_PATH = PROJECT_ROOT / "eval" / "results" / "batch_extraction_output.json"
 OUTPUT_PATH = PROJECT_ROOT / "eval" / "results" / "batch_extraction_output_filtered.json"
 
 
-def filter_existing_entities(input_path: Path = INPUT_PATH, output_path: Path = OUTPUT_PATH) -> tuple[int, int]:
+def filter_existing_entities(
+    input_path: Path = INPUT_PATH,
+    output_path: Path = OUTPUT_PATH,
+) -> tuple[int, int]:
     payload: dict[str, Any] = json.loads(input_path.read_text(encoding="utf-8"))
     before_count = 0
     after_count = 0

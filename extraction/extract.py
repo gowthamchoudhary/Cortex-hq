@@ -28,6 +28,18 @@ GROQ_MODELS_ENDPOINT = "https://api.groq.com/openai/v1/models"
 ALLOWED_ENTITY_TYPES = frozenset(
     {"Person", "Organization", "Project", "Document", "Issue", "Product", "Team"}
 )
+ENTITY_TYPE_NORMALIZATION = {
+    "person": "Person",
+    "org": "Organization",
+    "organization": "Organization",
+    "project": "Project",
+    "document": "Document",
+    "doc": "Document",
+    "issue": "Issue",
+    "ticket": "Issue",
+    "product": "Product",
+    "team": "Team",
+}
 GENERIC_ENTITY_STOPLIST = frozenset(
     {
         "api",
@@ -345,11 +357,13 @@ def filter_candidate_entities(extraction: dict[str, Any]) -> list[dict[str, Any]
         if not isinstance(name, str) or not isinstance(entity_type, str):
             continue
         name = name.strip()
-        if len(name) < 3 or entity_type not in ALLOWED_ENTITY_TYPES:
+        normalized_type = ENTITY_TYPE_NORMALIZATION.get(entity_type.strip().casefold())
+        if len(name) < 3 or normalized_type not in ALLOWED_ENTITY_TYPES:
             continue
         if name.casefold() in GENERIC_ENTITY_STOPLIST:
             continue
         entity["name"] = name
+        entity["type"] = normalized_type
         filtered.append(entity)
     return filtered
 
