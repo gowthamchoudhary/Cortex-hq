@@ -95,8 +95,22 @@ def ensure_collection(client: HydraDB, database: str, collection: str) -> bool:
     ]
     graph_payload = {
         marker_id: {
-            "entities": {},
-            "relations": [],
+            "entities": {
+                marker_id: {
+                    "name": marker_id,
+                    "type": "SYSTEM",
+                    "namespace": "system",
+                    "external_id": marker_id,
+                }
+            },
+            "relations": [
+                {
+                    "source": marker_id,
+                    "target": marker_id,
+                    "predicate": "MARKER",
+                    "context": f"System marker for collection '{collection}'.",
+                }
+            ],
         }
     }
     client.context.ingest(
