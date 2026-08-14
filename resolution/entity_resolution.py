@@ -437,13 +437,11 @@ def score_pair(
         entity_b["id"],
         facts_cache,
     )
-    combined_score = (0.6 if exact_id_match else 0.0) + 0.25 * name_similarity + 0.15 * overlap
-    if (
-        entity_type(entity_a) == "person"
-        and entity_type(entity_b) == "person"
-        and name_similarity >= 0.92
-    ):
-        combined_score = max(combined_score, 0.65)
+    if exact_id_match:
+        combined_score = 0.85 + 0.15 * name_similarity
+    else:
+        combined_score = 0.65 * name_similarity + 0.35 * overlap
+    combined_score = min(combined_score, 1.0)
     return PairScore(
         entity_a_id=entity_a["id"],
         entity_b_id=entity_b["id"],
