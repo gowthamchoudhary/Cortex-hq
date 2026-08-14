@@ -25,6 +25,49 @@ DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_MAX_CONTENT_CHARS = 300
 GROQ_MODELS_ENDPOINT = "https://api.groq.com/openai/v1/models"
+ALLOWED_ENTITY_TYPES = frozenset(
+    {"Person", "Organization", "Project", "Document", "Issue", "Product", "Team"}
+)
+GENERIC_ENTITY_STOPLIST = frozenset(
+    {
+        "api",
+        "and",
+        "application",
+        "app",
+        "all",
+        "bug",
+        "company",
+        "data",
+        "database",
+        "document",
+        "feature",
+        "for",
+        "from",
+        "issue",
+        "kms",
+        "new",
+        "none",
+        "platform",
+        "product",
+        "project",
+        "repository",
+        "repo",
+        "sdk",
+        "se",
+        "service",
+        "sql",
+        "system",
+        "task",
+        "team",
+        "ticket",
+        "the",
+        "this",
+        "that",
+        "with",
+        "user",
+        "work",
+    }
+)
 
 
 EXTRACTION_SCHEMA: dict[str, Any] = {
@@ -36,7 +79,7 @@ EXTRACTION_SCHEMA: dict[str, Any] = {
                 "type": "object",
                 "properties": {
                     "name": {"type": "string"},
-                    "type": {"type": "string"},
+                    "type": {"type": "string", "enum": sorted(ALLOWED_ENTITY_TYPES)},
                     "aliases_hint": {
                         "type": "array",
                         "items": {"type": "string"},
@@ -164,11 +207,17 @@ def build_messages(document: RawDocument, max_content_chars: int = DEFAULT_MAX_C
             "role": "system",
             "content": (
                 "Extract enterprise knowledge graph candidates from normalized documents. "
-                "Use concise canonical entity names, uppercase entity types such as PERSON, "
-                "ORG, PROJECT, ACCOUNT, TICKET, REPOSITORY, DOCUMENT, FEATURE, or SYSTEM, "
-                "and stable snake_case predicates. Only extract claims supported by the "
-                "document. Use the document timestamp when no better stated_at date is in "
-                "the content. Return one JSON object with candidate_entities, "
+                "Use concise canonical entity names. Only extract genuine named things: "
+                "specific people, organizations or companies, named projects, named products, "
+                "documents, issues or tickets, and teams. Do not extract generic technical "
+                "terms, acronyms, or common nouns as standalone entities unless they are "
+                "clearly a proper noun or named entity in context. For example, AWS KMS as a "
+                "specific service reference is valid, but bare KMS or SE without a clear "
+                "referent should not become a person or organization candidate. Entity type "
+                "must be exactly one of Person, Organization, Project, Document, Issue, "
+                "Product, or Team. Use stable snake_case predicates. Only extract claims "
+                "supported by the document. Use the document timestamp when no better "
+                "stated_at date is in the content. Return one JSON object with candidate_entities, "
                 "candidate_relations, and candidate_facts arrays. Entity objects contain "
                 "name, type, aliases_hint. Relation objects contain source_entity, "
                 "predicate, target_entity. Fact objects contain subject_entity, predicate, "
@@ -286,12 +335,32 @@ def chat_completion_json(
     return json.loads(message["content"])
 
 
+def filter_candidate_entities(extraction: dict[str, Any]) -> list[dict[str, Any]]:
+    filtered: list[dict[str, Any]] = []
+    for entity in extraction.get("candidate_entities") or []:
+        if not isinstance(entity, dict):
+            continue
+        name = entity.get("name")
+        entity_type = entity.get("type")
+        if not isinstance(name, str) or not isinstance(entity_type, str):
+            continue
+        name = name.strip()
+        if len(name) < 3 or entity_type not in ALLOWED_ENTITY_TYPES:
+            continue
+        if name.casefold() in GENERIC_ENTITY_STOPLIST:
+            continue
+        entity["name"] = name
+        filtered.append(entity)
+    return filtered
+
+
 def tag_source_doc_id(extraction: dict[str, Any], source_doc_id: str) -> dict[str, Any]:
     record_types = {
         "candidate_entities": "Entity",
         "candidate_relations": "Relation",
         "candidate_facts": "FactState",
     }
+    extraction["candidate_entities"] = filter_candidate_entities(extraction)
     for collection, record_type in record_types.items():
         extraction.setdefault(collection, [])
         for item in extraction.get(collection, []):
