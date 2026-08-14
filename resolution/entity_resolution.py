@@ -591,12 +591,42 @@ def apply_auto_merges(
     return merged_count
 
 
+def print_debug_scores(
+    scores: list[PairScore],
+    entities_by_id: dict[str, dict[str, Any]],
+) -> None:
+    buckets = (
+        ("0.0-0.2", lambda value: 0.0 <= value < 0.2),
+        ("0.2-0.4", lambda value: 0.2 <= value < 0.4),
+        ("0.4-0.6", lambda value: 0.4 <= value < 0.6),
+        ("0.6-0.85", lambda value: 0.6 <= value < 0.85),
+        ("0.85-1.0", lambda value: 0.85 <= value <= 1.0),
+    )
+    print("Combined score distribution:")
+    for label, matches in buckets:
+        count = sum(1 for score in scores if matches(score.combined_score))
+        print(f"- {label}: {count}")
+
+    print("Top 5 highest-scoring pairs:")
+    for score in sorted(scores, key=lambda item: item.combined_score, reverse=True)[:5]:
+        entity_a_name = canonical_name(entities_by_id[score.entity_a_id])
+        entity_b_name = canonical_name(entities_by_id[score.entity_b_id])
+        print(
+            f"- {entity_a_name} <> {entity_b_name}: "
+            f"combined_score={score.combined_score:.4f}, "
+            f"name_sim={score.name_similarity:.4f}, "
+            f"exact_id_match={score.exact_id_match}, "
+            f"graph_overlap={score.graph_overlap:.4f}"
+        )
+
+
 def run_resolution(
     database: str,
     collection: str,
     limit: int | None,
     dry_run: bool,
     max_block_size: int = 100,
+    debug_scores: bool = False,
 ) -> dict[str, Any]:
     if max_block_size < 1:
         raise ValueError("--max-block-size must be at least 1")
@@ -637,6 +667,7 @@ def run_resolution(
     }
     facts_cache: dict[str, list[dict[str, Any]]] = {}
     pending_count = 0
+    debug_pair_scores: list[PairScore] = []
 
     for block in blocks:
         for entity_a_id, entity_b_id in combinations(sorted(block), 2):
@@ -653,6 +684,8 @@ def run_resolution(
                 entities_by_id[entity_b_id],
                 facts_cache,
             )
+            if debug_scores:
+                debug_pair_scores.append(score)
             comparison_count = len(compared_pairs)
             if comparison_count % 500 == 0:
                 print(f"Compared {comparison_count}/{len(total_pairs)} pairs...")
@@ -663,6 +696,9 @@ def run_resolution(
                 ingest_pending_merge(client, database, collection, score, entities_by_id, dry_run)
                 pending_examples.append(score)
                 pending_count += 1
+
+    if debug_scores:
+        print_debug_scores(debug_pair_scores, entities_by_id)
 
     clusters = union_find.clusters()
     auto_merged_count = apply_auto_merges(
@@ -694,6 +730,7 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--max-block-size", type=int, default=100)
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--debug-scores", action="store_true")
     parser.add_argument("--disabled", action="store_true")
     args = parser.parse_args()
 
@@ -708,6 +745,7 @@ def main() -> int:
             args.limit,
             args.dry_run,
             max_block_size=args.max_block_size,
+            debug_scores=args.debug_scores,
         )
         print("Entity resolution summary:")
         print(f"- total entities processed: {summary['total_entities_processed']}")
