@@ -112,12 +112,13 @@ def additional_metadata(source: dict[str, Any]) -> dict[str, Any]:
     return dict(source.get("additional_metadata") or {})
 
 
-def list_all_sources(client: HydraDB, database: str, page_size: int = PAGE_SIZE) -> list[dict[str, Any]]:
+def list_all_sources(client: HydraDB, database: str, collection: str, page_size: int = PAGE_SIZE) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
     page = 1
     while True:
         response = client.context.list(
             database=database,
+            collection=collection,
             type="knowledge",
             page=page,
             page_size=page_size,
@@ -157,9 +158,9 @@ def update_source_metadata(
         )
 
 
-def hydradb_documents(client: HydraDB, database: str) -> list[DocumentRecord]:
+def hydradb_documents(client: HydraDB, database: str, collection: str) -> list[DocumentRecord]:
     docs: list[DocumentRecord] = []
-    for source in list_all_sources(client, database):
+    for source in list_all_sources(client, database, collection):
         meta = metadata(source)
         record_type = str(meta.get("type") or meta.get("record_type") or "").lower()
         if record_type != "document":
@@ -196,12 +197,12 @@ def local_documents() -> list[DocumentRecord]:
     return [doc for doc in docs if doc.id and doc.content.strip()]
 
 
-def load_source_documents(database: str, source: str) -> tuple[list[DocumentRecord], str, HydraDB | None]:
+def load_source_documents(database: str, collection: str, source: str) -> tuple[list[DocumentRecord], str, HydraDB | None]:
     if source == "local":
         return local_documents(), "local", None
     try:
         client = HydraDB(token=get_api_key())
-        docs = hydradb_documents(client, database)
+        docs = hydradb_documents(client, database, collection)
         if docs:
             return docs, "hydradb", client
         if source == "hydradb":
@@ -293,6 +294,7 @@ def mark_duplicates(
     canonical: DocumentRecord,
     docs_by_id: dict[str, DocumentRecord],
     dry_run: bool,
+    collection: str,
 ) -> int:
     marked = 0
     for doc_id in cluster:
@@ -312,7 +314,7 @@ def mark_duplicates(
                 doc.id,
                 doc.metadata,
                 doc.additional_metadata,
-                doc.hydradb_source.get("sub_tenant_id"),
+                collection,
             )
     return marked
 
@@ -333,8 +335,8 @@ def save_local_marks(path: Path, docs: list[DocumentRecord]) -> None:
     path.write_text(json.dumps(marked_docs, indent=2), encoding="utf-8")
 
 
-def run_dedup(database: str, limit: int | None, dry_run: bool, source: str, output: Path) -> dict[str, Any]:
-    docs, document_source, client = load_source_documents(database, source)
+def run_dedup(database: str, collection: str, limit: int | None, dry_run: bool, source: str, output: Path) -> dict[str, Any]:
+    docs, document_source, client = load_source_documents(database, collection, source)
     if limit is not None:
         docs = docs[:limit]
 
@@ -345,7 +347,7 @@ def run_dedup(database: str, limit: int | None, dry_run: bool, source: str, outp
 
     for cluster in clusters:
         canonical = pick_canonical(cluster, docs_by_id)
-        marked += mark_duplicates(client, database, document_source, cluster, canonical, docs_by_id, dry_run)
+        marked += mark_duplicates(client, database, document_source, cluster, canonical, docs_by_id, dry_run, collection)
         cluster_scores = {
             f"{left} <> {right}": score
             for (left, right), score in pair_scores.items()
@@ -376,6 +378,7 @@ def run_dedup(database: str, limit: int | None, dry_run: bool, source: str, outp
 def main() -> int:
     parser = argparse.ArgumentParser(description="Detect and mark near-duplicate documents.")
     parser.add_argument("--database", default=DATABASE_NAME)
+    parser.add_argument("--collection", default="default")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--source", choices=("local", "hydradb"), default="local")
@@ -383,7 +386,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        summary = run_dedup(args.database, args.limit, args.dry_run, args.source, args.output)
+        summary = run_dedup(args.database, args.collection, args.limit, args.dry_run, args.source, args.output)
         print("Near-duplicate document detection summary:")
         print(f"- source of truth: {summary['document_source']}")
         print(f"- total docs processed: {summary['total_docs_processed']}")

@@ -78,6 +78,7 @@ def run_calibration(
     questions_path: Path | None,
     limit: int,
     database: str,
+    collection: str,
     provider: str,
     model: str | None,
     timeout_seconds: int,
@@ -102,6 +103,7 @@ def run_calibration(
         qa_result = answer_question(
             question=question["question"],
             database=database,
+            collection=collection,
             provider=provider,
             model=model,
             timeout_seconds=timeout_seconds,
@@ -159,6 +161,7 @@ def main() -> int:
     parser.add_argument("--questions", type=Path, default=None)
     parser.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     parser.add_argument("--database", default=DATABASE_NAME)
+    parser.add_argument("--collection", default="default")
     parser.add_argument("--provider", choices=("auto", "groq", "openai"), default="auto")
     parser.add_argument("--model", default=None)
     parser.add_argument("--timeout-seconds", type=int, default=90)
@@ -173,6 +176,7 @@ def main() -> int:
             questions_path=args.questions,
             limit=args.limit,
             database=args.database,
+            collection=args.collection,
             provider=args.provider,
             model=args.model,
             timeout_seconds=args.timeout_seconds,

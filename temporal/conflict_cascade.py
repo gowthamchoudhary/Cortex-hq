@@ -88,12 +88,13 @@ def additional_metadata(source: dict[str, Any]) -> dict[str, Any]:
     return dict(source.get("additional_metadata") or {})
 
 
-def list_all_sources(client: HydraDB, database: str, page_size: int = PAGE_SIZE) -> list[dict[str, Any]]:
+def list_all_sources(client: HydraDB, database: str, collection: str, page_size: int = PAGE_SIZE) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
     page = 1
     while True:
         response = client.context.list(
             database=database,
+            collection=collection,
             type="knowledge",
             page=page,
             page_size=page_size,
@@ -353,6 +354,7 @@ def update_source_metadata(
 def apply_decision(
     client: HydraDB,
     database: str,
+    collection: str,
     decision: CascadeDecision,
     facts_by_id: dict[str, dict[str, Any]],
     dry_run: bool,
@@ -398,12 +400,13 @@ def apply_decision(
                 fact["id"],
                 meta,
                 extra,
-                fact.get("sub_tenant_id"),
+                collection,
             )
 
 
 def run_cascade(
     database: str,
+    collection: str,
     dry_run: bool,
     limit_groups: int | None,
     disabled: bool = False,
@@ -412,7 +415,7 @@ def run_cascade(
     global USE_LEARNED_AUTHORITY
     USE_LEARNED_AUTHORITY = use_learned_authority
     client = HydraDB(token=get_api_key())
-    all_sources = list_all_sources(client, database)
+    all_sources = list_all_sources(client, database, collection)
     fact_states = [
         source
         for source in all_sources
@@ -441,6 +444,7 @@ def run_cascade(
         apply_decision(
             client,
             database,
+            collection,
             decision,
             facts_by_id,
             dry_run,
@@ -473,6 +477,7 @@ class CounterLike(defaultdict[str, int]):
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run temporal conflict cascade over HydraDB FactStates.")
     parser.add_argument("--database", default=DATABASE_NAME)
+    parser.add_argument("--collection", default="default")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--limit-groups", type=int, default=None)
     parser.add_argument("--disabled", action="store_true")
@@ -482,6 +487,7 @@ def main() -> int:
     try:
         summary = run_cascade(
             args.database,
+            args.collection,
             args.dry_run,
             args.limit_groups,
             args.disabled,

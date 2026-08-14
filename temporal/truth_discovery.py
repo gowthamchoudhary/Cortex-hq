@@ -113,6 +113,7 @@ def old_weights_for_source(source_type: str) -> dict[str, float]:
 def update_fact_authority_weights(
     client: HydraDB,
     database: str,
+    collection: str,
     fact_states: list[dict[str, Any]],
     reliability: dict[str, float],
     dry_run: bool,
@@ -130,7 +131,7 @@ def update_fact_authority_weights(
                 fact["id"],
                 meta,
                 extra,
-                fact.get("sub_tenant_id"),
+                collection,
             )
         updated += 1
     return updated
@@ -167,12 +168,13 @@ def example_groups(
 
 def run_truth_discovery(
     database: str,
+    collection: str,
     dry_run: bool,
     iterations: int,
     convergence_delta: float,
 ) -> dict[str, Any]:
     client = HydraDB(token=get_api_key())
-    all_sources = list_all_sources(client, database)
+    all_sources = list_all_sources(client, database, collection)
     fact_states = [source for source in all_sources if metadata(source).get("type") == "FactState"]
 
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -182,7 +184,7 @@ def run_truth_discovery(
             grouped[key].append(fact)
 
     reliability, value_confidences, history = discover_truth(grouped, iterations, convergence_delta)
-    updated = update_fact_authority_weights(client, database, fact_states, reliability, dry_run)
+    updated = update_fact_authority_weights(client, database, collection, fact_states, reliability, dry_run)
 
     comparison = {
         source_type: {
@@ -218,6 +220,7 @@ def print_comparison(comparison: dict[str, dict[str, Any]]) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Learn source reliability from FactState agreement.")
     parser.add_argument("--database", default=DATABASE_NAME)
+    parser.add_argument("--collection", default="default")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--iterations", type=int, default=8)
     parser.add_argument("--convergence-delta", type=float, default=CONVERGENCE_DELTA)
@@ -228,6 +231,7 @@ def main() -> int:
             raise ValueError("--iterations must be at least 1.")
         summary = run_truth_discovery(
             database=args.database,
+            collection=args.collection,
             dry_run=args.dry_run,
             iterations=args.iterations,
             convergence_delta=args.convergence_delta,

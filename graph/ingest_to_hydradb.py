@@ -405,11 +405,12 @@ def update_metadata_schema(client: HydraDB, database: str) -> None:
         print(f"Metadata schema update skipped/failed: {exc}")
 
 
-def ingest_batch(client: HydraDB, database: str, batch: list[dict[str, Any]]) -> list[str]:
+def ingest_batch(client: HydraDB, database: str, collection: str, batch: list[dict[str, Any]]) -> list[str]:
     app_knowledge, graph_payload = build_ingest_payload(batch, database)
     response = client.context.ingest(
         type="knowledge",
         database=database,
+        collection=collection,
         upsert=True,
         app_knowledge=json.dumps(app_knowledge),
         graph_payload=json.dumps(graph_payload),
@@ -418,10 +419,10 @@ def ingest_batch(client: HydraDB, database: str, batch: list[dict[str, Any]]) ->
     return [item["id"] for item in batch]
 
 
-def wait_for_ingestion(client: HydraDB, database: str, ids: list[str]) -> list[dict[str, Any]]:
+def wait_for_ingestion(client: HydraDB, database: str, collection: str, ids: list[str]) -> list[dict[str, Any]]:
     deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
-        response = client.context.status(database=database, ids=ids)
+        response = client.context.status(database=database, collection=collection, ids=ids)
         statuses = to_plain_data(response.data.statuses)
         states = {status["id"]: status["indexing_status"] for status in statuses}
         print(f"Ingestion status: {states}")
@@ -440,6 +441,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Ingest extracted graph candidates into HydraDB.")
     parser.add_argument("extraction_output", type=Path)
     parser.add_argument("--database", default=DATABASE_NAME)
+    parser.add_argument("--collection", default="default")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--dry-run", action="store_true")
@@ -469,9 +471,9 @@ def main() -> int:
 
         failed_statuses: list[dict[str, Any]] = []
         for index, batch in enumerate(batched(graph_sources, args.batch_size), start=1):
-            print(f"Ingesting batch {index} with {len(batch)} records...")
-            ids = ingest_batch(client, args.database, batch)
-            statuses = wait_for_ingestion(client, args.database, ids)
+            print(f"Ingesting batch {index} with {len(batch)} records into collection {args.collection!r}...")
+            ids = ingest_batch(client, args.database, args.collection, batch)
+            statuses = wait_for_ingestion(client, args.database, args.collection, ids)
             failed_statuses.extend(
                 status for status in statuses if status.get("indexing_status") == "errored"
             )

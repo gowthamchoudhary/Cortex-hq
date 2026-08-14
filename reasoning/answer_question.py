@@ -183,11 +183,11 @@ def additional_metadata(source: dict[str, Any]) -> dict[str, Any]:
     return dict(source.get("additional_metadata") or {})
 
 
-def list_all_sources(client: HydraDB, database: str) -> list[dict[str, Any]]:
+def list_all_sources(client: HydraDB, database: str, collection: str) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
     page = 1
     while True:
-        response = client.context.list(database=database, type="knowledge", page=page, page_size=PAGE_SIZE)
+        response = client.context.list(database=database, collection=collection, type="knowledge", page=page, page_size=PAGE_SIZE)
         data = to_plain_data(response.data)
         sources.extend(data.get("sources") or [])
         pagination = data.get("pagination") or {}
@@ -279,9 +279,9 @@ def fact_sort_key(fact: dict[str, Any]) -> int:
         return 0
 
 
-def relation_triplets(client: HydraDB, database: str, entity_id: str, limit: int = 50) -> list[dict[str, Any]]:
+def relation_triplets(client: HydraDB, database: str, collection: str, entity_id: str, limit: int = 50) -> list[dict[str, Any]]:
     try:
-        response = client.context.relations(database=database, id=entity_id, type="knowledge", limit=limit)
+        response = client.context.relations(database=database, collection=collection, id=entity_id, type="knowledge", limit=limit)
     except Exception:
         return []
     data = to_plain_data(response.data)
@@ -328,6 +328,7 @@ def relation_predicate(triplet: dict[str, Any]) -> str:
 def expand_subgraph(
     client: HydraDB,
     database: str,
+    collection: str,
     links: list[LinkResult],
     all_sources: list[dict[str, Any]],
     time_scope: str,
@@ -346,7 +347,7 @@ def expand_subgraph(
     for _ in range(max(hops, 0)):
         next_frontier: list[str] = []
         for entity_id in frontier:
-            for triplet in relation_triplets(client, database, entity_id):
+            for triplet in relation_triplets(client, database, collection, entity_id):
                 source_id, target_id = relation_entities(triplet)
                 predicate = relation_predicate(triplet)
                 relations.append(
@@ -505,6 +506,7 @@ def generate_answer(packet: dict[str, Any], provider: str, model: str | None, ti
 def answer_question(
     question: str,
     database: str,
+    collection: str,
     provider: str,
     model: str | None,
     timeout_seconds: int,
@@ -515,7 +517,7 @@ def answer_question(
     load_dotenv()
     client = HydraDB(token=get_api_key())
     understanding = query_understanding(question, provider, model, timeout_seconds)
-    all_sources = list_all_sources(client, database)
+    all_sources = list_all_sources(client, database, collection)
     entities = [source for source in all_sources if metadata(source).get("type") == "Entity"]
     mentions = understanding["target_entity_mentions"] or [question]
     links = link_entity_mentions(mentions, entities)
@@ -540,6 +542,7 @@ def answer_question(
         subgraph = expand_subgraph(
             client,
             database,
+            collection,
             links,
             all_sources,
             understanding["time_scope"],
@@ -549,6 +552,7 @@ def answer_question(
         subgraph = expand_subgraph(
             client,
             database,
+            collection,
             links,
             all_sources,
             understanding["time_scope"],
@@ -591,6 +595,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Answer a question from the HydraDB graph.")
     parser.add_argument("question")
     parser.add_argument("--database", default=DATABASE_NAME)
+    parser.add_argument("--collection", default="default")
     parser.add_argument("--provider", choices=("auto", "groq", "openai"), default="auto")
     parser.add_argument("--model", default=None)
     parser.add_argument("--timeout-seconds", type=int, default=90)
@@ -603,6 +608,7 @@ def main() -> int:
         result = answer_question(
             question=args.question,
             database=args.database,
+            collection=args.collection,
             provider=args.provider,
             model=args.model,
             timeout_seconds=args.timeout_seconds,

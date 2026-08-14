@@ -105,12 +105,13 @@ def stable_id(*parts: Any) -> str:
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:24]
 
 
-def list_all_sources(client: HydraDB, database: str, page_size: int = PAGE_SIZE) -> list[dict[str, Any]]:
+def list_all_sources(client: HydraDB, database: str, collection: str, page_size: int = PAGE_SIZE) -> list[dict[str, Any]]:
     sources: list[dict[str, Any]] = []
     page = 1
     while True:
         response = client.context.list(
             database=database,
+            collection=collection,
             type="knowledge",
             page=page,
             page_size=page_size,
@@ -295,9 +296,10 @@ def fact_signature(fact: dict[str, Any]) -> tuple[str, str]:
     return str(meta.get("predicate") or ""), str(meta.get("source_doc_id") or "")
 
 
-def fact_states_for_subject(client: HydraDB, database: str, subject_id: str) -> list[dict[str, Any]]:
+def fact_states_for_subject(client: HydraDB, database: str, collection: str, subject_id: str) -> list[dict[str, Any]]:
     response = client.context.list(
         database=database,
+        collection=collection,
         type="knowledge",
         filters={"metadata": {"type": "FactState", "subject_id": subject_id}},
         page_size=PAGE_SIZE,
@@ -306,9 +308,9 @@ def fact_states_for_subject(client: HydraDB, database: str, subject_id: str) -> 
     return list(data.get("sources") or [])
 
 
-def graph_overlap(client: HydraDB, database: str, entity_a_id: str, entity_b_id: str) -> float:
-    facts_a = {fact_signature(fact) for fact in fact_states_for_subject(client, database, entity_a_id)}
-    facts_b = {fact_signature(fact) for fact in fact_states_for_subject(client, database, entity_b_id)}
+def graph_overlap(client: HydraDB, database: str, collection: str, entity_a_id: str, entity_b_id: str) -> float:
+    facts_a = {fact_signature(fact) for fact in fact_states_for_subject(client, database, collection, entity_a_id)}
+    facts_b = {fact_signature(fact) for fact in fact_states_for_subject(client, database, collection, entity_b_id)}
     facts_a.discard(("", ""))
     facts_b.discard(("", ""))
     if not facts_a and not facts_b:
@@ -316,10 +318,10 @@ def graph_overlap(client: HydraDB, database: str, entity_a_id: str, entity_b_id:
     return len(facts_a & facts_b) / len(facts_a | facts_b)
 
 
-def score_pair(client: HydraDB, database: str, entity_a: dict[str, Any], entity_b: dict[str, Any]) -> PairScore:
+def score_pair(client: HydraDB, database: str, collection: str, entity_a: dict[str, Any], entity_b: dict[str, Any]) -> PairScore:
     exact_id_match = bool(identifiers(entity_a) & identifiers(entity_b))
     name_similarity = best_name_similarity(entity_a, entity_b)
-    overlap = graph_overlap(client, database, entity_a["id"], entity_b["id"])
+    overlap = graph_overlap(client, database, collection, entity_a["id"], entity_b["id"])
     combined_score = (0.6 if exact_id_match else 0.0) + 0.25 * name_similarity + 0.15 * overlap
     return PairScore(
         entity_a_id=entity_a["id"],
@@ -371,24 +373,24 @@ def update_source_metadata(
         )
 
 
-def mark_entity_resolved(client: HydraDB, database: str, entity: dict[str, Any], canonical_id: str, dry_run: bool) -> None:
+def mark_entity_resolved(client: HydraDB, database: str, collection: str, entity: dict[str, Any], canonical_id: str, dry_run: bool) -> None:
     meta = metadata(entity)
     extra = additional_metadata(entity)
     meta["state"] = "resolved"
     extra["merged_into"] = canonical_id
     if not dry_run:
-        update_source_metadata(client, database, entity["id"], meta, extra, entity.get("sub_tenant_id"))
+        update_source_metadata(client, database, entity["id"], meta, extra, collection)
 
 
-def repoint_fact_state(client: HydraDB, database: str, fact: dict[str, Any], canonical_id: str, dry_run: bool) -> None:
+def repoint_fact_state(client: HydraDB, database: str, collection: str, fact: dict[str, Any], canonical_id: str, dry_run: bool) -> None:
     meta = metadata(fact)
     extra = additional_metadata(fact)
     meta["subject_id"] = canonical_id
     if not dry_run:
-        update_source_metadata(client, database, fact["id"], meta, extra, fact.get("sub_tenant_id"))
+        update_source_metadata(client, database, fact["id"], meta, extra, collection)
 
 
-def ingest_pending_merge(client: HydraDB, database: str, score: PairScore, entities_by_id: dict[str, dict[str, Any]], dry_run: bool) -> str:
+def ingest_pending_merge(client: HydraDB, database: str, collection: str, score: PairScore, entities_by_id: dict[str, dict[str, Any]], dry_run: bool) -> str:
     entity_a = entities_by_id[score.entity_a_id]
     entity_b = entities_by_id[score.entity_b_id]
     merge_id = f"candidate-merge-{stable_id(score.entity_a_id, score.entity_b_id)}"
@@ -449,6 +451,7 @@ def ingest_pending_merge(client: HydraDB, database: str, score: PairScore, entit
         client.context.ingest(
             type="knowledge",
             database=database,
+            collection=collection,
             upsert=True,
             app_knowledge=json.dumps(app_knowledge),
             graph_payload=json.dumps(graph_payload),
@@ -459,6 +462,7 @@ def ingest_pending_merge(client: HydraDB, database: str, score: PairScore, entit
 def apply_auto_merges(
     client: HydraDB,
     database: str,
+    collection: str,
     clusters: list[list[str]],
     entities_by_id: dict[str, dict[str, Any]],
     facts_by_subject: dict[str, list[dict[str, Any]]],
@@ -470,16 +474,16 @@ def apply_auto_merges(
         for entity_id in cluster:
             if entity_id == canonical_id:
                 continue
-            mark_entity_resolved(client, database, entities_by_id[entity_id], canonical_id, dry_run)
+            mark_entity_resolved(client, database, collection, entities_by_id[entity_id], canonical_id, dry_run)
             for fact in facts_by_subject.get(entity_id, []):
-                repoint_fact_state(client, database, fact, canonical_id, dry_run)
+                repoint_fact_state(client, database, collection, fact, canonical_id, dry_run)
             merged_count += 1
     return merged_count
 
 
-def run_resolution(database: str, limit: int | None, dry_run: bool) -> dict[str, Any]:
+def run_resolution(database: str, collection: str, limit: int | None, dry_run: bool) -> dict[str, Any]:
     client = HydraDB(token=get_api_key())
-    all_sources = list_all_sources(client, database)
+    all_sources = list_all_sources(client, database, collection)
     candidate_entities = [
         source
         for source in all_sources
@@ -513,6 +517,7 @@ def run_resolution(database: str, limit: int | None, dry_run: bool) -> dict[str,
             score = score_pair(
                 client,
                 database,
+                collection,
                 entities_by_id[entity_a_id],
                 entities_by_id[entity_b_id],
             )
@@ -520,7 +525,7 @@ def run_resolution(database: str, limit: int | None, dry_run: bool) -> dict[str,
                 union_find.union(entity_a_id, entity_b_id)
                 auto_merge_examples.append(score)
             elif score.combined_score >= PENDING_THRESHOLD:
-                ingest_pending_merge(client, database, score, entities_by_id, dry_run)
+                ingest_pending_merge(client, database, collection, score, entities_by_id, dry_run)
                 pending_examples.append(score)
                 pending_count += 1
 
@@ -528,6 +533,7 @@ def run_resolution(database: str, limit: int | None, dry_run: bool) -> dict[str,
     auto_merged_count = apply_auto_merges(
         client,
         database,
+        collection,
         clusters,
         entities_by_id,
         facts_by_subject,
@@ -548,6 +554,7 @@ def run_resolution(database: str, limit: int | None, dry_run: bool) -> dict[str,
 def main() -> int:
     parser = argparse.ArgumentParser(description="Resolve candidate HydraDB entities.")
     parser.add_argument("--database", default=DATABASE_NAME)
+    parser.add_argument("--collection", default="default")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--disabled", action="store_true")
@@ -558,7 +565,7 @@ def main() -> int:
         return 0
 
     try:
-        summary = run_resolution(args.database, args.limit, args.dry_run)
+        summary = run_resolution(args.database, args.collection, args.limit, args.dry_run)
         print("Entity resolution summary:")
         print(f"- total entities processed: {summary['total_entities_processed']}")
         print(f"- blocks: {summary['blocks']}")
