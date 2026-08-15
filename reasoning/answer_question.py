@@ -228,11 +228,7 @@ def entity_aliases(entity: dict[str, Any]) -> list[str]:
 
 
 def score_entity_mention(mention: str, entity: dict[str, Any]) -> float:
-    best = max((jaro_winkler(mention, alias) for alias in entity_aliases(entity)), default=0.0)
-    state = str(metadata(entity).get("state") or "")
-    if state == "resolved":
-        best += 0.05
-    return min(best, 1.0)
+    return max((jaro_winkler(mention, alias) for alias in entity_aliases(entity)), default=0.0)
 
 
 def link_entity_mentions(mentions: list[str], entities: list[dict[str, Any]]) -> list[LinkResult]:
@@ -325,6 +321,10 @@ def relation_predicate(triplet: dict[str, Any]) -> str:
     return str(relation.get("canonical_predicate") or relation.get("raw_predicate") or relation.get("predicate") or "")
 
 
+def is_bookkeeping_relation(predicate: str) -> bool:
+    return predicate.strip().upper() == "HAS_STATE"
+
+
 def expand_subgraph(
     client: HydraDB,
     database: str,
@@ -338,6 +338,7 @@ def expand_subgraph(
     fact_states = [source for source in all_sources if metadata(source).get("type") == "FactState"]
     facts_by_subject: dict[str, list[dict[str, Any]]] = {}
     for fact in fact_states:
+        # FactState validity is independent of whether its entity is a candidate or resolved.
         subject_id = str(metadata(fact).get("subject_id") or "")
         facts_by_subject.setdefault(subject_id, []).append(fact)
 
@@ -350,6 +351,8 @@ def expand_subgraph(
             for triplet in relation_triplets(client, database, collection, entity_id):
                 source_id, target_id = relation_entities(triplet)
                 predicate = relation_predicate(triplet)
+                if is_bookkeeping_relation(predicate):
+                    continue
                 relations.append(
                     {
                         "source_entity_id": source_id,
@@ -475,12 +478,17 @@ def context_packet(question: str, links: list[LinkResult], subgraph: dict[str, A
         }
         for entity in subgraph["entities"]
     ]
+    relations = [
+        relation
+        for relation in subgraph["relations"]
+        if not is_bookkeeping_relation(str(relation.get("predicate") or ""))
+    ]
     return {
         "question": question,
         "resolved_entities": [asdict(link) for link in links],
         "current_state": facts,
         "entities": entities,
-        "relations": subgraph["relations"],
+        "relations": relations,
         "fallback_documents": subgraph.get("fallback_documents", []),
         "evidence_doc_ids": sorted({fact["source_doc_id"] for fact in facts if fact["source_doc_id"]}),
         "confidence": confidence,
