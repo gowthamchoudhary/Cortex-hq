@@ -1,348 +1,483 @@
-"""Minimal Streamlit explorer for the HydraDB knowledge graph."""
+"""CORTEX — hero landing page.
+
+A single-viewport landing page in the reference design language: pure-black
+background with a soft electric-blue spotlight rising from the bottom, a
+minimal top navigation, a waitlist badge, a large sans-serif headline with an
+editorial serif-italic accent, an email + CTA group, and a wide translucent
+integration panel emerging from the glow near the bottom.
+
+Cortex is a living organizational context layer: it connects scattered
+conversations, documents, code, issues, and decisions, resolves entities,
+tracks changing facts, preserves evidence and history, and surfaces context
+to teams and agents.
+"""
 
 from __future__ import annotations
 
-import os
-import sys
-from difflib import SequenceMatcher
-from pathlib import Path
-from typing import Any
-from urllib.parse import quote
-
 import streamlit as st
-from hydra_db import HydraDB
 
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
-if str(PROJECT_ROOT) not in sys.path:
-    sys.path.insert(0, str(PROJECT_ROOT))
-
-DATABASE_NAME = "hackhydra-track1"
-PAGE_SIZE = 100
-
-
-def load_dotenv(path: Path = PROJECT_ROOT / ".env") -> None:
-    if not path.exists():
-        return
-    with path.open(encoding="utf-8") as env_file:
-        for line in env_file:
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
-
-
-def get_api_key() -> str:
-    load_dotenv()
-    api_key = os.environ.get("HYDRADB_API_KEY")
-    if not api_key:
-        raise RuntimeError("HYDRADB_API_KEY environment variable is required.")
-    return api_key
-
-
-def to_plain_data(value: Any) -> Any:
-    if hasattr(value, "model_dump"):
-        return to_plain_data(value.model_dump())
-    if hasattr(value, "dict"):
-        return to_plain_data(value.dict())
-    if isinstance(value, dict):
-        return {key: to_plain_data(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [to_plain_data(item) for item in value]
-    if hasattr(value, "__dict__"):
-        return to_plain_data(vars(value))
-    return value
-
-
-def metadata(source: dict[str, Any]) -> dict[str, Any]:
-    return dict(source.get("metadata") or {})
-
-
-def additional_metadata(source: dict[str, Any]) -> dict[str, Any]:
-    return dict(source.get("additional_metadata") or {})
-
-
-def flatten_strings(value: Any) -> list[str]:
-    if value is None:
-        return []
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        values: list[str] = []
-        for nested in value.values():
-            values.extend(flatten_strings(nested))
-        return values
-    if isinstance(value, (list, tuple, set)):
-        values = []
-        for nested in value:
-            values.extend(flatten_strings(nested))
-        return values
-    return [str(value)]
-
-
-def canonical_name(entity: dict[str, Any]) -> str:
-    return str(metadata(entity).get("canonical_name") or entity.get("title") or entity.get("id") or "")
-
-
-def aliases(entity: dict[str, Any]) -> list[str]:
-    extra = additional_metadata(entity)
-    values = flatten_strings(extra.get("aliases")) + flatten_strings(extra.get("alias"))
-    return sorted({value.strip() for value in values if value and value.strip()})
-
-
-def source_doc_id(source: dict[str, Any]) -> str:
-    return str(metadata(source).get("source_doc_id") or additional_metadata(source).get("source_doc_id") or "")
-
-
-def fact_value(fact: dict[str, Any]) -> str:
-    extra = additional_metadata(fact)
-    if "value" in extra:
-        return str(extra.get("value") or "")
-    meta = metadata(fact)
-    return str(meta.get("value") or fact.get("note") or fact.get("title") or "")
-
-
-def valid_from(fact: dict[str, Any]) -> int:
-    try:
-        return int(float(metadata(fact).get("valid_from") or 0))
-    except (TypeError, ValueError):
-        return 0
-
-
-def list_all_sources(client: HydraDB, database: str, collection: str) -> list[dict[str, Any]]:
-    sources: list[dict[str, Any]] = []
-    page = 1
-    while True:
-        response = client.context.list(
-            database=database,
-            collection=collection,
-            type="knowledge",
-            page=page,
-            page_size=PAGE_SIZE,
-        )
-        data = to_plain_data(response.data)
-        sources.extend(data.get("sources") or [])
-        pagination = data.get("pagination") or {}
-        if not pagination.get("has_next"):
-            break
-        page += 1
-    return sources
-
-
-@st.cache_data(ttl=60)
-def cached_sources(database: str, collection: str, api_key: str) -> list[dict[str, Any]]:
-    client = HydraDB(token=api_key)
-    return list_all_sources(client, database, collection)
-
-
-def entity_terms(entity: dict[str, Any]) -> list[str]:
-    terms = [str(entity.get("id") or ""), canonical_name(entity), *aliases(entity)]
-    return [term.strip() for term in terms if term and term.strip()]
-
-
-def resolve_entity(query: str, entities: list[dict[str, Any]]) -> tuple[dict[str, Any] | None, float]:
-    needle = query.strip().lower()
-    if not needle:
-        return None, 0.0
-
-    for entity in entities:
-        if str(entity.get("id") or "").lower() == needle:
-            return entity, 1.0
-
-    scored: list[tuple[float, dict[str, Any]]] = []
-    for entity in entities:
-        best = 0.0
-        for term in entity_terms(entity):
-            haystack = term.lower()
-            score = 1.0 if haystack == needle else SequenceMatcher(None, needle, haystack).ratio()
-            if needle in haystack or haystack in needle:
-                score = max(score, 0.85)
-            best = max(best, score)
-        scored.append((best, entity))
-
-    score, entity = max(scored, key=lambda item: item[0], default=(0.0, None))
-    return (entity, score) if entity and score >= 0.6 else (None, score)
-
-
-def fact_rows(facts: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    rows = []
-    for fact in facts:
-        meta = metadata(fact)
-        rows.append(
-            {
-                "predicate": meta.get("predicate"),
-                "value": fact_value(fact),
-                "source_doc_id": source_doc_id(fact),
-                "authority_weight": meta.get("authority_weight"),
-                "valid_from": meta.get("valid_from"),
-            }
-        )
-    return rows
-
-
-def relation_triplets(
-    client: HydraDB,
-    database: str,
-    collection: str,
-    entity_id: str,
-    limit: int = 50,
-) -> list[dict[str, Any]]:
-    try:
-        response = client.context.relations(
-            database=database,
-            collection=collection,
-            id=entity_id,
-            type="knowledge",
-            limit=limit,
-        )
-    except Exception:
-        return []
-    data = to_plain_data(response.data)
-    relations = data.get("relations") or data.get("triplets") or data.get("chunk_relations") or []
-    triplets: list[dict[str, Any]] = []
-    for item in relations:
-        if "triplets" in item:
-            triplets.extend(item.get("triplets") or [])
-        elif "relations" in item:
-            for relation in item.get("relations") or []:
-                relation_item = dict(item)
-                relation_item.pop("relations", None)
-                relation_item["relation"] = relation
-                triplets.append(relation_item)
-        else:
-            triplets.append(item)
-    return triplets
-
-
-def relation_entity_id(value: Any) -> str | None:
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return value
-    if isinstance(value, dict):
-        for key in ("entity_id", "external_id", "id"):
-            if value.get(key):
-                return str(value[key])
-    return str(value)
-
-
-def relation_entities(triplet: dict[str, Any]) -> tuple[str | None, str | None]:
-    relation = triplet.get("relation") or triplet
-    source_id = relation.get("source_entity_id") or relation.get("source") or triplet.get("source")
-    target_id = relation.get("target_entity_id") or relation.get("target") or triplet.get("target")
-    return relation_entity_id(source_id), relation_entity_id(target_id)
-
-
-def relation_predicate(triplet: dict[str, Any]) -> str:
-    relation = triplet.get("relation") or triplet
-    return str(relation.get("canonical_predicate") or relation.get("raw_predicate") or relation.get("predicate") or "")
-
-
-def query_param_entity() -> str:
-    try:
-        value = st.query_params.get("entity", "")
-        return value[0] if isinstance(value, list) else str(value)
-    except Exception:
-        params = st.experimental_get_query_params()
-        value = params.get("entity", [""])
-        return value[0] if value else ""
-
-
-def entity_link(entity_id: str, label: str) -> str:
-    return f"?entity={quote(entity_id)}"
-
-
-def main() -> None:
-    st.set_page_config(page_title="Knowledge Explorer", layout="wide")
-    st.title("Knowledge Explorer")
-
-    database = st.sidebar.text_input("Database", DATABASE_NAME)
-    collection = st.sidebar.text_input("Collection", "benchmark-eval")
-    refresh = st.sidebar.button("Refresh data")
-    if refresh:
-        cached_sources.clear()
-
-    try:
-        api_key = get_api_key()
-        all_sources = cached_sources(database, collection, api_key)
-    except Exception as exc:
-        st.error(f"Could not load HydraDB data: {exc}")
-        return
-
-    entities = [source for source in all_sources if metadata(source).get("type") == "Entity"]
-    fact_states = [source for source in all_sources if metadata(source).get("type") == "FactState"]
-    entities_by_id = {str(entity.get("id")): entity for entity in entities}
-
-    default_entity = query_param_entity()
-    query = st.text_input("Entity name or id", value=default_entity, placeholder="Sam Ratnaparkhi or entity-...")
-    entity, match_score = resolve_entity(query, entities)
-
-    if not entity:
-        st.info("Enter an entity name or id to inspect its metadata, FactStates, and 1-hop relations.")
-        return
-
-    entity_id = str(entity.get("id"))
-    meta = metadata(entity)
-    extra = additional_metadata(entity)
-
-    st.subheader(canonical_name(entity))
-    st.caption(f"id: {entity_id} | match score: {match_score:.2f}")
-    st.json(
-        {
-            "canonical_name": meta.get("canonical_name"),
-            "aliases": aliases(entity),
-            "entity_type": meta.get("entity_type"),
-            "state": meta.get("state"),
-            "additional_metadata": extra,
-        },
-        expanded=False,
-    )
-
-    entity_facts = [fact for fact in fact_states if str(metadata(fact).get("subject_id") or "") == entity_id]
-    current_facts = [fact for fact in entity_facts if metadata(fact).get("state") == "current"]
-    history_facts = sorted(
-        [fact for fact in entity_facts if metadata(fact).get("state") == "superseded"],
-        key=valid_from,
-    )
-
-    left, right = st.columns(2)
-    with left:
-        st.subheader("Current")
-        if current_facts:
-            st.dataframe(fact_rows(current_facts), use_container_width=True, hide_index=True)
-        else:
-            st.write("No current FactStates found.")
-    with right:
-        st.subheader("History")
-        if history_facts:
-            st.dataframe(fact_rows(history_facts), use_container_width=True, hide_index=True)
-        else:
-            st.write("No superseded FactStates found.")
-
-    st.subheader("1-Hop Related Entities")
-    client = HydraDB(token=api_key)
-    related = []
-    for triplet in relation_triplets(client, database, collection, entity_id):
-        source_id, target_id = relation_entities(triplet)
-        neighbor_id = target_id if source_id == entity_id else source_id if target_id == entity_id else None
-        if not neighbor_id:
-            continue
-        neighbor = entities_by_id.get(neighbor_id)
-        label = canonical_name(neighbor) if neighbor else neighbor_id
-        related.append((relation_predicate(triplet), neighbor_id, label))
-
-    if related:
-        seen = set()
-        for predicate, neighbor_id, label in related:
-            key = (predicate, neighbor_id)
-            if key in seen:
-                continue
-            seen.add(key)
-            st.markdown(f"- `{predicate or 'related_to'}` [{label}]({entity_link(neighbor_id, label)})")
-    else:
-        st.write("No 1-hop relations found.")
-
-
-if __name__ == "__main__":
-    main()
+st.set_page_config(
+    page_title="CORTEX — Organizational Context Layer",
+    page_icon="◈",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ---------------------------------------------------------------------------
+# Hide Streamlit chrome so the page renders edge-to-edge on pure black.
+# ---------------------------------------------------------------------------
+CHROME_CSS = """
+<style>
+  html, body, .stApp {
+    background: #050505 !important;
+    overflow: hidden;
+  }
+  #MainMenu, footer, [data-testid="stHeader"],
+  [data-testid="stToolbar"], [data-testid="stDecoration"] {
+    display: none !important;
+    visibility: hidden !important;
+  }
+  [data-testid="stAppViewContainer"] > .main {
+    padding: 0 !important;
+    background: #050505 !important;
+  }
+  .block-container {
+    padding: 0 !important;
+    max-width: 100% !important;
+  }
+</style>
+"""
+
+# ---------------------------------------------------------------------------
+# The landing page: full-viewport fixed overlay.
+# ---------------------------------------------------------------------------
+def _strip_line_indent(raw: str) -> str:
+    """Remove leading whitespace from every line of raw HTML.
+
+    Streamlit renders markdown with the `marked` parser, which treats any
+    line indented with 4+ spaces as a code block and escapes it (showing
+    raw HTML source instead of the page). The readable indentation used in
+    PAGE_HTML must therefore be removed before rendering.
+    """
+    return "\n".join(line.lstrip() if line.strip() else "" for line in raw.splitlines())
+
+
+PAGE_HTML = """
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap');
+
+  #cortex-hero {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    background: #050505;
+    color: #ffffff;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+    user-select: none;
+  }
+  #cortex-hero a { -webkit-tap-highlight-color: transparent; }
+  #cortex-hero ::selection { background: rgba(59, 130, 246, 0.35); }
+
+  /* ---------- atmospheric glow layers ---------- */
+  .glow, .beam { position: absolute; pointer-events: none; }
+  .glow-core {
+    width: 940px; height: 560px; top: 22%; left: 50%;
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(37, 99, 235, 0.13), transparent 70%);
+    filter: blur(30px);
+  }
+  .glow-accent {
+    width: 860px; height: 300px; top: 40%; left: 50%;
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side, rgba(139, 92, 246, 0.10), transparent 72%);
+    filter: blur(46px);
+  }
+  .glow-lower {
+    width: 1240px; height: 580px; bottom: -170px; left: 50%;
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side at 50% 62%,
+      rgba(37, 99, 235, 0.34), rgba(34, 211, 238, 0.12) 48%, transparent 74%);
+    filter: blur(56px);
+  }
+  .glow-cyan {
+    width: 720px; height: 300px; bottom: -96px; left: 50%;
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side at 50% 70%, rgba(34, 211, 238, 0.20), transparent 72%);
+    filter: blur(46px);
+  }
+  .beam {
+    width: 620px; height: 840px; top: 10%; left: 50%;
+    transform: translateX(-50%);
+    background: linear-gradient(to top,
+      rgba(56, 189, 248, 0.10), rgba(59, 130, 246, 0.05) 42%, transparent 76%);
+    filter: blur(34px);
+  }
+
+  /* ---------- top navigation ---------- */
+  .nav {
+    position: absolute; top: 0; left: 0; right: 0; z-index: 4;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 34px clamp(40px, 5.2vw, 84px);
+  }
+  .brand { display: flex; align-items: center; gap: 13px; }
+  .brand-icon {
+    width: 38px; height: 38px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 32% 28%, rgba(59, 130, 246, 0.28), rgba(30, 58, 138, 0.16));
+    border: 1px solid rgba(96, 165, 250, 0.35);
+    box-shadow: 0 0 18px rgba(59, 130, 246, 0.35), inset 0 0 10px rgba(59, 130, 246, 0.15);
+  }
+  .brand-name { font-size: 13.5px; font-weight: 600; letter-spacing: 0.16em; color: #ffffff; }
+  .brand-tag {
+    display: block; margin-top: 3px;
+    font-size: 8.5px; font-weight: 500; letter-spacing: 0.18em; text-transform: uppercase;
+    color: #6E7684;
+  }
+  .nav-links {
+    position: absolute; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: clamp(18px, 2.2vw, 32px);
+  }
+  .nav-links a {
+    font-size: 13.5px; color: #9AA1AC; text-decoration: none;
+    display: flex; align-items: center; gap: 5px;
+    transition: color 0.15s ease;
+  }
+  .nav-links a:hover { color: #ffffff; }
+  .nav-cta {
+    padding: 10px 22px; border-radius: 999px;
+    background: #ffffff; color: #0a0b0d;
+    font-size: 13.5px; font-weight: 500; text-decoration: none;
+    box-shadow: 0 0 24px rgba(96, 165, 250, 0.35);
+    transition: box-shadow 0.2s ease, transform 0.15s ease;
+  }
+  .nav-cta:hover { box-shadow: 0 0 36px rgba(96, 165, 250, 0.55); }
+  .nav-cta:active { transform: scale(0.97); }
+
+  /* ---------- hero ---------- */
+  .hero {
+    position: absolute; top: 42%; left: 50%; z-index: 2;
+    transform: translate(-50%, -50%);
+    width: 100%; display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+  }
+  .badge {
+    display: inline-flex; align-items: center; gap: 12px;
+    padding: 6px 16px 6px 8px; border-radius: 999px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+    font-size: 13px; color: #E5E7EB;
+  }
+  .badge-avatars { display: flex; }
+  .avatar {
+    width: 22px; height: 22px; border-radius: 50%;
+    border: 2px solid #0b0d13; margin-left: -8px;
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.5);
+  }
+  .avatar:first-child { margin-left: 0; }
+  .a1 { background: linear-gradient(135deg, #60a5fa, #1e3a8a); }
+  .a2 { background: linear-gradient(135deg, #a78bfa, #4c1d95); }
+  .a3 { background: linear-gradient(135deg, #22d3ee, #164e63); }
+  .a4 { background: linear-gradient(135deg, #818cf8, #312e81); }
+  .badge b { color: #7ec9ff; font-weight: 600; }
+
+  .headline {
+    margin: 28px 0 0;
+    font-size: clamp(52px, 6.2vw, 88px);
+    line-height: 1.0; font-weight: 600; letter-spacing: -0.02em;
+    color: #ffffff;
+    text-shadow: 0 0 60px rgba(148, 163, 184, 0.12);
+  }
+  .accent {
+    margin: 14px 0 0;
+    font-family: 'Instrument Serif', Georgia, serif;
+    font-style: italic; font-weight: 400;
+    font-size: clamp(46px, 5vw, 68px); line-height: 1.1;
+    background-image: linear-gradient(94deg, #cdb9ff 0%, #ffffff 46%, #8ec9ff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+    filter: drop-shadow(0 0 26px rgba(147, 197, 253, 0.22));
+  }
+  .sub {
+    margin: 24px 0 0;
+    max-width: 640px;
+    font-size: 17px; line-height: 1.6; color: #9AA1AC;
+  }
+
+  /* ---------- email + CTA ---------- */
+  .cta {
+    margin-top: 34px;
+    display: flex; align-items: center;
+    width: min(560px, 88vw); height: 58px;
+    background: rgba(255, 255, 255, 0.045);
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 30px; padding: 5px;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 12px 44px rgba(0, 0, 0, 0.45);
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  }
+  .cta:focus-within {
+    border-color: rgba(96, 165, 250, 0.45);
+    box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.10), 0 12px 44px rgba(0, 0, 0, 0.45);
+  }
+  .cta input {
+    flex: 1; min-width: 0;
+    background: transparent; border: 0; outline: none;
+    color: #ffffff; font-size: 15px; font-family: inherit;
+    padding: 0 22px;
+  }
+  .cta input::placeholder { color: #767E8B; }
+  .cta button {
+    width: 212px; height: 48px; border-radius: 25px;
+    background: #ffffff; color: #0a0b0d; border: 0; cursor: pointer;
+    font-size: 14px; font-weight: 500; font-family: inherit;
+    display: flex; align-items: center; justify-content: center; gap: 9px;
+    box-shadow: 0 0 28px rgba(96, 165, 250, 0.35);
+    transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
+  }
+  .cta button:hover { background: #eef3fb; box-shadow: 0 0 38px rgba(96, 165, 250, 0.5); }
+  .cta button:active { transform: scale(0.98); }
+  .cta button svg { margin-left: 1px; }
+  .success {
+    display: none; margin-top: 20px;
+    font-size: 14px; color: #8fd6ff; letter-spacing: 0.01em;
+  }
+
+  /* ---------- integration panel ---------- */
+  .integrations {
+    position: absolute; bottom: -12px; left: 50%; z-index: 3;
+    transform: translateX(-50%);
+    width: min(960px, 92vw); height: 158px;
+    border-radius: 32px; overflow: hidden;
+    padding: 24px 40px 26px;
+    display: flex; flex-direction: column; align-items: center;
+    background: linear-gradient(180deg, rgba(30, 41, 66, 0.50), rgba(8, 11, 18, 0.74));
+    border: 1px solid rgba(148, 163, 184, 0.16);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 -18px 60px rgba(37, 99, 235, 0.18),
+      0 30px 80px rgba(0, 0, 0, 0.6);
+  }
+  .integrations .graph {
+    position: absolute; inset: 0; width: 100%; height: 100%;
+    opacity: 0.55; filter: blur(1px);
+    pointer-events: none;
+  }
+  .integrations-label {
+    position: relative; margin: 0 0 18px;
+    font-size: 10.5px; font-weight: 500; letter-spacing: 0.3em;
+    text-transform: uppercase; color: rgba(226, 232, 240, 0.5);
+  }
+  .integrations-row {
+    position: relative;
+    display: flex; align-items: center; justify-content: center;
+    gap: clamp(20px, 3.4vw, 46px); flex-wrap: wrap;
+  }
+  .integ { display: flex; align-items: center; gap: 9px; }
+  .integ svg { opacity: 0.92; }
+  .integ span {
+    font-size: 13.5px; color: #E7EAF1; letter-spacing: 0.01em; white-space: nowrap;
+  }
+  .integ.more span { color: #AEB6C2; }
+  .integ.more svg { opacity: 0.7; }
+
+  @media (max-width: 1180px) {
+    .nav-links { display: none; }
+    .nav { padding: 28px 38px; }
+  }
+  @media (max-width: 760px) {
+    .headline { font-size: clamp(38px, 9vw, 52px); }
+    .accent { font-size: clamp(30px, 7vw, 44px); }
+    .sub { font-size: 15px; }
+    .cta { height: 54px; }
+    .cta button { width: 158px; }
+    .integrations { height: auto; padding-bottom: 34px; }
+  }
+</style>
+
+<div id="cortex-hero">
+  <!-- atmospheric light -->
+  <div class="beam"></div>
+  <div class="glow glow-core"></div>
+  <div class="glow glow-accent"></div>
+  <div class="glow glow-lower"></div>
+  <div class="glow glow-cyan"></div>
+
+  <!-- top navigation -->
+  <header class="nav">
+    <div class="brand">
+      <div class="brand-icon">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="4" r="1.9" fill="#7EC9FF"/>
+          <circle cx="4.8" cy="10.2" r="1.9" fill="#7EC9FF"/>
+          <circle cx="19.2" cy="10.2" r="1.9" fill="#7EC9FF"/>
+          <circle cx="8.6" cy="18.4" r="1.9" fill="#A5C9F5"/>
+          <circle cx="15.4" cy="18.4" r="1.9" fill="#A5C9F5"/>
+          <circle cx="12" cy="11.6" r="1.9" fill="#38BDF8"/>
+          <path d="M12 5.9 L5.6 9.0 M12 5.9 L18.4 9.0 M5.6 9.0 L8.6 16.6 M18.4 9.0 L15.4 16.6 M12 13.5 L8.6 16.6 M12 13.5 L15.4 16.6"
+                stroke="#3B82F6" stroke-width="1.1" opacity="0.85"/>
+        </svg>
+      </div>
+      <div>
+        <div class="brand-name">CORTEX</div>
+        <div class="brand-tag">Organizational Context Layer</div>
+      </div>
+    </div>
+    <nav class="nav-links">
+      <a href="#">Product
+        <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </a>
+      <a href="#">How It Works</a>
+      <a href="#">Use Cases</a>
+      <a href="#">Pricing</a>
+      <a href="#">Docs</a>
+      <a href="#">GitHub</a>
+    </nav>
+    <a class="nav-cta" href="#" id="nav-cta">Join The Waitlist</a>
+  </header>
+
+  <!-- hero content -->
+  <main class="hero">
+    <div class="badge">
+      <div class="badge-avatars">
+        <span class="avatar a1"></span>
+        <span class="avatar a2"></span>
+        <span class="avatar a3"></span>
+        <span class="avatar a4"></span>
+      </div>
+      <span><b>576</b>currently on the waitlist</span>
+    </div>
+
+    <h1 class="headline">Understand your<br>organization.</h1>
+
+    <p class="accent">Cortex makes it usable.</p>
+
+    <p class="sub">Connect your scattered conversations, documents, code, issues,<br>
+      and decisions into a living context layer that your team and agents can use — anywhere, anytime.</p>
+
+    <form class="cta" id="waitlist-form" novalidate>
+      <input type="email" id="waitlist-email" name="email" placeholder="Your work email" autocomplete="email" />
+      <button type="submit" id="waitlist-submit">Join The Waitlist
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+    <p class="success" id="waitlist-success">You're on the list — welcome to Cortex.</p>
+  </main>
+
+  <!-- integration panel emerging from the glow -->
+  <section class="integrations">
+    <svg class="graph" viewBox="0 0 960 158" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+      <g stroke="#93c5fd" stroke-width="1" opacity="0.35" fill="none">
+        <line x1="118" y1="100" x2="232" y2="62"/>
+        <line x1="232" y1="62" x2="344" y2="116"/>
+        <line x1="232" y1="62" x2="474" y2="38"/>
+        <line x1="344" y1="116" x2="474" y2="38"/>
+        <line x1="474" y1="38" x2="604" y2="94"/>
+        <line x1="604" y1="94" x2="724" y2="44"/>
+        <line x1="604" y1="94" x2="836" y2="104"/>
+        <line x1="724" y1="44" x2="836" y2="104"/>
+      </g>
+      <g fill="rgba(96, 165, 250, 0.30)">
+        <circle cx="118" cy="100" r="4"/>
+        <circle cx="232" cy="62" r="5"/>
+        <circle cx="344" cy="116" r="4"/>
+        <circle cx="474" cy="38" r="6"/>
+        <circle cx="604" cy="94" r="5"/>
+        <circle cx="724" cy="44" r="4"/>
+        <circle cx="836" cy="104" r="5"/>
+      </g>
+    </svg>
+
+    <p class="integrations-label">Cortex connects your organization</p>
+
+    <div class="integrations-row">
+      <div class="integ">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#AEB9C9" aria-hidden="true">
+          <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
+        </svg>
+        <span>Slack</span>
+      </div>
+      <div class="integ">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#AEB9C9" aria-hidden="true">
+          <path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/>
+        </svg>
+        <span>Gmail</span>
+      </div>
+      <div class="integ">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#AEB9C9" aria-hidden="true">
+          <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
+        </svg>
+        <span>GitHub</span>
+      </div>
+      <div class="integ">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#AEB9C9" aria-hidden="true">
+          <path d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.215 5.215 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zm5.705-5.7h-11.56a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058A5.215 5.215 0 0 0 24 12.543V1.058a1.001 1.001 0 0 0-1.001-1.001z"/>
+        </svg>
+        <span>Jira</span>
+      </div>
+      <div class="integ">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#AEB9C9" aria-hidden="true">
+          <path d="M.87 18.12c.193 0 .38.062.536.177l11.173 8.022c.161.117.36.18.564.18.53 0 .96-.43.96-.96v-3.426c0-.541-.218-1.056-.618-1.428l-5.36-4.96 5.36-4.97c.4-.372.618-.885.618-1.427V6.9c0-.531-.43-.96-.96-.96-.204 0-.403.063-.564.18L1.406 14.14c-.156.114-.344.177-.536.177-.53 0-.96.43-.96.96v1.884c0 .53.43.96.96.96zm22.26-.12c0-.203-.063-.38-.177-.536L11.78 9.44c-.16-.116-.36-.18-.563-.18-.531 0-.96.43-.96.96v3.426c0 .541.218 1.057.618 1.428l5.36 4.962-5.36 4.968c-.4.372-.618.885-.618 1.428v3.426c0 .53.43.96.96.96.203 0 .402-.064.564-.18l11.172-8.02c.114-.158.177-.333.177-.537v-1.887c0-.53-.43-.96-.96-.96z"/>
+        </svg>
+        <span>Confluence</span>
+      </div>
+      <div class="integ">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#AEB9C9" aria-hidden="true">
+          <path d="M4.433 22.5l-2.165-3.75L12 3.75l2.165 3.75H6.598L4.433 22.5zm4.712 0L11.31 18h9.257l-2.165 3.75H9.145zM20.168 7.5l2.165 3.75-5.716 9.9-2.164-3.75 5.715-9.9zM15.435 4.5L13.27.75h4.33L19.76 4.5h-4.325zM9.1 4.5h5.716l-2.164 3.75H6.935L9.1 4.5z"/>
+        </svg>
+        <span>Drive</span>
+      </div>
+      <div class="integ more">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#AEB9C9" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+          <path d="M12 5v14M5 12h14"/>
+        </svg>
+        <span>More</span>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  var form = document.getElementById('waitlist-form');
+  var success = document.getElementById('waitlist-success');
+
+  function quietNav() {
+    document.querySelectorAll('#cortex-hero a[href="#"]').forEach(function (a) {
+      a.addEventListener('click', function (e) { e.preventDefault(); });
+    });
+  }
+  quietNav();
+
+  if (form) {
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      form.style.display = 'none';
+      success.style.display = 'block';
+    });
+  }
+
+  var navCta = document.getElementById('nav-cta');
+  var email = document.getElementById('waitlist-email');
+  if (navCta && email) {
+    navCta.addEventListener('click', function (e) {
+      e.preventDefault();
+      email.focus();
+      email.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  }
+})();
+</script>
+"""
+
+st.markdown(CHROME_CSS, unsafe_allow_html=True)
+st.markdown(_strip_line_indent(PAGE_HTML), unsafe_allow_html=True)
