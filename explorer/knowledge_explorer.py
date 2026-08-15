@@ -83,48 +83,56 @@ PAGE_HTML = """
   #cortex-hero a { -webkit-tap-highlight-color: transparent; }
   #cortex-hero ::selection { background: rgba(59, 130, 246, 0.35); }
 
-  /* ---------- atmospheric light: black base, blue/violet glow rises from below ---------- */
+  /* ---------- atmospheric light: layered volumetric blue rising from below ---------- */
   .glow, .beam { position: absolute; pointer-events: none; }
-  /* dark-blue atmospheric haze behind the headline */
+  /* faint deep-navy + violet haze behind the headline (top stays near-black) */
   .glow-hero {
-    width: 1120px; height: 540px; top: 22%; left: 50%;
+    width: 1240px; height: 580px; top: 18%; left: 50%;
     transform: translateX(-50%);
     background: radial-gradient(closest-side,
-      rgba(59, 130, 246, 0.15), rgba(76, 29, 149, 0.10) 46%, transparent 76%);
-    filter: blur(54px);
+      rgba(77, 60, 255, 0.09), rgba(7, 16, 43, 0.30) 48%, transparent 78%);
+    filter: blur(60px);
   }
-  /* very subtle purple illumination around the accent line */
+  /* very subtle violet illumination around the accent line */
   .glow-accent {
-    width: 920px; height: 340px; top: 38%; left: 50%;
+    width: 940px; height: 340px; top: 40%; left: 50%;
     transform: translateX(-50%);
     background: radial-gradient(closest-side,
-      rgba(139, 92, 246, 0.12), rgba(59, 130, 246, 0.06) 48%, transparent 74%);
-    filter: blur(48px);
+      rgba(77, 60, 255, 0.10), rgba(22, 77, 255, 0.05) 48%, transparent 74%);
+    filter: blur(50px);
   }
-  /* electric-blue glow emerging from the lower center */
-  .glow-lower {
-    width: 1320px; height: 700px; bottom: -260px; left: 50%;
+  /* LAYER 1 — very large deep-navy haze centered ~72% down */
+  .glow-navy {
+    width: 1760px; height: 800px; bottom: -260px; left: 50%;
     transform: translateX(-50%);
-    background: radial-gradient(closest-side at 50% 78%,
-      rgba(34, 211, 238, 0.17), rgba(59, 130, 246, 0.26) 40%,
-      rgba(30, 58, 138, 0.13) 56%, transparent 78%);
-    filter: blur(62px);
+    background: radial-gradient(closest-side at 50% 62%,
+      rgba(11, 31, 102, 0.45), rgba(7, 16, 43, 0.32) 52%, transparent 80%);
+    filter: blur(72px);
   }
-  /* cyan highlight at the very bottom center */
-  .glow-cyan {
-    width: 760px; height: 320px; bottom: -110px; left: 50%;
+  /* LAYER 2 — large electric-blue glow centered ~88% down */
+  .glow-lower {
+    width: 1480px; height: 680px; bottom: -220px; left: 50%;
     transform: translateX(-50%);
     background: radial-gradient(closest-side at 50% 70%,
-      rgba(34, 211, 238, 0.20), transparent 72%);
-    filter: blur(46px);
+      rgba(22, 77, 255, 0.38), rgba(20, 107, 255, 0.20) 46%, transparent 76%);
+    filter: blur(64px);
   }
-  /* soft blue-to-cyan beam rising behind the hero */
+  /* LAYER 3 — brightest bright-blue → cyan core at the very bottom */
+  .glow-cyan {
+    width: 1040px; height: 440px; bottom: -160px; left: 50%;
+    transform: translateX(-50%);
+    background: radial-gradient(closest-side at 50% 76%,
+      rgba(40, 215, 255, 0.46), rgba(20, 107, 255, 0.30) 38%, transparent 74%);
+    filter: blur(54px);
+  }
+  /* LAYER 4 — soft vertical blue haze rising from the bottom toward the hero */
   .beam {
-    width: 580px; height: 940px; bottom: -160px; left: 50%;
+    width: 760px; height: 1120px; bottom: -230px; left: 50%;
     transform: translateX(-50%);
     background: linear-gradient(to top,
-      rgba(34, 211, 238, 0.14), rgba(59, 130, 246, 0.10) 32%, transparent 70%);
-    filter: blur(42px);
+      rgba(40, 215, 255, 0.20), rgba(22, 77, 255, 0.15) 24%,
+      rgba(22, 77, 255, 0.08) 48%, transparent 74%);
+    filter: blur(48px);
   }
 
   /* ---------- top navigation ---------- */
@@ -170,7 +178,7 @@ PAGE_HTML = """
 
   /* ---------- hero ---------- */
   .hero {
-    position: absolute; top: 16.5%; left: 50%; z-index: 2;
+    position: absolute; top: 15.5%; left: 50%; z-index: 2;
     transform: translateX(-50%);
     width: 100%; display: flex; flex-direction: column; align-items: center;
     text-align: center;
@@ -193,33 +201,37 @@ PAGE_HTML = """
 
   .headline {
     margin: 26px 0 0;
-    font-size: clamp(52px, 5.6vw, 78px);
-    line-height: 1.02; font-weight: 500; letter-spacing: -0.02em;
+    max-width: 950px;
+    font-size: clamp(64px, 6.6vw, 92px);
+    line-height: 0.96; font-weight: 600; letter-spacing: -0.05em;
     color: #ffffff;
   }
   .accent {
-    margin: 10px 0 0;
+    margin: 14px 0 0;
     font-family: 'Instrument Serif', Georgia, serif;
     font-style: italic; font-weight: 400;
-    font-size: clamp(50px, 5.3vw, 74px); line-height: 1.06;
-    background-image: linear-gradient(92deg, #d0b6ff 0%, #ffffff 42%, #7db8ff 100%);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
-    filter: drop-shadow(0 0 36px rgba(147, 160, 255, 0.26));
+    font-size: clamp(72px, 7.4vw, 104px); line-height: 1.0;
+    filter: drop-shadow(0 0 44px rgba(120, 140, 255, 0.34));
   }
+  .accent-grad {
+    background-image: linear-gradient(92deg, #e9c9ff 0%, #c9a8ff 32%, #8f7bff 60%, #86b8ff 100%);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .accent-solid { color: #5ea2ff; }
   .sub {
-    margin: 20px 0 0;
-    max-width: 640px;
-    font-size: 17px; line-height: 1.6; color: #9AA1AC;
+    margin: 22px 0 0;
+    max-width: 720px;
+    font-size: 19px; line-height: 1.5; color: #A7ACB8;
   }
 
   /* ---------- pill CTA ---------- */
   .cta {
-    margin-top: 32px;
+    margin-top: 34px;
     display: flex; align-items: center;
     padding: 6px;
     background: rgba(255, 255, 255, 0.035);
-    border: 1px solid rgba(255, 255, 255, 0.09);
-    border-radius: 31px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 999px;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
     box-shadow: 0 14px 44px rgba(0, 0, 0, 0.5);
@@ -231,13 +243,13 @@ PAGE_HTML = """
   }
   .cta a {
     display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-    width: 206px; height: 48px; border-radius: 25px;
+    width: 238px; height: 60px; border-radius: 999px;
     background: #ffffff; color: #0a0b0d;
-    font-size: 15px; font-weight: 500; text-decoration: none;
-    box-shadow: 0 0 26px rgba(96, 165, 250, 0.30);
+    font-size: 16px; font-weight: 500; text-decoration: none;
+    box-shadow: 0 0 36px rgba(22, 77, 255, 0.5);
     transition: background 0.2s ease, box-shadow 0.2s ease, transform 0.15s ease;
   }
-  .cta a:hover { background: #eef3fb; box-shadow: 0 0 38px rgba(96, 165, 250, 0.48); }
+  .cta a:hover { background: #eef3fb; box-shadow: 0 0 52px rgba(22, 77, 255, 0.68); }
   .cta a:active { transform: scale(0.98); }
   .cta a svg { margin-left: 1px; }
 
@@ -249,13 +261,13 @@ PAGE_HTML = """
     border-radius: 34px; overflow: hidden;
     padding: 30px 44px;
     display: flex; flex-direction: column; align-items: center;
-    background: linear-gradient(180deg, rgba(24, 30, 44, 0.42), rgba(6, 9, 15, 0.80));
+    background: linear-gradient(180deg, rgba(24, 30, 44, 0.38), rgba(6, 9, 15, 0.72));
     border: 1px solid rgba(148, 163, 184, 0.14);
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.05),
-      0 -24px 80px rgba(37, 99, 235, 0.16),
+      0 -24px 80px rgba(22, 77, 255, 0.24),
       0 40px 90px rgba(0, 0, 0, 0.65);
   }
   .integrations .graph {
@@ -286,10 +298,10 @@ PAGE_HTML = """
     .nav { padding: 28px 40px; }
   }
   @media (max-width: 760px) {
-    .headline { font-size: clamp(38px, 9vw, 52px); }
-    .accent { font-size: clamp(30px, 7vw, 44px); }
-    .sub { font-size: 15px; }
-    .cta a { width: 172px; height: 46px; }
+    .headline { font-size: clamp(42px, 9vw, 58px); letter-spacing: -0.035em; }
+    .accent { font-size: clamp(40px, 9.5vw, 64px); }
+    .sub { font-size: 16px; }
+    .cta a { width: 210px; height: 54px; }
     .integrations { height: auto; padding-bottom: 40px; }
   }
 </style>
@@ -299,6 +311,7 @@ PAGE_HTML = """
   <div class="beam"></div>
   <div class="glow glow-hero"></div>
   <div class="glow glow-accent"></div>
+  <div class="glow glow-navy"></div>
   <div class="glow glow-lower"></div>
   <div class="glow glow-cyan"></div>
 
@@ -341,7 +354,7 @@ PAGE_HTML = """
 
     <h1 class="headline">Understand your<br>organization.</h1>
 
-    <p class="accent">Cortex makes it usable.</p>
+    <p class="accent"><span class="accent-grad">Cortex makes it </span><span class="accent-solid">usable.</span></p>
 
     <p class="sub">Connect your scattered conversations, documents, code, issues, and decisions into a living context layer that your team and agents can use — anywhere, anytime.</p>
 
@@ -389,37 +402,44 @@ PAGE_HTML = """
 
     <div class="integrations-row">
       <div class="integ">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="#B7C0CD" aria-hidden="true">
-          <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"/>
+        <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52z" fill="#E01E5A"/>
+          <path d="M6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313z" fill="#E01E5A"/>
+          <path d="M8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834z" fill="#36C5F0"/>
+          <path d="M8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312z" fill="#36C5F0"/>
+          <path d="M18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834z" fill="#2EB67D"/>
+          <path d="M17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312z" fill="#2EB67D"/>
+          <path d="M15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52z" fill="#ECB22E"/>
+          <path d="M15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z" fill="#ECB22E"/>
         </svg>
         <span>Slack</span>
       </div>
       <div class="integ">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="#B7C0CD" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#EA4335" aria-hidden="true">
           <path d="M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z"/>
         </svg>
         <span>Gmail</span>
       </div>
       <div class="integ">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="#B7C0CD" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#E6EDF3" aria-hidden="true">
           <path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/>
         </svg>
         <span>GitHub</span>
       </div>
       <div class="integ">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="#B7C0CD" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#2684FF" aria-hidden="true">
           <path d="M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.575 24V12.518a1.005 1.005 0 0 0-1.005-1.005zm5.723-5.756H5.736a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058a5.215 5.215 0 0 0 5.215 5.214V6.758a1.001 1.001 0 0 0-1.001-1.001zm5.705-5.7h-11.56a5.215 5.215 0 0 0 5.215 5.214h2.129v2.058A5.215 5.215 0 0 0 24 12.543V1.058a1.001 1.001 0 0 0-1.001-1.001z"/>
         </svg>
         <span>Jira</span>
       </div>
       <div class="integ">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="#B7C0CD" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#5B8DEF" aria-hidden="true">
           <path d="M.87 18.12c.193 0 .38.062.536.177l11.173 8.022c.161.117.36.18.564.18.53 0 .96-.43.96-.96v-3.426c0-.541-.218-1.056-.618-1.428l-5.36-4.96 5.36-4.97c.4-.372.618-.885.618-1.427V6.9c0-.531-.43-.96-.96-.96-.204 0-.403.063-.564.18L1.406 14.14c-.156.114-.344.177-.536.177-.53 0-.96.43-.96.96v1.884c0 .53.43.96.96.96zm22.26-.12c0-.203-.063-.38-.177-.536L11.78 9.44c-.16-.116-.36-.18-.563-.18-.531 0-.96.43-.96.96v3.426c0 .541.218 1.057.618 1.428l5.36 4.962-5.36 4.968c-.4.372-.618.885-.618 1.428v3.426c0 .53.43.96.96.96.203 0 .402-.064.564-.18l11.172-8.02c.114-.158.177-.333.177-.537v-1.887c0-.53-.43-.96-.96-.96z"/>
         </svg>
         <span>Confluence</span>
       </div>
       <div class="integ">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="#B7C0CD" aria-hidden="true">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="#4285F4" aria-hidden="true">
           <path d="M4.433 22.5l-2.165-3.75L12 3.75l2.165 3.75H6.598L4.433 22.5zm4.712 0L11.31 18h9.257l-2.165 3.75H9.145zM20.168 7.5l2.165 3.75-5.716 9.9-2.164-3.75 5.715-9.9zM15.435 4.5L13.27.75h4.33L19.76 4.5h-4.325zM9.1 4.5h5.716l-2.164 3.75H6.935L9.1 4.5z"/>
         </svg>
         <span>Drive</span>
