@@ -256,6 +256,62 @@ def link_entity_mentions(mentions: list[str], entities: list[dict[str, Any]]) ->
     return links
 
 
+def merged_into_id(entity: dict[str, Any]) -> str | None:
+    extra = additional_metadata(entity)
+    meta = metadata(entity)
+    merged_into = extra.get("merged_into") or meta.get("merged_into")
+    return str(merged_into) if merged_into else None
+
+
+def resolve_merged_entity_id(
+    entity_id: str,
+    entities_by_id: dict[str, dict[str, Any]],
+) -> str:
+    current_id = entity_id
+    visited: set[str] = set()
+    while current_id not in visited:
+        visited.add(current_id)
+        entity = entities_by_id.get(current_id)
+        next_id = merged_into_id(entity) if entity else None
+        if not next_id or next_id not in entities_by_id:
+            break
+        current_id = next_id
+    return current_id
+
+
+def redirect_links_through_merges(
+    links: list[LinkResult],
+    entities: list[dict[str, Any]],
+    ignore_entity_merges: bool,
+) -> list[LinkResult]:
+    if ignore_entity_merges:
+        return links
+
+    entities_by_id = {entity["id"]: entity for entity in entities}
+    redirected: list[LinkResult] = []
+    for link in links:
+        if not link.entity_id:
+            redirected.append(link)
+            continue
+        canonical_id = resolve_merged_entity_id(link.entity_id, entities_by_id)
+        canonical_entity = entities_by_id.get(canonical_id)
+        if canonical_entity is None or canonical_id == link.entity_id:
+            redirected.append(link)
+            continue
+        redirected.append(
+            LinkResult(
+                mention=link.mention,
+                entity_id=canonical_id,
+                canonical_name=canonical_name(canonical_entity),
+                score=link.score,
+                state=str(metadata(canonical_entity).get("state") or "candidate"),
+                no_anchor=link.no_anchor,
+                fallback_used=link.fallback_used,
+            )
+        )
+    return redirected
+
+
 def fact_value(fact: dict[str, Any]) -> str:
     extra = additional_metadata(fact)
     if "value" in extra:
@@ -521,6 +577,7 @@ def answer_question(
     verbose: bool,
     disable_abstention: bool = False,
     disable_graph_reasoning: bool = False,
+    ignore_entity_merges: bool = False,
 ) -> dict[str, Any]:
     load_dotenv()
     client = HydraDB(token=get_api_key())
@@ -537,25 +594,19 @@ def answer_question(
         fallback, _ = fallback_links(question, entities)
         if fallback:
             links = fallback
+    elif all(link.no_anchor for link in links):
+        fallback, fallback_doc_ids = fallback_links(question, entities)
+        if fallback:
+            links = fallback
+    links = redirect_links_through_merges(links, entities, ignore_entity_merges)
+
+    if disable_graph_reasoning:
         subgraph = {
             "entities": [],
             "facts": [],
             "relations": [],
             "fallback_documents": fallback_context,
         }
-    elif all(link.no_anchor for link in links):
-        fallback, fallback_doc_ids = fallback_links(question, entities)
-        if fallback:
-            links = fallback
-        subgraph = expand_subgraph(
-            client,
-            database,
-            collection,
-            links,
-            all_sources,
-            understanding["time_scope"],
-            hops=2,
-        )
     else:
         subgraph = expand_subgraph(
             client,
@@ -595,6 +646,7 @@ def answer_question(
             "context_packet": packet,
             "disable_abstention": disable_abstention,
             "disable_graph_reasoning": disable_graph_reasoning,
+            "ignore_entity_merges": ignore_entity_merges,
         }
     return result
 
@@ -610,6 +662,7 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--disable-abstention", action="store_true")
     parser.add_argument("--disable-graph-reasoning", action="store_true")
+    parser.add_argument("--ignore-entity-merges", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -623,6 +676,7 @@ def main() -> int:
             verbose=args.verbose,
             disable_abstention=args.disable_abstention,
             disable_graph_reasoning=args.disable_graph_reasoning,
+            ignore_entity_merges=args.ignore_entity_merges,
         )
         print(json.dumps(result, indent=2))
         return 0
