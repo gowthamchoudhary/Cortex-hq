@@ -40,6 +40,11 @@ OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 ENTITY_MATCH_THRESHOLD = 0.75
 ABSTENTION_THRESHOLD = 0.4
 CALIBRATION_PATH = PROJECT_ROOT / "reasoning" / "calibration.json"
+ROLE_ACCESS_LEVELS = {
+    "admin": ["public", "internal", "restricted"],
+    "member": ["public", "internal"],
+    "guest": ["public"],
+}
 
 
 @dataclass
@@ -181,6 +186,18 @@ def metadata(source: dict[str, Any]) -> dict[str, Any]:
 
 def additional_metadata(source: dict[str, Any]) -> dict[str, Any]:
     return dict(source.get("additional_metadata") or {})
+
+
+def allowed_access_levels(role: str) -> set[str]:
+    normalized_role = role.strip().lower()
+    try:
+        return set(ROLE_ACCESS_LEVELS[normalized_role])
+    except KeyError as exc:
+        raise ValueError(f"Unsupported role {role!r}; choose one of {', '.join(ROLE_ACCESS_LEVELS)}.") from exc
+
+
+def access_level(source: dict[str, Any]) -> str:
+    return str(metadata(source).get("access_level") or "public").strip().lower()
 
 
 def list_all_sources(client: HydraDB, database: str, collection: str) -> list[dict[str, Any]]:
@@ -389,9 +406,16 @@ def expand_subgraph(
     all_sources: list[dict[str, Any]],
     time_scope: str,
     hops: int,
+    role: str = "member",
 ) -> dict[str, Any]:
     entities_by_id = {source["id"]: source for source in all_sources if metadata(source).get("type") == "Entity"}
-    fact_states = [source for source in all_sources if metadata(source).get("type") == "FactState"]
+    allowed_levels = allowed_access_levels(role)
+    # HydraDB metadata filters are equality-only, so enforce the access set client-side.
+    fact_states = [
+        source
+        for source in all_sources
+        if metadata(source).get("type") == "FactState" and access_level(source) in allowed_levels
+    ]
     facts_by_subject: dict[str, list[dict[str, Any]]] = {}
     for fact in fact_states:
         # FactState validity is independent of whether its entity is a candidate or resolved.
@@ -578,8 +602,10 @@ def answer_question(
     disable_abstention: bool = False,
     disable_graph_reasoning: bool = False,
     ignore_entity_merges: bool = False,
+    role: str = "member",
 ) -> dict[str, Any]:
     load_dotenv()
+    allowed_access_levels(role)
     client = HydraDB(token=get_api_key())
     understanding = query_understanding(question, provider, model, timeout_seconds)
     all_sources = list_all_sources(client, database, collection)
@@ -616,6 +642,7 @@ def answer_question(
             all_sources,
             understanding["time_scope"],
             hops=2,
+            role=role,
         )
     confidence, breakdown = compute_confidence(links, subgraph)
     packet = context_packet(question, links, subgraph, confidence)
@@ -647,6 +674,8 @@ def answer_question(
             "disable_abstention": disable_abstention,
             "disable_graph_reasoning": disable_graph_reasoning,
             "ignore_entity_merges": ignore_entity_merges,
+            "role": role,
+            "allowed_access_levels": sorted(allowed_access_levels(role)),
         }
     return result
 
@@ -663,6 +692,7 @@ def main() -> int:
     parser.add_argument("--disable-abstention", action="store_true")
     parser.add_argument("--disable-graph-reasoning", action="store_true")
     parser.add_argument("--ignore-entity-merges", action="store_true")
+    parser.add_argument("--role", choices=tuple(ROLE_ACCESS_LEVELS), default="member")
     args = parser.parse_args()
 
     try:
@@ -677,6 +707,7 @@ def main() -> int:
             disable_abstention=args.disable_abstention,
             disable_graph_reasoning=args.disable_graph_reasoning,
             ignore_entity_merges=args.ignore_entity_merges,
+            role=args.role,
         )
         print(json.dumps(result, indent=2))
         return 0
