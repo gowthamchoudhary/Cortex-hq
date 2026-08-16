@@ -1,9 +1,11 @@
-"""Agent configuration store for deploying Cortex agents.
+"""Agent configuration and deployment store for Cortex agents.
 
 Agents are lightweight configuration records: which HydraDB collection an
-agent is tied to, and the default role applied to anyone using it. Records
-live in a local SQLite store (``deploy/agents.db``) so no live backend is
-required to define or inspect an agent.
+agent is tied to, and the default role applied to anyone using it. A second
+``deployments`` table records which platforms (slack, github, email, whatsapp)
+an agent is live on plus each platform's config (bot tokens, webhook secrets).
+Records live in a local SQLite store (``deploy/agents.db``) so no live backend
+is required to define or inspect an agent.
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ DEFAULT_DB_PATH = DEPLOY_DIR / "agents.db"
 DATABASE_NAME = "hackhydra-track1"
 
 VALID_ROLES = ("admin", "member", "guest")
+VALID_PLATFORMS = ("slack", "github", "email", "whatsapp")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS agents (
@@ -29,6 +32,17 @@ CREATE TABLE IF NOT EXISTS agents (
     collection   TEXT NOT NULL,
     role_default TEXT NOT NULL,
     created_at   INTEGER NOT NULL
+);
+"""
+
+_SCHEMA_DEPLOYMENTS = """
+CREATE TABLE IF NOT EXISTS deployments (
+    agent_id    TEXT NOT NULL,
+    platform    TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    status      TEXT NOT NULL,
+    deployed_at INTEGER NOT NULL,
+    PRIMARY KEY (agent_id, platform)
 );
 """
 
@@ -44,6 +58,7 @@ def _connect() -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(str(path))
     connection.execute(_SCHEMA)
+    connection.execute(_SCHEMA_DEPLOYMENTS)
     connection.commit()
     return connection
 
@@ -152,31 +167,96 @@ def get_agent_chat_endpoint(agent_id: str) -> dict[str, Any]:
     }
 
 
+def deploy_agent(
+    agent_id: str,
+    platform: str,
+    platform_config: dict[str, Any],
+    status: str = "pending",
+) -> dict[str, Any]:
+    """Record that ``agent_id`` is deployed to ``platform`` with its config.
+
+    ``platform`` is one of ``slack``, ``github``, ``email``, ``whatsapp``.
+    ``platform_config`` holds whatever the adapter needs at runtime (bot
+    tokens, webhook secrets, channel/workspace ids) — stored as JSON, never
+    printed.
+
+    ``status`` starts as ``"pending"``; set it to ``"active"`` once the
+    adapter's webhook has been confirmed reachable (e.g. after the platform's
+    URL-verification handshake succeeds). Re-deploying the same agent+platform
+    upserts the config.
+    """
+    normalized_platform = str(platform).strip().lower()
+    if normalized_platform not in VALID_PLATFORMS:
+        raise ValueError(
+            f"Unsupported platform {platform!r}; choose one of {', '.join(VALID_PLATFORMS)}."
+        )
+    if not isinstance(platform_config, dict) or not platform_config:
+        raise ValueError("platform_config must be a non-empty dict.")
+    if str(status).strip().lower() not in ("pending", "active", "disabled"):
+        raise ValueError("status must be one of 'pending', 'active', 'disabled'.")
+
+    get_agent_chat_endpoint(agent_id)  # Raises KeyError for unknown agents.
+
+    import json
+
+    connection = _connect()
+    try:
+        connection.execute(
+            "INSERT INTO deployments (agent_id, platform, config_json, status, deployed_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT (agent_id, platform) "
+            "DO UPDATE SET config_json = excluded.config_json, "
+            "                status = excluded.status, "
+            "                deployed_at = excluded.deployed_at",
+            (
+                str(agent_id),
+                normalized_platform,
+                json.dumps(platform_config, sort_keys=True),
+                str(status).strip().lower(),
+                int(time.time()),
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    return {
+        "status": str(status).strip().lower(),
+        "agent_id": str(agent_id),
+        "platform": normalized_platform,
+        "config": dict(platform_config),
+    }
+
+
+def get_agent_deployments(agent_id: str) -> list[dict[str, Any]]:
+    """Return every platform deployment recorded for ``agent_id``."""
+    import json
+
+    get_agent_chat_endpoint(agent_id)  # Raises KeyError for unknown agents.
+    connection = _connect()
+    try:
+        rows = connection.execute(
+            "SELECT platform, config_json, status, deployed_at FROM deployments "
+            "WHERE agent_id = ? ORDER BY platform",
+            (str(agent_id),),
+        ).fetchall()
+    finally:
+        connection.close()
+
+    return [
+        {
+            "platform": platform,
+            "config": json.loads(config_json or "{}"),
+            "status": status,
+            "deployed_at": deployed_at,
+        }
+        for platform, config_json, status, deployed_at in rows
+    ]
+
+
 def deploy_to_slack(
     agent_id: str,
     slack_workspace_config: dict[str, Any],
 ) -> dict[str, Any]:
-    """Stub for deploying an agent to Slack.
-
-    Validates that the agent exists and that a workspace config was supplied,
-    then returns a ``pending`` status. Actual Slack bot wiring (app manifest,
-    socket mode, event handlers) lands in a later step once this interface is
-    finalised.
-    """
-    if not isinstance(slack_workspace_config, dict) or not slack_workspace_config:
-        raise ValueError("slack_workspace_config must be a non-empty dict.")
-
-    workspace = slack_workspace_config.get("workspace")
-    if not workspace or not str(workspace).strip():
-        raise ValueError(
-            "slack_workspace_config must include a non-empty 'workspace' value."
-        )
-
-    get_agent_chat_endpoint(agent_id)  # Raises KeyError for unknown agents.
-
-    return {
-        "status": "pending",
-        "agent_id": agent_id,
-        "workspace": str(workspace).strip(),
-        "note": "Slack deployment is stubbed; bot wiring is not yet implemented.",
-    }
+    """Deprecated alias for ``deploy_agent(agent_id, "slack", config)``."""
+    return deploy_agent(agent_id, "slack", slack_workspace_config)
