@@ -8,6 +8,7 @@ from typing import Any
 
 from hydra_db import HydraDB
 
+from auth.user_brains import register_user_brain
 from schema.create_collection import (
     DATABASE_NAME,
     collection_names,
@@ -93,11 +94,13 @@ def _list_all_sources(client: HydraDB, collection_name: str) -> list[dict[str, A
     return sources
 
 
-def create_brain(org_name: str) -> dict[str, str]:
+def create_brain(org_name: str, user_id: str | None = None) -> dict[str, str]:
     """Create a unique HydraDB collection for an organization.
 
     The returned collection name is safe to persist and use in later pipeline
-    calls. Existing collections are never overwritten.
+    calls. Existing collections are never overwritten. When ``user_id`` is
+    provided (the authenticated Supabase user), the creator is automatically
+    registered as an ``admin`` on the new brain.
     """
     if not str(org_name).strip():
         raise ValueError("org_name must not be empty.")
@@ -105,6 +108,8 @@ def create_brain(org_name: str) -> dict[str, str]:
     client = _client()
     collection_name = _unique_collection_name(org_name, collection_names(client, DATABASE_NAME))
     ensure_collection(client, DATABASE_NAME, collection_name)
+    if user_id:
+        register_user_brain(str(user_id).strip(), collection_name, role="admin")
     return {"collection_name": collection_name, "status": "ready"}
 
 
