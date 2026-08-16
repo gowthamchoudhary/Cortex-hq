@@ -324,7 +324,7 @@ Google sign-in runs **client-side via Supabase's hosted auth**; the backend only
 - **`agent_manager.py`** — SQLite store (`deploy/agents.db`, override `CORTEX_AGENTS_DB`):
   - `create_agent(collection, agent_name, role_default="member")` — upsert by name; roles validated.
   - `get_agent_chat_endpoint(agent_id)` — returns `{database, collection, role, pipeline}` ready to call `reasoning.answer_question.answer_question`.
-  - `deploy_to_slack(agent_id, slack_workspace_config)` — validated stub returning `{"status": "pending"}`; Slack bot wiring lands in a later step.
+  - `deploy_agent(agent_id, platform, platform_config)` — records the platform(s) an agent is live on (slack/github/email/whatsapp) with their config in the SQLite store; `deploy_to_slack(...)` is kept as a deprecated alias.
 
 ### `dashboard/` — Admin Stats
 
