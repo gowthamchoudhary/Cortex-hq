@@ -365,6 +365,7 @@ def build_graph_documents(
                         "doc_source_type": doc_source_type,
                         "confidence": 0.5,
                         "state": "candidate",
+                        "access_level": default_access_level,
                     },
                     "additional_metadata": {"source_doc_id": doc_source_id},
                     "graph_entities": relation_entities,
