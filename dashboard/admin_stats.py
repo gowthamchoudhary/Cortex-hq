@@ -133,17 +133,28 @@ def get_admin_dashboard_data(collection: str) -> dict[str, Any]:
     records = _list_sources(client, str(collection))
 
     counts = Counter(_record_type(record) for record in records)
-    source_types: Counter[str] = Counter()
+    # The graph ingestion pipeline tracks documents via source_doc_id on
+    # entity/fact/relation records rather than standalone document records, so
+    # count distinct source_doc_ids (mirroring onboarding.get_brain_status)
+    # and fall back to literal document-type records when present.
+    document_ids: set[str] = set()
+    document_source_types: dict[str, str] = {}
+    for record in records:
+        doc_id = str(_record_value(record, "source_doc_id") or "").strip()
+        if doc_id:
+            document_ids.add(doc_id)
+            if doc_id not in document_source_types:
+                source_type = _record_value(record, "doc_source_type")
+                if source_type not in (None, ""):
+                    document_source_types[doc_id] = str(source_type)
+        elif _record_type(record) == "document":
+            document_ids.add(str(record.get("id") or ""))
+    document_ids.discard("")
+    source_types = Counter(document_source_types.values())
+
     latest_timestamp: Any = None
     latest_key: tuple[int, Any] = (0, 0)
-
     for record in records:
-        record_type = _record_type(record)
-        if record_type == "document":
-            source_type = _record_value(record, "doc_source_type")
-            if source_type not in (None, ""):
-                source_types[str(source_type)] += 1
-
         # Prefer created_at when present, then txn_from as requested by the
         # ingestion schema. Values are returned unchanged for UI formatting.
         timestamp = _record_value(record, "created_at")
@@ -168,7 +179,7 @@ def get_admin_dashboard_data(collection: str) -> dict[str, Any]:
     )
 
     return {
-        "total_documents": counts["document"],
+        "total_documents": len(document_ids),
         "total_entities": counts["entity"],
         "total_facts": counts["factstate"],
         "total_relations": counts["relation"],
