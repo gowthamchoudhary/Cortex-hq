@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from auth.user_brains import get_user_role_in_brain  # noqa: E402
 from eval.baseline import (  # noqa: E402
     DEFAULT_FIRE_FLIES_DIR,
     DEFAULT_GMAIL_DIR,
@@ -603,8 +604,20 @@ def answer_question(
     disable_graph_reasoning: bool = False,
     ignore_entity_merges: bool = False,
     role: str = "member",
+    user_id: str | None = None,
 ) -> dict[str, Any]:
+    """Answer a question with role-based access filtering.
+
+    When ``user_id`` is provided, the caller's role is derived from the
+    user-to-brain mapping (``auth.user_brains``) instead of being passed
+    explicitly — the explicit ``role`` remains the fallback for users without
+    a recorded grant.
+    """
     load_dotenv()
+    if user_id:
+        mapped_role = get_user_role_in_brain(str(user_id).strip(), collection)
+        if mapped_role:
+            role = mapped_role
     allowed_access_levels(role)
     client = HydraDB(token=get_api_key())
     understanding = query_understanding(question, provider, model, timeout_seconds)
@@ -693,6 +706,7 @@ def main() -> int:
     parser.add_argument("--disable-graph-reasoning", action="store_true")
     parser.add_argument("--ignore-entity-merges", action="store_true")
     parser.add_argument("--role", choices=tuple(ROLE_ACCESS_LEVELS), default="member")
+    parser.add_argument("--user-id", default=None, help="Supabase user id; role is derived from the user-to-brain mapping when set.")
     args = parser.parse_args()
 
     try:
@@ -708,6 +722,7 @@ def main() -> int:
             disable_graph_reasoning=args.disable_graph_reasoning,
             ignore_entity_merges=args.ignore_entity_merges,
             role=args.role,
+            user_id=args.user_id,
         )
         print(json.dumps(result, indent=2))
         return 0
