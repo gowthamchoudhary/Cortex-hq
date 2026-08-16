@@ -29,6 +29,7 @@ BATCH_SIZE = 20
 POLL_INTERVAL_SECONDS = 5
 POLL_TIMEOUT_SECONDS = 300
 VALID_TO_SENTINEL = 9_999_999_999
+ACCESS_LEVELS = ("public", "internal", "restricted")
 
 ENTITY_TYPE_MAP = {
     "PERSON": "Person",
@@ -165,7 +166,11 @@ def extract_document_and_payload(record: dict[str, Any]) -> tuple[dict[str, Any]
     }
 
 
-def build_graph_documents(records: list[dict[str, Any]], limit: int | None) -> tuple[list[dict[str, Any]], dict[str, int]]:
+def build_graph_documents(
+    records: list[dict[str, Any]],
+    limit: int | None,
+    default_access_level: str = "public",
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
     now = int(time.time())
     graph_sources: list[dict[str, Any]] = []
     summary = {
@@ -220,6 +225,7 @@ def build_graph_documents(records: list[dict[str, Any]], limit: int | None) -> t
                         "source_doc_id": doc_source_id,
                         "confidence": confidence(entity),
                         "state": "candidate",
+                        "access_level": default_access_level,
                     },
                     "additional_metadata": {
                         "aliases": list(entity.get("aliases_hint") or [name]),
@@ -281,6 +287,7 @@ def build_graph_documents(records: list[dict[str, Any]], limit: int | None) -> t
                         "corroboration_count": 1,
                         "confidence": confidence(fact),
                         "state": "candidate",
+                        "access_level": default_access_level,
                     },
                     "additional_metadata": {"value": value},
                     "graph_entities": {
@@ -444,13 +451,18 @@ def main() -> int:
     parser.add_argument("--collection", default="default")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
+    parser.add_argument("--default-access-level", choices=ACCESS_LEVELS, default="public")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--skip-schema-update", action="store_true")
     args = parser.parse_args()
 
     try:
         records = load_extraction_records(args.extraction_output)
-        graph_sources, summary = build_graph_documents(records, args.limit)
+        graph_sources, summary = build_graph_documents(
+            records,
+            args.limit,
+            default_access_level=args.default_access_level,
+        )
         print(
             "Prepared "
             f"{summary['entities_created']} entities, "
