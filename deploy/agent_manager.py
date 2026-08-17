@@ -167,6 +167,41 @@ def get_agent_chat_endpoint(agent_id: str) -> dict[str, Any]:
     }
 
 
+def list_agents() -> list[dict[str, Any]]:
+    """Return every agent config, each with its platform deployments.
+
+    Read-only; used by the admin Agents UI. Deployments come from
+    ``get_agent_deployments`` so a single response carries both the agent
+    record and its live/pending platforms.
+    """
+    connection = _connect()
+    try:
+        rows = connection.execute(
+            "SELECT agent_id, agent_name, collection, role_default, created_at "
+            "FROM agents ORDER BY created_at DESC",
+        ).fetchall()
+    finally:
+        connection.close()
+
+    agents: list[dict[str, Any]] = []
+    for agent_id, agent_name, collection, role_default, created_at in rows:
+        try:
+            deployments = get_agent_deployments(agent_id)
+        except KeyError:
+            deployments = []
+        agents.append(
+            {
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "collection": collection,
+                "role_default": role_default,
+                "created_at": created_at,
+                "deployments": deployments,
+            }
+        )
+    return agents
+
+
 def deploy_agent(
     agent_id: str,
     platform: str,
