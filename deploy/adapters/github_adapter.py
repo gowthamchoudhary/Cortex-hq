@@ -156,7 +156,9 @@ def github_webhook() -> Any:
         return jsonify({"ok": True, "ignored": "empty question"})
 
     try:
-        result = handle_incoming_message(_agent_id(), question, commenter or None)
+        result = handle_incoming_message(
+            _agent_id(), question, commenter or None, platform="github"
+        )
         reply = format_github_reply(result, thread_url)
         post_github_reply(repo, comment_kind, thread_number, reply)
     except Exception as exc:  # noqa: BLE001 — log and ack; never crash the webhook
