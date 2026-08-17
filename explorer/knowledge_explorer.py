@@ -200,17 +200,17 @@ PAGE_HTML = """
   }
 
   .headline {
-    margin: 26px 0 0;
+    margin: 20px 0 0;
     max-width: 950px;
     font-size: clamp(64px, 6.6vw, 92px);
     line-height: 0.96; font-weight: 600; letter-spacing: -0.05em;
     color: #ffffff;
   }
   .accent {
-    margin: 14px 0 0;
+    margin: 10px 0 0;
     font-family: 'Instrument Serif', Georgia, serif;
     font-style: italic; font-weight: 400;
-    font-size: clamp(72px, 7.4vw, 104px); line-height: 1.0;
+    font-size: clamp(72px, 8.2vw, 116px); line-height: 1.0;
     filter: drop-shadow(0 0 44px rgba(120, 140, 255, 0.34));
   }
   .accent-grad {
@@ -219,14 +219,14 @@ PAGE_HTML = """
   }
   .accent-solid { color: #5ea2ff; }
   .sub {
-    margin: 22px 0 0;
+    margin: 18px 0 0;
     max-width: 720px;
     font-size: 19px; line-height: 1.5; color: #A7ACB8;
   }
 
   /* ---------- pill CTA ---------- */
   .cta {
-    margin-top: 34px;
+    margin-top: 28px;
     display: flex; align-items: center;
     padding: 6px;
     background: rgba(255, 255, 255, 0.035);
@@ -299,7 +299,7 @@ PAGE_HTML = """
   }
   @media (max-width: 760px) {
     .headline { font-size: clamp(42px, 9vw, 58px); letter-spacing: -0.035em; }
-    .accent { font-size: clamp(40px, 9.5vw, 64px); }
+    .accent { font-size: clamp(48px, 11.5vw, 76px); }
     .sub { font-size: 16px; }
     .cta a { width: 210px; height: 54px; }
     .integrations { height: auto; padding-bottom: 40px; }
