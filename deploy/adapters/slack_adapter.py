@@ -24,8 +24,9 @@ Run the app::
 
     flask --app deploy/adapters/slack_adapter run --host 0.0.0.0 --port 5000
 
-Users are matched to Cortex roles by their Slack user id through
-``auth.user_brains`` identities; unregistered users get the agent's default role.
+Users are matched to Cortex roles by their Slack user id through the canonical
+identity layer (``identity.external_identities`` -> employee directory);
+unlinked senders get the agent's default role (logged by the runtime).
 """
 
 from __future__ import annotations
@@ -123,7 +124,7 @@ def slack_events() -> Any:
     channel = event.get("channel")
     user = event.get("user")
     try:
-        result = handle_incoming_message(_agent_id(), question, user)
+        result = handle_incoming_message(_agent_id(), question, user, platform="slack")
         # Ack Slack fast (3s limit); a synchronous post is fine for a single bot.
         post_slack_message(channel, format_slack_reply(result))
     except Exception as exc:  # noqa: BLE001 — log and ack; never crash the webhook

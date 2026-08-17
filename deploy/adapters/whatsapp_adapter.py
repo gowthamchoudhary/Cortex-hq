@@ -29,9 +29,10 @@ Run the app::
 
     flask --app deploy/adapters/whatsapp_adapter run --host 0.0.0.0 --port 5000
 
-Phone numbers are matched to Cortex roles via ``auth.user_brains`` phone
-identities (E.164, e.g. ``+15551234567``); unregistered numbers get the agent's
-default role.
+Phone numbers are matched to Cortex roles through the canonical identity layer
+(``identity.external_identities`` -> employee directory, E.164 e.g.
+``+15551234567``); unlinked numbers get the agent's default role (logged by the
+runtime).
 """
 
 from __future__ import annotations
@@ -141,7 +142,9 @@ def whatsapp_webhook() -> Any:
         if not question or not sender_phone:
             continue
         try:
-            result = handle_incoming_message(_agent_id(), question, sender_phone)
+            result = handle_incoming_message(
+                _agent_id(), question, sender_phone, platform="whatsapp"
+            )
             send_whatsapp_reply(sender_phone, format_whatsapp_reply(result))
         except Exception as exc:  # noqa: BLE001 — log and ack; never crash the webhook
             app.logger.exception("WhatsApp handler failed: %s", exc)
