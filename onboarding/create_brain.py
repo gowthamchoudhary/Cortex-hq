@@ -94,13 +94,21 @@ def _list_all_sources(client: HydraDB, collection_name: str) -> list[dict[str, A
     return sources
 
 
-def create_brain(org_name: str, user_id: str | None = None) -> dict[str, str]:
+def create_brain(
+    org_name: str,
+    user_id: str | None = None,
+    employee_list: Any = None,
+) -> dict[str, str]:
     """Create a unique HydraDB collection for an organization.
 
     The returned collection name is safe to persist and use in later pipeline
     calls. Existing collections are never overwritten. When ``user_id`` is
     provided (the authenticated Supabase user), the creator is automatically
-    registered as an ``admin`` on the new brain.
+    registered as an ``admin`` on the new brain. When ``employee_list`` is
+    provided (a list of dicts or a CSV/JSON file path — see
+    ``identity.employee_directory.bulk_register_employees``), the employees are
+    registered into the new brain's directory in the same call (backward
+    compatible: omitted by default).
     """
     if not str(org_name).strip():
         raise ValueError("org_name must not be empty.")
@@ -110,7 +118,22 @@ def create_brain(org_name: str, user_id: str | None = None) -> dict[str, str]:
     ensure_collection(client, DATABASE_NAME, collection_name)
     if user_id:
         register_user_brain(str(user_id).strip(), collection_name, role="admin")
-    return {"collection_name": collection_name, "status": "ready"}
+
+    employees_added = 0
+    employees_updated = 0
+    if employee_list is not None:
+        from identity.employee_directory import bulk_register_employees
+
+        summary = bulk_register_employees(collection_name, employee_list)
+        employees_added = int(summary.get("added") or 0)
+        employees_updated = int(summary.get("updated") or 0)
+
+    return {
+        "collection_name": collection_name,
+        "status": "ready",
+        "employees_added": employees_added,
+        "employees_updated": employees_updated,
+    }
 
 
 def get_brain_status(collection_name: str) -> dict[str, int | str]:
