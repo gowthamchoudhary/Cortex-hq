@@ -345,7 +345,7 @@ PAGE_HTML = """
       <a href="#">Docs</a>
       <a href="#">GitHub</a>
     </nav>
-    <a class="nav-cta" href="#">Explore Cortex</a>
+    <a class="nav-cta" href="?view=auth">Explore Cortex</a>
   </header>
 
   <!-- hero content -->
@@ -359,7 +359,7 @@ PAGE_HTML = """
     <p class="sub">Connect your scattered conversations, documents, code, issues, and decisions into a living context layer that your team and agents can use — anywhere, anytime.</p>
 
     <div class="cta">
-      <a href="#">Explore Cortex
+      <a href="?view=auth">Explore Cortex
         <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
       </a>
     </div>
@@ -464,4 +464,18 @@ PAGE_HTML = """
 """
 
 st.markdown(CHROME_CSS, unsafe_allow_html=True)
+
+# ---------------------------------------------------------------------------
+# Route to the auth view (?view=auth) or handle an auth callback landing
+# (?code=..., ?token_hash=...). Everything else renders the landing page.
+# ---------------------------------------------------------------------------
+_params = st.query_params
+if str(_params.get("view", "")) == "auth" or "code" in _params or "token_hash" in _params:
+    try:
+        from auth_ui import render_auth_page  # run as `streamlit run explorer/...`
+    except ImportError:
+        from explorer.auth_ui import render_auth_page  # run from repo root
+    render_auth_page()
+    st.stop()
+
 st.markdown(_strip_line_indent(PAGE_HTML), unsafe_allow_html=True)
