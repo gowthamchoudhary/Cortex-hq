@@ -94,9 +94,11 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 
 - **Python ≥ 3.12** managed with **uv**
 - **HydraDB** (`hydradb-sdk`) — graph/vector knowledge store with metadata schemas, collections, temporal fields, and graph payloads
-- **Streamlit** — frontend (landing page + explorer)
+- **Frontend** — React 18 + TypeScript + Vite + Tailwind CSS (shadcn-style component system, Lucide icons, Framer Motion for subtle motion) in `frontend/`
+- **Flask** — thin HTTP API (`api/server.py`) that wraps the Python modules for the frontend; the only server the browser talks to
+- **Streamlit** — *legacy* frontend, kept for reference in `explorer/` (see “Streamlit deprecation” below)
 - **httpx** — LLM APIs (Groq / OpenAI) and GitHub REST/GraphQL
-- **supabase-py** — session token validation for sign-in (Google, email+password, magic link)
+
 - **NumPy** — abstention calibration fitting
 - **SQLite** (stdlib) — lightweight local stores (agent configs, user→brain mapping)
 
@@ -106,6 +108,8 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 
 ```
 .
+├── api/
+│   └── server.py                 # Flask HTTP API — the React frontend's only backend surface
 ├── auth/                         # Supabase authentication & access mapping
 │   ├── supabase_client.py        #   lazy client init (SUPABASE_URL / SUPABASE_ANON_KEY)
 │   ├── session.py                #   get_current_user(access_token) token validation
@@ -121,7 +125,16 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 │   ├── filter_answerable_questions.py  # question↔ingested-doc coverage filter
 │   └── results/                  #   baseline, batch extraction, real extraction outputs
 ├── explorer/
-│   └── knowledge_explorer.py     # CORTEX landing page (Streamlit entry point)
+│   ├── knowledge_explorer.py     # LEGACY Streamlit landing page (kept for reference)
+│   └── auth_ui.py                #   LEGACY Streamlit auth card
+├── frontend/                     # React + TypeScript + Vite web app (primary UI)
+│   ├── src/api/                  #   typed API client modules (auth, home, knowledge, …)
+│   ├── src/auth/                 #   Supabase AuthContext (Google, email+password, magic link)
+│   ├── src/components/           #   ui primitives, layout (sidebar shell), home widgets
+│   ├── src/pages/                #   Landing, Auth, Home, Knowledge, Agents, Activity,
+│   │                             #   Overview, Sources, People, Settings
+│   ├── src/types/api.ts          #   TypeScript interfaces for every API response
+│   └── vite.config.ts            #   /api → Flask dev proxy, HMR disabled
 ├── extraction/
 │   ├── extract.py                #   LLM extraction of entities/facts/relations
 │   └── batch_extract.py          #   batched extraction with rate-limit backoff
@@ -146,6 +159,7 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 │   ├── truth_discovery.py        #   learned source reliability per source type
 │   └── conflict_cascade.py       #   temporal conflict resolution
 ├── scripts/
+│   ├── dev.sh                    #   full-stack preview: Flask API + Vite dev server
 │   └── build_check.js            #   hosting build sanity check (Node.js image)
 ├── Datasets/
 │   ├── fireflies/                #   173 meeting transcripts
@@ -188,12 +202,29 @@ The dependency set is small: `httpx`, `hydradb-sdk`, `streamlit`, `supabase`, `n
 | `GITHUB_TOKEN` | github-repo | ingestion | GitHub API access for `fetch_repo_activity` |
 | `SUPABASE_URL` | sign-in | auth | Supabase project URL |
 | `SUPABASE_ANON_KEY` | sign-in | auth | Supabase anon/public key |
+]
 | `CORTEX_AGENTS_DB` | optional | deploy | Agent store path override |
 | `CORTEX_USER_BRAINS_DB` | optional | auth | User→brain mapping path override |
 
 Modules read keys from the environment directly or from a `.env` file at the project root (each module ships a `load_dotenv()` that only sets variables that are not already present).
 
-### Run the App
+### Run the App (React frontend — current)
+
+One command starts both processes: the Flask API on `:8000` and the Vite dev
+server (which proxies `/api` to Flask) on the preview port.
+
+```bash
+bash scripts/dev.sh
+```
+
+Individually:
+
+```bash
+.venv/bin/python api/server.py          # API only (default :8000)
+cd frontend && bun install && bun run dev  # Vite only (proxies /api → :8000)
+```
+
+### Run the App (Streamlit — legacy)
 
 ```bash
 uv run streamlit run explorer/knowledge_explorer.py \
@@ -201,6 +232,32 @@ uv run streamlit run explorer/knowledge_explorer.py \
 ```
 
 Behind a reverse proxy, also pass `--server.enableCORS false --server.enableXsrfProtection false`.
+
+### Streamlit deprecation
+
+The Streamlit pages in `explorer/` are kept as a reference and are **not** used
+by the product anymore. The React frontend (`frontend/`) is the complete
+presentation layer: it reproduces the landing page and the sign-in card
+(Google, email+password, magic link) and adds the role-aware workspace
+(Home, Knowledge, Agents, Activity, and admin Overview/Sources/People). The
+`.replit` “Streamlit (legacy)” workflow can be deleted once the React UI has
+been verified against your real data — nothing in the backend depends on it.
+
+### New frontend → backend contract
+
+- The browser talks **only** to the Flask API (`/api/*`); all endpoints except
+  `/api/health` require `Authorization: Bearer <supabase access token>`.
+- `GET /api/me` returns the authenticated user, their role (resolved from
+  `auth.user_brains` — **the backend decides authorization**, the frontend
+  only renders), and their brain grants.
+- `GET /api/home` returns counts, suggestions, and recent intelligence derived
+  from real HydraDB records; `GET /api/overview`, `/api/knowledge`,
+  `/api/sources`, `/api/agents`, `/api/people`, `/api/activity` and
+  `POST /api/ask` (the existing `reasoning.answer_question` pipeline) cover
+  the rest of the UI.
+- When a dependency is unconfigured (e.g. no `HYDRADB_API_KEY`), endpoints
+  return `available: false` with a machine-readable `reason` — the UI shows
+  honest empty states, never fabricated numbers.
 
 ---
 
@@ -330,9 +387,20 @@ Sign-in runs **client-side via Supabase's hosted auth**; the backend only valida
 
 - **`get_admin_dashboard_data(collection)`** — read-only `context.list` aggregation: `total_documents` (distinct `source_doc_id`s, matching how the graph ingestor tracks docs), `total_entities`, `total_facts`, `total_relations`, `pending_merges` (CandidateMerge with `state="pending"`), `disputed_facts` (FactStates with `state="disputed"`), `last_ingestion_timestamp` (max `created_at`/`txn_from`), and `source_type_breakdown` (per-`doc_source_type`).
 
-### `explorer/` — Frontend
+### `explorer/` — Legacy Streamlit frontend
 
-- **`knowledge_explorer.py`** — the CORTEX landing page: near-black canvas, concentrated electric-blue bottom glow, minimal nav, eyebrow, large sans-serif headline with an editorial serif-italic accent, pill CTA, and an integrations panel emerging from the bottom light. It is a single Streamlit entry point (`streamlit run explorer/knowledge_explorer.py`).
+- **`knowledge_explorer.py`** — the original CORTEX landing page (Streamlit) and its `?view=auth` route. Kept for reference only; the product UI now lives in `frontend/`.
+- **`auth_ui.py`** — the legacy Streamlit sign-in/sign-up card (Google, email+password, magic link).
+
+### `api/` + `frontend/` — Current product UI
+
+- **`api/server.py`** — Flask API. Thin JSON adapters over the modules above; bearer-token auth via `auth/session.py`; never fabricates data (unconfigured dependencies surface as `available: false` + `reason`).
+- **`frontend/`** — React 18 + TypeScript + Vite + Tailwind app:
+  - `src/api/*` — typed client per domain (`auth`, `home`, `overview`, `knowledge`, `sources`, `agents`, `people`, `activity`, `ask`).
+  - `src/auth/AuthContext.tsx` — Supabase sessions (Google, email+password, magic link) and the backend-resolved role.
+  - `src/components/layout/` — `AppShell` (sidebar + content), `Sidebar` (role-aware nav), `RequireRole` (admin gates).
+  - `src/pages/` — Landing, Auth, Home (greeting, real suggestions, recent intelligence, Ask bar), Knowledge, Agents, Activity, Overview, Sources, People, Settings.
+  - One design system for every role; only the navigation items and available pages differ (admin, member, guest).
 
 ---
 
