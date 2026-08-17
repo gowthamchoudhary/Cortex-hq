@@ -98,7 +98,7 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 - **Flask** — thin HTTP API (`api/server.py`) that wraps the Python modules for the frontend; the only server the browser talks to
 - **Streamlit** — *legacy* frontend, kept for reference in `explorer/` (see “Streamlit deprecation” below)
 - **httpx** — LLM APIs (Groq / OpenAI) and GitHub REST/GraphQL
-- **supabase-js** — browser-side sign-in (Google, email+password, magic link); **supabase-py** validates sessions server-side
+
 - **NumPy** — abstention calibration fitting
 - **SQLite** (stdlib) — lightweight local stores (agent configs, user→brain mapping)
 
@@ -202,10 +202,7 @@ The dependency set is small: `httpx`, `hydradb-sdk`, `streamlit`, `supabase`, `n
 | `GITHUB_TOKEN` | github-repo | ingestion | GitHub API access for `fetch_repo_activity` |
 | `SUPABASE_URL` | sign-in | auth | Supabase project URL |
 | `SUPABASE_ANON_KEY` | sign-in | auth | Supabase anon/public key |
-| `VITE_SUPABASE_URL` | sign-in | frontend | Same value as `SUPABASE_URL`, exposed to the browser |
-| `VITE_SUPABASE_ANON_KEY` | sign-in | frontend | Same value as `SUPABASE_ANON_KEY`, exposed to the browser |
-| `CORTEX_API_PORT` | optional | api | Flask port (default `8000`; Vite proxies `/api` to it) |
-| `CORTEX_DEFAULT_COLLECTION` | optional | api | Collection used when the user has no brain yet (default `default`) |
+]
 | `CORTEX_AGENTS_DB` | optional | deploy | Agent store path override |
 | `CORTEX_USER_BRAINS_DB` | optional | auth | User→brain mapping path override |
 
