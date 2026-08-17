@@ -31,8 +31,9 @@ is served by this Flask app)::
 
     flask --app deploy/adapters/email_adapter run --host 0.0.0.0 --port 5000
 
-Sender addresses are matched to Cortex roles via ``auth.user_brains`` email
-identities; unregistered senders get the agent's default role.
+Sender addresses are matched to Cortex roles through the canonical identity
+layer (``identity.external_identities`` -> employee directory); unlinked
+senders get the agent's default role (logged by the runtime).
 """
 
 from __future__ import annotations
@@ -187,7 +188,7 @@ def process_inbound_email(raw_email_bytes: bytes) -> dict[str, Any]:
     if not question:
         raise ValueError("Inbound email has no subject or body to answer.")
 
-    result = handle_incoming_message(_agent_id(), question, sender)
+    result = handle_incoming_message(_agent_id(), question, sender, platform="email")
     subject, body = format_email_reply(result)
     send_email_reply(sender, subject, body)
     return {**result, "reply_to": sender}
