@@ -18,6 +18,8 @@ export default defineConfig({
   server: {
     host: "0.0.0.0",
     port: PORT,
+    // Replit previews use a generated proxied hostname.
+    allowedHosts: true,
     // Freebuff requires HMR to stay disabled in managed dev servers.
     hmr: false,
     proxy: {
