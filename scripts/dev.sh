@@ -11,10 +11,17 @@ cd "$ROOT"
 
 API_PORT="${CORTEX_API_PORT:-8000}"
 HEALTH_URL="http://127.0.0.1:${API_PORT}/api/health"
+if [[ -x "$ROOT/.venv/bin/python" ]]; then
+  PYTHON_BIN="$ROOT/.venv/bin/python"
+elif [[ -x "$ROOT/.pythonlibs/bin/python" ]]; then
+  PYTHON_BIN="$ROOT/.pythonlibs/bin/python"
+else
+  PYTHON_BIN="$(command -v python3 || command -v python)"
+fi
 
 if ! curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
   echo "[cortex] starting API server on :${API_PORT}"
-  "$ROOT/.venv/bin/python" "$ROOT/api/server.py" >"$ROOT/.cortex-api.log" 2>&1 &
+  "$PYTHON_BIN" "$ROOT/api/server.py" >"$ROOT/.cortex-api.log" 2>&1 &
   API_PID=$!
   for _ in $(seq 1 40); do
     if curl -fsS "$HEALTH_URL" >/dev/null 2>&1; then
