@@ -25,6 +25,7 @@ DATABASE_METADATA_SCHEMA = [
     {"name": "corroboration_count", "data_type": "INT32"},
     {"name": "confidence", "data_type": "FLOAT"},
     {"name": "state", "data_type": "VARCHAR", "max_length": 256, "enable_match": True},
+    {"name": "access_level", "data_type": "VARCHAR", "max_length": 256, "enable_match": True},
 ]
 
 
