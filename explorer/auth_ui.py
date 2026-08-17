@@ -1,9 +1,9 @@
 """CORTEX — sign-in / sign-up UI.
 
-A Streamlit-rendered auth card in the landing page's design language: a
-pure-black canvas with the layered electric-blue atmospheric glow, a dark
-translucent card, and the three supported sign-in methods backed by
-Supabase Auth:
+A Streamlit-rendered auth card in a clean light design: a soft neutral page
+background with a centered white card (rounded corners, subtle shadow), gray
+pill-less inputs with inset icons, a solid-black primary action, and the three
+supported sign-in methods backed by Supabase Auth:
 
 * **Google OAuth** — Supabase hosted flow. We send the browser to the
   provider authorize URL (PKCE; the code verifier is held in the memory
@@ -20,6 +20,10 @@ Supabase Auth:
 The page is reachable at ``?view=auth`` from the landing page and doubles
 as the OAuth / magic-link callback destination. Sessions live in
 ``st.session_state`` for the lifetime of the browser tab.
+
+The Sign In / Sign Up screens share one card: a heading + subtext at the
+top, the form in the middle, and a plain text link at the bottom of the
+card that switches between the two (client-side, no rerun).
 """
 
 from __future__ import annotations
@@ -201,6 +205,8 @@ def _do_magic_confirm(email: str, token: str, token_type: str) -> None:
 
 def _google_url() -> str | None:
     """Build (once per session) and cache the Google OAuth URL."""
+    if not supabase_configured():
+        return None  # unconfigured: render the disabled Google row, no error banner
     cached = st.session_state.get(GOOGLE_URL_KEY)
     if cached:
         return str(cached)
@@ -286,44 +292,47 @@ GOOGLE_G_SVG = """
 """
 
 CHECK_SVG = """
-<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#7EC9FF" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+<svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#2563EB" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
 """
 
 
 def _card_header_html(title: str, sub: str) -> str:
     return (
         f'<div class="auth-logo">{LOGO_SVG}</div>\n'
-        f'<h2 class="auth-title">{title}</h2>\n'
-        f'<p class="auth-sub">{sub}</p>\n'
+        f'<h2 class="auth-title" id="auth-title">{title}</h2>\n'
+        f'<p class="auth-sub" id="auth-sub">{sub}</p>\n'
         f'<p class="auth-tagline">Cortex makes it usable.</p>\n'
     )
 
 
-def _divider_html(text: str = "Or continue with") -> str:
+def _divider_html(text: str = "or continue with") -> str:
     return f'<div class="auth-divider"><span>{text}</span></div>'
 
 
 def _google_button_html(url: str | None) -> str:
-    if not url:
+    """Google row — same shape whether or not it is configured.
+
+    Unconfigured (url is None) just drops opacity on the identical row so the
+    layout never changes shape; the button is genuinely disabled in that case.
+    """
+    if url:
         return (
-            '<div class="auth-social" style="opacity:.55;cursor:not-allowed;">'
-            f"{GOOGLE_G_SVG}<span>Google sign-in unavailable</span></div>"
+            f'<a class="auth-social" href="{url}">'
+            f"{GOOGLE_G_SVG}<span>Continue with Google</span></a>"
         )
-    return f'<a class="auth-social" href="{url}">{GOOGLE_G_SVG}<span>Continue with Google</span></a>'
-
-
-def _magic_header_html() -> str:
     return (
-        '<p class="auth-magic-head">No password? '
-        "<span>Email me a magic link instead</span></p>"
+        '<div class="auth-social auth-social--disabled" '
+        'title="Google sign-in becomes available once SUPABASE_URL and '
+        'SUPABASE_ANON_KEY are configured.">'
+        f"{GOOGLE_G_SVG}<span>Continue with Google</span></div>"
     )
 
 
-def _config_notice_html() -> str:
+def _magic_line_html() -> str:
+    """Plain-text magic-link toggle: muted lead + bold actionable link."""
     return (
-        '<div class="auth-notice"><strong>Sign-in is not configured yet.</strong><br>'
-        "Add <code>SUPABASE_URL</code> and <code>SUPABASE_ANON_KEY</code> in "
-        "Freebuff → Keys/API keys to enable Google, email + password, and magic-link sign-in.</div>"
+        '<p class="auth-magic-line"><span>No password? </span>'
+        '<a href="#" id="auth-magic-toggle">Email me a magic link</a></p>'
     )
 
 
@@ -332,7 +341,7 @@ def _signed_in_html(email: str) -> str:
     return (
         f'<div class="auth-ok-icon">{CHECK_SVG}</div>\n'
         f'<h2 class="auth-title">You&rsquo;re signed in</h2>\n'
-        f'<p class="auth-sub">Signed in as <strong style="color:#E7EAF1">{safe_email}</strong>. '
+        f'<p class="auth-sub">Signed in as <strong style="color:#18181B">{safe_email}</strong>. '
         "Head back to Cortex to explore your organization&rsquo;s context layer.</p>\n"
     )
 
@@ -387,7 +396,8 @@ def _render_signed_in_card() -> None:
         st.rerun()
 
 
-def _render_signin_tab() -> None:
+def _render_signin_form() -> None:
+    """The Sign In screen: email+password, divider, Google, magic link."""
     with st.form("cortex_signin", clear_on_submit=True):
         email = st.text_input(
             "Email", placeholder="you@company.com", label_visibility="collapsed", key="si_email"
@@ -404,18 +414,21 @@ def _render_signin_tab() -> None:
     st.markdown(_divider_html(), unsafe_allow_html=True)
     st.markdown(_google_button_html(_google_url()), unsafe_allow_html=True)
 
-    st.markdown(_magic_header_html(), unsafe_allow_html=True)
+    st.markdown(_magic_line_html(), unsafe_allow_html=True)
+    st.markdown('<div id="auth-magic-form" style="display:none">', unsafe_allow_html=True)
     with st.form("cortex_magic", clear_on_submit=True):
         ml_email = st.text_input(
             "Email", placeholder="you@company.com", label_visibility="collapsed", key="ml_email"
         )
         st.form_submit_button(
-            "Email me a magic link", type="secondary", use_container_width=True,
+            "Send magic link", type="secondary", use_container_width=True,
             on_click=_do_magic_link, args=(ml_email,),
         )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
-def _render_signup_tab() -> None:
+def _render_signup_form() -> None:
+    """The Sign Up screen: name/email/password, divider, Google."""
     with st.form("cortex_signup", clear_on_submit=True):
         name = st.text_input(
             "Full name", placeholder="Ada Lovelace", label_visibility="collapsed", key="su_name"
@@ -428,7 +441,9 @@ def _render_signup_tab() -> None:
             label_visibility="collapsed", key="su_password",
         )
         st.form_submit_button(
-            "Create account", type="primary", use_container_width=True,
+            "Create account",
+            type="primary",
+            use_container_width=True,
             on_click=_do_sign_up, args=(name, email, password),
         )
 
@@ -451,15 +466,15 @@ def _render_forms_card() -> None:
     elif ok == "confirm_email":
         st.success("Account created — check your email to confirm, then sign in.")
 
-    if not supabase_configured():
-        st.markdown(_config_notice_html(), unsafe_allow_html=True)
-        return
+    # Both screens render; the JS below toggles which one is visible and swaps
+    # the heading/subtext/footer via the bottom "Sign Up" / "Sign In" link.
+    st.markdown('<div id="auth-signin-form">', unsafe_allow_html=True)
+    _render_signin_form()
+    st.markdown("</div>", unsafe_allow_html=True)
 
-    tab_signin, tab_signup = st.tabs(["Sign In", "Sign Up"])
-    with tab_signin:
-        _render_signin_tab()
-    with tab_signup:
-        _render_signup_tab()
+    st.markdown('<div id="auth-signup-form" style="display:none">', unsafe_allow_html=True)
+    _render_signup_form()
+    st.markdown("</div>", unsafe_allow_html=True)
 
     st.markdown(_card_footer_html(), unsafe_allow_html=True)
 
@@ -480,9 +495,8 @@ def _render_card() -> None:
 
 
 def render_auth_page() -> None:
-    """Render the full auth view (backdrop + card + behavior scripts)."""
+    """Render the full auth view (light backdrop + card + behavior scripts)."""
     st.markdown(AUTH_CSS, unsafe_allow_html=True)
-    st.markdown(BACKDROP_HTML, unsafe_allow_html=True)
     _handle_inbound_callbacks()
     _left, _center, _right = st.columns([1, 2, 1])
     with _center:
@@ -491,220 +505,176 @@ def render_auth_page() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Styling.
+# Styling (light theme — matches the reference card).
 # ---------------------------------------------------------------------------
 
 AUTH_CSS = """
 <style>
   html, body, .stApp { overflow: auto !important; }
-  [data-testid="stAppViewContainer"] > .main { padding: 0 !important; background: #050505 !important; }
+  [data-testid="stAppViewContainer"] > .main { padding: 0 !important; background: #F4F4F5 !important; }
   .block-container { max-width: 100% !important; padding: 0 !important; }
 
-  /* ---------- atmospheric backdrop (same layered light as the landing page) ---------- */
-  #auth-bg { position: fixed; inset: 0; z-index: 0; background: #050505; overflow: hidden; pointer-events: none; }
-  #auth-bg .glow, #auth-bg .beam { position: absolute; }
-  #auth-bg .glow-hero {
-    width: 900px; height: 420px; top: -140px; left: 50%; transform: translateX(-50%);
-    background: radial-gradient(closest-side, rgba(77, 60, 255, 0.07), transparent 72%);
-    filter: blur(60px);
-  }
-  #auth-bg .glow-navy {
-    width: 1500px; height: 700px; bottom: -260px; left: 50%; transform: translateX(-50%);
-    background: radial-gradient(closest-side at 50% 62%, rgba(11, 31, 102, 0.42), rgba(7, 16, 43, 0.30) 52%, transparent 80%);
-    filter: blur(72px);
-  }
-  #auth-bg .glow-lower {
-    width: 1200px; height: 560px; bottom: -200px; left: 50%; transform: translateX(-50%);
-    background: radial-gradient(closest-side at 50% 70%, rgba(22, 77, 255, 0.34), rgba(20, 107, 255, 0.18) 46%, transparent 76%);
-    filter: blur(64px);
-  }
-  #auth-bg .glow-cyan {
-    width: 820px; height: 380px; bottom: -150px; left: 50%; transform: translateX(-50%);
-    background: radial-gradient(closest-side at 50% 76%, rgba(40, 215, 255, 0.40), rgba(20, 107, 255, 0.26) 38%, transparent 74%);
-    filter: blur(54px);
-  }
-  #auth-bg .beam {
-    width: 620px; height: 900px; bottom: -200px; left: 50%; transform: translateX(-50%);
-    background: linear-gradient(to top, rgba(40, 215, 255, 0.18), rgba(22, 77, 255, 0.13) 24%, rgba(22, 77, 255, 0.07) 48%, transparent 74%);
-    filter: blur(48px);
-  }
-
-  /* ---------- centered card ---------- */
+  /* ---------- centered white card ---------- */
   [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) {
     position: relative; z-index: 1;
-    max-width: 560px; margin: 9vh auto 6vh;
-    padding: 44px 44px 30px;
-    background: linear-gradient(180deg, rgba(16, 19, 27, 0.92), rgba(8, 10, 15, 0.95));
-    border: 1px solid rgba(148, 163, 184, 0.16);
-    border-radius: 28px;
+    max-width: 440px; margin: 8vh auto 6vh;
+    padding: 42px 36px 26px;
+    background: #FFFFFF;
+    border: 1px solid rgba(17, 24, 39, 0.06);
+    border-radius: 18px;
     box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.05),
-      0 30px 90px rgba(0, 0, 0, 0.6),
-      0 0 70px rgba(22, 77, 255, 0.10);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+      0 24px 60px rgba(15, 23, 42, 0.10),
+      0 2px 10px rgba(15, 23, 42, 0.04);
   }
 
+  /* ---------- logo with dotted-circle accent ---------- */
+  .auth-logo {
+    position: relative; width: 72px; height: 72px; margin: 0 auto 22px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .auth-logo::before {
+    content: ''; position: absolute; inset: 0;
+    border: 1.5px dashed rgba(59, 130, 246, 0.35);
+    border-radius: 50%;
+  }
+  .auth-logo::after {
+    content: ''; position: absolute; inset: 9px;
+    border: 1.5px dashed rgba(59, 130, 246, 0.16);
+    border-radius: 50%;
+  }
+  .auth-logo svg { position: relative; z-index: 1; }
+
   /* ---------- card typography ---------- */
-  .auth-logo { display: flex; justify-content: center; margin-bottom: 22px; }
   .auth-title {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 30px; font-weight: 600; letter-spacing: -0.02em;
-    text-align: center; color: #ffffff; margin: 0 0 8px;
+    font-size: 27px; font-weight: 650; letter-spacing: -0.02em;
+    text-align: center; color: #18181B; margin: 0 0 8px;
   }
   .auth-sub {
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    font-size: 14.5px; line-height: 1.55; color: #9AA1AC;
-    text-align: center; margin: 0 0 26px;
+    font-size: 14.5px; line-height: 1.55; color: #71717A;
+    text-align: center; margin: 0 0 8px;
   }
   .auth-tagline {
     font-family: 'Instrument Serif', Georgia, serif; font-style: italic;
-    font-size: 17.5px; text-align: center; margin: -12px 0 26px;
-    background-image: linear-gradient(92deg, #e9c9ff 0%, #8f7bff 60%, #86b8ff 100%);
-    -webkit-background-clip: text; background-clip: text; color: transparent;
+    font-size: 16px; text-align: center; margin: 0 0 26px; color: #64748B;
   }
 
-  /* ---------- inputs ---------- */
+  /* ---------- inputs (gray fill, no border, inset icon space) ---------- */
   [data-testid="stTextInput"] { margin-bottom: 12px; }
   [data-testid="stTextInput"] input {
-    background: rgba(255, 255, 255, 0.04) !important;
-    border: 1px solid rgba(148, 163, 184, 0.18) !important;
-    border-radius: 14px !important;
-    color: #ffffff !important;
+    background: #F4F4F5 !important;
+    border: 1px solid transparent !important;
+    border-radius: 12px !important;
+    color: #18181B !important;
     font-size: 15px !important;
-    padding: 14px 16px !important;
+    padding: 13px 16px 13px 44px !important;
     box-shadow: none !important;
-    caret-color: #7EC9FF;
+    caret-color: #2563EB;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
   }
-  [data-testid="stTextInput"] input::placeholder { color: #6B7280; }
+  [data-testid="stTextInput"] input::placeholder { color: #A1A1AA; }
   [data-testid="stTextInput"] input:focus {
-    border-color: rgba(96, 165, 250, 0.55) !important;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.14) !important;
+    background: #FFFFFF !important;
+    border-color: rgba(37, 99, 235, 0.4) !important;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12) !important;
   }
 
-  /* ---------- buttons ---------- */
+  /* ---------- buttons (black primary, rounded to match inputs) ---------- */
   [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primary"] {
-    width: 100%; height: 54px; border-radius: 999px !important;
-    background: #ffffff !important; color: #0a0b0d !important;
-    border: none !important; font-weight: 600; font-size: 15.5px;
-    box-shadow: 0 0 30px rgba(22, 77, 255, 0.30);
-    transition: box-shadow 0.2s ease, background 0.2s ease;
+    width: 100%; height: 50px; border-radius: 12px !important;
+    background: #111111 !important; color: #FFFFFF !important;
+    border: none !important; font-weight: 600; font-size: 15px;
+    box-shadow: none;
+    transition: background 0.15s ease;
   }
   [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-primary"]:hover {
-    background: #eef3fb !important;
-    box-shadow: 0 0 44px rgba(22, 77, 255, 0.45);
+    background: #000000 !important;
   }
   [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondary"] {
-    width: 100%; height: 50px; border-radius: 999px !important;
-    background: rgba(255, 255, 255, 0.04) !important; color: #C9D2DF !important;
-    border: 1px solid rgba(148, 163, 184, 0.22) !important;
+    width: 100%; height: 48px; border-radius: 12px !important;
+    background: #FFFFFF !important; color: #18181B !important;
+    border: 1px solid #E4E4E7 !important;
     font-weight: 500; font-size: 14.5px;
     transition: background 0.15s ease, border-color 0.15s ease;
   }
   [data-testid="stFormSubmitButton"] button[data-testid="stBaseButton-secondary"]:hover {
-    background: rgba(255, 255, 255, 0.08) !important;
-    border-color: rgba(148, 163, 184, 0.38) !important;
+    background: #FAFAFA !important;
+    border-color: #D4D4D8 !important;
   }
   [data-testid="stLinkButton"] {
     display: flex; justify-content: center; align-items: center;
-    width: 100%; height: 54px; border-radius: 999px !important;
-    background: #ffffff !important; color: #0a0b0d !important;
-    font-weight: 600; font-size: 15.5px; text-decoration: none;
-    box-shadow: 0 0 30px rgba(22, 77, 255, 0.30);
+    width: 100%; height: 50px; border-radius: 12px !important;
+    background: #111111 !important; color: #FFFFFF !important;
+    font-weight: 600; font-size: 15px; text-decoration: none;
     margin-bottom: 12px;
   }
-  [data-testid="stLinkButton"]:hover { background: #eef3fb !important; }
+  [data-testid="stLinkButton"]:hover { background: #000000 !important; }
   button[data-testid="stBaseButton-secondary"] {
-    width: 100%; height: 46px; border-radius: 999px !important;
-    background: transparent !important; color: #9AA1AC !important;
-    border: 1px solid rgba(148, 163, 184, 0.18) !important;
+    width: 100%; height: 46px; border-radius: 12px !important;
+    background: #FFFFFF !important; color: #18181B !important;
+    border: 1px solid #E4E4E7 !important;
     font-weight: 500; font-size: 14px;
   }
   button[data-testid="stBaseButton-secondary"]:hover {
-    color: #E7EAF1 !important; border-color: rgba(148, 163, 184, 0.4) !important;
+    background: #FAFAFA !important; border-color: #D4D4D8 !important;
   }
 
-  /* ---------- tabs (segmented control) ---------- */
-  [data-testid="stTabs"] { display: flex; justify-content: center; margin-bottom: 6px; }
-  [data-testid="stTabs"] [data-baseweb="tab-list"] {
-    gap: 6px; padding: 4px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(148, 163, 184, 0.12);
-    border-radius: 999px;
-  }
-  [data-testid="stTabs"] [data-baseweb="tab"] {
-    border-radius: 999px; padding: 8px 26px;
-    color: #9AA1AC; font-size: 14px; font-weight: 500;
-    background: transparent;
-  }
-  [data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"] {
-    background: #ffffff; color: #0a0b0d;
-  }
-  [data-testid="stTabs"] [data-baseweb="tab-panel"] { padding: 20px 0 0; }
-
-  /* ---------- divider / social / misc ---------- */
+  /* ---------- divider / social / magic / footer ---------- */
   .auth-divider {
     display: flex; align-items: center; gap: 14px;
-    margin: 22px 0; color: #6E7684;
-    font-size: 12.5px; letter-spacing: 0.04em;
+    margin: 22px 0 20px; color: #A1A1AA;
+    font-size: 12.5px; letter-spacing: 0.05em;
   }
   .auth-divider::before, .auth-divider::after {
-    content: ''; flex: 1; border-top: 1px dashed rgba(148, 163, 184, 0.22);
+    content: ''; flex: 1; border-top: 1px dotted #D4D4D8;
   }
   .auth-social {
     display: flex; align-items: center; justify-content: center; gap: 12px;
-    width: 100%; height: 52px; border-radius: 999px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(148, 163, 184, 0.25);
-    color: #E7EAF1; font-size: 15px; font-weight: 500; text-decoration: none;
+    width: 100%; height: 50px; border-radius: 12px;
+    background: #FFFFFF; border: 1px solid #E4E4E7;
+    color: #18181B; font-size: 14.5px; font-weight: 500; text-decoration: none;
     transition: background 0.15s ease, border-color 0.15s ease;
   }
-  .auth-social:hover { background: rgba(255, 255, 255, 0.09); border-color: rgba(148, 163, 184, 0.4); }
-  .auth-magic-head { text-align: center; font-size: 13px; color: #6E7684; margin: 24px 0 14px; }
-  .auth-magic-head span { color: #C9D2DF; }
+  .auth-social:hover { background: #FAFAFA; border-color: #D4D4D8; }
+  .auth-social--disabled { opacity: 0.5; cursor: not-allowed; }
+  .auth-social--disabled:hover { background: #FFFFFF; border-color: #E4E4E7; }
+  .auth-magic-line {
+    text-align: center; font-size: 13.5px; color: #71717A; margin: 18px 0 0;
+  }
+  .auth-magic-line a {
+    color: #18181B; font-weight: 600; text-decoration: none;
+  }
+  .auth-magic-line a:hover { text-decoration: underline; }
   .auth-footer {
-    text-align: center; margin-top: 26px; padding-top: 20px;
-    border-top: 1px solid rgba(148, 163, 184, 0.12);
-    font-size: 14px; color: #9AA1AC;
+    text-align: center; margin-top: 24px; padding-top: 18px;
+    border-top: 1px solid #F0F0F1;
+    font-size: 14px; color: #71717A;
   }
-  .auth-footer a { color: #ffffff; font-weight: 600; text-decoration: none; }
+  .auth-footer a { color: #18181B; font-weight: 600; text-decoration: none; }
   .auth-footer a:hover { text-decoration: underline; }
-  .auth-notice {
-    margin: 4px 0 8px; padding: 14px 16px; border-radius: 14px;
-    background: rgba(22, 77, 255, 0.08);
-    border: 1px solid rgba(96, 165, 250, 0.25);
-    color: #C7D4E8; font-size: 13.5px; line-height: 1.55; text-align: center;
-  }
-  .auth-notice code { color: #93c5fd; }
   .auth-ok-icon {
     width: 64px; height: 64px; margin: 0 auto 20px; border-radius: 50%;
     display: flex; align-items: center; justify-content: center;
-    background: radial-gradient(circle at 32% 28%, rgba(59, 130, 246, 0.3), rgba(23, 37, 84, 0.18));
-    border: 1px solid rgba(96, 165, 250, 0.35);
-    box-shadow: 0 0 30px rgba(59, 130, 246, 0.35);
+    background: #F0F6FF; border: 1px solid #DBEAFE;
+    box-shadow: 0 0 24px rgba(37, 99, 235, 0.12);
   }
+
+  /* ---------- alerts ---------- */
+  [data-testid="stAlert"] { border-radius: 12px !important; margin-bottom: 14px !important; }
 
   @media (max-width: 760px) {
     [data-testid="stHorizontalBlock"] > [data-testid="column"]:nth-child(2) {
-      margin: 4vh auto; padding: 32px 22px 24px; max-width: 100%;
+      margin: 4vh auto; padding: 32px 22px 20px; max-width: 100%;
     }
   }
 </style>
 """
 
-BACKDROP_HTML = """
-<div id="auth-bg">
-  <div class="beam"></div>
-  <div class="glow glow-hero"></div>
-  <div class="glow glow-navy"></div>
-  <div class="glow glow-lower"></div>
-  <div class="glow glow-cyan"></div>
-</div>
-"""
-
 # ---------------------------------------------------------------------------
 # Behavior scripts: hash→query shim (magic-link tokens can arrive in the URL
-# fragment), show/hide password toggle, and the footer Sign-Up link.
+# fragment), inset field icons, show/hide password toggle, magic-link reveal,
+# and the footer Sign Up / Sign In switch.
 # ---------------------------------------------------------------------------
 
 AUTH_JS = """
@@ -721,8 +691,34 @@ AUTH_JS = """
     return;
   }
 
-  function mount() {
-    // 2) Show/hide password eye toggle.
+  var ICONS = {
+    email: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>',
+    password: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>',
+    name: '<svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>'
+  };
+
+  function mountIcons() {
+    document.querySelectorAll('[data-testid="stTextInput"]').forEach(function (wrap) {
+      if (wrap.dataset.iconMounted) return;
+      wrap.dataset.iconMounted = '1';
+      var label = wrap.querySelector('label');
+      var txt = label ? label.textContent.toLowerCase() : '';
+      var key = null;
+      if (txt.indexOf('email') !== -1) key = 'email';
+      else if (txt.indexOf('password') !== -1) key = 'password';
+      else if (txt.indexOf('full name') !== -1) key = 'name';
+      if (!key) return;
+      wrap.style.position = 'relative';
+      var input = wrap.querySelector('input');
+      if (input) input.style.paddingLeft = '44px';
+      var span = document.createElement('span');
+      span.innerHTML = ICONS[key];
+      span.style.cssText = 'position:absolute;left:15px;top:50%;transform:translateY(-50%);color:#A1A1AA;display:flex;pointer-events:none;';
+      wrap.appendChild(span);
+    });
+  }
+
+  function mountEyes() {
     document.querySelectorAll('[data-testid="stTextInput"] input[type="password"]').forEach(function (pw) {
       if (pw.dataset.eyeMounted) return;
       pw.dataset.eyeMounted = '1';
@@ -736,7 +732,7 @@ AUTH_JS = """
       btn.type = 'button';
       btn.setAttribute('aria-label', 'Toggle password visibility');
       btn.innerHTML = eye;
-      btn.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#8A93A3;padding:4px;display:flex;';
+      btn.style.cssText = 'position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;color:#A1A1AA;padding:4px;display:flex;';
       btn.addEventListener('click', function () {
         var show = pw.type === 'password';
         pw.type = show ? 'text' : 'password';
@@ -744,30 +740,61 @@ AUTH_JS = """
       });
       wrap.appendChild(btn);
     });
+  }
 
-    // 3) Footer "Sign Up" ⇄ "Sign In" link switches the active tab.
-    var link = document.getElementById('auth-switch-link');
-    var tabs = document.querySelectorAll('[data-testid="stTabs"] [data-baseweb="tab"]');
+  function bindMagicToggle() {
+    var toggle = document.getElementById('auth-magic-toggle');
+    if (!toggle || toggle.dataset.bound) return;
+    toggle.dataset.bound = '1';
+    toggle.addEventListener('click', function (e) {
+      e.preventDefault();
+      var f = document.getElementById('auth-magic-form');
+      if (!f) return;
+      var open = f.style.display !== 'none' && f.style.display !== '';
+      f.style.display = open ? 'none' : 'block';
+      toggle.textContent = open ? 'Email me a magic link' : 'Hide magic link';
+    });
+  }
+
+  function setMode(mode) {
+    var isSignUp = mode === 'signup';
+    var signIn = document.getElementById('auth-signin-form');
+    var signUp = document.getElementById('auth-signup-form');
+    var title = document.getElementById('auth-title');
+    var sub = document.getElementById('auth-sub');
     var footer = document.getElementById('auth-footer');
-    if (link && tabs.length) {
-      var findTab = function (label) {
-        return Array.prototype.slice.call(tabs).find(function (t) {
-          return t.textContent.trim().toLowerCase().indexOf(label) !== -1;
-        });
+    var magicForm = document.getElementById('auth-magic-form');
+    var magicToggle = document.getElementById('auth-magic-toggle');
+    if (signIn) signIn.style.display = isSignUp ? 'none' : 'block';
+    if (signUp) signUp.style.display = isSignUp ? 'block' : 'none';
+    if (title) title.textContent = isSignUp ? 'Create your account' : 'Sign in to Cortex';
+    if (sub) sub.textContent = isSignUp
+      ? 'Start bringing your organization\\u2019s context into one living layer.'
+      : 'Access your organization\\u2019s living context layer.';
+    if (magicForm) magicForm.style.display = 'none';
+    if (magicToggle) magicToggle.textContent = 'Email me a magic link';
+    if (footer) footer.innerHTML = isSignUp
+      ? 'Already have an account? <a href="#" id="auth-switch-link">Sign In</a>'
+      : 'Don\\u2019t have an account? <a href="#" id="auth-switch-link">Sign Up</a>';
+    var link = document.getElementById('auth-switch-link');
+    if (link) {
+      link.href = '#';
+      link.onclick = function (e) {
+        e.preventDefault();
+        setMode(isSignUp ? 'signin' : 'signup');
+        return false;
       };
-      var signInTab = findTab('sign in');
-      var signUpTab = findTab('sign up');
-      var activeIsSignUp = signUpTab && signUpTab.getAttribute('aria-selected') === 'true';
-      var target = activeIsSignUp ? signInTab : signUpTab;
-      var label = activeIsSignUp ? 'Sign In' : 'Sign Up';
-      if (footer) footer.innerHTML = (activeIsSignUp
-        ? 'Already have an account? <a href="#" id="auth-switch-link">Sign In</a>'
-        : 'Don\u2019t have an account? <a href="#" id="auth-switch-link">Sign Up</a>');
-      link = document.getElementById('auth-switch-link');
-      if (link && target) {
-        link.href = '#';
-        link.onclick = function (e) { e.preventDefault(); target.click(); return false; };
-      }
+    }
+  }
+
+  function mount() {
+    mountIcons();
+    mountEyes();
+    bindMagicToggle();
+    var link = document.getElementById('auth-switch-link');
+    if (link && !link.dataset.bound) {
+      link.dataset.bound = '1';
+      link.onclick = function (e) { e.preventDefault(); setMode('signup'); return false; };
     }
   }
 
