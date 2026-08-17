@@ -14,9 +14,9 @@ Cortex is not a chatbot. It is a knowledge platform that ingests your organizati
                         │                           │
                ┌────────▼────────┐          ┌───────▼────────┐
                │  Supabase Auth  │          │  auth/*        │
-               │  (Google OAuth) │          │  user→brain    │
-               └────────┬────────┘          │  role mapping  │
-                        │                   └───────┬────────┘
+               │ (Google · Email │          │  user→brain    │
+               │  · Magic Link)  │          │  role mapping  │
+               └────────┬────────┘          └───────┬────────┘
 ┌─────────────┐  ┌──────▼───────────────────────────▼─────────────┐
 │  Connectors │  │                  HydraDB                        │
 │  Gmail mbox │  │  Entity · FactState · RelationSet · Candidate   │
@@ -84,7 +84,7 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 | Organization "brain" provisioning | `onboarding/create_brain.py` |
 | Admin dashboard aggregates | `dashboard/admin_stats.py` |
 | Agent configuration & chat endpoints | `deploy/agent_manager.py` |
-| Supabase Google sign-in + user→brain role mapping | `auth/` |
+| Supabase sign-in (Google, email+password, magic link) + user→brain role mapping | `auth/` |
 | Benchmarking (baseline, system eval, ablations, coverage filter, calibration) | `eval/` |
 | CORTEX landing page / explorer UI | `explorer/knowledge_explorer.py` |
 
@@ -96,7 +96,7 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 - **HydraDB** (`hydradb-sdk`) — graph/vector knowledge store with metadata schemas, collections, temporal fields, and graph payloads
 - **Streamlit** — frontend (landing page + explorer)
 - **httpx** — LLM APIs (Groq / OpenAI) and GitHub REST/GraphQL
-- **supabase-py** — session token validation for Google sign-in
+- **supabase-py** — session token validation for sign-in (Google, email+password, magic link)
 - **NumPy** — abstention calibration fitting
 - **SQLite** (stdlib) — lightweight local stores (agent configs, user→brain mapping)
 
@@ -164,7 +164,7 @@ Every company generates context: meeting transcripts, email threads, Slack conve
 - **Python 3.12+** and **uv** (the project pins `requires-python = ">=3.12"`)
 - A **HydraDB** account (the graph database) — `HYDRADB_API_KEY`
 - At least one LLM key — **Groq** (`GROQ_API_KEY`, default `llama-3.1-8b-instant`) or **OpenAI** (`OPENAI_API_KEY`) — used for extraction and answer generation
-- Optional: **Supabase** project (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) for Google sign-in, **GitHub** token for repo ingestion
+- Optional: **Supabase** project (`SUPABASE_URL`, `SUPABASE_ANON_KEY`) for sign-in (Google, email+password, magic link), **GitHub** token for repo ingestion
 
 ### Install
 
@@ -186,8 +186,8 @@ The dependency set is small: `httpx`, `hydradb-sdk`, `streamlit`, `supabase`, `n
 | `OPENAI_API_KEY` | for OpenAI | extraction, eval, reasoning | LLM provider (auto-selected when set) |
 | `OPENAI_MODEL` | optional | extraction, eval, reasoning | Default `gpt-4.1-mini` |
 | `GITHUB_TOKEN` | github-repo | ingestion | GitHub API access for `fetch_repo_activity` |
-| `SUPABASE_URL` | Google sign-in | auth | Supabase project URL |
-| `SUPABASE_ANON_KEY` | Google sign-in | auth | Supabase anon/public key |
+| `SUPABASE_URL` | sign-in | auth | Supabase project URL |
+| `SUPABASE_ANON_KEY` | sign-in | auth | Supabase anon/public key |
 | `CORTEX_AGENTS_DB` | optional | deploy | Agent store path override |
 | `CORTEX_USER_BRAINS_DB` | optional | auth | User→brain mapping path override |
 
@@ -313,7 +313,7 @@ stats = get_admin_dashboard_data(brain["collection_name"])
 
 ### `auth/` — Supabase Sign-In
 
-Google sign-in runs **client-side via Supabase's hosted auth**; the backend only validates the resulting token:
+Sign-in runs **client-side via Supabase's hosted auth**; the backend only validates the resulting token. Three methods are supported:
 
 - **`supabase_client.py`** — lazy client from `SUPABASE_URL` + `SUPABASE_ANON_KEY` (import-safe; clear `RuntimeError` if unconfigured).
 - **`session.py`** — `get_current_user(access_token)` → `{"user_id", "email"}` or `None` for missing/expired/invalid tokens (never raises for a bad token).
@@ -374,12 +374,14 @@ Graph payloads attach entities and typed relations (`HAS_STATE`, domain predicat
 
 ## Authentication (Supabase)
 
-1. The client (web app) redirects to Supabase's hosted Google sign-in.
+1. The client (web app) redirects to Supabase's hosted sign-in — **Google OAuth**, **email + password**, or **magic link** (passwordless email).
 2. After login, the client holds a Supabase access token.
 3. The backend calls `get_current_user(access_token)` → `{user_id, email}`.
 4. `create_brain(org, user_id=…)` grants the user `admin` on their new brain; `answer_question(…, user_id=…)` derives the access role from the same mapping.
 
-**Setup:** create a Supabase project → enable the **Google** provider under Authentication → Providers (configure the client ID/secret) → add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to the environment. No password store is built or needed.
+**Setup:** create a Supabase project → under Authentication → Providers, enable **Google** (configure the client ID/secret), **Email** (password login), and **Magic Link** → add `SUPABASE_URL` and `SUPABASE_ANON_KEY` to the environment.
+
+All three providers share the exact same backend path: the client signs in however it likes, and `get_current_user()` validates whatever token Supabase issues. Enabling or disabling a provider is a Supabase dashboard toggle — no code changes needed.
 
 ---
 
