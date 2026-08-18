@@ -4,76 +4,57 @@ import { Link } from "react-router-dom";
 import { LogoMark } from "@/components/brand/Logo";
 
 /* ====================================================================== */
-/*  Brand Icons — real SVGs from simple-icons (except Slack)              */
+/*  Real brand icons from @icons-pack/react-simple-icons                  */
 /* ====================================================================== */
 
-function BrandIcon({ path, color, className = "" }: { path: string; color: string; className?: string }) {
+import {
+  SiGmail,
+  SiGithub,
+  SiGoogledrive,
+  SiJira,
+  SiConfluence,
+  SiLinear,
+} from "@icons-pack/react-simple-icons";
+
+/* Slack isn't in the package — hand-crafted multi-color mark */
+function SlackIcon({ size = 24 }: { size?: number }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} fill={color}>
-      <path d={path} />
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none">
+      <path
+        d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313z"
+        fill="#E01E5A"
+      />
+      <path
+        d="M6.313 8.834a2.527 2.527 0 0 1-2.521-2.52A2.528 2.528 0 0 1 6.313 3.79a2.527 2.527 0 0 1 2.521 2.522v2.522H6.313z"
+        fill="#36C5F0"
+      />
+      <path
+        d="M8.834 6.313a2.528 2.528 0 0 1 2.521-2.521 2.528 2.528 0 0 1 2.521 2.521V8.83a2.528 2.528 0 0 1-2.521 2.521 2.527 2.527 0 0 1-2.521-2.52V6.313z"
+        fill="#2EB67D"
+      />
+      <path
+        d="M15.165 6.313a2.528 2.528 0 0 1 2.523-2.521A2.528 2.528 0 0 1 20.21 6.313a2.527 2.527 0 0 1-2.522 2.52h-2.523V6.313z"
+        fill="#ECB22E"
+      />
+      <path
+        d="M17.688 8.834a2.528 2.528 0 0 1 2.523 2.521 2.527 2.527 0 0 1-2.523 2.521h-6.312A2.528 2.528 0 0 1 8.834 11.355a2.528 2.528 0 0 1 2.52-2.521h6.312z"
+        fill="#36C5F0"
+      />
+      <path
+        d="M15.165 17.688a2.527 2.527 0 0 1 2.523 2.523A2.528 2.528 0 0 1 15.165 22.73a2.527 2.527 0 0 1-2.52-2.52v-2.522h2.52z"
+        fill="#E01E5A"
+      />
+      <path
+        d="M12.643 17.688a2.528 2.528 0 0 1-2.521 2.523 2.527 2.527 0 0 1-2.521-2.523v-6.312A2.528 2.528 0 0 1 10.122 8.834a2.527 2.527 0 0 1 2.521 2.521v6.313z"
+        fill="#2EB67D"
+      />
+      <path
+        d="M8.834 15.165a2.528 2.528 0 0 1-2.521 2.523A2.527 2.527 0 0 1 3.79 15.165a2.528 2.528 0 0 1 2.522-2.52h2.522v2.52z"
+        fill="#ECB22E"
+      />
     </svg>
   );
 }
-
-/* Slack uses a multi-color design — hand-crafted four-bolt mark */
-function SlackIcon({ className = "" }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} fill="none">
-      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313zM8.834 5.042a2.528 2.528 0 0 1-2.521-2.52A2.528 2.528 0 0 1 8.834 0a2.528 2.528 0 0 1 2.521 2.522v2.52H8.834zM8.834 6.313a2.528 2.528 0 0 1 2.521 2.521 2.528 2.528 0 0 1-2.521 2.521H2.522A2.528 2.528 0 0 1 0 8.834a2.528 2.528 0 0 1 2.522-2.521h6.312zM18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834zM17.688 8.834a2.528 2.528 0 0 1-2.523 2.521 2.527 2.527 0 0 1-2.52-2.521V2.522A2.527 2.527 0 0 1 15.165 0a2.528 2.528 0 0 1 2.523 2.522v6.312zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52zM15.165 17.688a2.527 2.527 0 0 1-2.52-2.523 2.526 2.526 0 0 1 2.52-2.52h6.313A2.527 2.527 0 0 1 24 15.165a2.528 2.528 0 0 1-2.522 2.523h-6.313z"
-        fill="#E01E5A" />
-      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52z"
-        fill="#36C5F0" style={{ clipPath: "inset(0 0 50% 0)" }} />
-      <path d="M18.956 8.834a2.528 2.528 0 0 1 2.522-2.521A2.528 2.528 0 0 1 24 8.834a2.528 2.528 0 0 1-2.522 2.521h-2.522V8.834z"
-        fill="#2EB67D" />
-      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52zM15.165 18.956a2.528 2.528 0 0 1 2.523 2.522A2.528 2.528 0 0 1 15.165 24a2.527 2.527 0 0 1-2.52-2.522v-2.522h2.52z"
-        fill="#ECB22E" style={{ clipPath: "inset(50% 0 0 0)" }} />
-    </svg>
-  );
-}
-
-const BRAND = {
-  gmail: {
-    path: "M24 5.457v13.909c0 .904-.732 1.636-1.636 1.636h-3.819V11.73L12 16.64l-6.545-4.91v9.273H1.636A1.636 1.636 0 0 1 0 19.366V5.457c0-2.023 2.309-3.178 3.927-1.964L5.455 4.64 12 9.548l6.545-4.91 1.528-1.145C21.69 2.28 24 3.434 24 5.457z",
-    color: "#EA4335",
-  },
-  github: {
-    path: "M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12",
-    color: "#181717",
-  },
-  drive: {
-    path: "M12.01 1.485c-2.082 0-3.754.02-3.743.047.01.02 1.708 3.001 3.774 6.62l3.76 6.574 3.76-6.574c2.066-3.62 3.764-6.6 3.774-6.62.011-.027-1.661-.047-3.743-.047-1.613 0-3.544 1.527-3.782 1.527S13.623 1.485 12.01 1.485zM7.736 14.948l-3.74 6.496c2.034 1.197 4.554 1.878 7.004 1.878 2.454 0 4.968-.674 7.004-1.878l-3.74-6.496-3.14 5.438S10.02 14.948 7.736 14.948zM1.668 19.444l3.74-6.496-3.74-6.496C.607 7.72 0 9.247 0 10.948s.607 3.228 1.668 4.5z",
-    color: "#4285F4",
-  },
-  jira: {
-    path: "M11.571 11.513H0a5.218 5.218 0 0 0 5.232 5.215h2.13v2.057A5.215 5.215 0 0 0 12.577 24h2.056V18.73a5.218 5.218 0 0 0 5.215-5.215h-11.28v-2zm12.43-5.768A5.215 5.215 0 0 0 18.786.53H5.793a5.218 5.218 0 0 0-5.232 5.215v2.057h13.476v-2.057a5.218 5.218 0 0 1 5.232-5.215z",
-    color: "#0052CC",
-  },
-  confluence: {
-    path: ".87 18.257c-.248.382-.53.875-.763 1.245a.764.764 0 0 0 .255 1.04l4.965 3.054a.77.77 0 0 0 1.01-.146c2.154-2.718 3.47-4.4 5.833-4.4 2.424 0 3.748 1.722 5.89 4.49a.77.77 0 0 0 1.01.146l4.965-3.054a.77.77 0 0 0 .272-1.04c-.248-.382-.53-.875-.763-1.245C21.827 15.587 19.564 13.35 16.232 12.4c-.523-.147-1.035-.193-1.515-.193-4.675 0-8.113 3.48-9.877 6.05zm13.496-1.762a.77.77 0 0 0 .764-.775.77.77 0 0 0-.764-.775H8.372a.77.77 0 0 0-.763.775.77.77 0 0 0 .763.775h6.03zm-6.254-5.5a.77.77 0 0 0 .763-.775.77.77 0 0 0-.763-.775H5.592a.77.77 0 0 0-.763.775.77.77 0 0 0 .763.775h6.277z",
-    color: "#172B4D",
-  },
-  linear: {
-    path: "M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.91-4.176 9.126l-1.125-1.992A9.37 9.37 0 0 0 21.6 12.01c0-5.303-4.305-9.61-9.61-9.61a9.61 9.61 0 0 0-8.384 4.928L2.886 4.18zM.262 11.484l1.128 2.008A11.975 11.975 0 0 1 11.99 0v0C6.572.024 2.132 3.822 1.282 8.876l-1.02 2.608zm22.266 1.076c-.058.57-.2 1.12-.41 1.632l-1.264 3.044c-1.37 3.136-4.252 5.28-7.59 5.28-1.43 0-2.77-.408-3.904-1.108l-1.224 2.172A11.982 11.982 0 0 0 11.99 24c7.28 0 13.19-5.91 13.19-13.19 0-3.956-1.752-7.504-4.496-9.9l-1.15 2.116A11.97 11.97 0 0 1 22.314 12c0 1.672-.448 3.244-1.224 4.592l-1.272 3.072a9.39 9.39 0 0 0 3.128-4.104l1.128-2.008.048-.692.504-2.3zM2.886 19.82l1.125 1.992A11.975 11.975 0 0 0 11.99 24v0c5.418-.024 9.858-3.822 10.708-8.876l1.02-2.608-.012-.012L2.886 19.82z",
-    color: "#5E6AD2",
-  },
-} as const;
-
-type IntegrationDef = {
-  name: string;
-  className: string;
-  brandKey: keyof typeof BRAND;
-  isSlack?: boolean;
-};
-
-const integrations: IntegrationDef[] = [
-  { name: "GitHub", className: "orbit-github", brandKey: "github" },
-  { name: "Drive", className: "orbit-drive", brandKey: "drive" },
-  { name: "Confluence", className: "orbit-confluence", brandKey: "confluence" },
-  { name: "Slack", className: "orbit-slack", brandKey: "gmail", isSlack: true },
-  { name: "Linear", className: "orbit-linear", brandKey: "linear" },
-  { name: "Gmail", className: "orbit-gmail", brandKey: "gmail" },
-  { name: "Jira", className: "orbit-jira", brandKey: "jira" },
-];
 
 /* ====================================================================== */
 /*  Navbar                                                                 */
@@ -138,15 +119,64 @@ function CortexNavbar() {
 }
 
 /* ====================================================================== */
-/*  Integration Orbit — wide elliptical arc with brand cards              */
+/*  Integration Orbit — wide elliptical arc with real brand cards         */
 /* ====================================================================== */
+
+type IntegrationDef = {
+  name: string;
+  className: string;
+  icon: React.ReactNode;
+};
+
+const integrations: IntegrationDef[] = [
+  {
+    name: "GitHub",
+    className: "orbit-github",
+    icon: <SiGithub size={26} color="#181717" />,
+  },
+  {
+    name: "Drive",
+    className: "orbit-drive",
+    icon: <SiGoogledrive size={26} color="#4285F4" />,
+  },
+  {
+    name: "Confluence",
+    className: "orbit-confluence",
+    icon: <SiConfluence size={26} color="#172B4D" />,
+  },
+  {
+    name: "Slack",
+    className: "orbit-slack",
+    icon: <SlackIcon size={26} />,
+  },
+  {
+    name: "Linear",
+    className: "orbit-linear",
+    icon: <SiLinear size={26} color="#5E6AD2" />,
+  },
+  {
+    name: "Gmail",
+    className: "orbit-gmail",
+    icon: <SiGmail size={26} color="#EA4335" />,
+  },
+  {
+    name: "Jira",
+    className: "orbit-jira",
+    icon: <SiJira size={26} color="#0052CC" />,
+  },
+];
 
 function IntegrationOrbit() {
   return (
     <div className="integration-orbit" aria-hidden="true">
       {/* SVG orbit — large smooth elliptical path spanning the hero */}
-      <svg className="orbit-lines" viewBox="0 0 1536 864" fill="none" preserveAspectRatio="xMidYMid slice">
-        {/* Primary orbit arc — thin, elegant, visible */}
+      <svg
+        className="orbit-lines"
+        viewBox="0 0 1536 864"
+        fill="none"
+        preserveAspectRatio="xMidYMid slice"
+      >
+        {/* Primary orbit arc */}
         <ellipse
           cx="768"
           cy="420"
@@ -157,7 +187,7 @@ function IntegrationOrbit() {
           strokeLinecap="round"
           fill="none"
         />
-        {/* Secondary inner arc — dashed, subtle depth */}
+        {/* Secondary inner arc — dashed */}
         <ellipse
           cx="768"
           cy="420"
@@ -170,24 +200,18 @@ function IntegrationOrbit() {
         />
       </svg>
 
-      {/* Travelling particles along a matching path */}
+      {/* Travelling particles */}
       <div className="orbit-particle" />
       <div className="orbit-particle" />
       <div className="orbit-particle" />
 
-      {/* Integration cards with real brand icons */}
-      {integrations.map(({ name, className, brandKey, isSlack }) => (
+      {/* Real brand integration cards */}
+      {integrations.map(({ name, className, icon }) => (
         <div
           key={name}
           className={`integration-card ${className} float-${name.toLowerCase()}`}
         >
-          <span className={`integration-icon ${name.toLowerCase()}-icon`}>
-            {isSlack ? (
-              <SlackIcon />
-            ) : (
-              <BrandIcon path={BRAND[brandKey].path} color={BRAND[brandKey].color} />
-            )}
-          </span>
+          <span className="integration-icon">{icon}</span>
           <span>{name}</span>
         </div>
       ))}
@@ -196,7 +220,7 @@ function IntegrationOrbit() {
 }
 
 /* ====================================================================== */
-/*  Cortex Dashboard (inside MacBook) — bright, readable, polished        */
+/*  Cortex Dashboard (inside MacBook)                                     */
 /* ====================================================================== */
 
 function CortexDashboard() {
@@ -208,23 +232,48 @@ function CortexDashboard() {
           <strong>Cortex</strong>
         </div>
         <div className="preview-nav-group">
-          <span className="preview-nav-active"><b>⌂ Home</b></span>
-          <span><b>🔍 Search</b></span>
-          <span><b>◈ Knowledge</b></span>
-          <span><b>□ Projects</b></span>
-          <span><b>✦ Decisions</b></span>
-          <span><b>◆ Agents</b></span>
-          <span><b>◌ Activity</b></span>
+          <span className="preview-nav-active">
+            <b>⌂ Home</b>
+          </span>
+          <span>
+            <b>🔍 Search</b>
+          </span>
+          <span>
+            <b>◈ Knowledge</b>
+          </span>
+          <span>
+            <b>□ Projects</b>
+          </span>
+          <span>
+            <b>✦ Decisions</b>
+          </span>
+          <span>
+            <b>◆ Agents</b>
+          </span>
+          <span>
+            <b>◌ Activity</b>
+          </span>
         </div>
         <div className="preview-nav-bottom">
-          <span><b>⚙ Settings</b></span>
+          <span>
+            <b>⚙ Settings</b>
+          </span>
         </div>
       </aside>
 
       <div className="preview-main">
         <div className="preview-topline">
           <span>
-            <Search style={{ width: 10, height: 10, display: "inline", verticalAlign: "middle", marginRight: 4, opacity: 0.45 }} />
+            <Search
+              style={{
+                width: 10,
+                height: 10,
+                display: "inline",
+                verticalAlign: "middle",
+                marginRight: 4,
+                opacity: 0.45,
+              }}
+            />
             Search Cortex…
           </span>
           <span className="preview-top-avatar">PR</span>
@@ -239,7 +288,9 @@ function CortexDashboard() {
           {/* Ask Cortex */}
           <div className="preview-panel preview-ask">
             <span className="preview-panel-kicker">Ask Cortex anything</span>
-            <strong>&ldquo;What changed across the organization this week?&rdquo;</strong>
+            <strong>
+              &ldquo;What changed across the organization this week?&rdquo;
+            </strong>
             <span className="preview-search">
               What do you want to know? <ArrowRight />
             </span>
@@ -293,21 +344,37 @@ function CortexDashboard() {
 }
 
 /* ====================================================================== */
-/*  MacBook Preview — thin dark bezel, sits on stone pedestal             */
+/*  MacBook Preview — realistic MacBook Pro                                */
 /* ====================================================================== */
 
 function MacBookPreview() {
   return (
-    <div className="product-preview-wrap" aria-label="Preview of the Cortex application">
-      <div className="laptop">
-        <div className="laptop-camera" />
-        <div className="laptop-screen">
-          <CortexDashboard />
-        </div>
-        <div className="laptop-base" />
-      </div>
+    <div
+      className="product-preview-wrap"
+      aria-label="Preview of the Cortex application"
+    >
       {/* Contact shadow on the stone */}
       <div className="laptop-shadow" />
+
+      <div className="laptop">
+        {/* Display lid */}
+        <div className="laptop-lid">
+          {/* Camera notch */}
+          <div className="laptop-camera">
+            <div className="laptop-camera-lens" />
+          </div>
+          {/* Screen */}
+          <div className="laptop-screen">
+            <CortexDashboard />
+          </div>
+        </div>
+        {/* Hinge */}
+        <div className="laptop-hinge" />
+        {/* Base / keyboard deck edge-on */}
+        <div className="laptop-base">
+          <div className="laptop-notch" />
+        </div>
+      </div>
     </div>
   );
 }
@@ -323,16 +390,17 @@ export function LandingPage() {
       <div className="landing-landscape" />
       <div className="landing-atmosphere" />
 
-      {/* Navbar — floating pill, absolute positioned */}
+      {/* Navbar */}
       <CortexNavbar />
 
-      {/* Orbit + integration cards — spans full hero */}
+      {/* Orbit + integration cards */}
       <IntegrationOrbit />
 
-      {/* Hero content — centered text, absolutely positioned in viewport */}
+      {/* Hero content — centered text */}
       <div className="landing-hero">
         <div className="landing-eyebrow">
-          <LogoMark className="h-4 w-4" /> Your organization&apos;s second brain
+          <LogoMark className="h-4 w-4" /> Your organization&apos;s second
+          brain
         </div>
         <h1 className="landing-headline">
           <span>Unify. Understand.</span>
@@ -353,7 +421,7 @@ export function LandingPage() {
         </div>
       </div>
 
-      {/* MacBook — absolute positioned at bottom of viewport, centered on stone */}
+      {/* MacBook — sits on the stone pedestal */}
       <MacBookPreview />
     </div>
   );
