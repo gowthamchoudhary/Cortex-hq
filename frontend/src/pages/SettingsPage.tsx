@@ -1,12 +1,8 @@
 import { LogOut, ShieldCheck } from "lucide-react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Avatar } from "@/components/ui/avatar";
-import { Button } from "@/components/ui/button";
 import { PageHeader } from "@/components/shared/states";
 import { useAuth } from "@/auth/AuthContext";
 import { ROLE_LABELS } from "@/lib/nav";
-import { cn } from "@/lib/utils";
+import { initialsFor } from "@/lib/format";
 
 export function SettingsPage() {
   const { user, role, brains, signOut } = useAuth();
@@ -19,58 +15,97 @@ export function SettingsPage() {
     <div className="max-w-2xl space-y-6">
       <PageHeader title="Settings" subtitle="Your profile and access" />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Profile</CardTitle>
-        </CardHeader>
-        <CardContent className="flex items-center gap-4">
-          <Avatar name={name} className="h-12 w-12 text-sm" />
-          <div className="min-w-0">
-            <p className="text-[15px] font-semibold text-foreground">{name}</p>
-            <p className="truncate text-sm text-muted-foreground">{user?.email}</p>
+      {/* Profile */}
+      <div className="dash-card">
+        <div className="dash-card-header">
+          <p className="dash-card-title">Profile</p>
+        </div>
+        <div className="dash-card-body flex items-center gap-4">
+          <div
+            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl text-sm font-bold"
+            style={{
+              background:
+                "linear-gradient(135deg, hsl(var(--accent) / 0.12), hsl(var(--accent) / 0.06))",
+              color: "hsl(var(--accent))",
+            }}
+          >
+            {initialsFor(name)}
           </div>
-          <Badge variant={role === "admin" ? "accent" : "default"} className="ml-auto">
-            <ShieldCheck className="h-3 w-3" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[15px] font-semibold text-foreground">{name}</p>
+            <p className="truncate text-sm text-muted-foreground">
+              {user?.email}
+            </p>
+          </div>
+          <span
+            className="inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-[12px] font-medium"
+            style={{
+              background:
+                role === "admin"
+                  ? "hsl(var(--accent) / 0.1)"
+                  : "hsl(var(--muted))",
+              color:
+                role === "admin"
+                  ? "hsl(var(--accent))"
+                  : "hsl(var(--muted-foreground))",
+            }}
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
             {role ? ROLE_LABELS[role] : "…"}
-          </Badge>
-        </CardContent>
-      </Card>
+          </span>
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Brains</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-2.5">
+      {/* Brains */}
+      <div className="dash-card">
+        <div className="dash-card-header">
+          <p className="dash-card-title">Brains</p>
+        </div>
+        <div className="dash-card-body space-y-2.5">
           {brains.length === 0 ? (
-            <p className="text-sm text-muted-foreground">You don&rsquo;t have access to any brain yet.</p>
+            <p className="text-[13.5px] text-muted-foreground">
+              You don't have access to any brain yet.
+            </p>
           ) : (
             brains.map((brain) => (
               <div
                 key={brain.collection_name}
-                className="flex items-center justify-between rounded-lg border border-border px-3.5 py-2.5"
+                className="flex items-center justify-between rounded-xl border border-border px-4 py-3"
               >
                 <span className="text-[13.5px] font-medium text-foreground">
                   {brain.collection_name}
                 </span>
-                <Badge variant="outline" className={cn("capitalize")}>
+                <span
+                  className="inline-flex items-center rounded-lg px-2 py-0.5 text-[11px] font-medium capitalize"
+                  style={{
+                    background: "hsl(var(--muted))",
+                    color: "hsl(var(--muted-foreground))",
+                  }}
+                >
                   {brain.role}
-                </Badge>
+                </span>
               </div>
             ))
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Session</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Button variant="secondary" className="text-destructive hover:bg-destructive/5" onClick={() => void signOut()}>
-            <LogOut /> Sign out
-          </Button>
-        </CardContent>
-      </Card>
+      {/* Session */}
+      <div className="dash-card">
+        <div className="dash-card-header">
+          <p className="dash-card-title">Session</p>
+        </div>
+        <div className="dash-card-body">
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="dash-btn dash-btn-secondary text-destructive hover:bg-destructive/5"
+          >
+            <LogOut className="h-4 w-4" />
+            Sign out
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
