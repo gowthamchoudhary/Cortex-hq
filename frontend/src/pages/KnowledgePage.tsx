@@ -1,10 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
-import { Search } from "lucide-react";
+import { Search, Database } from "lucide-react";
 import { fetchKnowledge } from "@/api/knowledge";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Button } from "@/components/ui/button";
 import { PageHeader, EmptyState, ErrorState, LoadingState } from "@/components/shared/states";
 import { useAuth } from "@/auth/AuthContext";
 import { cn } from "@/lib/utils";
@@ -42,7 +39,9 @@ export function KnowledgePage() {
         setItems(response.items);
         setTotal(response.total);
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load knowledge.");
+        setError(
+          err instanceof Error ? err.message : "Failed to load knowledge."
+        );
       } finally {
         setLoading(false);
       }
@@ -66,7 +65,7 @@ export function KnowledgePage() {
         }
       />
 
-      <div className="mb-5 flex flex-wrap items-center gap-2">
+      <div className="mb-6 flex flex-wrap items-center gap-2">
         <div className="relative w-full max-w-xs">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-faint" />
           <Input
@@ -75,19 +74,18 @@ export function KnowledgePage() {
             onKeyDown={(e) => {
               if (e.key === "Enter") void load(query, type);
             }}
-            placeholder="Search knowledge…"
+            placeholder="Search knowledge..."
             className="pl-9"
           />
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1">
           {TYPE_FILTERS.map((filter) => (
-            <Button
+            <button
               key={filter.value}
-              variant="ghost"
-              size="sm"
+              type="button"
               className={cn(
-                "rounded-lg px-2.5 text-[12.5px]",
-                type === filter.value && "bg-muted text-foreground"
+                "dash-btn dash-btn-ghost text-[12.5px]",
+                type === filter.value && "!bg-muted !text-foreground"
               )}
               onClick={() => {
                 setType(filter.value);
@@ -95,7 +93,7 @@ export function KnowledgePage() {
               }}
             >
               {filter.label}
-            </Button>
+            </button>
           ))}
         </div>
       </div>
@@ -110,27 +108,37 @@ export function KnowledgePage() {
           message="Nothing matches this search yet. Records appear here once sources are ingested into the graph."
         />
       ) : (
-        <div className="space-y-2.5">
-          {items.map((item) => (
-            <Card key={item.id} className="rounded-xl">
-              <CardContent className="flex items-start gap-3 p-4">
-                <div className="min-w-0 flex-1">
-                  <p className="text-[13.5px] font-medium text-foreground" title={item.title}>
-                    {item.title}
-                  </p>
-                  <div className="mt-1.5 flex flex-wrap items-center gap-2 text-[12px] text-faint">
-                    <Badge variant="outline" className="px-1.5 py-0 text-[10px]">
-                      {item.record_type}
-                    </Badge>
-                    <span>{item.source_type}</span>
-                    {item.confidence !== undefined && item.confidence !== null ? (
-                      <span>{Math.round(item.confidence * 100)}% conf.</span>
-                    ) : null}
-                    <span className="ml-auto shrink-0">{timeAgo(item.created_at)}</span>
-                  </div>
+        <div className="dash-card overflow-hidden">
+          {items.map((item, i) => (
+            <div key={item.id} className={cn("list-item", i === 0 && "border-t-0")}>
+              <div className="list-item-icon">
+                <Database className="h-4 w-4" />
+              </div>
+              <div className="list-item-content">
+                <p className="list-item-title" title={item.title}>
+                  {item.title}
+                </p>
+                <div className="list-item-meta">
+                  <span
+                    className="inline-flex items-center rounded-md px-1.5 py-0.5 text-[10px] font-medium"
+                    style={{
+                      background: "hsl(var(--muted))",
+                      color: "hsl(var(--muted-foreground))",
+                    }}
+                  >
+                    {item.record_type}
+                  </span>
+                  <span className="capitalize">{item.source_type}</span>
+                  {item.confidence !== undefined &&
+                  item.confidence !== null ? (
+                    <span>{Math.round(item.confidence * 100)}% conf.</span>
+                  ) : null}
+                  <span className="ml-auto shrink-0">
+                    {timeAgo(item.created_at)}
+                  </span>
                 </div>
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ))}
         </div>
       )}
