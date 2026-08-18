@@ -1,8 +1,5 @@
 import { useState } from "react";
 import { ArrowUp, Loader2, ShieldCheck } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { askQuestion } from "@/api/ask";
 import { formatNumber } from "@/lib/format";
@@ -29,7 +26,9 @@ export function AskBar({
     try {
       setResult(await askQuestion(trimmed, collection));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong.");
+      setError(
+        err instanceof Error ? err.message : "Something went wrong."
+      );
     } finally {
       setLoading(false);
     }
@@ -37,62 +36,83 @@ export function AskBar({
 
   return (
     <div>
-      <Card className="overflow-hidden">
-        <CardContent className="p-0">
-          <div className="flex items-end gap-2 p-3">
-            <Textarea
-              value={question}
-              onChange={(e) => setQuestion(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  void submit(question);
-                }
-              }}
-              placeholder="Ask Cortex anything…"
-              className="min-h-[48px] resize-none border-0 bg-transparent px-3 py-2.5 text-[15px] focus-visible:ring-0"
-              rows={1}
-            />
-            <Button
-              size="icon"
-              className="h-9 w-9 shrink-0 rounded-lg"
-              disabled={loading || !question.trim()}
-              onClick={() => void submit(question)}
-              aria-label="Ask"
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ArrowUp className="h-4 w-4" />}
-            </Button>
-          </div>
-          <div className="flex items-center gap-3 border-t border-border px-4 py-2 text-[12px] text-faint">
-            <span className="inline-flex items-center gap-1.5">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Answers respect your role&rsquo;s access level
-            </span>
-            {collection ? (
-              <span className="ml-auto rounded-full border border-border px-2 py-0.5">{collection}</span>
-            ) : null}
-          </div>
-        </CardContent>
-      </Card>
+      <div className="ask-panel">
+        <div className="ask-panel-input-area">
+          <Textarea
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void submit(question);
+              }
+            }}
+            placeholder="Ask a question about your organization's knowledge..."
+            className="min-h-[48px] resize-none border-0 bg-transparent px-2 py-2 text-[14.5px] focus-visible:ring-0"
+            rows={1}
+          />
+          <button
+            type="button"
+            className="dash-btn dash-btn-primary dash-btn-icon"
+            style={{ height: 38, width: 38, borderRadius: 10 }}
+            disabled={loading || !question.trim()}
+            onClick={() => void submit(question)}
+            aria-label="Ask"
+          >
+            {loading ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <ArrowUp className="h-4 w-4" />
+            )}
+          </button>
+        </div>
+        <div className="ask-panel-footer">
+          <span className="inline-flex items-center gap-1.5">
+            <ShieldCheck className="h-3.5 w-3.5" />
+            Answers respect your role's access level
+          </span>
+          {collection ? (
+            <span className="ml-auto source-badge">{collection}</span>
+          ) : null}
+        </div>
+      </div>
 
       {error ? (
         <p className="mt-3 text-[13px] text-destructive">{error}</p>
       ) : null}
 
       {result ? (
-        <Card className="mt-4">
-          <CardContent className="space-y-3 p-5">
+        <div className="dash-card mt-4">
+          <div className="dash-card-body space-y-3">
             <div className="flex flex-wrap items-center gap-2">
-              <p className="text-[13px] font-semibold text-foreground">{result.question}</p>
+              <p className="text-[13.5px] font-semibold text-foreground">
+                {result.question}
+              </p>
               {result.abstained ? (
-                <Badge variant="warning">Couldn&rsquo;t verify</Badge>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                  style={{
+                    background: "hsl(38 92% 46% / 0.1)",
+                    color: "hsl(38 92% 46%)",
+                  }}
+                >
+                  Couldn't verify
+                </span>
               ) : (
-                <Badge variant="success">
+                <span
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium"
+                  style={{
+                    background: "hsl(152 60% 36% / 0.1)",
+                    color: "hsl(152 60% 36%)",
+                  }}
+                >
                   {Math.round((result.confidence ?? 0) * 100)}% confidence
-                </Badge>
+                </span>
               )}
             </div>
-            <p className="text-[14.5px] leading-relaxed text-foreground">{result.answer}</p>
+            <p className="text-[14.5px] leading-relaxed text-foreground">
+              {result.answer}
+            </p>
             {result.evidence && result.evidence.length > 0 ? (
               <div className="pt-1">
                 <p className="mb-1.5 text-[11px] font-medium uppercase tracking-wide text-faint">
@@ -102,7 +122,7 @@ export function AskBar({
                   {result.evidence.slice(0, 8).map((doc) => (
                     <code
                       key={doc}
-                      className="max-w-[260px] truncate rounded-md border border-border bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground"
+                      className="max-w-[260px] truncate rounded-lg border border-border bg-muted px-2 py-0.5 text-[11px] text-muted-foreground"
                       title={doc}
                     >
                       {doc}
@@ -111,8 +131,8 @@ export function AskBar({
                 </div>
               </div>
             ) : null}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       ) : null}
     </div>
   );
