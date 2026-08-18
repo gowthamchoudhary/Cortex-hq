@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { Cable } from "lucide-react";
+import { Cable, Database } from "lucide-react";
 import { fetchSources } from "@/api/sources";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { PageHeader, EmptyState, ErrorState, LoadingState } from "@/components/shared/states";
 import { useAuth } from "@/auth/AuthContext";
 import { formatNumber, timeAgo } from "@/lib/format";
@@ -21,7 +19,9 @@ export function SourcesPage() {
     try {
       setData(await fetchSources(collection));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load sources.");
+      setError(
+        err instanceof Error ? err.message : "Failed to load sources."
+      );
     } finally {
       setLoading(false);
     }
@@ -34,7 +34,12 @@ export function SourcesPage() {
   if (loading) return <LoadingState rows={4} />;
   if (error) return <ErrorState message={error} onRetry={() => void load()} />;
   if (!data) {
-    return <EmptyState title="No sources yet" message="Connect a source to start ingesting knowledge." />;
+    return (
+      <EmptyState
+        title="No sources yet"
+        message="Connect a source to start ingesting knowledge."
+      />
+    );
   }
 
   const sourceTypes = Object.entries(data.source_type_breakdown || {});
@@ -46,7 +51,15 @@ export function SourcesPage() {
         subtitle={`${formatNumber(data.total_documents)} documents ingested`}
         actions={
           data.last_ingestion_timestamp ? (
-            <Badge variant="outline">Last ingestion {timeAgo(data.last_ingestion_timestamp)}</Badge>
+            <span
+              className="inline-flex items-center rounded-lg px-3 py-1 text-[12px] font-medium"
+              style={{
+                background: "hsl(var(--muted))",
+                color: "hsl(var(--muted-foreground))",
+              }}
+            >
+              Last ingestion {timeAgo(data.last_ingestion_timestamp)}
+            </span>
           ) : undefined
         }
       />
@@ -54,35 +67,43 @@ export function SourcesPage() {
       {sourceTypes.length === 0 ? (
         <EmptyState
           title="No connected sources"
-          message="Source type breakdown will appear here after the first ingestion."
+          message="Your organization hasn't connected any sources yet. Source type breakdown will appear here after the first ingestion."
         />
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <Cable className="h-4 w-4 text-faint" /> Source types
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
+        <div className="dash-card">
+          <div className="dash-card-header">
+            <div className="flex items-center gap-2">
+              <Cable className="h-4 w-4 text-faint" />
+              <p className="dash-card-title">Source types</p>
+            </div>
+          </div>
+          <div className="dash-card-body space-y-4.5">
             {sourceTypes.map(([type, count]) => {
               const max = Math.max(...sourceTypes.map(([, c]) => c), 1);
               return (
                 <div key={type}>
-                  <div className="mb-1.5 flex items-center justify-between text-[13.5px]">
-                    <span className="font-medium capitalize text-foreground">{type}</span>
-                    <span className="text-muted-foreground">{formatNumber(count)} documents</span>
+                  <div className="mb-2 flex items-center justify-between text-[13.5px]">
+                    <span className="flex items-center gap-2 font-medium capitalize text-foreground">
+                      <Database className="h-3.5 w-3.5 text-faint" />
+                      {type}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {formatNumber(count)} documents
+                    </span>
                   </div>
-                  <div className="h-2 overflow-hidden rounded-full bg-muted">
+                  <div className="progress-track">
                     <div
-                      className="h-full rounded-full bg-accent/70"
-                      style={{ width: `${Math.round((count / max) * 100)}%` }}
+                      className="progress-fill"
+                      style={{
+                        width: `${Math.round((count / max) * 100)}%`,
+                      }}
                     />
                   </div>
                 </div>
               );
             })}
-          </CardContent>
-        </Card>
+          </div>
+        </div>
       )}
     </div>
   );
