@@ -1,8 +1,5 @@
 import * as React from "react";
 import { AlertTriangle, Inbox, RefreshCw } from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 
 export function PageHeader({
@@ -15,10 +12,10 @@ export function PageHeader({
   actions?: React.ReactNode;
 }) {
   return (
-    <div className="mb-7 flex items-start justify-between gap-4">
+    <div className="page-header">
       <div>
-        <h1 className="text-[22px] font-semibold tracking-tight text-foreground">{title}</h1>
-        {subtitle ? <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p> : null}
+        <h1 className="page-title">{title}</h1>
+        {subtitle ? <p className="page-subtitle">{subtitle}</p> : null}
       </div>
       {actions ? <div className="flex items-center gap-2">{actions}</div> : null}
     </div>
@@ -27,9 +24,17 @@ export function PageHeader({
 
 export function LoadingState({ rows = 3 }: { rows?: number }) {
   return (
-    <div className="space-y-4">
+    <div className="space-y-3">
       {Array.from({ length: rows }).map((_, i) => (
-        <Skeleton key={i} className="h-24 w-full rounded-2xl" />
+        <div key={i} className="dash-card p-5">
+          <div className="flex items-start gap-3">
+            <div className="h-9 w-9 animate-pulse rounded-xl bg-muted" />
+            <div className="flex-1 space-y-2.5">
+              <div className="h-4 w-48 animate-pulse rounded-lg bg-muted" />
+              <div className="h-3 w-32 animate-pulse rounded bg-muted" />
+            </div>
+          </div>
+        </div>
       ))}
     </div>
   );
@@ -47,22 +52,29 @@ export function ErrorState({
   className?: string;
 }) {
   return (
-    <Card className={cn("w-full", className)}>
-      <CardContent className="flex flex-col items-center gap-3 px-6 py-10 text-center">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-destructive/10">
-          <AlertTriangle className="h-5 w-5 text-destructive" />
+    <div className={cn("dash-card", className)}>
+      <div className="empty-state">
+        <div className="empty-state-icon" style={{ background: "hsl(0 72% 48% / 0.08)" }}>
+          <AlertTriangle style={{ color: "hsl(0 72% 48%)" }} />
         </div>
         <div>
-          <p className="text-sm font-semibold text-foreground">{title}</p>
-          {message ? <p className="mt-1 text-sm text-muted-foreground">{message}</p> : null}
+          <p className="empty-state-title">{title}</p>
+          {message ? (
+            <p className="empty-state-message">{message}</p>
+          ) : null}
         </div>
         {onRetry ? (
-          <Button variant="secondary" size="sm" onClick={onRetry}>
-            <RefreshCw /> Try again
-          </Button>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="dash-btn dash-btn-secondary"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Try again
+          </button>
         ) : null}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
 
@@ -78,17 +90,19 @@ export function EmptyState({
   className?: string;
 }) {
   return (
-    <Card className={cn("w-full", className)}>
-      <CardContent className="flex flex-col items-center gap-3 px-6 py-10 text-center">
-        <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-          <Inbox className="h-5 w-5 text-faint" />
+    <div className={cn("dash-card", className)}>
+      <div className="empty-state">
+        <div className="empty-state-icon">
+          <Inbox />
         </div>
         <div>
-          <p className="text-sm font-semibold text-foreground">{title}</p>
-          {message ? <p className="mt-1 max-w-sm text-sm text-muted-foreground">{message}</p> : null}
+          <p className="empty-state-title">{title}</p>
+          {message ? (
+            <p className="empty-state-message">{message}</p>
+          ) : null}
         </div>
         {action}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }
