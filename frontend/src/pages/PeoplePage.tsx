@@ -7,8 +7,8 @@ import { formatNumber, initialsFor } from "@/lib/format";
 import type { Person } from "@/types/api";
 
 export function PeoplePage() {
-  const { brains } = useAuth();
-  const collection = brains[0]?.collection_name;
+  const { selectedBrain } = useAuth();
+  const collection = selectedBrain;
   const [items, setItems] = useState<Person[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
