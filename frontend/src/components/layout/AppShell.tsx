@@ -46,9 +46,39 @@ export function AppShell({ minRole = "guest" }: { minRole?: CortexRole }) {
     return <Navigate to={`/auth?returnTo=${encodeURIComponent(returnTo)}`} replace />;
   }
 
-  const effectiveRole = role ?? "member";
+  // Session exists but role hasn't resolved from /api/me yet —
+  // show a loading state to prevent flashing the wrong dashboard.
+  if (role === null) {
+    return (
+      <div className="app-shell">
+        <div className="app-sidebar">
+          <div className="sidebar-inner">
+            <div className="sidebar-header">
+              <div className="h-6 w-24 animate-pulse rounded bg-muted" />
+            </div>
+            <div className="sidebar-nav">
+              <div className="space-y-3 px-3 py-4">
+                <div className="h-4 w-28 animate-pulse rounded bg-muted" />
+                <div className="h-4 w-20 animate-pulse rounded bg-muted" />
+                <div className="h-4 w-24 animate-pulse rounded bg-muted" />
+              </div>
+            </div>
+          </div>
+        </div>
+        <div className="app-main">
+          <div className="app-content">
+            <div className="flex items-center justify-center py-20">
+              <p className="text-sm text-muted-foreground animate-pulse">Checking your Cortex session…</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const effectiveRole = role;
   if (ROLE_RANK[effectiveRole] < ROLE_RANK[minRole]) {
-    return <Navigate to="/" replace />;
+    return <Navigate to="/app" replace />;
   }
 
   return (
