@@ -10,7 +10,7 @@ export interface IngestResponse {
 
 export async function ingestSource(params: {
   collection?: string;
-  sourceType: "gmail-export" | "slack-export" | "github-repo";
+  sourceType: "gmail-export" | "slack-export" | "github-repo" | "document-upload";
   file?: File;
   sourceRepo?: string;
 }): Promise<IngestResponse> {
