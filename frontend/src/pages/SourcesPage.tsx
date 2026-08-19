@@ -1,16 +1,30 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Cable,
   Database,
-  Plus,
-  Mail,
-  MessageSquare,
   Github,
-  Upload,
   Loader2,
   CheckCircle2,
-  FileArchive,
+  Info,
 } from "lucide-react";
+import { SiGmail, SiGithub } from "@icons-pack/react-simple-icons";
+
+/* Slack isn't in @icons-pack — hand-crafted multi-color mark */
+function SlackIcon({ size = 22 }: { size?: string | number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none">
+      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52z" fill="#E01E5A"/>
+      <path d="M6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313z" fill="#36C5F0"/>
+      <path d="M6.313 8.834a2.527 2.527 0 0 1-2.521-2.52A2.528 2.528 0 0 1 6.313 3.79a2.527 2.527 0 0 1 2.521 2.522v2.522H6.313z" fill="#2EB67D"/>
+      <path d="M8.834 6.313a2.528 2.528 0 0 1 2.521-2.521 2.528 2.528 0 0 1 2.521 2.521V8.83a2.528 2.528 0 0 1-2.521 2.521 2.527 2.527 0 0 1-2.521-2.52V6.313z" fill="#ECB22E"/>
+      <path d="M15.165 6.313a2.528 2.528 0 0 1 2.523-2.521A2.528 2.528 0 0 1 20.21 6.313a2.527 2.527 0 0 1-2.522 2.52h-2.523V6.313z" fill="#36C5F0"/>
+      <path d="M17.688 8.834a2.528 2.528 0 0 1 2.523 2.521 2.527 2.527 0 0 1-2.523 2.521h-6.312A2.528 2.528 0 0 1 8.834 11.355a2.528 2.528 0 0 1 2.52-2.521h6.312z" fill="#2EB67D"/>
+      <path d="M15.165 17.688a2.527 2.527 0 0 1 2.523 2.523A2.528 2.528 0 0 1 15.165 22.73a2.527 2.527 0 0 1-2.52-2.52v-2.522h2.52z" fill="#E01E5A"/>
+      <path d="M12.643 17.688a2.528 2.528 0 0 1-2.521 2.523 2.527 2.527 0 0 1-2.521-2.523v-6.312A2.528 2.528 0 0 1 10.122 8.834a2.527 2.527 0 0 1 2.521 2.521v6.313z" fill="#ECB22E"/>
+      <path d="M8.834 15.165a2.528 2.528 0 0 1-2.521 2.523A2.527 2.527 0 0 1 3.79 15.165a2.528 2.528 0 0 1 2.522-2.52h2.522v2.52z" fill="#36C5F0"/>
+    </svg>
+  );
+}
 import { fetchSources } from "@/api/sources";
 import { ingestSource } from "@/api/ingest";
 import { PageHeader, EmptyState, ErrorState, LoadingState } from "@/components/shared/states";
@@ -20,51 +34,24 @@ import type { SourcesResponse } from "@/types/api";
 
 type SourceType = "gmail-export" | "slack-export" | "github-repo";
 
-const SOURCE_OPTIONS: {
-  type: SourceType;
-  label: string;
-  icon: typeof Mail;
-  description: string;
-  instruction: string;
-}[] = [
-  {
-    type: "gmail-export",
-    label: "Gmail",
-    icon: Mail,
-    description: "Import emails from a Gmail Takeout export",
-    instruction: "Go to Google Takeout → select Gmail → download the .zip file",
-  },
-  {
-    type: "slack-export",
-    label: "Slack",
-    icon: MessageSquare,
-    description: "Import messages from a Slack workspace export",
-    instruction: "Go to Slack Settings → Import Data → download the workspace export .zip",
-  },
-  {
-    type: "github-repo",
-    label: "GitHub",
-    icon: Github,
-    description: "Fetch issues, PRs, and discussions from a GitHub repository",
-    instruction: "Enter the repository as owner/name (e.g. facebook/react)",
-  },
-];
-
 export function SourcesPage() {
   const { selectedBrain } = useAuth();
   const collection = selectedBrain;
   const [data, setData] = useState<SourcesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showConnect, setShowConnect] = useState(false);
 
   // Ingestion state
   const [ingesting, setIngesting] = useState(false);
-  const [ingestProgress, setIngestProgress] = useState<string>("");
+  const [ingestType, setIngestType] = useState<SourceType | null>(null);
   const [ingestResult, setIngestResult] = useState<{
     ok: boolean;
     message: string;
   } | null>(null);
+
+  // GitHub input
+  const [showGitHubInput, setShowGitHubInput] = useState(false);
+  const [githubRepo, setGithubRepo] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -84,49 +71,57 @@ export function SourcesPage() {
     void load();
   }, [load]);
 
-  const handleIngest = async (
-    sourceType: SourceType,
-    file?: File,
-    repo?: string
+  const handleFileIngest = async (
+    sourceType: "gmail-export" | "slack-export",
+    file: File
   ) => {
     setIngesting(true);
+    setIngestType(sourceType);
     setIngestResult(null);
-    setIngestProgress("Starting ingestion…");
-
     try {
-      const typeLabel =
-        sourceType === "gmail-export"
-          ? "Gmail"
-          : sourceType === "slack-export"
-            ? "Slack"
-            : "GitHub";
-
-      setIngestProgress(
-        `Processing ${typeLabel} data — this may take several minutes…`
-      );
-
-      const result = await ingestSource({
-        collection,
-        sourceType,
-        file,
-        sourceRepo: repo,
-      });
-
+      const result = await ingestSource({ collection, sourceType, file });
       setIngestResult({
         ok: true,
-        message: `Ingestion complete: ${result.docs_processed} documents, ${result.entities_found} entities found, ${result.merges_made} merges, ${result.conflicts_resolved} conflicts resolved.`,
+        message: `Ingestion complete: ${result.docs_processed} docs, ${result.entities_found} entities, ${result.merges_made} merges.`,
       });
-
-      // Refresh source data
       await load();
     } catch (err) {
       setIngestResult({
         ok: false,
-        message:
-          err instanceof Error ? err.message : "Ingestion failed.",
+        message: err instanceof Error ? err.message : "Ingestion failed.",
       });
     } finally {
       setIngesting(false);
+      setIngestType(null);
+    }
+  };
+
+  const handleGitHubIngest = async () => {
+    if (!githubRepo.trim()) return;
+    setIngesting(true);
+    setIngestType("github-repo");
+    setIngestResult(null);
+    setShowGitHubInput(false);
+    try {
+      const result = await ingestSource({
+        collection,
+        sourceType: "github-repo",
+        sourceRepo: githubRepo.trim(),
+      });
+      setIngestResult({
+        ok: true,
+        message: `Ingestion complete: ${result.docs_processed} docs, ${result.entities_found} entities, ${result.merges_made} merges.`,
+      });
+      setGithubRepo("");
+      await load();
+    } catch (err) {
+      setIngestResult({
+        ok: false,
+        message: err instanceof Error ? err.message : "Ingestion failed.",
+      });
+    } finally {
+      setIngesting(false);
+      setIngestType(null);
     }
   };
 
@@ -140,50 +135,76 @@ export function SourcesPage() {
       <PageHeader
         title="Sources"
         subtitle={`${formatNumber(data?.total_documents ?? 0)} documents ingested`}
-        actions={
-          <button
-            type="button"
-            onClick={() => setShowConnect(!showConnect)}
-            className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-medium text-white transition-all duration-200"
-            style={{
-              background: "linear-gradient(180deg, #252525 0%, #171717 100%)",
-              boxShadow:
-                "0 1px 2px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.10)",
-            }}
-          >
-            <Plus className="h-4 w-4" />
-            Connect a source
-          </button>
-        }
       />
 
-      {/* Connect Source Panel */}
-      {showConnect && (
-        <ConnectSourcePanel
-          onIngest={handleIngest}
-          ingesting={ingesting}
-          onClose={() => {
-            setShowConnect(false);
-            setIngestResult(null);
-          }}
+      {/* Connect Platform Buttons */}
+      <div className="grid gap-3 sm:grid-cols-3">
+        <ConnectButton
+          label="Gmail"
+          icon={SiGmail}
+          iconColor="#EA4335"
+          instruction="Export from Google Takeout → Gmail → download .zip"
+          loading={ingesting && ingestType === "gmail-export"}
+          onFileSelect={(file) => void handleFileIngest("gmail-export", file)}
+          accept=".zip,.mbox"
         />
+        <ConnectButton
+          label="Slack"
+          icon={SlackIcon}
+          iconColor="#4A154B"
+          instruction="Export from Slack Settings → Import/Export Data → download workspace .zip"
+          loading={ingesting && ingestType === "slack-export"}
+          onFileSelect={(file) => void handleFileIngest("slack-export", file)}
+          accept=".zip"
+        />
+        <ConnectButton
+          label="GitHub"
+          icon={SiGithub}
+          iconColor="#181717"
+          instruction="Enter a public or private repository (owner/name)"
+          loading={ingesting && ingestType === "github-repo"}
+          onClick={() => setShowGitHubInput(!showGitHubInput)}
+        />
+      </div>
+
+      {/* GitHub single input */}
+      {showGitHubInput && !ingesting && (
+        <div className="flex items-center gap-3 rounded-2xl bg-white border border-black/[0.065] p-4 shadow-[0_2px_8px_rgba(0,0,0,0.04)]">
+          <Github className="h-5 w-5 shrink-0" style={{ color: "#181717" }} />
+          <input
+            type="text"
+            value={githubRepo}
+            onChange={(e) => setGithubRepo(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") void handleGitHubIngest();
+            }}
+            placeholder="Paste repository URL (e.g. facebook/react)"
+            className="flex-1 rounded-lg border border-black/[0.08] bg-[#FAFAF9] px-3 py-2 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-1 focus:ring-[#171717]/5"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => void handleGitHubIngest()}
+            disabled={!githubRepo.trim()}
+            className="btn-orange !h-9 !text-[12px] !px-4"
+          >
+            Connect
+          </button>
+        </div>
       )}
 
-      {/* Ingestion Progress Banner */}
+      {/* Ingestion Progress */}
       {ingesting && (
-        <div className="flex items-center gap-3 rounded-2xl border border-[#F59E0B]/20 bg-[#F59E0B]/5 p-4">
-          <Loader2
-            className="h-5 w-5 shrink-0 animate-spin"
-            style={{ color: "#F59E0B" }}
-          />
+        <div className="flex items-center gap-3 rounded-2xl p-4 btn-green !cursor-default">
+          <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
           <div>
-            <p className="text-[14px] font-medium text-[#171717]">
-              {ingestProgress}
+            <p className="text-[14px] font-medium">
+              {ingestType === "github-repo"
+                ? "Fetching repository data…"
+                : "Processing export file…"}
             </p>
-            <p className="text-[12px] text-[#6B6B6B]">
-              Ingestion includes extraction, graph building, entity resolution,
-              and truth discovery.
+            <p className="text-[12px] opacity-80">
+              Extraction, graph building, entity resolution — this may take a few minutes.
             </p>
           </div>
         </div>
@@ -210,7 +231,7 @@ export function SourcesPage() {
       {!data || sourceTypes.length === 0 ? (
         <EmptyState
           title="No connected sources"
-          message="Your organization hasn't connected any sources yet. Click 'Connect a source' above to start ingesting knowledge."
+          message="Click a platform above to start ingesting knowledge."
         />
       ) : (
         <div className="dash-card">
@@ -264,221 +285,113 @@ export function SourcesPage() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Connect Source Panel                                                        */
+/* Connect Button — one click opens file picker or triggers action             */
 /* -------------------------------------------------------------------------- */
 
-function ConnectSourcePanel({
-  onIngest,
-  ingesting,
-  onClose,
+function ConnectButton({
+  label,
+  icon: Icon,
+  iconColor,
+  instruction,
+  loading,
+  onFileSelect,
+  onClick,
+  accept,
 }: {
-  onIngest: (
-    sourceType: SourceType,
-    file?: File,
-    repo?: string
-  ) => Promise<void>;
-  ingesting: boolean;
-  onClose: () => void;
+  label: string;
+  icon: React.ComponentType<{ size?: string | number; color?: string }>;
+  iconColor: string;
+  instruction: string;
+  loading: boolean;
+  onFileSelect?: (file: File) => void;
+  onClick?: () => void;
+  accept?: string;
 }) {
-  const [selectedType, setSelectedType] = useState<SourceType | null>(null);
-  const [file, setFile] = useState<File | null>(null);
-  const [repo, setRepo] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [showTooltip, setShowTooltip] = useState(false);
 
-  const handleSubmit = async () => {
-    if (!selectedType) return;
-    if (selectedType === "github-repo") {
-      if (!repo.trim()) return;
-      await onIngest(selectedType, undefined, repo.trim());
-    } else {
-      if (!file) return;
-      await onIngest(selectedType, file);
+  const handleClick = () => {
+    if (loading) return;
+    if (onFileSelect) {
+      inputRef.current?.click();
+    } else if (onClick) {
+      onClick();
     }
   };
 
-  return (
-    <div className="rounded-2xl bg-white border border-black/[0.065] shadow-[0_4px_20px_rgba(0,0,0,0.035)] p-6">
-      <div className="flex items-center justify-between mb-5">
-        <h3 className="text-[16px] font-semibold text-[#171717]">
-          Connect a source
-        </h3>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-[13px] text-[#6B6B6B] hover:text-[#171717] transition-colors"
-        >
-          Close
-        </button>
-      </div>
-
-      {/* Source Type Selector */}
-      {!ingesting && (
-        <div className="grid gap-3 sm:grid-cols-3 mb-5">
-          {SOURCE_OPTIONS.map((option) => {
-            const Icon = option.icon;
-            const isSelected = selectedType === option.type;
-            return (
-              <button
-                key={option.type}
-                type="button"
-                onClick={() => {
-                  setSelectedType(option.type);
-                  setFile(null);
-                  setRepo("");
-                }}
-                className={`flex flex-col items-center gap-2.5 rounded-xl border p-4 text-left transition-all duration-200 ${
-                  isSelected
-                    ? "border-[#171717]/20 bg-[#171717]/[0.03] shadow-sm"
-                    : "border-black/[0.065] hover:border-black/[0.12] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
-                }`}
-              >
-                <div
-                  className={`flex h-10 w-10 items-center justify-center rounded-xl ${
-                    isSelected ? "bg-[#171717] text-white" : "bg-black/[0.04] text-[#6B6B6B]"
-                  }`}
-                >
-                  <Icon className="h-5 w-5" />
-                </div>
-                <div className="text-center">
-                  <p className="text-[14px] font-medium text-[#171717]">
-                    {option.label}
-                  </p>
-                  <p className="text-[12px] text-[#6B6B6B] mt-0.5">
-                    {option.description}
-                  </p>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
-
-      {/* Form for selected type */}
-      {selectedType && !ingesting && (
-        <div className="border-t border-black/[0.065] pt-5">
-          {selectedType === "github-repo" ? (
-            <GitHubForm repo={repo} setRepo={setRepo} />
-          ) : (
-            <FileUploadForm
-              sourceType={selectedType}
-              file={file}
-              setFile={setFile}
-            />
-          )}
-
-          <button
-            type="button"
-            onClick={() => void handleSubmit()}
-            disabled={
-              ingesting ||
-              (selectedType === "github-repo" ? !repo.trim() : !file)
-            }
-            className="mt-5 w-full flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-[14px] font-medium text-white transition-all duration-200 disabled:opacity-40"
-            style={{
-              background: "linear-gradient(180deg, #252525 0%, #171717 100%)",
-              boxShadow:
-                "0 1px 2px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.10)",
-            }}
-          >
-            <Upload className="h-4 w-4" />
-            Start ingestion
-          </button>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* GitHub Form                                                                 */
-/* -------------------------------------------------------------------------- */
-
-function GitHubForm({
-  repo,
-  setRepo,
-}: {
-  repo: string;
-  setRepo: (v: string) => void;
-}) {
-  return (
-    <div className="space-y-4">
-      <div>
-        <label className="block mb-1 text-[13px] font-medium text-[#171717]">
-          Repository
-        </label>
-        <input
-          type="text"
-          value={repo}
-          onChange={(e) => setRepo(e.target.value)}
-          placeholder="owner/repo (e.g. facebook/react)"
-          className="w-full rounded-xl border border-black/[0.08] bg-[#FAFAF9] px-4 py-3 text-[14px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
-        />
-      </div>
-      <p className="text-[12px] text-[#6B6B6B]">
-        The GITHUB_TOKEN environment variable must be configured on the backend
-        for GitHub ingestion to work.
-      </p>
-    </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-/* File Upload Form                                                            */
-/* -------------------------------------------------------------------------- */
-
-function FileUploadForm({
-  sourceType,
-  file,
-  setFile,
-}: {
-  sourceType: "gmail-export" | "slack-export";
-  file: File | null;
-  setFile: (f: File | null) => void;
-}) {
-  const option = SOURCE_OPTIONS.find((o) => o.type === sourceType)!;
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onFileSelect) {
+      onFileSelect(file);
+    }
+    // Reset input so the same file can be re-selected
+    e.target.value = "";
+  };
 
   return (
-    <div className="space-y-4">
-      <p className="text-[13px] text-[#6B6B6B]">{option.instruction}</p>
-
-      <div
-        className={`relative flex flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-6 transition-all duration-200 ${
-          file
-            ? "border-[#10B981]/40 bg-[#10B981]/[0.03]"
-            : "border-black/[0.12] hover:border-black/[0.2] bg-[#FAFAF9]"
+    <div className="relative">
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={loading}
+        className={`w-full flex items-center gap-3 rounded-2xl border border-black/[0.065] bg-white p-4 text-left transition-all duration-200 ${
+          loading
+            ? "btn-green !rounded-2xl !h-auto !p-4 !justify-start !text-[13px]"
+            : "hover:border-black/[0.12] hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
         }`}
       >
-        <input
-          type="file"
-          accept=".zip,.mbox"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className="absolute inset-0 cursor-pointer opacity-0"
-        />
-        {file ? (
-          <>
-            <FileArchive
-              className="h-8 w-8"
-              style={{ color: "#10B981" }}
-            />
-            <p className="text-[13px] font-medium text-[#171717]">
-              {file.name}
-            </p>
-            <p className="text-[12px] text-[#6B6B6B]">
-              {(file.size / 1024 / 1024).toFixed(1)} MB
-            </p>
-          </>
+        {loading ? (
+          <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
         ) : (
-          <>
-            <Upload className="h-8 w-8 text-[#9A9A9A]" />
-            <p className="text-[13px] text-[#6B6B6B]">
-              Click to upload or drag and drop
-            </p>
-            <p className="text-[12px] text-[#9A9A9A]">
-              .zip or .mbox files accepted
-            </p>
-          </>
+          <div
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
+            style={{ background: `${iconColor}10` }}
+          >
+            <Icon size={22} color={iconColor} />
+          </div>
         )}
-      </div>
+        <div className="min-w-0 flex-1">
+          <p className={`text-[14px] font-semibold ${loading ? "" : "text-[#171717]"}`}>
+            {loading ? `Connecting ${label}…` : `Connect ${label}`}
+          </p>
+          {!loading && (
+            <p className="text-[12px] text-[#6B6B6B] mt-0.5 truncate">
+              {onFileSelect ? "Click to select export file" : "Click to configure"}
+            </p>
+          )}
+        </div>
+        {!loading && (
+          <button
+            type="button"
+            className="shrink-0 p-1 rounded-lg hover:bg-black/[0.04] transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowTooltip(!showTooltip);
+            }}
+            aria-label={`Instructions for ${label}`}
+          >
+            <Info className="h-4 w-4 text-[#9A9A9A]" />
+          </button>
+        )}
+      </button>
+
+      {/* Tooltip */}
+      {showTooltip && !loading && (
+        <div className="absolute left-0 right-0 top-full z-10 mt-2 rounded-xl border border-black/[0.065] bg-white p-3 shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
+          <p className="text-[12px] text-[#6B6B6B] leading-relaxed">{instruction}</p>
+        </div>
+      )}
+
+      {/* Hidden file input */}
+      {onFileSelect && (
+        <input
+          ref={inputRef}
+          type="file"
+          accept={accept}
+          onChange={handleFileChange}
+          className="hidden"
+        />
+      )}
     </div>
   );
 }
