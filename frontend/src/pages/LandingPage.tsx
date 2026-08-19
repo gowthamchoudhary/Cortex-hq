@@ -88,9 +88,9 @@ function CortexNavbar() {
         <Link to="/auth" className="landing-login">
           Log in
         </Link>
-        <a className="landing-demo" href="mailto:hello@cortex.ai">
-          Book a demo <ArrowRight />
-        </a>
+        <Link className="landing-cta-primary" to="/auth">
+          Get started <ArrowRight />
+        </Link>
       </div>
       <button
         className="landing-menu"
@@ -109,9 +109,9 @@ function CortexNavbar() {
           <a href="#pricing" onClick={() => setMenuOpen(false)}>Pricing</a>
           <a href="#company" onClick={() => setMenuOpen(false)}>Company</a>
           <Link to="/auth" onClick={() => setMenuOpen(false)}>Log in</Link>
-          <a className="mobile-menu-demo" href="mailto:hello@cortex.ai" onClick={() => setMenuOpen(false)}>
-            Book a demo <ArrowRight />
-          </a>
+          <Link className="mobile-menu-demo" to="/auth" onClick={() => setMenuOpen(false)}>
+            Get started <ArrowRight />
+          </Link>
         </div>
       ) : null}
     </header>
@@ -412,11 +412,8 @@ export function LandingPage() {
           can use — anywhere.
         </p>
         <div className="landing-ctas">
-          <a className="landing-cta-primary" href="mailto:hello@cortex.ai">
-            Book a demo <ArrowRight />
-          </a>
-          <Link className="landing-cta-secondary" to="/auth">
-            Explore Cortex <ArrowRight />
+          <Link className="landing-cta-primary" to="/auth">
+            Get started <ArrowRight />
           </Link>
         </div>
       </div>
