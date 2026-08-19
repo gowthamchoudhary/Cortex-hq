@@ -681,5 +681,116 @@ def ask() -> Any:
     )
 
 
+@app.post("/api/ingest")
+def ingest() -> Any:
+    """Ingest a source into a collection. Supports file upload (Gmail/Slack) and GitHub repo."""
+    user, error = _authenticate()
+    if error:
+        return error
+    collection = _collection_for(user, request.args.get("collection"))
+
+    # Check if this is a multipart file upload (Gmail/Slack)
+    source_type = (request.form.get("source_type") or "").strip().lower()
+    source_repo = (request.form.get("source_repo") or "").strip()
+
+    if not source_type:
+        body = request.get_json(silent=True) or {}
+        source_type = str(body.get("source_type") or "").strip().lower()
+        source_repo = str(body.get("source_repo") or "").strip()
+
+    if source_type not in ("gmail-export", "slack-export", "github-repo"):
+        return _error_response("source_type must be gmail-export, slack-export, or github-repo", 400)
+
+    import tempfile
+    from ingestion.ingest_pipeline import run_full_ingestion
+
+    source_path = None
+    try:
+        if source_type in ("gmail-export", "slack-export"):
+            uploaded = request.files.get("file")
+            if not uploaded or not uploaded.filename:
+                return _error_response("file upload is required for Gmail/Slack ingestion", 400)
+            # Save to a temp file
+            suffix = ".zip" if uploaded.filename.endswith(".zip") else ".mbox"
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp")
+            uploaded.save(tmp.name)
+            tmp.close()
+            source_path = tmp.name
+        elif source_type == "github-repo":
+            if not source_repo:
+                return _error_response("source_repo (owner/repo) is required for GitHub ingestion", 400)
+            source_path = source_repo
+
+        result = run_full_ingestion(
+            collection=collection,
+            source_type=source_type,
+            source_path_or_repo=source_path,
+            role_default="admin",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Ingestion failed: {exc}", 500)
+    finally:
+        if source_path and source_type in ("gmail-export", "slack-export"):
+            try:
+                import os
+                os.unlink(source_path)
+            except OSError:
+                pass
+
+    return jsonify({"ok": True, **result})
+
+
+@app.post("/api/agents/create")
+def create_agent_endpoint() -> Any:
+    """Create a new agent in a collection."""
+    user, error = _authenticate()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    agent_name = str(body.get("agent_name") or "").strip()
+    if not agent_name:
+        return _error_response("agent_name is required", 400)
+    collection = _collection_for(user, str(body.get("collection") or ""))
+    role_default = str(body.get("role_default") or "member").strip()
+
+    from deploy.agent_manager import create_agent
+
+    try:
+        result = create_agent(collection=collection, agent_name=agent_name, role_default=role_default)
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Failed to create agent: {exc}", 500)
+
+    return jsonify({"ok": True, **result})
+
+
+@app.post("/api/agents/<agent_id>/deploy")
+def deploy_agent_endpoint(agent_id: str) -> Any:
+    """Deploy an agent to a platform (Slack, GitHub, Email)."""
+    user, error = _authenticate()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    platform = str(body.get("platform") or "").strip().lower()
+    if platform not in ("slack", "github", "email"):
+        return _error_response("platform must be slack, github, or email", 400)
+    platform_config = body.get("config") or {}
+    if not isinstance(platform_config, dict) or not platform_config:
+        return _error_response("config must be a non-empty object", 400)
+
+    from deploy.agent_manager import deploy_agent
+
+    try:
+        result = deploy_agent(
+            agent_id=str(agent_id).strip(),
+            platform=platform,
+            platform_config=platform_config,
+            status="pending",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Failed to deploy agent: {exc}", 500)
+
+    return jsonify({"ok": True, **result})
+
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=API_PORT, debug=True)
