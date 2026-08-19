@@ -17,8 +17,8 @@ const TYPE_FILTERS = [
 ];
 
 export function KnowledgePage() {
-  const { brains } = useAuth();
-  const collection = brains[0]?.collection_name;
+  const { selectedBrain } = useAuth();
+  const collection = selectedBrain;
   const [query, setQuery] = useState("");
   const [type, setType] = useState("");
   const [items, setItems] = useState<KnowledgeItem[]>([]);
