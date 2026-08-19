@@ -48,7 +48,7 @@ const PLATFORMS = [
     key: "github" as const,
     label: "GitHub",
     icon: SiGithub,
-    color: "#181717",
+     color: "#7C3AED",
     instruction: [
       "1. Go to github.com/settings/tokens → Generate new token (classic)",
       "2. Select scopes: repo, read:org",
@@ -131,7 +131,7 @@ export function AgentsPage() {
           <button
             type="button"
             onClick={() => setShowCreate(!showCreate)}
-            className="btn-orange"
+             className="btn-dark"
           >
             <Plus className="h-4 w-4" />
             Create agent

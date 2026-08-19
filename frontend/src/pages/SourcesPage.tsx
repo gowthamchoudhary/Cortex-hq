@@ -161,7 +161,7 @@ export function SourcesPage() {
         <ConnectButton
           label="GitHub"
           icon={SiGithub}
-          iconColor="#181717"
+           iconColor="#7C3AED"
           instruction="Enter a public or private repository (owner/name)"
           loading={ingesting && ingestType === "github-repo"}
           onClick={() => setShowGitHubInput(!showGitHubInput)}
