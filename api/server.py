@@ -265,6 +265,56 @@ def me() -> Any:
     )
 
 
+@app.post("/api/brains")
+def create_brain_endpoint() -> Any:
+    """Create a new organization brain. The authenticated user becomes admin."""
+    user, error = _authenticate()
+    if error:
+        return error
+    body = request.get_json(silent=True) or {}
+    org_name = str(body.get("org_name") or "").strip()
+    if not org_name:
+        return _error_response("org_name is required", 400)
+
+    from onboarding.create_brain import create_brain
+
+    try:
+        result = create_brain(
+            org_name=org_name,
+            user_id=str(user["user_id"]),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Failed to create brain: {exc}", 500)
+
+    return jsonify({"ok": True, **result})
+
+
+@app.post("/api/invitations/<token>/accept")
+def accept_invitation_endpoint(token: str) -> Any:
+    """Accept an invitation token and register the user on the brain."""
+    user, error = _authenticate()
+    if error:
+        return error
+
+    from identity.invitations import accept_invitation
+
+    try:
+        result = accept_invitation(
+            token=str(token).strip(),
+            user_id=str(user["user_id"]),
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Failed to accept invitation: {exc}", 500)
+
+    status = result.get("status")
+    if status == "failure":
+        return _error_response(result.get("reason", "invitation_failed"), 400)
+    if status == "verification_required":
+        return jsonify({"ok": False, **result}), 400
+
+    return jsonify({"ok": True, **result})
+
+
 @app.get("/api/home")
 def home() -> Any:
     user, error = _authenticate()
@@ -395,7 +445,7 @@ def home() -> Any:
         suggestions.append(
             {
                 "id": f'recent-{item["id"]}',
-                "prompt": f"What changed in “{title}”?",
+                "prompt": f'What changed in "{title}"?',
                 "source": f"{item['source_type']} · {item['record_type']}",
             }
         )
@@ -632,4 +682,4 @@ def ask() -> Any:
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=API_PORT, debug=False)
+    app.run(host="0.0.0.0", port=API_PORT, debug=True)
