@@ -16,13 +16,13 @@ import { timeAgo, formatNumber } from "@/lib/format";
 import type { HomeResponse } from "@/types/api";
 
 export function HomePage() {
-  const { user, brains } = useAuth();
+  const { user, selectedBrain } = useAuth();
   const [data, setData] = useState<HomeResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [draft, setDraft] = useState<string | null>(null);
 
-  const collection = brains[0]?.collection_name;
+  const collection = selectedBrain;
 
   const load = useCallback(async () => {
     setLoading(true);
