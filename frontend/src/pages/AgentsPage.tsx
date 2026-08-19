@@ -1,51 +1,77 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Bot,
   Plus,
-  Slack,
-  Github,
-  Mail,
   Loader2,
-  CheckCircle2,
-  Settings,
   ExternalLink,
+  CheckCircle2,
 } from "lucide-react";
+import { SiGithub, SiGmail } from "@icons-pack/react-simple-icons";
+
+/* Slack isn't in @icons-pack — hand-crafted multi-color mark */
+function SlackIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg viewBox="0 0 24 24" width={size} height={size} fill="none">
+      <path d="M5.042 15.165a2.528 2.528 0 0 1-2.52 2.523A2.528 2.528 0 0 1 0 15.165a2.527 2.527 0 0 1 2.522-2.52h2.52v2.52z" fill="#E01E5A"/>
+      <path d="M6.313 15.165a2.527 2.527 0 0 1 2.521-2.52 2.527 2.527 0 0 1 2.521 2.52v6.313A2.528 2.528 0 0 1 8.834 24a2.528 2.528 0 0 1-2.521-2.522v-6.313z" fill="#36C5F0"/>
+      <path d="M6.313 8.834a2.527 2.527 0 0 1-2.521-2.52A2.528 2.528 0 0 1 6.313 3.79a2.527 2.527 0 0 1 2.521 2.522v2.522H6.313z" fill="#2EB67D"/>
+      <path d="M8.834 6.313a2.528 2.528 0 0 1 2.521-2.521 2.528 2.528 0 0 1 2.521 2.521V8.83a2.528 2.528 0 0 1-2.521 2.521 2.527 2.527 0 0 1-2.521-2.52V6.313z" fill="#ECB22E"/>
+      <path d="M15.165 6.313a2.528 2.528 0 0 1 2.523-2.521A2.528 2.528 0 0 1 20.21 6.313a2.527 2.527 0 0 1-2.522 2.52h-2.523V6.313z" fill="#36C5F0"/>
+      <path d="M17.688 8.834a2.528 2.528 0 0 1 2.523 2.521 2.527 2.527 0 0 1-2.523 2.521h-6.312A2.528 2.528 0 0 1 8.834 11.355a2.528 2.528 0 0 1 2.52-2.521h6.312z" fill="#2EB67D"/>
+      <path d="M15.165 17.688a2.527 2.527 0 0 1 2.523 2.523A2.528 2.528 0 0 1 15.165 22.73a2.527 2.527 0 0 1-2.52-2.52v-2.522h2.52z" fill="#E01E5A"/>
+      <path d="M12.643 17.688a2.528 2.528 0 0 1-2.521 2.523 2.527 2.527 0 0 1-2.521-2.523v-6.312A2.528 2.528 0 0 1 10.122 8.834a2.527 2.527 0 0 1 2.521 2.521v6.313z" fill="#ECB22E"/>
+      <path d="M8.834 15.165a2.528 2.528 0 0 1-2.521 2.523A2.527 2.527 0 0 1 3.79 15.165a2.528 2.528 0 0 1 2.522-2.52h2.522v2.52z" fill="#36C5F0"/>
+    </svg>
+  );
+}
 import { fetchAgents, createAgent, deployAgent } from "@/api/agents";
 import { PageHeader, EmptyState, ErrorState, LoadingState } from "@/components/shared/states";
 import { useAuth } from "@/auth/AuthContext";
 import { timeAgo } from "@/lib/format";
 import type { Agent } from "@/types/api";
 
-const PLATFORM_CONFIG: Record<
-  string,
-  { label: string; icon: typeof Slack; fields: { key: string; label: string; placeholder: string }[] }
-> = {
-  slack: {
+const PLATFORMS = [
+  {
+    key: "slack" as const,
     label: "Slack",
-    icon: Slack,
-    fields: [
-      { key: "workspace", label: "Workspace name", placeholder: "e.g. acme-corp" },
-      { key: "webhook_url", label: "Webhook URL", placeholder: "https://hooks.slack.com/services/..." },
-      { key: "bot_token", label: "Bot token (xoxb-...)", placeholder: "xoxb-..." },
+    icon: SlackIcon,
+    color: "#E01E5A",
+    instruction: [
+      "1. Go to api.slack.com/apps → Create New App → From scratch",
+      "2. Under OAuth & Permissions, add bot scopes: chat:write, channels:history, im:history",
+      "3. Install to workspace and copy the Bot User OAuth Token (xoxb-…)",
+      "4. Paste it below",
     ],
+    inputLabel: "Bot token (xoxb-…)",
+    inputPlaceholder: "xoxb-...",
   },
-  github: {
+  {
+    key: "github" as const,
     label: "GitHub",
-    icon: Github,
-    fields: [
-      { key: "repo", label: "Repository (owner/name)", placeholder: "e.g. facebook/react" },
-      { key: "bot_username", label: "Bot username", placeholder: "e.g. cortex-bot" },
+    icon: SiGithub,
+    color: "#181717",
+    instruction: [
+      "1. Go to github.com/settings/tokens → Generate new token (classic)",
+      "2. Select scopes: repo, read:org",
+      "3. Copy the token",
+      "4. Paste it below",
     ],
+    inputLabel: "Personal access token",
+    inputPlaceholder: "ghp_...",
   },
-  email: {
+  {
+    key: "email" as const,
     label: "Email",
-    icon: Mail,
-    fields: [
-      { key: "from_address", label: "From address", placeholder: "cortex@yourcompany.com" },
-      { key: "imap_host", label: "IMAP host", placeholder: "imap.gmail.com" },
+    icon: SiGmail,
+    color: "#EA4335",
+    instruction: [
+      "1. Configure an IMAP-capable email address for Cortex",
+      "2. Ensure IMAP access is enabled (Gmail: App Passwords → IMAP)",
+      "3. Paste the email address below",
     ],
+    inputLabel: "Email address",
+    inputPlaceholder: "cortex@yourcompany.com",
   },
-};
+];
 
 export function AgentsPage() {
   const { selectedBrain } = useAuth();
@@ -105,13 +131,7 @@ export function AgentsPage() {
           <button
             type="button"
             onClick={() => setShowCreate(!showCreate)}
-            className="inline-flex items-center gap-2 rounded-xl px-4 py-2 text-[13px] font-medium text-white transition-all duration-200"
-            style={{
-              background: "linear-gradient(180deg, #252525 0%, #171717 100%)",
-              boxShadow:
-                "0 1px 2px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.08)",
-              border: "1px solid rgba(255,255,255,0.10)",
-            }}
+            className="btn-orange"
           >
             <Plus className="h-4 w-4" />
             Create agent
@@ -131,7 +151,7 @@ export function AgentsPage() {
       {items.length === 0 ? (
         <EmptyState
           title="No agents configured yet"
-          message="Agents let your team ask Cortex questions from Slack, GitHub, and email. Create one above to get started."
+          message="Agents let your team ask Cortex questions from Slack, GitHub, and email."
         />
       ) : (
         <div className="grid gap-4 lg:grid-cols-2">
@@ -224,20 +244,12 @@ function CreateAgentForm({
           </select>
         </div>
 
-        {error && (
-          <p className="text-[13px] text-[#EF4444]">{error}</p>
-        )}
+        {error && <p className="text-[13px] text-[#EF4444]">{error}</p>}
 
         <button
           type="submit"
           disabled={loading || !name.trim()}
-          className="w-full flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-[14px] font-medium text-white transition-all duration-200 disabled:opacity-40"
-          style={{
-            background: "linear-gradient(180deg, #252525 0%, #171717 100%)",
-            boxShadow:
-              "0 1px 2px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.08)",
-            border: "1px solid rgba(255,255,255,0.10)",
-          }}
+          className={`w-full ${loading ? "btn-green" : "btn-dark"}`}
         >
           {loading ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -251,7 +263,7 @@ function CreateAgentForm({
 }
 
 /* -------------------------------------------------------------------------- */
-/* Agent Card                                                                  */
+/* Agent Card — with orb and one-click deploy per platform                     */
 /* -------------------------------------------------------------------------- */
 
 function AgentCard({
@@ -266,21 +278,36 @@ function AgentCard({
   ) => Promise<void>;
 }) {
   const [deployingPlatform, setDeployingPlatform] = useState<string | null>(null);
-  const [deployConfig, setDeployConfig] = useState<Record<string, string>>({});
+  const [token, setToken] = useState("");
   const [deployError, setDeployError] = useState<string | null>(null);
+  const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
 
-  const deployedPlatforms = new Set(
-    agent.deployments.map((d) => d.platform)
-  );
+  const deployedPlatforms = new Set(agent.deployments.map((d) => d.platform));
 
   const handleDeploy = async (platform: "slack" | "github" | "email") => {
     setDeployError(null);
+    setDeploySuccess(null);
     setDeployingPlatform(platform);
 
+    const platformInfo = PLATFORMS.find((p) => p.key === platform)!;
+
     try {
-      await onDeploy(agent.agent_id, platform, deployConfig);
-      setDeployConfig({});
+      // For Slack and GitHub, the single input is a token
+      // For email, it's an address
+      const config =
+        platform === "email"
+          ? { from_address: token.trim() }
+          : { token: token.trim() };
+
+      await onDeploy(agent.agent_id, platform, config);
+      setDeploySuccess(`${platformInfo.label} configuration saved — see setup instructions to go live.`);
+      setToken("");
       setDeployingPlatform(null);
+      // Close the deploy panel after a brief delay
+      setTimeout(() => {
+        setDeployingPlatform(null);
+        setDeploySuccess(null);
+      }, 3000);
     } catch (err) {
       setDeployError(
         err instanceof Error ? err.message : "Deploy failed."
@@ -289,20 +316,19 @@ function AgentCard({
     }
   };
 
+  const orbClass =
+    agent.role_default === "admin"
+      ? "admin"
+      : agent.role_default === "guest"
+        ? "guest"
+        : "member";
+
   return (
     <div className="dash-card">
       <div className="p-5">
         {/* Agent Header */}
         <div className="flex items-start gap-3 mb-4">
-          <div
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-            style={{ background: "hsl(var(--accent) / 0.08)" }}
-          >
-            <Bot
-              className="h-5 w-5"
-              style={{ color: "hsl(var(--accent))" }}
-            />
-          </div>
+          <div className={`agent-orb ${orbClass}`} />
           <div className="min-w-0 flex-1">
             <p className="text-[14.5px] font-semibold text-foreground">
               {agent.agent_name}
@@ -326,14 +352,18 @@ function AgentCard({
         {agent.deployments.length > 0 && (
           <div className="mb-4 space-y-2">
             {agent.deployments.map((deployment) => {
-              const platformInfo = PLATFORM_CONFIG[deployment.platform];
-              const Icon = platformInfo?.icon || Settings;
+              const platformInfo = PLATFORMS.find(
+                (p) => p.key === deployment.platform
+              );
+              const Icon = platformInfo?.icon;
               return (
                 <div
                   key={deployment.platform}
                   className="flex items-center gap-2.5 rounded-xl border border-black/[0.065] bg-[#FAFAF9] px-3 py-2.5"
                 >
-                  <Icon className="h-4 w-4 text-[#6B6B6B]" />
+                  {Icon && (
+                    <Icon size={16} color={platformInfo?.color} />
+                  )}
                   <span className="text-[13px] font-medium text-[#171717]">
                     {platformInfo?.label ?? deployment.platform}
                   </span>
@@ -359,123 +389,165 @@ function AgentCard({
           </div>
         )}
 
-        {/* Deploy Options */}
+        {/* Deploy Options — one button per platform */}
         <div className="border-t border-black/[0.065] pt-4">
           <p className="text-[12px] font-medium text-[#6B6B6B] uppercase tracking-wider mb-3">
             Deploy to platform
           </p>
           <div className="grid grid-cols-3 gap-2">
-            {(["slack", "github", "email"] as const).map((platform) => {
-              const info = PLATFORM_CONFIG[platform];
-              const Icon = info.icon;
-              const isDeployed = deployedPlatforms.has(platform);
-              const isDeploying = deployingPlatform === platform;
+            {PLATFORMS.map((platform) => {
+              const Icon = platform.icon;
+              const isDeployed = deployedPlatforms.has(platform.key);
+              const isExpanded = deployingPlatform === platform.key;
+
 
               return (
                 <button
-                  key={platform}
+                  key={platform.key}
                   type="button"
                   onClick={() => {
                     if (!isDeployed) {
                       setDeployingPlatform(
-                        deployingPlatform === platform ? null : platform
+                        isExpanded ? null : platform.key
                       );
-                      setDeployConfig({});
+                      setToken("");
                       setDeployError(null);
+                      setDeploySuccess(null);
                     }
                   }}
                   disabled={isDeployed}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border p-3 text-[12px] font-medium transition-all duration-200 ${
                     isDeployed
                       ? "border-[#10B981]/20 bg-[#10B981]/[0.03] text-[#10B981] cursor-default"
-                      : isDeploying
+                      : isExpanded
                         ? "border-[#171717]/20 bg-[#171717]/[0.03] shadow-sm"
                         : "border-black/[0.065] hover:border-black/[0.12] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
                   }`}
                 >
-                  <Icon className="h-5 w-5" />
-                  <span>{info.label}</span>
-                  {isDeployed && (
-                    <CheckCircle2 className="h-3.5 w-3.5" />
-                  )}
+                  <Icon size={20} color={isDeployed ? "#10B981" : platform.color} />
+                  <span>{platform.label}</span>
+                  {isDeployed && <CheckCircle2 className="h-3.5 w-3.5" />}
                 </button>
               );
             })}
           </div>
         </div>
 
-        {/* Deploy Form */}
-        {deployingPlatform && PLATFORM_CONFIG[deployingPlatform] && (
-          <div className="mt-4 rounded-xl border border-black/[0.065] bg-[#FAFAF9] p-4 space-y-3">
-            <p className="text-[13px] font-medium text-[#171717]">
-              Configure {PLATFORM_CONFIG[deployingPlatform].label} deployment
-            </p>
-            {PLATFORM_CONFIG[deployingPlatform].fields.map((field) => (
-              <div key={field.key}>
-                <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">
-                  {field.label}
-                </label>
-                <input
-                  type="text"
-                  value={deployConfig[field.key] || ""}
-                  onChange={(e) =>
-                    setDeployConfig({
-                      ...deployConfig,
-                      [field.key]: e.target.value,
-                    })
-                  }
-                  placeholder={field.placeholder}
-                  className="w-full rounded-lg border border-black/[0.08] bg-white px-3 py-2 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-1 focus:ring-[#171717]/5"
-                />
-              </div>
-            ))}
-
-            {deployError && (
-              <p className="text-[12px] text-[#EF4444]">{deployError}</p>
-            )}
-
-            <div className="flex items-center gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => {
-                  void handleDeploy(deployingPlatform as "slack" | "github" | "email");
-                }}
-                disabled={
-                  deployingPlatform !== null &&
-                  PLATFORM_CONFIG[deployingPlatform].fields.some(
-                    (f) => !deployConfig[f.key]?.trim()
-                  )
-                }
-                className="flex items-center gap-2 rounded-lg px-4 py-2 text-[13px] font-medium text-white transition-all duration-200 disabled:opacity-40"
-                style={{
-                  background: "linear-gradient(180deg, #252525 0%, #171717 100%)",
-                  boxShadow:
-                    "0 1px 2px rgba(0,0,0,0.15), inset 0 1px 0 rgba(255,255,255,0.08)",
-                  border: "1px solid rgba(255,255,255,0.10)",
-                }}
-              >
-                <ExternalLink className="h-3.5 w-3.5" />
-                Save configuration
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDeployingPlatform(null);
-                  setDeployConfig({});
-                }}
-                className="rounded-lg px-4 py-2 text-[13px] font-medium text-[#6B6B6B] hover:text-[#171717] transition-colors"
-              >
-                Cancel
-              </button>
-            </div>
-
-            <p className="text-[11px] text-[#9A9A9A]">
-              Configuration saved as pending. Follow the platform-specific setup
-              instructions to go live.
-            </p>
-          </div>
+        {/* Deploy Panel — step-by-step instructions + one input */}
+        {deployingPlatform && (
+          <DeployPanel
+            platform={PLATFORMS.find((p) => p.key === deployingPlatform)!}
+            token={token}
+            setToken={setToken}
+            loading={deployingPlatform !== null && !deployError && !deploySuccess}
+            error={deployError}
+            success={deploySuccess}
+            onDeploy={() => {
+              void handleDeploy(deployingPlatform as "slack" | "github" | "email");
+            }}
+            onCancel={() => {
+              setDeployingPlatform(null);
+              setToken("");
+              setDeployError(null);
+              setDeploySuccess(null);
+            }}
+          />
         )}
       </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Deploy Panel — instructions + single input                                  */
+/* -------------------------------------------------------------------------- */
+
+function DeployPanel({
+  platform,
+  token,
+  setToken,
+  loading,
+  error,
+  success,
+  onDeploy,
+  onCancel,
+}: {
+  platform: (typeof PLATFORMS)[number];
+  token: string;
+  setToken: (v: string) => void;
+  loading: boolean;
+  error: string | null;
+  success: string | null;
+  onDeploy: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="mt-4 rounded-2xl border border-black/[0.065] bg-[#FAFAF9] p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <p className="text-[14px] font-semibold text-[#171717]">
+          Connect to {platform.label}
+        </p>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-[12px] text-[#6B6B6B] hover:text-[#171717] transition-colors"
+        >
+          Cancel
+        </button>
+      </div>
+
+      {/* Step-by-step instructions */}
+      <div className="space-y-1.5">
+        {platform.instruction.map((step, i) => (
+          <p key={i} className="text-[12px] text-[#6B6B6B] leading-relaxed">
+            {step}
+          </p>
+        ))}
+      </div>
+
+      {/* Single input */}
+      <div>
+        <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">
+          {platform.inputLabel}
+        </label>
+        <input
+          type="text"
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && token.trim()) onDeploy();
+          }}
+          placeholder={platform.inputPlaceholder}
+          className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
+          autoFocus
+          disabled={loading}
+        />
+      </div>
+
+      {error && <p className="text-[12px] text-[#EF4444]">{error}</p>}
+      {success && <p className="text-[12px] text-[#10B981]">{success}</p>}
+
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={onDeploy}
+          disabled={!token.trim() || loading}
+          className={loading ? "btn-green !h-9 !text-[12px]" : "btn-orange !h-9 !text-[12px]"}
+        >
+          {loading ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          ) : (
+            <>
+              <ExternalLink className="h-3.5 w-3.5" />
+              Save configuration
+            </>
+          )}
+        </button>
+      </div>
+
+      <p className="text-[11px] text-[#9A9A9A]">
+        Configuration saved as pending. Follow the steps above to go live.
+      </p>
     </div>
   );
 }
