@@ -7,8 +7,8 @@ import { formatNumber, timeAgo } from "@/lib/format";
 import type { SourcesResponse } from "@/types/api";
 
 export function SourcesPage() {
-  const { brains } = useAuth();
-  const collection = brains[0]?.collection_name;
+  const { selectedBrain } = useAuth();
+  const collection = selectedBrain;
   const [data, setData] = useState<SourcesResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
