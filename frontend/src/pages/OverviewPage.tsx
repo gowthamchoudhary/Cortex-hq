@@ -7,11 +7,11 @@ import { formatNumber, timeAgo } from "@/lib/format";
 import type { OverviewResponse } from "@/types/api";
 
 export function OverviewPage() {
-  const { brains } = useAuth();
+  const { selectedBrain } = useAuth();
   const [data, setData] = useState<OverviewResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const collection = brains[0]?.collection_name;
+  const collection = selectedBrain;
 
   const load = useCallback(async () => {
     setLoading(true);
