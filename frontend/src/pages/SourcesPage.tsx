@@ -340,10 +340,10 @@ function ConnectButton({
         type="button"
         onClick={handleClick}
         disabled={loading}
-        className={`w-full flex items-center gap-3 rounded-2xl border border-black/[0.065] bg-white p-4 text-left transition-all duration-200 ${
+         className={`w-full flex items-center gap-3 rounded-2xl p-4 text-left transition-all duration-200 ${
           loading
             ? "btn-green !rounded-2xl !h-auto !p-4 !justify-start !text-[13px]"
-            : "hover:border-black/[0.12] hover:shadow-[0_2px_12px_rgba(0,0,0,0.06)]"
+             : "btn-orange !rounded-2xl !h-auto !p-4 !justify-start !text-[13px] hover:brightness-105"
         }`}
       >
         {loading ? (
@@ -351,13 +351,13 @@ function ConnectButton({
         ) : (
           <div
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-            style={{ background: `${iconColor}12` }}
+             style={{ background: "rgba(255,255,255,0.16)" }}
           >
             <Icon size={24} color={iconColor} />
           </div>
         )}
         <div className="min-w-0 flex-1">
-          <p className={`text-[14px] font-semibold ${loading ? "" : "text-[#171717]"}`}>
+           <p className="text-[14px] font-semibold text-white">
             {loading ? `Connecting…` : label}
           </p>
         </div>
@@ -371,7 +371,7 @@ function ConnectButton({
             }}
             aria-label={`Instructions for ${label}`}
           >
-            <Info className="h-4 w-4 text-[#9A9A9A]" />
+             <Info className="h-4 w-4 text-white/80" />
           </button>
         )}
       </button>
