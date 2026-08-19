@@ -6,7 +6,7 @@ import type { CortexRole } from "@/types/api";
 const ROLE_RANK: Record<CortexRole, number> = { guest: 0, member: 1, admin: 2 };
 
 export function AppShell({ minRole = "guest" }: { minRole?: CortexRole }) {
-  const { loading, user, session, role } = useAuth();
+  const { loading, user, session, role, brains, selectedRole } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -76,7 +76,12 @@ export function AppShell({ minRole = "guest" }: { minRole?: CortexRole }) {
     );
   }
 
-  const effectiveRole = role;
+  // User is authenticated but has no brain memberships — route to onboarding.
+  if (brains.length === 0) {
+    return <Navigate to="/onboarding" replace />;
+  }
+
+  const effectiveRole = selectedRole;
   if (ROLE_RANK[effectiveRole] < ROLE_RANK[minRole]) {
     return <Navigate to="/app" replace />;
   }
