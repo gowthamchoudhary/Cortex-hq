@@ -27,7 +27,7 @@ export function AuthPage() {
   // Preserve the intended destination across the Google OAuth round-trip
   // (the callback URL only carries ?code=..., so we stash it first).
   const storedReturn = sessionStorage.getItem("cortex:returnTo");
-  const returnTo = searchParams.get("returnTo") || storedReturn || "/";
+  const returnTo = searchParams.get("returnTo") || storedReturn || "/app";
   const [mode, setMode] = useState<Mode>("signin");
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
