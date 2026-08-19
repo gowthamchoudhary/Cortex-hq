@@ -23,6 +23,12 @@ interface AuthContextValue {
   /** Role resolved from the backend (auth.user_brains) — authoritative. */
   role: CortexRole | null;
   brains: BrainGrant[];
+  /** The currently selected brain collection name. */
+  selectedBrain: string | undefined;
+  /** The role in the currently selected brain. */
+  selectedRole: CortexRole;
+  /** Set the selected brain (by collection name). */
+  setSelectedBrain: (collectionName: string) => void;
   refreshIdentity: () => Promise<void>;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUp: (name: string, email: string, password: string) => Promise<{ needsConfirmation: boolean }>;
@@ -39,15 +45,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [role, setRole] = useState<CortexRole | null>(null);
   const [brains, setBrains] = useState<BrainGrant[]>([]);
+  const [selectedBrain, setSelectedBrainState] = useState<string | undefined>(undefined);
 
   const refreshIdentity = useCallback(async () => {
     try {
       const me = await fetchMe();
       setRole(me.role);
       setBrains(me.brains);
+
+      // Auto-select the first brain if none selected yet, or if the
+      // previously selected brain no longer exists.
+      if (me.brains.length > 0) {
+        setSelectedBrainState((prev) => {
+          if (prev && me.brains.some((b) => b.collection_name === prev)) {
+            return prev;
+          }
+          return me.brains[0].collection_name;
+        });
+      } else {
+        setSelectedBrainState(undefined);
+      }
     } catch {
       // 401s are handled globally (UNAUTHORIZED_EVENT); keep the last known
       // identity otherwise rather than hard-failing the whole app.
+    }
+  }, []);
+
+  // Persist selected brain in sessionStorage so it survives refreshes.
+  const setSelectedBrain = useCallback((collectionName: string) => {
+    setSelectedBrainState(collectionName);
+    try {
+      sessionStorage.setItem("cortex:selectedBrain", collectionName);
+    } catch {
+      // sessionStorage may be unavailable.
+    }
+  }, []);
+
+  // Restore selected brain from sessionStorage on mount.
+  useEffect(() => {
+    try {
+      const stored = sessionStorage.getItem("cortex:selectedBrain");
+      if (stored) setSelectedBrainState(stored);
+    } catch {
+      // sessionStorage may be unavailable.
     }
   }, []);
 
@@ -79,6 +119,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       else {
         setRole(null);
         setBrains([]);
+        setSelectedBrainState(undefined);
       }
     });
 
@@ -98,6 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(null);
       setRole(null);
       setBrains([]);
+      setSelectedBrainState(undefined);
       setAccessToken(null);
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
@@ -151,8 +193,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setRole(null);
     setBrains([]);
+    setSelectedBrainState(undefined);
     setAccessToken(null);
+    try {
+      sessionStorage.removeItem("cortex:selectedBrain");
+    } catch {
+      // ignore
+    }
   }, []);
+
+  // Derive the role for the selected brain.
+  const selectedRole: CortexRole = useMemo(() => {
+    if (!selectedBrain || brains.length === 0) return role ?? "member";
+    const match = brains.find((b) => b.collection_name === selectedBrain);
+    return match ? match.role : brains[0]?.role ?? role ?? "member";
+  }, [selectedBrain, brains, role]);
 
   const value = useMemo<AuthContextValue>(
     () => ({
@@ -162,6 +217,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       role,
       brains,
+      selectedBrain,
+      selectedRole,
+      setSelectedBrain,
       refreshIdentity,
       signInWithPassword,
       signUp,
@@ -175,6 +233,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       user,
       role,
       brains,
+      selectedBrain,
+      selectedRole,
+      setSelectedBrain,
       refreshIdentity,
       signInWithPassword,
       signUp,
