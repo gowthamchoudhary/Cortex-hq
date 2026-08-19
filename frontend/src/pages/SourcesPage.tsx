@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Cable,
   Database,
+  FileUp,
   Github,
   Loader2,
   CheckCircle2,
@@ -32,7 +33,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { formatNumber, timeAgo } from "@/lib/format";
 import type { SourcesResponse } from "@/types/api";
 
-type SourceType = "gmail-export" | "slack-export" | "github-repo";
+type SourceType = "gmail-export" | "slack-export" | "github-repo" | "document-upload";
 
 export function SourcesPage() {
   const { selectedBrain } = useAuth();
@@ -72,7 +73,7 @@ export function SourcesPage() {
   }, [load]);
 
   const handleFileIngest = async (
-    sourceType: "gmail-export" | "slack-export",
+    sourceType: "gmail-export" | "slack-export" | "document-upload",
     file: File
   ) => {
     setIngesting(true);
@@ -201,7 +202,7 @@ export function SourcesPage() {
             <p className="text-[14px] font-medium">
               {ingestType === "github-repo"
                 ? "Fetching repository data…"
-                : "Processing export file…"}
+                : "Processing file…"}
             </p>
             <p className="text-[12px] opacity-80">
               Extraction, graph building, entity resolution — this may take a few minutes.
@@ -227,11 +228,17 @@ export function SourcesPage() {
         </div>
       )}
 
+      {/* Generic Upload Zone */}
+      <GenericUploadZone
+        loading={ingesting}
+        onFileSelect={(file) => void handleFileIngest("document-upload", file)}
+      />
+
       {/* Source Breakdown */}
       {!data || sourceTypes.length === 0 ? (
         <EmptyState
           title="No connected sources"
-          message="Click a platform above to start ingesting knowledge."
+          message="Click a platform above or upload a document to start ingesting knowledge."
         />
       ) : (
         <div className="dash-card">
@@ -324,7 +331,6 @@ function ConnectButton({
     if (file && onFileSelect) {
       onFileSelect(file);
     }
-    // Reset input so the same file can be re-selected
     e.target.value = "";
   };
 
@@ -345,20 +351,15 @@ function ConnectButton({
         ) : (
           <div
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-            style={{ background: `${iconColor}10` }}
+            style={{ background: `${iconColor}12` }}
           >
-            <Icon size={22} color={iconColor} />
+            <Icon size={24} color={iconColor} />
           </div>
         )}
         <div className="min-w-0 flex-1">
           <p className={`text-[14px] font-semibold ${loading ? "" : "text-[#171717]"}`}>
-            {loading ? `Connecting ${label}…` : `Connect ${label}`}
+            {loading ? `Connecting…` : label}
           </p>
-          {!loading && (
-            <p className="text-[12px] text-[#6B6B6B] mt-0.5 truncate">
-              {onFileSelect ? "Click to select export file" : "Click to configure"}
-            </p>
-          )}
         </div>
         {!loading && (
           <button
@@ -392,6 +393,68 @@ function ConnectButton({
           className="hidden"
         />
       )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Generic Upload Zone — PDF/TXT/DOCX/CSV/JSON drag-and-drop or click          */
+/* -------------------------------------------------------------------------- */
+
+function GenericUploadZone({
+  loading,
+  onFileSelect,
+}: {
+  loading: boolean;
+  onFileSelect: (file: File) => void;
+}) {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file && !loading) onFileSelect(file);
+  };
+
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) onFileSelect(file);
+    e.target.value = "";
+  };
+
+  return (
+    <div
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!loading) setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={handleDrop}
+      onClick={() => !loading && inputRef.current?.click()}
+      className={`flex items-center gap-4 rounded-2xl border-2 border-dashed p-6 cursor-pointer transition-all duration-200 ${
+        dragOver
+          ? "border-[#EB512F]/40 bg-[#EB512F]/5"
+          : "border-black/[0.08] bg-white hover:border-black/[0.15] hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)]"
+      } ${loading ? "opacity-50 pointer-events-none" : ""}`}
+    >
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F5F3F0]">
+        <FileUp className="h-5 w-5 text-[#6B6B6B]" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[14px] font-semibold text-[#171717]">Upload any document</p>
+        <p className="text-[12px] text-[#6B6B6B] mt-0.5">
+          PDF, TXT, DOCX, CSV, or JSON — drop a file or click to browse
+        </p>
+      </div>
+      <input
+        ref={inputRef}
+        type="file"
+        accept=".pdf,.txt,.docx,.csv,.json,.jsonl,.md"
+        onChange={handleChange}
+        className="hidden"
+      />
     </div>
   );
 }
