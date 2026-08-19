@@ -7,8 +7,8 @@ import { timeAgo } from "@/lib/format";
 import type { ActivityEvent } from "@/types/api";
 
 export function ActivityPage() {
-  const { brains } = useAuth();
-  const collection = brains[0]?.collection_name;
+  const { selectedBrain } = useAuth();
+  const collection = selectedBrain;
   const [items, setItems] = useState<ActivityEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
