@@ -698,8 +698,8 @@ def ingest() -> Any:
         source_type = str(body.get("source_type") or "").strip().lower()
         source_repo = str(body.get("source_repo") or "").strip()
 
-    if source_type not in ("gmail-export", "slack-export", "github-repo"):
-        return _error_response("source_type must be gmail-export, slack-export, or github-repo", 400)
+    if source_type not in ("gmail-export", "slack-export", "github-repo", "document-upload"):
+        return _error_response("source_type must be gmail-export, slack-export, github-repo, or document-upload", 400)
 
     import tempfile
     from ingestion.ingest_pipeline import run_full_ingestion
@@ -710,7 +710,6 @@ def ingest() -> Any:
             uploaded = request.files.get("file")
             if not uploaded or not uploaded.filename:
                 return _error_response("file upload is required for Gmail/Slack ingestion", 400)
-            # Save to a temp file
             suffix = ".zip" if uploaded.filename.endswith(".zip") else ".mbox"
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp")
             uploaded.save(tmp.name)
@@ -720,6 +719,19 @@ def ingest() -> Any:
             if not source_repo:
                 return _error_response("source_repo (owner/repo) is required for GitHub ingestion", 400)
             source_path = source_repo
+        elif source_type == "document-upload":
+            uploaded = request.files.get("file")
+            if not uploaded or not uploaded.filename:
+                return _error_response("file upload is required for document ingestion", 400)
+            # Read file content as text and run through extraction pipeline
+            file_content = uploaded.read()
+            suffix = Path(uploaded.filename).suffix.lower() or ".txt"
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp")
+            tmp.write(file_content)
+            tmp.close()
+            source_path = tmp.name
+            # For generic docs, use "gmail" as the adapter (treats as generic text source)
+            source_type = "gmail-export"
 
         result = run_full_ingestion(
             collection=collection,
@@ -730,7 +742,7 @@ def ingest() -> Any:
     except Exception as exc:  # noqa: BLE001
         return _error_response(f"Ingestion failed: {exc}", 500)
     finally:
-        if source_path and source_type in ("gmail-export", "slack-export"):
+        if source_path:
             try:
                 import os
                 os.unlink(source_path)
@@ -788,6 +800,68 @@ def deploy_agent_endpoint(agent_id: str) -> Any:
         )
     except Exception as exc:  # noqa: BLE001
         return _error_response(f"Failed to deploy agent: {exc}", 500)
+
+    return jsonify({"ok": True, **result})
+
+
+@app.post("/api/employees")
+def register_employee_endpoint() -> Any:
+    """Register an employee in the directory."""
+    user, error = _authenticate()
+    if error:
+        return error
+    collection = _collection_for(user, request.args.get("collection"))
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("name") or "").strip()
+    work_email = str(body.get("work_email") or "").strip()
+    employee_id = str(body.get("employee_id") or "").strip()
+    cortex_role = str(body.get("cortex_role") or "member").strip()
+    department = str(body.get("department") or "").strip() or None
+    role_title = str(body.get("role_title") or "").strip() or None
+
+    if not name or not work_email:
+        return _error_response("name and work_email are required", 400)
+    if not employee_id:
+        # Auto-generate employee_id from email prefix
+        employee_id = work_email.split("@")[0].replace(".", "-").replace("+", "-")
+
+    from identity.employee_directory import register_employee
+
+    try:
+        result = register_employee(
+            collection=collection,
+            employee_id=employee_id,
+            name=name,
+            work_email=work_email,
+            department=department,
+            role_title=role_title,
+            cortex_role=cortex_role,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Failed to register employee: {exc}", 500)
+
+    return jsonify({"ok": True, "employee": result})
+
+
+@app.post("/api/invitations")
+def create_invitation_endpoint() -> Any:
+    """Create an invitation for an employee."""
+    user, error = _authenticate()
+    if error:
+        return error
+    collection = _collection_for(user, request.args.get("collection"))
+    body = request.get_json(silent=True) or {}
+    employee_id = str(body.get("employee_id") or "").strip()
+
+    if not employee_id:
+        return _error_response("employee_id is required", 400)
+
+    from identity.invitations import create_invitation
+
+    try:
+        result = create_invitation(collection=collection, employee_id=employee_id)
+    except Exception as exc:  # noqa: BLE001
+        return _error_response(f"Failed to create invitation: {exc}", 500)
 
     return jsonify({"ok": True, **result})
 
