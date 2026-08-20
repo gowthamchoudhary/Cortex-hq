@@ -4,14 +4,15 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import type { Session, User } from "@supabase/supabase-js";
 import { getSupabaseClient, supabaseConfigured } from "@/lib/supabase";
-import { setAccessToken, UNAUTHORIZED_EVENT } from "@/lib/api";
+import { setAccessToken, setTokenRefreshFn, UNAUTHORIZED_EVENT } from "@/lib/api";
 import { fetchMe } from "@/api/auth";
-import type { BrainGrant, CortexRole } from "@/types/api";
+import type { BrainGrant, CortexRole } from "@/types/api"
 
 interface AuthContextValue {
   /** True while the initial session is being restored. */
@@ -20,6 +21,8 @@ interface AuthContextValue {
   configured: boolean;
   session: Session | null;
   user: User | null;
+  /** True once the first /api/me call has succeeded (or failed). */
+  identityLoaded: boolean;
   /** Role resolved from the backend (auth.user_brains) — authoritative. */
   role: CortexRole | null;
   brains: BrainGrant[];
@@ -46,12 +49,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [role, setRole] = useState<CortexRole | null>(null);
   const [brains, setBrains] = useState<BrainGrant[]>([]);
   const [selectedBrain, setSelectedBrainState] = useState<string | undefined>(undefined);
+  const [identityLoaded, setIdentityLoaded] = useState(false);
+  const refreshIdentityIdRef = useRef(0);
 
   const refreshIdentity = useCallback(async () => {
+    const id = ++refreshIdentityIdRef.current;
     try {
       const me = await fetchMe();
+      // Ignore stale calls if a newer one has started.
+      if (id !== refreshIdentityIdRef.current) return;
       setRole(me.role);
       setBrains(me.brains);
+      setIdentityLoaded(true);
 
       // Auto-select the first brain if none selected yet, or if the
       // previously selected brain no longer exists.
@@ -66,8 +75,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setSelectedBrainState(undefined);
       }
     } catch {
-      // 401s are handled globally (UNAUTHORIZED_EVENT); keep the last known
-      // identity otherwise rather than hard-failing the whole app.
+      if (id !== refreshIdentityIdRef.current) return;
+      // Mark identity as loaded even on failure — prevents infinite
+      // "checking session" spinner. Keep last known role/brains if any.
+      setIdentityLoaded(true);
     }
   }, []);
 
@@ -89,6 +100,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } catch {
       // sessionStorage may be unavailable.
     }
+  }, []);
+
+  // Register the token refresh function so api.ts can attempt silent refresh on 401.
+  useEffect(() => {
+    setTokenRefreshFn(async () => {
+      const client = supabaseConfigured ? getSupabaseClient() : null;
+      if (!client) return null;
+      const { data } = await client.auth.getSession();
+      const token = data.session?.access_token ?? null;
+      setAccessToken(token);
+      setSession(data.session);
+      setUser(data.session?.user ?? null);
+      return token;
+    });
   }, []);
 
   useEffect(() => {
@@ -120,6 +145,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setRole(null);
         setBrains([]);
         setSelectedBrainState(undefined);
+        setIdentityLoaded(true);
       }
     });
 
@@ -129,8 +155,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [refreshIdentity]);
 
-  // Any API 401 (expired/invalid token) clears the local session so the app
-  // bounces back to the sign-in page.
+  // API 401 that survived the token refresh attempt in api.ts means the
+  // session is genuinely dead. Only then do we sign out.
   useEffect(() => {
     const onUnauthorized = () => {
       const client = supabaseConfigured ? getSupabaseClient() : null;
@@ -141,6 +167,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setBrains([]);
       setSelectedBrainState(undefined);
       setAccessToken(null);
+      setIdentityLoaded(true);
     };
     window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
     return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
@@ -215,6 +242,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       configured: supabaseConfigured,
       session,
       user,
+      identityLoaded,
       role,
       brains,
       selectedBrain,
@@ -231,6 +259,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loading,
       session,
       user,
+      identityLoaded,
       role,
       brains,
       selectedBrain,

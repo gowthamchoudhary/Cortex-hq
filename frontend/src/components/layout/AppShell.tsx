@@ -6,7 +6,7 @@ import type { CortexRole } from "@/types/api";
 const ROLE_RANK: Record<CortexRole, number> = { guest: 0, member: 1, admin: 2 };
 
 export function AppShell({ minRole = "guest" }: { minRole?: CortexRole }) {
-  const { loading, user, session, role, brains, selectedRole } = useAuth();
+  const { loading, user, session, identityLoaded, role, brains, selectedRole } = useAuth();
   const location = useLocation();
 
   if (loading) {
@@ -46,9 +46,10 @@ export function AppShell({ minRole = "guest" }: { minRole?: CortexRole }) {
     return <Navigate to={`/auth?returnTo=${encodeURIComponent(returnTo)}`} replace />;
   }
 
-  // Session exists but role hasn't resolved from /api/me yet —
-  // show a loading state to prevent flashing the wrong dashboard.
-  if (role === null) {
+  // Session exists but identity (role/brains) hasn't resolved from /api/me yet —
+  // show a loading state to prevent flashing the wrong dashboard or redirecting
+  // to onboarding before we know if the user actually has brains.
+  if (!identityLoaded || (session && role === null && brains.length === 0)) {
     return (
       <div className="app-shell">
         <div className="app-sidebar">
@@ -76,7 +77,7 @@ export function AppShell({ minRole = "guest" }: { minRole?: CortexRole }) {
     );
   }
 
-  // User is authenticated but has no brain memberships — route to onboarding.
+  // Identity loaded — user is authenticated but has no brain memberships.
   if (brains.length === 0) {
     return <Navigate to="/onboarding" replace />;
   }
