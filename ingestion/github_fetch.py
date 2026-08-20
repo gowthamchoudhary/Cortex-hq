@@ -20,6 +20,46 @@ import httpx
 REST_BASE = "https://api.github.com"
 GRAPHQL_ENDPOINT = "https://api.github.com/graphql"
 PER_PAGE = 100
+
+
+def clean_repo_slug(repo: str) -> str:
+    """Normalize any GitHub input into a clean ``owner/name`` slug.
+
+    Accepts all common formats:
+    * ``owner/name`` (bare slug)
+    * ``https://github.com/owner/name``
+    * ``https://github.com/owner/name.git``
+    * ``git@github.com:owner/name.git``
+    * Markdown links: ``[text](https://github.com/owner/name)``
+    * URLs with trailing slashes, query params, or fragments
+    """
+    value = str(repo).strip()
+    if not value:
+        raise ValueError("repo must not be empty.")
+
+    # Strip markdown link format: [text](url)
+    md_match = re.match(r"\[([^\]]*)\]\(([^)]+)\)", value)
+    if md_match:
+        value = md_match.group(2).strip()
+
+    # Strip SSH format: git@github.com:owner/name.git
+    ssh_match = re.match(r"git@github\.com[:/](.+)", value)
+    if ssh_match:
+        value = ssh_match.group(1).strip()
+    else:
+        # Strip HTTPS/HTTP URL format: https://github.com/owner/name[/...]
+        url_match = re.match(
+            r"https?://(?:www\.)?github\.com/([^/]+/[^/]+)", value
+        )
+        if url_match:
+            value = url_match.group(1).strip()
+
+    # Clean trailing slashes, .git suffix, query params, fragments
+    value = value.split("?")[0].split("#")[0].rstrip("/")
+    if value.endswith(".git"):
+        value = value[:-4]
+
+    return value
 DEFAULT_TIMEOUT_SECONDS = 30
 DEFAULT_RETRIES = 4
 DEFAULT_BACKOFF_SECONDS = 2.0
@@ -240,7 +280,8 @@ def _fetch_discussions(
     retries: int,
     backoff_seconds: float,
 ) -> list[dict[str, Any]]:
-    parts = str(repo).strip().split("/", 1)
+    repo = clean_repo_slug(repo)
+    parts = repo.split("/", 1)
     if len(parts) != 2 or not all(parts):
         raise ValueError(f"repo must be 'owner/name', got {repo!r}")
 
@@ -333,7 +374,9 @@ def fetch_repo_activity(
         raise ValueError("repo must not be empty.")
     if not str(token).strip():
         raise ValueError("token must not be empty.")
-    if not re.match(r"^[^/]+/[^/]+$", str(repo).strip()):
+
+    repo = clean_repo_slug(repo)
+    if not re.match(r"^[^/]+/[^/]+$", repo):
         raise ValueError(f"repo must be 'owner/name', got {repo!r}")
 
     records: list[dict[str, Any]] = []

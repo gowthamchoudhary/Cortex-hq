@@ -23,7 +23,7 @@ from graph.ingest_to_hydradb import (
     wait_for_ingestion,
 )
 from hydra_db import HydraDB
-from ingestion.github_fetch import fetch_repo_activity
+from ingestion.github_fetch import clean_repo_slug, fetch_repo_activity
 from ingestion.normalize import (
     normalize_gmail,
     normalize_github,
@@ -102,7 +102,8 @@ def _load_source_documents(source_type: str, source_path_or_repo: str | Path, co
                 "No GitHub token found. Connect GitHub via OAuth in the Sources page, "
                 "or set the GITHUB_TOKEN environment variable."
             )
-        raw_records = fetch_repo_activity(str(source_path_or_repo), token)
+        cleaned_repo = clean_repo_slug(str(source_path_or_repo))
+        raw_records = fetch_repo_activity(cleaned_repo, token)
         return [normalize_github(record) for record in raw_records]
 
     source_path = Path(source_path_or_repo)
