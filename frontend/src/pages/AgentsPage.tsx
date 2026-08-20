@@ -349,7 +349,10 @@ function AgentCard({
 
     try {
       let config: Record<string, unknown>;
-      if (platform === "email") {
+      if (platform === "slack") {
+        // Slack OAuth: server looks up the bot token from the OAuth store.
+        config = {};
+      } else if (platform === "email") {
         config = {
           from_address: emailConfig.from_address.trim(),
           smtp_host: emailConfig.smtp_host.trim(),
@@ -367,7 +370,6 @@ function AgentCard({
       setToken("");
       setDeployingPlatform(null);
       setTimeout(() => {
-        setDeployingPlatform(null);
         setDeploySuccess(null);
       }, 3000);
     } catch (err) {
@@ -478,12 +480,9 @@ function AgentCard({
                         window.location.href = buildSlackInstallUrl(collection);
                         return;
                       }
-                      // Bot is installed — deploy directly with empty config;
-                      // the server looks up the bot token from the OAuth store.
-                      setDeployingPlatform(platform.key);
-                      setDeployError(null);
-                      setDeploySuccess(null);
-                      void onDeploy(agent.agent_id, "slack", {});
+                      // Bot is installed — deploy directly via handleDeploy
+                      // which properly manages loading/error states.
+                      void handleDeploy("slack");
                       return;
                     }
 
