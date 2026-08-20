@@ -46,3 +46,26 @@ export async function deployAgent(params: {
     }
   );
 }
+
+export interface SlackBotStatusResponse {
+  ok: boolean;
+  connected: boolean;
+  needs_slack_install: boolean;
+  bot_user_id: string;
+  collection: string;
+}
+
+export async function fetchSlackBotStatus(collection?: string): Promise<SlackBotStatusResponse> {
+  const qs = collection ? `?collection=${encodeURIComponent(collection)}` : "";
+  return api.get<SlackBotStatusResponse>(`/oauth/slack/bot-status${qs}`);
+}
+
+/** Build the Slack OAuth install URL for agent deployment. */
+export function buildSlackInstallUrl(collection?: string): string {
+  const base = "/api/oauth/slack/start";
+  const params = new URLSearchParams();
+  if (collection) params.set("collection", collection);
+  params.set("scope", "full");
+  params.set("return_to", "agents");
+  return `${base}?${params.toString()}`;
+}
