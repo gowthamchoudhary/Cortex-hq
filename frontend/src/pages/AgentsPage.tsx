@@ -328,6 +328,13 @@ function AgentCard({
 }) {
   const [deployingPlatform, setDeployingPlatform] = useState<string | null>(null);
   const [token, setToken] = useState("");
+  const [emailConfig, setEmailConfig] = useState({
+    from_address: "",
+    smtp_host: "",
+    smtp_port: "587",
+    smtp_user: "",
+    smtp_password: "",
+  });
   const [deployError, setDeployError] = useState<string | null>(null);
   const [deploySuccess, setDeploySuccess] = useState<string | null>(null);
 
@@ -341,10 +348,19 @@ function AgentCard({
     const platformInfo = PLATFORMS.find((p) => p.key === platform)!;
 
     try {
-      const config =
-        platform === "email"
-          ? { from_address: token.trim() }
-          : { token: token.trim() };
+      let config: Record<string, unknown>;
+      if (platform === "email") {
+        config = {
+          from_address: emailConfig.from_address.trim(),
+          smtp_host: emailConfig.smtp_host.trim(),
+          smtp_port: parseInt(emailConfig.smtp_port) || 587,
+          smtp_user: emailConfig.smtp_user.trim(),
+          smtp_password: emailConfig.smtp_password,
+          source: "per-organization",
+        };
+      } else {
+        config = { token: token.trim() };
+      }
 
       await onDeploy(agent.agent_id, platform, config);
       setDeploySuccess(`${platformInfo.label} configuration saved — see setup instructions to go live.`);
@@ -506,11 +522,12 @@ function AgentCard({
         </div>
 
         {/* Deploy Panel — step-by-step instructions + one input (non-OAuth platforms only) */}
-        {deployingPlatform && (
-          <DeployPanel
+        {deployingPlatform && (                    <DeployPanel
             platform={PLATFORMS.find((p) => p.key === deployingPlatform)!}
             token={token}
             setToken={setToken}
+            emailConfig={emailConfig}
+            setEmailConfig={setEmailConfig}
             loading={deployingPlatform !== null && !deployError && !deploySuccess}
             error={deployError}
             success={deploySuccess}
@@ -538,6 +555,8 @@ function DeployPanel({
   platform,
   token,
   setToken,
+  emailConfig,
+  setEmailConfig,
   loading,
   error,
   success,
@@ -547,12 +566,15 @@ function DeployPanel({
   platform: (typeof PLATFORMS)[number];
   token: string;
   setToken: (v: string) => void;
+  emailConfig?: { from_address: string; smtp_host: string; smtp_port: string; smtp_user: string; smtp_password: string };
+  setEmailConfig?: (v: { from_address: string; smtp_host: string; smtp_port: string; smtp_user: string; smtp_password: string }) => void;
   loading: boolean;
   error: string | null;
   success: string | null;
   onDeploy: () => void;
   onCancel: () => void;
 }) {
+  const isEmail = platform.key === "email";
   return (
     <div className="mt-4 rounded-2xl border border-black/[0.065] bg-[#FAFAF9] p-5 space-y-4">
       <div className="flex items-center justify-between">
@@ -568,7 +590,7 @@ function DeployPanel({
         </button>
       </div>
 
-      {platform.instruction && (
+      {platform.instruction && !isEmail && (
         <ol className="space-y-1.5">
           {platform.instruction.map((line, i) => (
             <li key={i} className="text-[12px] text-[#6B6B6B] leading-relaxed">
@@ -578,19 +600,79 @@ function DeployPanel({
         </ol>
       )}
 
-      <div>
-        <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">
-          {platform.inputLabel ?? "Value"}
-        </label>
-        <input
-          type="text"
-          value={token}
-          onChange={(e) => setToken(e.target.value)}
-          placeholder={platform.inputPlaceholder ?? "Enter value"}
-          className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
-          autoFocus
-        />
-      </div>
+      {isEmail && emailConfig && setEmailConfig ? (
+        <div className="space-y-3">
+          <p className="text-[12px] text-[#6B6B6B] leading-relaxed">
+            Configure SMTP credentials for this organization's email agent. Each organization stores its own email provider credentials separately.
+          </p>
+          <div>
+            <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">From address</label>
+            <input
+              type="email"
+              value={emailConfig.from_address}
+              onChange={(e) => setEmailConfig({ ...emailConfig, from_address: e.target.value })}
+              placeholder="cortex@yourcompany.com"
+              className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div className="col-span-2">
+              <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">SMTP host</label>
+              <input
+                type="text"
+                value={emailConfig.smtp_host}
+                onChange={(e) => setEmailConfig({ ...emailConfig, smtp_host: e.target.value })}
+                placeholder="smtp.gmail.com"
+                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
+              />
+            </div>
+            <div>
+              <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">Port</label>
+              <input
+                type="text"
+                value={emailConfig.smtp_port}
+                onChange={(e) => setEmailConfig({ ...emailConfig, smtp_port: e.target.value })}
+                placeholder="587"
+                className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">SMTP username</label>
+            <input
+              type="text"
+              value={emailConfig.smtp_user}
+              onChange={(e) => setEmailConfig({ ...emailConfig, smtp_user: e.target.value })}
+              placeholder="Usually the email address"
+              className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
+            />
+          </div>
+          <div>
+            <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">SMTP password / app password</label>
+            <input
+              type="password"
+              value={emailConfig.smtp_password}
+              onChange={(e) => setEmailConfig({ ...emailConfig, smtp_password: e.target.value })}
+              placeholder="••••••••"
+              className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
+            />
+          </div>
+        </div>
+      ) : (
+        <div>
+          <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">
+            {platform.inputLabel ?? "Value"}
+          </label>
+          <input
+            type="text"
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            placeholder={platform.inputPlaceholder ?? "Enter value"}
+            className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
+            autoFocus
+          />
+        </div>
+      )}
 
       {error && <p className="text-[12px] text-[#EF4444]">{error}</p>}
       {success && <p className="text-[12px] text-[#10B981]">{success}</p>}
@@ -598,7 +680,7 @@ function DeployPanel({
       <button
         type="button"
         onClick={onDeploy}
-        disabled={(platform.inputLabel !== undefined && !token.trim()) || loading}
+        disabled={(!isEmail && platform.inputLabel !== undefined && !token.trim()) || (isEmail && emailConfig && (!emailConfig.from_address.trim() || !emailConfig.smtp_host.trim())) || loading}
         className={`w-full ${loading ? "btn-green" : "btn-orange"}`}
       >
         {loading ? (
