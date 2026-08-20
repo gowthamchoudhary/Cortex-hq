@@ -38,9 +38,13 @@ from temporal.truth_discovery import run_truth_discovery
 
 SOURCE_TYPE_TO_ADAPTER = {
     "gmail-export": "gmail",
+    "gmail-live": "gmail",
     "slack-export": "slack",
+    "slack-live": "slack",
     "github-repo": "github",
 }
+# Source types that use live OAuth tokens instead of file uploads.
+LIVE_OAUTH_TYPES = {"gmail-live", "slack-live"}
 # Default access level applied to newly ingested data per uploading role.
 # Admin-uploaded company data defaults to "internal" (visible to members);
 # "restricted" is only applied when explicitly requested via access_level.
@@ -55,10 +59,29 @@ EXTRACTION_RETRIES = 3
 EXTRACTION_BACKOFF_SECONDS = 5.0
 
 
-def _load_source_documents(source_type: str, source_path_or_repo: str | Path) -> list[Any]:
+def _load_source_documents(source_type: str, source_path_or_repo: str | Path, collection: str = "") -> list[Any]:
     if source_type not in SOURCE_TYPE_TO_ADAPTER:
         supported = ", ".join(sorted(SOURCE_TYPE_TO_ADAPTER))
         raise ValueError(f"Unsupported source_type {source_type!r}; choose one of {supported}.")
+
+    # Live OAuth sources: fetch messages via API instead of file upload.
+    if source_type == "gmail-live":
+        from oauth.tokens import get_token
+        token_data = get_token(collection, "gmail")
+        if not token_data or not token_data.get("access_token"):
+            raise RuntimeError("Gmail OAuth token not found. Connect Gmail first via the Sources page.")
+        from ingestion.gmail_fetch import fetch_gmail_messages
+        raw_records = fetch_gmail_messages(token_data["access_token"])
+        return [normalize_gmail(record) for record in raw_records]
+
+    if source_type == "slack-live":
+        from oauth.tokens import get_token
+        token_data = get_token(collection, "slack")
+        if not token_data or not token_data.get("access_token"):
+            raise RuntimeError("Slack OAuth token not found. Connect Slack first via the Sources page.")
+        from ingestion.slack_fetch import fetch_slack_messages
+        raw_records = fetch_slack_messages(token_data["access_token"])
+        return [normalize_slack(record) for record in raw_records]
 
     if source_type == "github-repo":
         # The "path" for a github-repo source is an owner/name slug, not a file.
@@ -175,7 +198,7 @@ def run_full_ingestion(
             supported = ", ".join(sorted(ROLE_TO_ACCESS_LEVEL))
             raise ValueError(f"Unsupported role_default {role_default!r}; choose one of {supported}.")
 
-    documents = _load_source_documents(normalized_source_type, source_path_or_repo)
+    documents = _load_source_documents(normalized_source_type, source_path_or_repo, collection=collection)
     extraction_results, _skipped_count = _extract_documents(documents)
     graph_summary = _ingest_graph(extraction_results, collection, access_level)
 
