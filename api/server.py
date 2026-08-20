@@ -698,14 +698,24 @@ def ingest() -> Any:
         source_type = str(body.get("source_type") or "").strip().lower()
         source_repo = str(body.get("source_repo") or "").strip()
 
-    if source_type not in ("gmail-export", "slack-export", "github-repo", "document-upload"):
-        return _error_response("source_type must be gmail-export, slack-export, github-repo, or document-upload", 400)
+    if source_type not in ("gmail-export", "slack-export", "github-repo", "document-upload", "gmail-live", "slack-live"):
+        return _error_response("source_type must be gmail-export, slack-export, github-repo, document-upload, gmail-live, or slack-live", 400)
 
     import tempfile
     from ingestion.ingest_pipeline import run_full_ingestion
 
     source_path = None
     try:
+        if source_type in ("gmail-live", "slack-live"):
+            # Live OAuth: no file upload needed; the pipeline fetches via API.
+            result = run_full_ingestion(
+                collection=collection,
+                source_type=source_type,
+                source_path_or_repo="",
+                role_default="admin",
+            )
+            return jsonify({"ok": True, **result})
+
         if source_type in ("gmail-export", "slack-export"):
             uploaded = request.files.get("file")
             if not uploaded or not uploaded.filename:
@@ -864,6 +874,192 @@ def create_invitation_endpoint() -> Any:
         return _error_response(f"Failed to create invitation: {exc}", 500)
 
     return jsonify({"ok": True, **result})
+
+
+# ---------------------------------------------------------------------------
+# OAuth routes — Gmail and Slack (no auth required; redirect to provider)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/oauth/<provider>/start")
+def oauth_start(provider: str) -> Any:
+    """Redirect to Google/Slack OAuth consent screen.
+
+    ``collection`` query param is required so the callback can store
+    the token against the right brain.
+    """
+    collection = (request.args.get("collection") or "").strip()
+    if not collection:
+        return _error_response("collection query param is required", 400)
+
+    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
+    callback_url = f"{app_base}/api/oauth/{provider}/callback?collection={collection}"
+
+    if provider == "gmail":
+        client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
+        if not client_id:
+            return _error_response("GOOGLE_OAUTH_CLIENT_ID is not configured", 503)
+        scopes = "openid email https://mail.google.com/"
+        auth_url = (
+            f"https://accounts.google.com/o/oauth2/v2/auth?"
+            f"client_id={client_id}&redirect_uri={callback_url}"
+            f"&response_type=code&scope={scopes}&access_type=offline&prompt=consent"
+        )
+        from flask import redirect
+        return redirect(auth_url)
+
+    if provider == "slack":
+        client_id = os.environ.get("SLACK_OAUTH_CLIENT_ID")
+        if not client_id:
+            return _error_response("SLACK_OAUTH_CLIENT_ID is not configured", 503)
+        scopes = "channels:history channels:read users:read"
+        auth_url = (
+            f"https://slack.com/oauth/v2/authorize?"
+            f"client_id={client_id}&redirect_uri={callback_url}"
+            f"&scope={scopes}&user_scope="
+        )
+        from flask import redirect
+        return redirect(auth_url)
+
+    return _error_response(f"Unsupported OAuth provider: {provider}", 400)
+
+
+@app.get("/api/oauth/<provider>/callback")
+def oauth_callback(provider: str) -> Any:
+    """Handle OAuth callback, exchange code for token, store it, redirect to app."""
+    collection = (request.args.get("collection") or "").strip()
+    code = (request.args.get("code") or "").strip()
+    error = request.args.get("error") or ""
+
+    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
+    frontend_base = app_base.replace("/api", "") if "/api" in app_base else app_base
+
+    if error:
+        from flask import redirect
+        return redirect(f"{frontend_base}/app/sources?oauth_error={error}")
+
+    if not code:
+        from flask import redirect
+        return redirect(f"{frontend_base}/app/sources?oauth_error=missing_code")
+
+    if provider == "gmail":
+        return _handle_gmail_callback(code, collection, frontend_base)
+    if provider == "slack":
+        return _handle_slack_callback(code, collection, frontend_base)
+
+    from flask import redirect
+    return redirect(f"{frontend_base}/app/sources?oauth_error=unsupported_provider")
+
+
+def _handle_gmail_callback(code: str, collection: str, frontend_base: str) -> Any:
+    """Exchange Gmail authorization code for tokens."""
+    from flask import redirect
+
+    client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return redirect(f"{frontend_base}/app/sources?oauth_error=missing_google_credentials")
+
+    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
+    callback_url = f"{app_base}/api/oauth/gmail/callback?collection={collection}"
+
+    import httpx
+    token_resp = httpx.post(
+        "https://oauth2.googleapis.com/token",
+        data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": callback_url,
+            "grant_type": "authorization_code",
+        },
+        timeout=15,
+    )
+    token_resp.raise_for_status()
+    token_data = token_resp.json()
+
+    from oauth.tokens import store_token
+    store_token(
+        collection=collection,
+        provider="gmail",
+        access_token=token_data["access_token"],
+        refresh_token=token_data.get("refresh_token"),
+        expires_in=token_data.get("expires_in"),
+        scopes=token_data.get("scope", ""),
+    )
+
+    return redirect(f"{frontend_base}/app/sources?oauth_success=gmail")
+
+
+def _handle_slack_callback(code: str, collection: str, frontend_base: str) -> Any:
+    """Exchange Slack authorization code for tokens."""
+    from flask import redirect
+
+    client_id = os.environ.get("SLACK_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("SLACK_OAUTH_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return redirect(f"{frontend_base}/app/sources?oauth_error=missing_slack_credentials")
+
+    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
+    callback_url = f"{app_base}/api/oauth/slack/callback?collection={collection}"
+
+    import httpx
+    token_resp = httpx.post(
+        "https://slack.com/api/oauth.v2.access",
+        data={
+            "code": code,
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "redirect_uri": callback_url,
+        },
+        timeout=15,
+    )
+    token_resp.raise_for_status()
+    token_data = token_resp.json()
+
+    if not token_data.get("ok"):
+        return redirect(f"{frontend_base}/app/sources?oauth_error={token_data.get('error', 'slack_error')}")
+
+    # Slack OAuth v2 returns access_token at top level
+    access_token = token_data.get("access_token", "")
+    bot_user_id = token_data.get("bot_user_id", "")
+    team_name = (token_data.get("team") or {}).get("name", "")
+
+    from oauth.tokens import store_token
+    store_token(
+        collection=collection,
+        provider="slack",
+        access_token=access_token,
+        scopes=",".join(token_data.get("scope", "").split(",")) if token_data.get("scope") else "",
+    )
+
+    return redirect(f"{frontend_base}/app/sources?oauth_success=slack")
+
+
+@app.get("/api/oauth/status/<provider>")
+def oauth_status(provider: str) -> Any:
+    """Check if an OAuth token exists and is valid for a provider."""
+    user, error = _authenticate()
+    if error:
+        return error
+    collection = _collection_for(user, request.args.get("collection"))
+
+    from oauth.tokens import is_token_valid
+    valid = is_token_valid(collection, provider)
+    return jsonify({"ok": True, "connected": valid, "provider": provider})
+
+
+@app.post("/api/oauth/<provider>/disconnect")
+def oauth_disconnect(provider: str) -> Any:
+    """Remove stored OAuth token for a provider."""
+    user, error = _authenticate()
+    if error:
+        return error
+    collection = _collection_for(user, request.args.get("collection"))
+
+    from oauth.tokens import delete_token
+    deleted = delete_token(collection, provider)
+    return jsonify({"ok": True, "disconnected": deleted})
 
 
 if __name__ == "__main__":
