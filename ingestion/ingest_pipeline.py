@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 from dataclasses import asdict
 from pathlib import Path
@@ -57,6 +58,7 @@ ACCESS_LEVELS = ("public", "internal", "restricted")
 EXTRACTION_TIMEOUT_SECONDS = 60
 EXTRACTION_RETRIES = 3
 EXTRACTION_BACKOFF_SECONDS = 5.0
+EXTRACTION_BATCH_SIZE = 10  # documents per batch to limit peak memory
 
 
 def _load_source_documents(source_type: str, source_path_or_repo: str | Path, collection: str = "") -> list[Any]:
@@ -129,24 +131,33 @@ def _load_source_documents(source_type: str, source_path_or_repo: str | Path, co
     )
 
 
-def _extract_documents(documents: list[Any]) -> tuple[list[dict[str, Any]], int]:
+def _extract_documents(documents: list[Any]) -> tuple[list[dict[str, Any]], list[dict[str, str]]]:
     results: list[dict[str, Any]] = []
-    skipped_count = 0
-    for document in documents:
-        try:
-            extraction = extract_with_backoff(
-                document=document,
-                provider="auto",
-                timeout_seconds=EXTRACTION_TIMEOUT_SECONDS,
-                max_content_chars=DEFAULT_MAX_CONTENT_CHARS,
-                retries=EXTRACTION_RETRIES,
-                backoff_seconds=EXTRACTION_BACKOFF_SECONDS,
-            )
-            results.append({"document": asdict(document), "extraction": extraction})
-        except Exception as exc:
-            skipped_count += 1
-            print(f"Skipped source_id={document.source_id}: {exc}")
-    return results, skipped_count
+    skipped: list[dict[str, str]] = []
+    total = len(documents)
+    for batch_start in range(0, total, EXTRACTION_BATCH_SIZE):
+        batch = documents[batch_start:batch_start + EXTRACTION_BATCH_SIZE]
+        for document in batch:
+            try:
+                extraction = extract_with_backoff(
+                    document=document,
+                    provider="auto",
+                    timeout_seconds=EXTRACTION_TIMEOUT_SECONDS,
+                    max_content_chars=DEFAULT_MAX_CONTENT_CHARS,
+                    retries=EXTRACTION_RETRIES,
+                    backoff_seconds=EXTRACTION_BACKOFF_SECONDS,
+                )
+                results.append({"document": asdict(document), "extraction": extraction})
+            except Exception as exc:
+                skipped.append({
+                    "source_id": document.source_id,
+                    "error": str(exc),
+                })
+                print(f"Skipped source_id={document.source_id}: {exc}")
+        # Release batch memory and force GC between batches to keep RSS low.
+        del batch
+        gc.collect()
+    return results, skipped
 
 
 def _ingest_graph(
@@ -212,7 +223,18 @@ def run_full_ingestion(
             raise ValueError(f"Unsupported role_default {role_default!r}; choose one of {supported}.")
 
     documents = _load_source_documents(normalized_source_type, source_path_or_repo, collection=collection)
-    extraction_results, _skipped_count = _extract_documents(documents)
+    extraction_results, skipped_docs = _extract_documents(documents)
+    # Release source documents now that extraction is done.
+    del documents
+    gc.collect()
+
+    if not extraction_results:
+        error_messages = [entry["error"] for entry in skipped_docs[:3]]
+        detail = "; ".join(error_messages) if error_messages else "unknown error"
+        raise RuntimeError(
+            f"Extraction failed: all documents were skipped — {detail}"
+        )
+
     graph_summary = _ingest_graph(extraction_results, collection, access_level)
 
     resolution_summary = run_resolution(
@@ -239,6 +261,7 @@ def run_full_ingestion(
 
     return {
         "docs_processed": len(extraction_results),
+        "docs_skipped": len(skipped_docs),
         "entities_found": int(graph_summary.get("entities_created", 0)),
         "merges_made": int(resolution_summary.get("auto_merges_made", 0)),
         "conflicts_resolved": _conflicts_resolved(cascade_summary),
