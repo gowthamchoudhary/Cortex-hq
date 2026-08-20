@@ -15,7 +15,7 @@ export function InvitePage() {
     async (inviteToken: string) => {
       try {
         const result = await api.post<{ ok: boolean; collection_name?: string; reason?: string }>(
-          `/invitations/${encodeURIComponent(inviteToken)}/accept`
+          `/invitations/${inviteToken}/accept`
         );
         if (result.ok) {
           setStatus("success");
