@@ -4,8 +4,35 @@ import { Loader2, CheckCircle2, AlertCircle } from "lucide-react";
 import { useAuth } from "@/auth/AuthContext";
 import { api } from "@/lib/api";
 
+/**
+ * Extract the invitation token from the current URL.
+ * Handles edge cases where useParams may fail or return the full URL.
+ */
+function extractTokenFromUrl(): string {
+  // Try React Router params first
+  const params = new URLSearchParams(window.location.search);
+  const queryToken = params.get("token");
+  if (queryToken) return queryToken;
+
+  // Parse from pathname: /invite/<token>
+  const parts = window.location.pathname.split("/");
+  // Find "invite" segment and take the one after it
+  const inviteIdx = parts.indexOf("invite");
+  if (inviteIdx !== -1 && inviteIdx + 1 < parts.length) {
+    return decodeURIComponent(parts[inviteIdx + 1]);
+  }
+
+  // Last resort: take the last non-empty segment
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i]) return decodeURIComponent(parts[i]);
+  }
+  return "";
+}
+
 export function InvitePage() {
-  const { token } = useParams<{ token: string }>();
+  const { token: routeToken } = useParams<{ token: string }>();
+  // Robust token extraction: prefer route param, fallback to URL parsing
+  const token = routeToken || extractTokenFromUrl();
   const navigate = useNavigate();
   const { session, loading: authLoading } = useAuth();
   const [status, setStatus] = useState<"loading" | "success" | "error" | "needs_auth">("loading");
@@ -13,9 +40,26 @@ export function InvitePage() {
 
   const acceptInvite = useCallback(
     async (inviteToken: string) => {
+      // Defensive: strip any URL prefix that might have leaked in
+      let cleanToken = inviteToken;
+      if (cleanToken.includes("://")) {
+        // Token contains a full URL — extract just the last path segment
+        try {
+          const url = new URL(cleanToken);
+          const parts = url.pathname.split("/").filter(Boolean);
+          cleanToken = parts[parts.length - 1] || cleanToken;
+        } catch {
+          // Not a valid URL, extract after last /
+          const lastSlash = cleanToken.lastIndexOf("/");
+          cleanToken = lastSlash !== -1 ? cleanToken.substring(lastSlash + 1) : cleanToken;
+        }
+      }
+      // Also strip leading/trailing whitespace and URI-encoded slashes
+      cleanToken = cleanToken.replace(/\//g, "").trim();
+
       try {
         const result = await api.post<{ ok: boolean; collection_name?: string; reason?: string }>(
-          `/invitations/${inviteToken}/accept`
+          `/invitations/${cleanToken}/accept`
         );
         if (result.ok) {
           setStatus("success");
