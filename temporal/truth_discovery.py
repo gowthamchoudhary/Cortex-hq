@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import math
 import sys
@@ -176,6 +177,8 @@ def run_truth_discovery(
     client = HydraDB(token=get_api_key())
     all_sources = list_all_sources(client, database, collection)
     fact_states = [source for source in all_sources if metadata(source).get("type") == "FactState"]
+    del all_sources
+    gc.collect()
 
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for fact in fact_states:

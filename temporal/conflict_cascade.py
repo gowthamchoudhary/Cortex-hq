@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gc
 import json
 import os
 import re
@@ -421,6 +422,8 @@ def run_cascade(
         for source in all_sources
         if metadata(source).get("type") == "FactState"
     ]
+    del all_sources
+    gc.collect()
 
     grouped: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for fact in fact_states:
