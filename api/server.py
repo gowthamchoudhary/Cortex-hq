@@ -860,7 +860,11 @@ def deploy_agent_endpoint(agent_id: str) -> Any:
     if platform not in ("slack", "github", "email"):
         return _error_response("platform must be slack, github, or email", 400)
     platform_config = body.get("config") or {}
-    if not isinstance(platform_config, dict) or not platform_config:
+    if not isinstance(platform_config, dict):
+        return _error_response("config must be an object", 400)
+    # Allow empty config for Slack — the server looks up the bot token from OAuth store.
+    # Require non-empty config for GitHub and Email (they need user-provided values).
+    if platform != "slack" and not platform_config:
         return _error_response("config must be a non-empty object", 400)
 
     # --- Slack: verify bot token exists for this collection ---
@@ -983,6 +987,7 @@ def oauth_start(provider: str) -> Any:
 
     # Clean redirect_uri — no query params. Dynamic context goes in the state param.
     redirect_uri = _clean_redirect_uri(provider)
+    encoded_redirect_uri = urllib.parse.quote(redirect_uri, safe="")
     state = _encode_oauth_state(collection, return_to)
 
     if provider == "gmail":
@@ -992,7 +997,7 @@ def oauth_start(provider: str) -> Any:
         scopes = "openid email https://mail.google.com/"
         auth_url = (
             f"https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri, safe="")}"
+            f"client_id={client_id}&redirect_uri={encoded_redirect_uri}"
             f"&response_type=code&scope={scopes}&access_type=offline&prompt=consent"
             f"&state={state}"
         )
@@ -1006,7 +1011,7 @@ def oauth_start(provider: str) -> Any:
         scopes = "repo read:org"
         auth_url = (
             f"https://github.com/login/oauth/authorize?"
-            f"client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri, safe="")}"
+            f"client_id={client_id}&redirect_uri={encoded_redirect_uri}"
             f"&scope={scopes}&state={state}"
         )
         from flask import redirect
@@ -1026,7 +1031,7 @@ def oauth_start(provider: str) -> Any:
         state_with_scope = _encode_oauth_state(collection, return_to, scope=scope_mode)
         auth_url = (
             f"https://slack.com/oauth/v2/authorize?"
-            f"client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri, safe="")}"
+            f"client_id={client_id}&redirect_uri={encoded_redirect_uri}"
             f"&scope={bot_scopes}&user_scope={user_scopes}"
             f"&state={state_with_scope}"
         )
