@@ -1,5 +1,7 @@
 import { api } from "@/lib/api";
 
+export type OAuthProvider = "gmail" | "slack" | "github";
+
 export interface OAuthStatusResponse {
   ok: boolean;
   connected: boolean;
@@ -7,7 +9,7 @@ export interface OAuthStatusResponse {
 }
 
 export async function getOAuthStatus(
-  provider: "gmail" | "slack",
+  provider: OAuthProvider,
   collection?: string
 ): Promise<OAuthStatusResponse> {
   const params = collection ? `?collection=${encodeURIComponent(collection)}` : "";
@@ -15,7 +17,7 @@ export async function getOAuthStatus(
 }
 
 export function getOAuthStartUrl(
-  provider: "gmail" | "slack",
+  provider: OAuthProvider,
   collection?: string
 ): string {
   const params = collection ? `?collection=${encodeURIComponent(collection)}` : "";
@@ -23,7 +25,7 @@ export function getOAuthStartUrl(
 }
 
 export async function disconnectOAuth(
-  provider: "gmail" | "slack",
+  provider: OAuthProvider,
   collection?: string
 ): Promise<{ ok: boolean; disconnected: boolean }> {
   const params = collection ? `?collection=${encodeURIComponent(collection)}` : "";
