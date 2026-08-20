@@ -21,5 +21,9 @@ export async function createBrain(orgName: string): Promise<CreateBrainResponse>
 }
 
 export async function acceptInvitation(token: string): Promise<AcceptInvitationResponse> {
-  return api.post<AcceptInvitationResponse>(`/invitations/${encodeURIComponent(token)}/accept`);
+  return api.post<AcceptInvitationResponse>(`/invitations/${token}/accept`);
+}
+
+export async function deleteBrain(collectionName: string): Promise<{ ok: boolean; removed: string }> {
+  return api.delete<{ ok: boolean; removed: string }>(`/brains/${encodeURIComponent(collectionName)}`);
 }
