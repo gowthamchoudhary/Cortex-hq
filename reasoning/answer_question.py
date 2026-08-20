@@ -123,6 +123,18 @@ def provider_config(provider: str, model: str | None) -> tuple[str, str, str]:
     raise ValueError(f"Unsupported provider: {provider}")
 
 
+def _parse_llm_json(raw_content: str) -> dict[str, Any]:
+    """Parse JSON from an LLM response, handling markdown code fences."""
+    text = raw_content.strip()
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    if text.startswith("```"):
+        lines = text.split("\n")
+        # Remove first and last lines if they are fence markers
+        if lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+            text = "\n".join(lines[1:-1]).strip()
+    return json.loads(text)
+
+
 def call_llm_json(
     messages: list[dict[str, str]],
     provider: str,
@@ -155,7 +167,14 @@ def call_llm_json(
             return call_llm_json(messages, provider, model, timeout_seconds, retries - 1)
         raise RuntimeError(f"LLM API returned HTTP {exc.response.status_code}: {exc.response.text}") from exc
 
-    return json.loads(response.json()["choices"][0]["message"]["content"])
+    raw_content = response.json()["choices"][0]["message"]["content"]
+    try:
+        return _parse_llm_json(raw_content)
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        if retries > 0:
+            time.sleep(2)
+            return call_llm_json(messages, provider, model, timeout_seconds, retries - 1)
+        raise RuntimeError(f"LLM returned invalid JSON: {raw_content[:200]}") from exc
 
 
 def query_understanding(question: str, provider: str, model: str | None, timeout_seconds: int) -> dict[str, Any]:
