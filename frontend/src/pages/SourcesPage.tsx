@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   Cable,
   Database,
-  FileUp,
   Github,
   Loader2,
   CheckCircle2,
-  Info,
+  Zap,
+  Upload,
+  ExternalLink,
 } from "lucide-react";
 import { SiGmail, SiGithub } from "@icons-pack/react-simple-icons";
 
@@ -28,12 +29,13 @@ function SlackIcon({ size = 22 }: { size?: string | number }) {
 }
 import { fetchSources } from "@/api/sources";
 import { ingestSource } from "@/api/ingest";
+import { getOAuthStatus, getOAuthStartUrl, disconnectOAuth } from "@/api/oauth";
 import { PageHeader, EmptyState, ErrorState, LoadingState } from "@/components/shared/states";
 import { useAuth } from "@/auth/AuthContext";
 import { formatNumber, timeAgo } from "@/lib/format";
 import type { SourcesResponse } from "@/types/api";
 
-type SourceType = "gmail-export" | "slack-export" | "github-repo" | "document-upload";
+type SourceType = "gmail-export" | "slack-export" | "github-repo" | "document-upload" | "gmail-live" | "slack-live";
 
 export function SourcesPage() {
   const { selectedBrain } = useAuth();
@@ -54,6 +56,13 @@ export function SourcesPage() {
   const [showGitHubInput, setShowGitHubInput] = useState(false);
   const [githubRepo, setGithubRepo] = useState("");
 
+  // OAuth status
+  const [gmailConnected, setGmailConnected] = useState(false);
+  const [slackConnected, setSlackConnected] = useState(false);
+
+  // OAuth feedback from redirect
+  const [oauthFeedback, setOauthFeedback] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -68,19 +77,50 @@ export function SourcesPage() {
     }
   }, [collection]);
 
+  // Check OAuth status on mount and after redirect
   useEffect(() => {
     void load();
-  }, [load]);
+    // Check for OAuth feedback in URL
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get("oauth_success");
+    const oauthErr = params.get("oauth_error");
+    if (success) {
+      setOauthFeedback(`${success} connected successfully`);
+      // Clean URL
+      window.history.replaceState({}, "", window.location.pathname);
+      // Reload to show updated sources
+      setTimeout(() => void load(), 500);
+    } else if (oauthErr) {
+      setOauthFeedback(`OAuth error: ${oauthErr}`);
+      window.history.replaceState({}, "", window.location.pathname);
+    }
+    // Check OAuth connection status
+    void checkOAuthStatus();
+  }, [load, collection]);
 
-  const handleFileIngest = async (
-    sourceType: "gmail-export" | "slack-export" | "document-upload",
-    file: File
-  ) => {
+  const checkOAuthStatus = async () => {
+    try {
+      const [gmail, slack] = await Promise.all([
+        getOAuthStatus("gmail", collection),
+        getOAuthStatus("slack", collection),
+      ]);
+      setGmailConnected(gmail.connected);
+      setSlackConnected(slack.connected);
+    } catch {
+      // OAuth status check failed silently — not critical
+    }
+  };
+
+  const handleLiveIngest = async (sourceType: "gmail-live" | "slack-live") => {
     setIngesting(true);
     setIngestType(sourceType);
     setIngestResult(null);
     try {
-      const result = await ingestSource({ collection, sourceType, file });
+      const result = await ingestSource({
+        collection,
+        sourceType,
+        sourceRepo: "",
+      });
       setIngestResult({
         ok: true,
         message: `Ingestion complete: ${result.docs_processed} docs, ${result.entities_found} entities, ${result.merges_made} merges.`,
@@ -138,31 +178,61 @@ export function SourcesPage() {
         subtitle={`${formatNumber(data?.total_documents ?? 0)} documents ingested`}
       />
 
-      {/* Connect Platform Buttons */}
+      {/* OAuth feedback banner */}
+      {oauthFeedback && (
+        <div
+          className={`flex items-center gap-3 rounded-2xl border p-4 ${
+            oauthFeedback.includes("error")
+              ? "border-[#EF4444]/20 bg-[#EF4444]/5"
+              : "border-[#10B981]/20 bg-[#10B981]/5"
+          }`}
+        >
+          <CheckCircle2
+            className="h-5 w-5 shrink-0"
+            style={{ color: oauthFeedback.includes("error") ? "#EF4444" : "#10B981" }}
+          />
+          <p className="text-[13px] text-[#171717]">{oauthFeedback}</p>
+        </div>
+      )}
+
+      {/* Platform Connect Buttons */}
       <div className="grid gap-3 sm:grid-cols-3">
-        <ConnectButton
+        <OAuthConnectButton
           label="Gmail"
           icon={SiGmail}
           iconColor="#EA4335"
-          instruction="Export from Google Takeout → Gmail → download .zip"
-          loading={ingesting && ingestType === "gmail-export"}
-          onFileSelect={(file) => void handleFileIngest("gmail-export", file)}
-          accept=".zip,.mbox"
+          connected={gmailConnected}
+          connecting={ingesting && ingestType === "gmail-live"}
+          onConnect={() => {
+            window.location.href = getOAuthStartUrl("gmail", collection);
+          }}
+          onDisconnect={() => {
+            void disconnectOAuth("gmail", collection).then(() => {
+              setGmailConnected(false);
+            });
+          }}
+          onSync={() => void handleLiveIngest("gmail-live")}
         />
-        <ConnectButton
+        <OAuthConnectButton
           label="Slack"
           icon={SlackIcon}
           iconColor="#4A154B"
-          instruction="Export from Slack Settings → Import/Export Data → download workspace .zip"
-          loading={ingesting && ingestType === "slack-export"}
-          onFileSelect={(file) => void handleFileIngest("slack-export", file)}
-          accept=".zip"
+          connected={slackConnected}
+          connecting={ingesting && ingestType === "slack-live"}
+          onConnect={() => {
+            window.location.href = getOAuthStartUrl("slack", collection);
+          }}
+          onDisconnect={() => {
+            void disconnectOAuth("slack", collection).then(() => {
+              setSlackConnected(false);
+            });
+          }}
+          onSync={() => void handleLiveIngest("slack-live")}
         />
         <ConnectButton
           label="GitHub"
           icon={SiGithub}
-           iconColor="#7C3AED"
-          instruction="Enter a public or private repository (owner/name)"
+          iconColor="#7C3AED"
           loading={ingesting && ingestType === "github-repo"}
           onClick={() => setShowGitHubInput(!showGitHubInput)}
         />
@@ -187,12 +257,25 @@ export function SourcesPage() {
             type="button"
             onClick={() => void handleGitHubIngest()}
             disabled={!githubRepo.trim()}
-            className="btn-orange !h-9 !text-[12px] !px-4"
+            className="btn-orange"
           >
             Connect
           </button>
         </div>
       )}
+
+      {/* File Upload Fallback */}
+      <div className="flex items-center gap-4 rounded-2xl border-2 border-dashed border-black/[0.08] bg-white p-6 hover:border-black/[0.15] hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)] transition-all duration-200">
+        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F5F3F0]">
+          <Upload className="h-5 w-5 text-[#6B6B6B]" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-semibold text-[#171717]">Upload a file</p>
+          <p className="text-[12px] text-[#6B6B6B] mt-0.5">
+            Gmail .zip, Slack .zip, or any document (PDF, TXT, DOCX, CSV, JSON)
+          </p>
+        </div>
+      </div>
 
       {/* Ingestion Progress */}
       {ingesting && (
@@ -202,6 +285,10 @@ export function SourcesPage() {
             <p className="text-[14px] font-medium">
               {ingestType === "github-repo"
                 ? "Fetching repository data…"
+                : ingestType === "gmail-live"
+                ? "Fetching Gmail messages…"
+                : ingestType === "slack-live"
+                ? "Fetching Slack messages…"
                 : "Processing file…"}
             </p>
             <p className="text-[12px] opacity-80">
@@ -227,12 +314,6 @@ export function SourcesPage() {
           <p className="text-[13px] text-[#171717]">{ingestResult.message}</p>
         </div>
       )}
-
-      {/* Generic Upload Zone */}
-      <GenericUploadZone
-        loading={ingesting}
-        onFileSelect={(file) => void handleFileIngest("document-upload", file)}
-      />
 
       {/* Source Breakdown */}
       {!data || sourceTypes.length === 0 ? (
@@ -292,169 +373,130 @@ export function SourcesPage() {
 }
 
 /* -------------------------------------------------------------------------- */
-/* Connect Button — one click opens file picker or triggers action             */
+/* OAuth Connect Button — one click to OAuth or sync if connected             */
 /* -------------------------------------------------------------------------- */
 
-function ConnectButton({
+function OAuthConnectButton({
   label,
   icon: Icon,
   iconColor,
-  instruction,
-  loading,
-  onFileSelect,
-  onClick,
-  accept,
+  connected,
+  connecting,
+  onConnect,
+  onDisconnect,
+  onSync,
 }: {
   label: string;
   icon: React.ComponentType<{ size?: string | number; color?: string }>;
   iconColor: string;
-  instruction: string;
-  loading: boolean;
-  onFileSelect?: (file: File) => void;
-  onClick?: () => void;
-  accept?: string;
+  connected: boolean;
+  connecting: boolean;
+  onConnect: () => void;
+  onDisconnect: () => void;
+  onSync: () => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [showTooltip, setShowTooltip] = useState(false);
-
-  const handleClick = () => {
-    if (loading) return;
-    if (onFileSelect) {
-      inputRef.current?.click();
-    } else if (onClick) {
-      onClick();
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file && onFileSelect) {
-      onFileSelect(file);
-    }
-    e.target.value = "";
-  };
-
   return (
     <div className="relative">
-      <button
-        type="button"
-        onClick={handleClick}
-        disabled={loading}
-         className={`w-full flex items-center gap-3 rounded-2xl p-4 text-left transition-all duration-200 ${
-          loading
-            ? "btn-green !rounded-2xl !h-auto !p-4 !justify-start !text-[13px]"
-             : "btn-orange !rounded-2xl !h-auto !p-4 !justify-start !text-[13px] hover:brightness-105"
-        }`}
-      >
-        {loading ? (
-          <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
-        ) : (
-          <div
-            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl"
-             style={{ background: "rgba(255,255,255,0.16)" }}
-          >
+      {connected ? (
+        <div className="space-y-2">
+          <div className="flex items-center gap-3 rounded-2xl bg-white border border-[#10B981]/20 p-4 shadow-[0_2px_8px_rgba(16,185,129,0.06)]">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-[#10B981]/10">
+              <Icon size={24} color={iconColor} />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="text-[14px] font-semibold text-[#171717]">{label}</p>
+              <p className="text-[11px] text-[#10B981] font-medium">Connected</p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onSync}
+              disabled={connecting}
+              className="btn-orange flex-1"
+            >
+              {connecting ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Syncing…
+                </>
+              ) : (
+                <>
+                  <Zap className="h-4 w-4" />
+                  Sync now
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={onDisconnect}
+              className="text-[12px] text-[#6B6B6B] hover:text-[#EF4444] transition-colors px-3"
+            >
+              Disconnect
+            </button>
+          </div>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onConnect}
+          disabled={connecting}
+          className="w-full flex items-center gap-3 rounded-2xl p-4 text-left transition-all duration-200 btn-orange hover:brightness-105"
+        >
+          <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/16">
             <Icon size={24} color={iconColor} />
           </div>
-        )}
-        <div className="min-w-0 flex-1">
-           <p className="text-[14px] font-semibold text-white">
-            {loading ? `Connecting…` : label}
-          </p>
-        </div>
-        {!loading && (
-          <button
-            type="button"
-            className="shrink-0 p-1 rounded-lg hover:bg-black/[0.04] transition-colors"
-            onClick={(e) => {
-              e.stopPropagation();
-              setShowTooltip(!showTooltip);
-            }}
-            aria-label={`Instructions for ${label}`}
-          >
-             <Info className="h-4 w-4 text-white/80" />
-          </button>
-        )}
-      </button>
-
-      {/* Tooltip */}
-      {showTooltip && !loading && (
-        <div className="absolute left-0 right-0 top-full z-10 mt-2 rounded-xl border border-black/[0.065] bg-white p-3 shadow-[0_8px_24px_rgba(0,0,0,0.08)]">
-          <p className="text-[12px] text-[#6B6B6B] leading-relaxed">{instruction}</p>
-        </div>
-      )}
-
-      {/* Hidden file input */}
-      {onFileSelect && (
-        <input
-          ref={inputRef}
-          type="file"
-          accept={accept}
-          onChange={handleFileChange}
-          className="hidden"
-        />
+          <div className="min-w-0 flex-1">
+            <p className="text-[14px] font-semibold text-white">Connect {label}</p>
+            <p className="text-[11px] text-white/70">OAuth — one click to link</p>
+          </div>
+          <ExternalLink className="h-4 w-4 text-white/60 shrink-0" />
+        </button>
       )}
     </div>
   );
 }
 
 /* -------------------------------------------------------------------------- */
-/* Generic Upload Zone — PDF/TXT/DOCX/CSV/JSON drag-and-drop or click          */
+/* Connect Button — for GitHub (token-based)                                  */
 /* -------------------------------------------------------------------------- */
 
-function GenericUploadZone({
+function ConnectButton({
+  label,
+  icon: Icon,
+  iconColor,
   loading,
-  onFileSelect,
+  onClick,
 }: {
+  label: string;
+  icon: React.ComponentType<{ size?: string | number; color?: string }>;
+  iconColor: string;
   loading: boolean;
-  onFileSelect: (file: File) => void;
+  onClick?: () => void;
 }) {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [dragOver, setDragOver] = useState(false);
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setDragOver(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file && !loading) onFileSelect(file);
-  };
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) onFileSelect(file);
-    e.target.value = "";
-  };
-
   return (
-    <div
-      onDragOver={(e) => {
-        e.preventDefault();
-        if (!loading) setDragOver(true);
-      }}
-      onDragLeave={() => setDragOver(false)}
-      onDrop={handleDrop}
-      onClick={() => !loading && inputRef.current?.click()}
-      className={`flex items-center gap-4 rounded-2xl border-2 border-dashed p-6 cursor-pointer transition-all duration-200 ${
-        dragOver
-          ? "border-[#EB512F]/40 bg-[#EB512F]/5"
-          : "border-black/[0.08] bg-white hover:border-black/[0.15] hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)]"
-      } ${loading ? "opacity-50 pointer-events-none" : ""}`}
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={loading}
+      className={`w-full flex items-center gap-3 rounded-2xl p-4 text-left transition-all duration-200 ${
+        loading
+          ? "btn-green !rounded-2xl !h-auto !p-4 !justify-start !text-[13px]"
+          : "btn-orange !rounded-2xl !h-auto !p-4 !justify-start !text-[13px] hover:brightness-105"
+      }`}
     >
-      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F5F3F0]">
-        <FileUp className="h-5 w-5 text-[#6B6B6B]" />
-      </div>
+      {loading ? (
+        <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
+      ) : (
+        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/16">
+          <Icon size={24} color={iconColor} />
+        </div>
+      )}
       <div className="min-w-0 flex-1">
-        <p className="text-[14px] font-semibold text-[#171717]">Upload any document</p>
-        <p className="text-[12px] text-[#6B6B6B] mt-0.5">
-          PDF, TXT, DOCX, CSV, or JSON — drop a file or click to browse
+        <p className="text-[14px] font-semibold text-white">
+          {loading ? "Connecting…" : label}
         </p>
       </div>
-      <input
-        ref={inputRef}
-        type="file"
-        accept=".pdf,.txt,.docx,.csv,.json,.jsonl,.md"
-        onChange={handleChange}
-        className="hidden"
-      />
-    </div>
+    </button>
   );
 }
