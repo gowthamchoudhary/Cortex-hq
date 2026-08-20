@@ -332,9 +332,20 @@ def accept_invitation_endpoint(token: str) -> Any:
 
     status = result.get("status")
     if status == "failure":
-        return _error_response(result.get("reason", "invitation_failed"), 400)
+        reason = result.get("reason", "invitation_failed")
+        user_friendly = {
+            "invalid_or_expired": "This invitation link is invalid or has expired.",
+            "already_used": "This invitation has already been accepted.",
+            "employee_not_found": "Employee record not found. Please ask your admin to re-send the invitation.",
+        }.get(reason, f"Invitation failed: {reason}")
+        return jsonify({"ok": False, "error": reason, "message": user_friendly}), 400
     if status == "verification_required":
-        return jsonify({"ok": False, **result}), 400
+        return jsonify({
+            "ok": False,
+            "error": "verification_required",
+            "message": "Your work email has not been verified yet. Please verify your email first.",
+            **{k: v for k, v in result.items() if k != "status"},
+        }), 400
 
     return jsonify({"ok": True, **result})
 

@@ -73,13 +73,27 @@ export function InvitePage() {
           setStatus("error");
           setMessage(result.reason || "Failed to accept invitation.");
         }
-      } catch (err) {
-        setStatus("error");
-        if (err instanceof Error && err.message.includes("401")) {
+      } catch (err: any) {
+        const errStatus = err?.status ?? err?.statusCode ?? 0;
+        const errCode = err?.code ?? err?.message ?? "";
+        if (errStatus === 401) {
           setStatus("needs_auth");
           setMessage("Please sign in first to accept this invitation.");
+        } else if (errCode.includes("verification_required")) {
+          setStatus("error");
+          setMessage("Your work email has not been verified yet. Please verify your email before accepting this invitation.");
+        } else if (errCode.includes("already_used")) {
+          setStatus("error");
+          setMessage("This invitation has already been accepted.");
+        } else if (errCode.includes("invalid_or_expired")) {
+          setStatus("error");
+          setMessage("This invitation link is invalid or has expired. Please request a new one.");
+        } else if (errCode.includes("employee_not_found")) {
+          setStatus("error");
+          setMessage("Employee record not found. Please contact your admin to re-send the invitation.");
         } else {
-          setMessage(err instanceof Error ? err.message : "Failed to accept invitation.");
+          setStatus("error");
+          setMessage(err instanceof Error ? err.message : "Failed to accept invitation. Please try again.");
         }
       }
     },
