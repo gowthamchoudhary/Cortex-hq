@@ -850,8 +850,9 @@ def deploy_agent_endpoint(agent_id: str) -> Any:
         agent_collection = endpoint["collection"]
         bot = get_bot_token_for_collection(agent_collection, "slack")
         if bot is None:
-            app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
-            install_url = f"{app_base}/api/oauth/slack/start?collection={agent_collection}&return_to=agents&scope=full"
+            # The install URL must point to the backend (where OAuth start lives).
+            backend_base = request.host_url.rstrip("/")
+            install_url = f"{backend_base}/api/oauth/slack/start?collection={agent_collection}&return_to=agents&scope=full"
             return jsonify({
                 "ok": False,
                 "error": "needs_slack_install",
@@ -957,8 +958,11 @@ def oauth_start(provider: str) -> Any:
         return _error_response("collection query param is required", 400)
     return_to = (request.args.get("return_to") or "").strip()  # e.g. "agents" or "sources"
 
-    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
-    callback_url = f"{app_base}/api/oauth/{provider}/callback?collection={collection}&return_to={return_to}"
+    # The OAuth callback must hit the backend (where Flask runs), NOT the frontend.
+    # request.host_url is always the backend URL; CORTEX_APP_BASE_URL is the frontend.
+    backend_base = request.host_url.rstrip("/")
+    frontend_base = os.environ.get("CORTEX_APP_BASE_URL", backend_base)
+    callback_url = f"{backend_base}/api/oauth/{provider}/callback?collection={collection}&return_to={return_to}"
 
     if provider == "gmail":
         client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
@@ -1015,9 +1019,11 @@ def oauth_callback(provider: str) -> Any:
     error = request.args.get("error") or ""
     return_to = (request.args.get("return_to") or "sources").strip() or "sources"
 
-    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
-    frontend_base = app_base.replace("/api", "") if "/api" in app_base else app_base
+    # CORTEX_APP_BASE_URL is the frontend URL (Vercel) for post-redirect.
+    backend_base = request.host_url.rstrip("/")
+    frontend_base = os.environ.get("CORTEX_APP_BASE_URL", backend_base)
 
+    # frontend_base is already set above from CORTEX_APP_BASE_URL.
     # Derive the redirect target from return_to param.
     target_page = "agents" if return_to == "agents" else "sources"
 
@@ -1049,8 +1055,9 @@ def _handle_gmail_callback(code: str, collection: str, frontend_base: str, targe
     if not client_id or not client_secret:
         return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_google_credentials")
 
-    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
-    callback_url = f"{app_base}/api/oauth/gmail/callback?collection={collection}"
+    # Token exchange redirect_uri must match the one sent during authorization.
+    backend_base = request.host_url.rstrip("/")
+    callback_url = f"{backend_base}/api/oauth/gmail/callback?collection={collection}"
 
     import httpx
     token_resp = httpx.post(
@@ -1100,8 +1107,9 @@ def _handle_slack_callback(code: str, collection: str, frontend_base: str, targe
     if not client_id or not client_secret:
         return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_slack_credentials")
 
-    app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
-    callback_url = f"{app_base}/api/oauth/slack/callback?collection={collection}"
+    # Token exchange redirect_uri must match the one sent during authorization.
+    backend_base = request.host_url.rstrip("/")
+    callback_url = f"{backend_base}/api/oauth/slack/callback?collection={collection}"
 
     import httpx
     token_resp = httpx.post(
