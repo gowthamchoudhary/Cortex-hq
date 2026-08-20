@@ -1,6 +1,7 @@
 import {
   Activity,
   Bot,
+  Building2,
   Cable,
   Home,
   LayoutDashboard,
@@ -29,6 +30,7 @@ export const NAV_ITEMS: NavItem[] = [
   { to: "/app/sources", label: "Sources", icon: Cable, roles: ["admin"], section: "admin" },
   { to: "/app/people", label: "People & Access", icon: Users, roles: ["admin"], section: "admin" },
   { to: "/app/settings", label: "Settings", icon: Settings, roles: ["admin", "member", "guest"], section: "bottom" },
+  { to: "/onboarding", label: "Switch organization", icon: Building2, roles: ["admin", "member", "guest"], section: "bottom" },
 ];
 
 export const ROLE_LABELS: Record<CortexRole, string> = {
