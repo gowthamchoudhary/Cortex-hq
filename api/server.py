@@ -37,6 +37,7 @@ from auth.user_brains import get_user_brains  # noqa: E402
 from dashboard.admin_stats import get_admin_dashboard_data  # noqa: E402
 from dashboard.people_access import get_people_access_data  # noqa: E402
 from deploy.agent_manager import list_agents  # noqa: E402
+from oauth.tokens import get_bot_token_for_collection  # noqa: E402
 from schema.create_collection import DATABASE_NAME, load_dotenv  # noqa: E402
 
 load_dotenv()
@@ -785,9 +786,49 @@ def create_agent_endpoint() -> Any:
     return jsonify({"ok": True, **result})
 
 
+@app.get("/api/oauth/slack/bot-status")
+def slack_bot_status() -> Any:
+    """Check if a Slack bot token exists for the current collection.
+
+    Returns ``{ok, connected, needs_slack_install, bot_user_id}``.
+    Used by the Agents page to decide whether the "Install to Slack" button
+    or a "connected" badge should show.
+    """
+    user, error = _authenticate()
+    if error:
+        return error
+    collection = _collection_for(user, request.args.get("collection"))
+
+    from oauth.tokens import get_token
+    bot = get_token(collection, "slack", "bot")
+    connected = bot is not None and (
+        bot.get("expires_at") is None or int(bot.get("expires_at", 0)) > __import__("time").time()
+    )
+    # Extract bot_user_id from scopes metadata if available.
+    bot_user_id = ""
+    if connected and bot:
+        scopes_str = bot.get("scopes") or ""
+        for part in scopes_str.split(","):
+            if part.startswith("bot_user_id:"):
+                bot_user_id = part.split(":", 1)[1]
+                break
+    return jsonify({
+        "ok": True,
+        "connected": connected,
+        "needs_slack_install": not connected,
+        "bot_user_id": bot_user_id,
+        "collection": collection,
+    })
+
+
 @app.post("/api/agents/<agent_id>/deploy")
 def deploy_agent_endpoint(agent_id: str) -> Any:
-    """Deploy an agent to a platform (Slack, GitHub, Email)."""
+    """Deploy an agent to a platform (Slack, GitHub, Email).
+
+    For Slack: checks that a bot token exists for the agent's collection.
+    If no bot token is found, returns ``needs_slack_install`` with a
+    redirect URL instead of silently failing.
+    """
     user, error = _authenticate()
     if error:
         return error
@@ -798,6 +839,29 @@ def deploy_agent_endpoint(agent_id: str) -> Any:
     platform_config = body.get("config") or {}
     if not isinstance(platform_config, dict) or not platform_config:
         return _error_response("config must be a non-empty object", 400)
+
+    # --- Slack: verify bot token exists for this collection ---
+    if platform == "slack":
+        from deploy.agent_manager import get_agent_chat_endpoint
+        try:
+            endpoint = get_agent_chat_endpoint(agent_id.strip())
+        except KeyError:
+            return _error_response(f"Unknown agent {agent_id!r}", 404)
+        agent_collection = endpoint["collection"]
+        bot = get_bot_token_for_collection(agent_collection, "slack")
+        if bot is None:
+            app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
+            install_url = f"{app_base}/api/oauth/slack/start?collection={agent_collection}&return_to=agents&scope=full"
+            return jsonify({
+                "ok": False,
+                "error": "needs_slack_install",
+                "message": "No Slack bot token found for this organization. Install the Slack app with bot permissions first.",
+                "install_url": install_url,
+            }), 400
+        # Inject the bot token into the platform config so it's stored
+        # with the deployment record for reference.
+        platform_config["bot_token"] = bot["access_token"]
+        platform_config["source"] = "oauth"
 
     from deploy.agent_manager import deploy_agent
 
@@ -891,9 +955,10 @@ def oauth_start(provider: str) -> Any:
     collection = (request.args.get("collection") or "").strip()
     if not collection:
         return _error_response("collection query param is required", 400)
+    return_to = (request.args.get("return_to") or "").strip()  # e.g. "agents" or "sources"
 
     app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
-    callback_url = f"{app_base}/api/oauth/{provider}/callback?collection={collection}"
+    callback_url = f"{app_base}/api/oauth/{provider}/callback?collection={collection}&return_to={return_to}"
 
     if provider == "gmail":
         client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
@@ -912,11 +977,16 @@ def oauth_start(provider: str) -> Any:
         client_id = os.environ.get("SLACK_OAUTH_CLIENT_ID")
         if not client_id:
             return _error_response("SLACK_OAUTH_CLIENT_ID is not configured", 503)
-        scopes = "channels:history channels:read users:read"
+        # ``scope`` query param controls which scopes we request:
+        #   - "ingest" (default): user-scoped tokens for message ingestion only
+        #   - "full":  adds bot scopes (chat:write, app_mentions:read) for agent deployment
+        scope_mode = (request.args.get("scope") or "ingest").strip().lower()
+        user_scopes = "channels:history channels:read users:read"
+        bot_scopes = "chat:write app_mentions:read channels:history channels:read users:read" if scope_mode == "full" else "channels:history channels:read users:read"
         auth_url = (
             f"https://slack.com/oauth/v2/authorize?"
             f"client_id={client_id}&redirect_uri={callback_url}"
-            f"&scope={scopes}&user_scope="
+            f"&scope={bot_scopes}&user_scope={user_scopes}"
         )
         from flask import redirect
         return redirect(auth_url)
@@ -930,35 +1000,39 @@ def oauth_callback(provider: str) -> Any:
     collection = (request.args.get("collection") or "").strip()
     code = (request.args.get("code") or "").strip()
     error = request.args.get("error") or ""
+    return_to = (request.args.get("return_to") or "sources").strip() or "sources"
 
     app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
     frontend_base = app_base.replace("/api", "") if "/api" in app_base else app_base
 
+    # Derive the redirect target from return_to param.
+    target_page = "agents" if return_to == "agents" else "sources"
+
     if error:
         from flask import redirect
-        return redirect(f"{frontend_base}/app/sources?oauth_error={error}")
+        return redirect(f"{frontend_base}/app/{target_page}?oauth_error={error}")
 
     if not code:
         from flask import redirect
-        return redirect(f"{frontend_base}/app/sources?oauth_error=missing_code")
+        return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_code")
 
     if provider == "gmail":
-        return _handle_gmail_callback(code, collection, frontend_base)
+        return _handle_gmail_callback(code, collection, frontend_base, target_page)
     if provider == "slack":
-        return _handle_slack_callback(code, collection, frontend_base)
+        return _handle_slack_callback(code, collection, frontend_base, target_page)
 
     from flask import redirect
-    return redirect(f"{frontend_base}/app/sources?oauth_error=unsupported_provider")
+    return redirect(f"{frontend_base}/app/{target_page}?oauth_error=unsupported_provider")
 
 
-def _handle_gmail_callback(code: str, collection: str, frontend_base: str) -> Any:
+def _handle_gmail_callback(code: str, collection: str, frontend_base: str, target_page: str = "sources") -> Any:
     """Exchange Gmail authorization code for tokens."""
     from flask import redirect
 
     client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID", "")
     client_secret = os.environ.get("GOOGLE_OAUTH_CLIENT_SECRET", "")
     if not client_id or not client_secret:
-        return redirect(f"{frontend_base}/app/sources?oauth_error=missing_google_credentials")
+        return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_google_credentials")
 
     app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
     callback_url = f"{app_base}/api/oauth/gmail/callback?collection={collection}"
@@ -988,17 +1062,28 @@ def _handle_gmail_callback(code: str, collection: str, frontend_base: str) -> An
         scopes=token_data.get("scope", ""),
     )
 
-    return redirect(f"{frontend_base}/app/sources?oauth_success=gmail")
+    return redirect(f"{frontend_base}/app/{target_page}?oauth_success=gmail")
 
 
-def _handle_slack_callback(code: str, collection: str, frontend_base: str) -> Any:
-    """Exchange Slack authorization code for tokens."""
+def _handle_slack_callback(code: str, collection: str, frontend_base: str, target_page: str = "sources") -> Any:
+    """Exchange Slack authorization code for tokens.
+
+    Slack OAuth v2 returns:
+    - ``access_token`` (top level): the bot token (xoxb-…)
+    - ``authed_user.access_token``: the user token (xoxp-…)
+    - ``team.id``: workspace/team id
+    - ``bot_user_id``: the bot's Slack user id
+
+    We store **both** tokens:
+    - user token (token_type="user") for ingestion
+    - bot token (token_type="bot") for agent message replies
+    """
     from flask import redirect
 
     client_id = os.environ.get("SLACK_OAUTH_CLIENT_ID", "")
     client_secret = os.environ.get("SLACK_OAUTH_CLIENT_SECRET", "")
     if not client_id or not client_secret:
-        return redirect(f"{frontend_base}/app/sources?oauth_error=missing_slack_credentials")
+        return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_slack_credentials")
 
     app_base = os.environ.get("CORTEX_APP_BASE_URL", request.host_url.rstrip("/"))
     callback_url = f"{app_base}/api/oauth/slack/callback?collection={collection}"
@@ -1018,22 +1103,50 @@ def _handle_slack_callback(code: str, collection: str, frontend_base: str) -> An
     token_data = token_resp.json()
 
     if not token_data.get("ok"):
-        return redirect(f"{frontend_base}/app/sources?oauth_error={token_data.get('error', 'slack_error')}")
+        return redirect(f"{frontend_base}/app/{target_page}?oauth_error={token_data.get('error', 'slack_error')}")
 
-    # Slack OAuth v2 returns access_token at top level
-    access_token = token_data.get("access_token", "")
+    # --- Extract tokens from the v2 response ---
+    # Top-level access_token is the BOT token (xoxb-…)
+    bot_access_token = token_data.get("access_token", "")
     bot_user_id = token_data.get("bot_user_id", "")
-    team_name = (token_data.get("team") or {}).get("name", "")
+    team = token_data.get("team") or {}
+    team_id = team.get("id", "")
+    team_name = team.get("name", "")
+
+    # authed_user sub-object holds the USER token (xoxp-…)
+    authed_user = token_data.get("authed_user") or {}
+    user_access_token = authed_user.get("access_token", "")
+    user_scopes = authed_user.get("scope", "")
+
+    # Bot scopes from the top-level scope field
+    bot_scopes = token_data.get("scope", "")
 
     from oauth.tokens import store_token
-    store_token(
-        collection=collection,
-        provider="slack",
-        access_token=access_token,
-        scopes=",".join(token_data.get("scope", "").split(",")) if token_data.get("scope") else "",
-    )
 
-    return redirect(f"{frontend_base}/app/sources?oauth_success=slack")
+    # Store user token for ingestion (always)
+    if user_access_token:
+        store_token(
+            collection=collection,
+            provider="slack",
+            access_token=user_access_token,
+            scopes=user_scopes,
+            token_type="user",
+        )
+
+    # Store bot token for agent deployment (always when present)
+    if bot_access_token:
+        # Encode team_id into the scopes field so we can look up tokens by team later.
+        bot_metadata = f"team_id:{team_id},bot_user_id:{bot_user_id},team_name:{team_name}"
+        combined_scopes = f"{bot_scopes},{bot_metadata}" if bot_scopes else bot_metadata
+        store_token(
+            collection=collection,
+            provider="slack",
+            access_token=bot_access_token,
+            scopes=combined_scopes,
+            token_type="bot",
+        )
+
+    return redirect(f"{frontend_base}/app/{target_page}?oauth_success=slack")
 
 
 @app.get("/api/oauth/status/<provider>")
