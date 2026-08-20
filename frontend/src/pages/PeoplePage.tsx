@@ -137,7 +137,7 @@ export function PeoplePage() {
           <button
             type="button"
             onClick={() => setShowInvite(!showInvite)}
-            className="btn-orange !h-10 !text-[13px] !px-5"
+            className="btn-orange"
           >
             <UserPlus className="h-4 w-4" />
             Invite people
@@ -211,7 +211,7 @@ export function PeoplePage() {
               type="button"
               onClick={() => void handleInvite()}
               disabled={inviteLoading || !inviteName.trim() || !inviteEmail.trim()}
-              className="btn-orange !h-10 !text-[13px] !px-5"
+              className="btn-orange"
             >
               {inviteLoading ? (
                 <>
