@@ -85,10 +85,22 @@ def _load_source_documents(source_type: str, source_path_or_repo: str | Path, co
 
     if source_type == "github-repo":
         # The "path" for a github-repo source is an owner/name slug, not a file.
-        token = os.environ.get("GITHUB_TOKEN")
+        # Try per-collection OAuth token first; fall back to global GITHUB_TOKEN.
+        token = ""
+        if collection:
+            try:
+                from oauth.tokens import get_token
+                token_data = get_token(collection, "github")
+                if token_data and token_data.get("access_token"):
+                    token = token_data["access_token"]
+            except Exception:  # noqa: BLE001
+                pass
+        if not token:
+            token = os.environ.get("GITHUB_TOKEN")
         if not token:
             raise RuntimeError(
-                "GITHUB_TOKEN environment variable is required for github-repo ingestion."
+                "No GitHub token found. Connect GitHub via OAuth in the Sources page, "
+                "or set the GITHUB_TOKEN environment variable."
             )
         raw_records = fetch_repo_activity(str(source_path_or_repo), token)
         return [normalize_github(record) for record in raw_records]
