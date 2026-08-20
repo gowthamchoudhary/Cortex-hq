@@ -2,7 +2,6 @@ import { useCallback, useEffect, useState } from "react";
 import {
   Plus,
   Loader2,
-  ExternalLink,
   CheckCircle2,
 } from "lucide-react";
 import { SiGithub, SiGmail } from "@icons-pack/react-simple-icons";
@@ -103,7 +102,11 @@ export function AgentsPage() {
   const handleCreate = async (agentName: string, roleDefault: string) => {
     await createAgent({ collection, agentName, roleDefault });
     setShowCreate(false);
-    await load();
+    try {
+      await load();
+    } catch {
+      // load() errors are already handled inside load()
+    }
   };
 
   const handleDeploy = async (
@@ -193,6 +196,7 @@ function CreateAgentForm({
       await onSubmit(name.trim(), role);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create agent.");
+    } finally {
       setLoading(false);
     }
   };
@@ -238,10 +242,15 @@ function CreateAgentForm({
             disabled={loading}
             className="w-full rounded-xl border border-black/[0.08] bg-[#FAFAF9] px-4 py-3 text-[14px] text-[#171717] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
           >
-            <option value="member">Member — can see internal knowledge</option>
-            <option value="admin">Admin — full access</option>
-            <option value="guest">Guest — public knowledge only</option>
+            <option value="member">Member</option>
+            <option value="admin">Admin</option>
+            <option value="guest">Guest</option>
           </select>
+          <p className="mt-1.5 text-[12px] text-[#6B6B6B] leading-relaxed">
+            {role === "member" && "Member — agent shares internal knowledge with anyone who messages it, unless they're linked to an employee with a different role."}
+            {role === "admin" && "Admin — agent has full access to all organizational knowledge and can answer questions across every access level."}
+            {role === "guest" && "Guest — agent only answers from publicly available knowledge. Internal documents, private facts, and restricted data are excluded."}
+          </p>
         </div>
 
         {error && <p className="text-[13px] text-[#EF4444]">{error}</p>}
@@ -252,7 +261,10 @@ function CreateAgentForm({
           className={`w-full ${loading ? "btn-green" : "btn-dark"}`}
         >
           {loading ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Creating…
+            </>
           ) : (
             "Create agent"
           )}
@@ -292,8 +304,6 @@ function AgentCard({
     const platformInfo = PLATFORMS.find((p) => p.key === platform)!;
 
     try {
-      // For Slack and GitHub, the single input is a token
-      // For email, it's an address
       const config =
         platform === "email"
           ? { from_address: token.trim() }
@@ -303,7 +313,6 @@ function AgentCard({
       setDeploySuccess(`${platformInfo.label} configuration saved — see setup instructions to go live.`);
       setToken("");
       setDeployingPlatform(null);
-      // Close the deploy panel after a brief delay
       setTimeout(() => {
         setDeployingPlatform(null);
         setDeploySuccess(null);
@@ -492,20 +501,18 @@ function DeployPanel({
           onClick={onCancel}
           className="text-[12px] text-[#6B6B6B] hover:text-[#171717] transition-colors"
         >
-          Cancel
+          Close
         </button>
       </div>
 
-      {/* Step-by-step instructions */}
-      <div className="space-y-1.5">
-        {platform.instruction.map((step, i) => (
-          <p key={i} className="text-[12px] text-[#6B6B6B] leading-relaxed">
-            {step}
-          </p>
+      <ol className="space-y-1.5">
+        {platform.instruction.map((line, i) => (
+          <li key={i} className="text-[12px] text-[#6B6B6B] leading-relaxed">
+            {line}
+          </li>
         ))}
-      </div>
+      </ol>
 
-      {/* Single input */}
       <div>
         <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">
           {platform.inputLabel}
@@ -514,40 +521,30 @@ function DeployPanel({
           type="text"
           value={token}
           onChange={(e) => setToken(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && token.trim()) onDeploy();
-          }}
           placeholder={platform.inputPlaceholder}
           className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
           autoFocus
-          disabled={loading}
         />
       </div>
 
       {error && <p className="text-[12px] text-[#EF4444]">{error}</p>}
       {success && <p className="text-[12px] text-[#10B981]">{success}</p>}
 
-      <div className="flex items-center gap-2 pt-1">
-        <button
-          type="button"
-          onClick={onDeploy}
-          disabled={!token.trim() || loading}
-          className={loading ? "btn-green !h-9 !text-[12px]" : "btn-orange !h-9 !text-[12px]"}
-        >
-          {loading ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <>
-              <ExternalLink className="h-3.5 w-3.5" />
-              Save configuration
-            </>
-          )}
-        </button>
-      </div>
-
-      <p className="text-[11px] text-[#9A9A9A]">
-        Configuration saved as pending. Follow the steps above to go live.
-      </p>
+      <button
+        type="button"
+        onClick={onDeploy}
+        disabled={!token.trim() || loading}
+        className={`w-full ${loading ? "btn-green" : "btn-orange"}`}
+      >
+        {loading ? (
+          <>
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Saving…
+          </>
+        ) : (
+          `Save ${platform.label} configuration`
+        )}
+      </button>
     </div>
   );
 }
