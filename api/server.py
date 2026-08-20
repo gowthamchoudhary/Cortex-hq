@@ -20,8 +20,11 @@ Run:  ``.venv/bin/python api/server.py``  (binds 0.0.0.0:8000 by default)
 
 from __future__ import annotations
 
+import base64
+import json
 import os
 import sys
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -110,6 +113,26 @@ def _hydra_key_status() -> str:
         return "ok"
     except Exception:
         return "unreachable"
+
+
+def _encode_oauth_state(collection: str, return_to: str, **extra: str) -> str:
+    """Encode dynamic OAuth context into a base64 ``state`` parameter."""
+    payload = {"c": collection, "r": return_to, **extra}
+    return base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+
+
+def _decode_oauth_state(state: str) -> dict[str, str]:
+    """Decode the ``state`` parameter from an OAuth callback."""
+    try:
+        return json.loads(base64.urlsafe_b64decode(state))
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _clean_redirect_uri(provider: str) -> str:
+    """Return the clean callback URL for a provider (no query params)."""
+    backend_base = request.host_url.rstrip("/")
+    return f"{backend_base}/api/oauth/{provider}/callback"
 
 
 def _ts_key(value: Any) -> tuple[int, Any]:
@@ -958,11 +981,9 @@ def oauth_start(provider: str) -> Any:
         return _error_response("collection query param is required", 400)
     return_to = (request.args.get("return_to") or "").strip()  # e.g. "agents" or "sources"
 
-    # The OAuth callback must hit the backend (where Flask runs), NOT the frontend.
-    # request.host_url is always the backend URL; CORTEX_APP_BASE_URL is the frontend.
-    backend_base = request.host_url.rstrip("/")
-    frontend_base = os.environ.get("CORTEX_APP_BASE_URL", backend_base)
-    callback_url = f"{backend_base}/api/oauth/{provider}/callback?collection={collection}&return_to={return_to}"
+    # Clean redirect_uri — no query params. Dynamic context goes in the state param.
+    redirect_uri = _clean_redirect_uri(provider)
+    state = _encode_oauth_state(collection, return_to)
 
     if provider == "gmail":
         client_id = os.environ.get("GOOGLE_OAUTH_CLIENT_ID")
@@ -971,8 +992,9 @@ def oauth_start(provider: str) -> Any:
         scopes = "openid email https://mail.google.com/"
         auth_url = (
             f"https://accounts.google.com/o/oauth2/v2/auth?"
-            f"client_id={client_id}&redirect_uri={callback_url}"
+            f"client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri, safe="")}"
             f"&response_type=code&scope={scopes}&access_type=offline&prompt=consent"
+            f"&state={state}"
         )
         from flask import redirect
         return redirect(auth_url)
@@ -984,8 +1006,8 @@ def oauth_start(provider: str) -> Any:
         scopes = "repo read:org"
         auth_url = (
             f"https://github.com/login/oauth/authorize?"
-            f"client_id={client_id}&redirect_uri={callback_url}"
-            f"&scope={scopes}"
+            f"client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri, safe="")}"
+            f"&scope={scopes}&state={state}"
         )
         from flask import redirect
         return redirect(auth_url)
@@ -1000,10 +1022,13 @@ def oauth_start(provider: str) -> Any:
         scope_mode = (request.args.get("scope") or "ingest").strip().lower()
         user_scopes = "channels:history channels:read users:read"
         bot_scopes = "chat:write app_mentions:read channels:history channels:read users:read" if scope_mode == "full" else "channels:history channels:read users:read"
+        # Pass scope_mode in state so callback knows which scope set was requested.
+        state_with_scope = _encode_oauth_state(collection, return_to, scope=scope_mode)
         auth_url = (
             f"https://slack.com/oauth/v2/authorize?"
-            f"client_id={client_id}&redirect_uri={callback_url}"
+            f"client_id={client_id}&redirect_uri={urllib.parse.quote(redirect_uri, safe="")}"
             f"&scope={bot_scopes}&user_scope={user_scopes}"
+            f"&state={state_with_scope}"
         )
         from flask import redirect
         return redirect(auth_url)
@@ -1014,17 +1039,20 @@ def oauth_start(provider: str) -> Any:
 @app.get("/api/oauth/<provider>/callback")
 def oauth_callback(provider: str) -> Any:
     """Handle OAuth callback, exchange code for token, store it, redirect to app."""
-    collection = (request.args.get("collection") or "").strip()
     code = (request.args.get("code") or "").strip()
     error = request.args.get("error") or ""
-    return_to = (request.args.get("return_to") or "sources").strip() or "sources"
+
+    # Decode dynamic context from the state parameter (not from query params).
+    state = (request.args.get("state") or "").strip()
+    state_data = _decode_oauth_state(state) if state else {}
+    collection = (state_data.get("c") or "").strip()
+    return_to = (state_data.get("r") or "sources").strip() or "sources"
 
     # CORTEX_APP_BASE_URL is the frontend URL (Vercel) for post-redirect.
     backend_base = request.host_url.rstrip("/")
     frontend_base = os.environ.get("CORTEX_APP_BASE_URL", backend_base)
 
-    # frontend_base is already set above from CORTEX_APP_BASE_URL.
-    # Derive the redirect target from return_to param.
+    # Derive the redirect target from return_to.
     target_page = "agents" if return_to == "agents" else "sources"
 
     if error:
@@ -1055,9 +1083,8 @@ def _handle_gmail_callback(code: str, collection: str, frontend_base: str, targe
     if not client_id or not client_secret:
         return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_google_credentials")
 
-    # Token exchange redirect_uri must match the one sent during authorization.
-    backend_base = request.host_url.rstrip("/")
-    callback_url = f"{backend_base}/api/oauth/gmail/callback?collection={collection}"
+    # Token exchange redirect_uri must match the clean URL sent during authorization.
+    redirect_uri = _clean_redirect_uri("gmail")
 
     import httpx
     token_resp = httpx.post(
@@ -1066,7 +1093,7 @@ def _handle_gmail_callback(code: str, collection: str, frontend_base: str, targe
             "code": code,
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": callback_url,
+            "redirect_uri": redirect_uri,
             "grant_type": "authorization_code",
         },
         timeout=15,
@@ -1107,9 +1134,8 @@ def _handle_slack_callback(code: str, collection: str, frontend_base: str, targe
     if not client_id or not client_secret:
         return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_slack_credentials")
 
-    # Token exchange redirect_uri must match the one sent during authorization.
-    backend_base = request.host_url.rstrip("/")
-    callback_url = f"{backend_base}/api/oauth/slack/callback?collection={collection}"
+    # Token exchange redirect_uri must match the clean URL sent during authorization.
+    redirect_uri = _clean_redirect_uri("slack")
 
     import httpx
     token_resp = httpx.post(
@@ -1118,7 +1144,7 @@ def _handle_slack_callback(code: str, collection: str, frontend_base: str, targe
             "code": code,
             "client_id": client_id,
             "client_secret": client_secret,
-            "redirect_uri": callback_url,
+            "redirect_uri": redirect_uri,
         },
         timeout=15,
     )
