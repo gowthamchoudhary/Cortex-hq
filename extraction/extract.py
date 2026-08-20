@@ -21,7 +21,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from ingestion.normalize import ADAPTERS, RawDocument, infer_source_type, load_records
 
 
-DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
+DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
 DEFAULT_MAX_CONTENT_CHARS = 300
 GROQ_MODELS_ENDPOINT = "https://api.groq.com/openai/v1/models"
