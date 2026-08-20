@@ -35,7 +35,7 @@ import { useAuth } from "@/auth/AuthContext";
 import { formatNumber, timeAgo } from "@/lib/format";
 import type { SourcesResponse } from "@/types/api";
 
-type SourceType = "gmail-export" | "slack-export" | "github-repo" | "document-upload" | "gmail-live" | "slack-live";
+type SourceType = "gmail-export" | "slack-export" | "github-repo" | "document-upload" | "gmail-live" | "slack-live" | "github-live";
 
 export function SourcesPage() {
   const { selectedBrain } = useAuth();
@@ -59,6 +59,7 @@ export function SourcesPage() {
   // OAuth status
   const [gmailConnected, setGmailConnected] = useState(false);
   const [slackConnected, setSlackConnected] = useState(false);
+  const [githubConnected, setGithubConnected] = useState(false);
 
   // OAuth feedback from redirect
   const [oauthFeedback, setOauthFeedback] = useState<string | null>(null);
@@ -100,12 +101,14 @@ export function SourcesPage() {
 
   const checkOAuthStatus = async () => {
     try {
-      const [gmail, slack] = await Promise.all([
+      const [gmail, slack, github] = await Promise.all([
         getOAuthStatus("gmail", collection),
         getOAuthStatus("slack", collection),
+        getOAuthStatus("github", collection),
       ]);
       setGmailConnected(gmail.connected);
       setSlackConnected(slack.connected);
+      setGithubConnected(github.connected);
     } catch {
       // OAuth status check failed silently — not critical
     }
@@ -229,12 +232,26 @@ export function SourcesPage() {
           }}
           onSync={() => void handleLiveIngest("slack-live")}
         />
-        <ConnectButton
+        <OAuthConnectButton
           label="GitHub"
           icon={SiGithub}
           iconColor="#7C3AED"
-          loading={ingesting && ingestType === "github-repo"}
-          onClick={() => setShowGitHubInput(!showGitHubInput)}
+          connected={githubConnected}
+          connecting={ingesting && ingestType === "github-repo"}
+          onConnect={() => {
+            window.location.href = getOAuthStartUrl("github", collection);
+          }}
+          onDisconnect={() => {
+            void disconnectOAuth("github", collection).then(() => {
+              setGithubConnected(false);
+            });
+          }}
+          onSync={() => {
+            // For GitHub, "sync" means show the repo input if connected
+            if (githubConnected) {
+              setShowGitHubInput(!showGitHubInput);
+            }
+          }}
         />
       </div>
 
@@ -457,46 +474,4 @@ function OAuthConnectButton({
   );
 }
 
-/* -------------------------------------------------------------------------- */
-/* Connect Button — for GitHub (token-based)                                  */
-/* -------------------------------------------------------------------------- */
 
-function ConnectButton({
-  label,
-  icon: Icon,
-  iconColor,
-  loading,
-  onClick,
-}: {
-  label: string;
-  icon: React.ComponentType<{ size?: string | number; color?: string }>;
-  iconColor: string;
-  loading: boolean;
-  onClick?: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={loading}
-      className={`w-full flex items-center gap-3 rounded-2xl p-4 text-left transition-all duration-200 ${
-        loading
-          ? "btn-green !rounded-2xl !h-auto !p-4 !justify-start !text-[13px]"
-          : "btn-orange !rounded-2xl !h-auto !p-4 !justify-start !text-[13px] hover:brightness-105"
-      }`}
-    >
-      {loading ? (
-        <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
-      ) : (
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-white/16">
-          <Icon size={24} color={iconColor} />
-        </div>
-      )}
-      <div className="min-w-0 flex-1">
-        <p className="text-[14px] font-semibold text-white">
-          {loading ? "Connecting…" : label}
-        </p>
-      </div>
-    </button>
-  );
-}
