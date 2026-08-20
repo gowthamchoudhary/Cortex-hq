@@ -235,3 +235,19 @@ def get_user_role_in_brain(user_id: str, collection_name: str) -> str | None:
         connection.close()
 
     return str(row[0]) if row else None
+
+
+def remove_user_brain(user_id: str, collection_name: str) -> bool:
+    """Remove ``user_id``'s access to ``collection_name``. Returns True if a row was deleted."""
+    if not str(user_id).strip() or not str(collection_name).strip():
+        return False
+    connection = _connect()
+    try:
+        cursor = connection.execute(
+            "DELETE FROM user_brains WHERE user_id = ? AND collection_name = ?",
+            (str(user_id).strip(), str(collection_name).strip()),
+        )
+        connection.commit()
+        return cursor.rowcount > 0
+    finally:
+        connection.close()

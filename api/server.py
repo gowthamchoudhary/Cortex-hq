@@ -36,7 +36,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from flask import Flask, jsonify, request  # noqa: E402
 
 from auth.session import get_current_user  # noqa: E402
-from auth.user_brains import get_user_brains  # noqa: E402
+from auth.user_brains import get_user_brains, remove_user_brain  # noqa: E402
 from dashboard.admin_stats import get_admin_dashboard_data  # noqa: E402
 from dashboard.people_access import get_people_access_data  # noqa: E402
 from deploy.agent_manager import list_agents  # noqa: E402
@@ -287,6 +287,19 @@ def me() -> Any:
             "app": {"name": "Cortex"},
         }
     )
+
+
+@app.delete("/api/brains/<collection_name>")
+def delete_brain_endpoint(collection_name: str) -> Any:
+    """Remove the authenticated user's access to a brain collection."""
+    user, error = _authenticate()
+    if error:
+        return error
+    user_id = str(user["user_id"])
+    removed = remove_user_brain(user_id, str(collection_name).strip())
+    if not removed:
+        return _error_response("You are not a member of this organization.", 404)
+    return jsonify({"ok": True, "removed": str(collection_name).strip()})
 
 
 @app.post("/api/brains")
