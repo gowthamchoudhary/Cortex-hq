@@ -5,7 +5,7 @@ export async function fetchPeople(
   collection?: string
 ): Promise<{ items: Person[] }> {
   const params = collection ? `?collection=${encodeURIComponent(collection)}` : "";
-  return api.get(`/api/people${params}`);
+  return api.get(`/people${params}`);
 }
 
 export interface EmployeeRegistration {
@@ -33,7 +33,7 @@ export async function registerEmployee(
   employee: EmployeeRegistration
 ): Promise<{ ok: boolean; employee?: Record<string, unknown> }> {
   const params = collection ? `?collection=${encodeURIComponent(collection)}` : "";
-  return api.post(`/api/employees${params}`, employee);
+  return api.post(`/employees${params}`, employee);
 }
 
 export async function createInvitation(
@@ -41,5 +41,5 @@ export async function createInvitation(
   employeeId: string
 ): Promise<InvitationResult> {
   const params = collection ? `?collection=${encodeURIComponent(collection)}` : "";
-  return api.post(`/api/invitations${params}`, { employee_id: employeeId });
+  return api.post(`/invitations${params}`, { employee_id: employeeId });
 }

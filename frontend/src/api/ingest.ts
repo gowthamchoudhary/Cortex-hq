@@ -10,11 +10,19 @@ export interface IngestResponse {
 
 export async function ingestSource(params: {
   collection?: string;
-  sourceType: "gmail-export" | "slack-export" | "github-repo" | "document-upload";
+  sourceType: "gmail-export" | "slack-export" | "github-repo" | "document-upload" | "gmail-live" | "slack-live";
   file?: File;
   sourceRepo?: string;
 }): Promise<IngestResponse> {
   const { collection, sourceType, file, sourceRepo } = params;
+
+  // Live OAuth sources: POST JSON (no file upload needed)
+  if (sourceType === "gmail-live" || sourceType === "slack-live") {
+    return api.post<IngestResponse>("/ingest", {
+      source_type: sourceType,
+      collection,
+    });
+  }
 
   if (sourceType === "github-repo") {
     // GitHub repo: POST JSON with source_repo
@@ -25,15 +33,13 @@ export async function ingestSource(params: {
     });
   }
 
-  // Gmail/Slack: multipart file upload
+  // Gmail/Slack file upload: multipart form
   const formData = new FormData();
   formData.append("source_type", sourceType);
   if (collection) formData.append("collection", collection);
   if (file) formData.append("file", file);
 
   const headers: Record<string, string> = {};
-  // The api helper sets Authorization header; we need to send it manually
-  // for multipart requests since the helper doesn't support FormData.
   const token = (await import("@/lib/api")).getAccessToken();
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
