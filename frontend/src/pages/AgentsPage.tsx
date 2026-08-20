@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Plus,
   Loader2,
   CheckCircle2,
+  ExternalLink,
 } from "lucide-react";
 import { SiGithub, SiGmail } from "@icons-pack/react-simple-icons";
 
@@ -22,7 +23,7 @@ function SlackIcon({ size = 20 }: { size?: number }) {
     </svg>
   );
 }
-import { fetchAgents, createAgent, deployAgent } from "@/api/agents";
+import { fetchAgents, createAgent, deployAgent, fetchSlackBotStatus, buildSlackInstallUrl } from "@/api/agents";
 import { PageHeader, EmptyState, ErrorState, LoadingState } from "@/components/shared/states";
 import { useAuth } from "@/auth/AuthContext";
 import { timeAgo } from "@/lib/format";
@@ -34,20 +35,14 @@ const PLATFORMS = [
     label: "Slack",
     icon: SlackIcon,
     color: "#E01E5A",
-    instruction: [
-      "1. Go to api.slack.com/apps → Create New App → From scratch",
-      "2. Under OAuth & Permissions, add bot scopes: chat:write, channels:history, im:history",
-      "3. Install to workspace and copy the Bot User OAuth Token (xoxb-…)",
-      "4. Paste it below",
-    ],
-    inputLabel: "Bot token (xoxb-…)",
-    inputPlaceholder: "xoxb-...",
+    oauth: true,  // uses OAuth install, not manual token paste
   },
   {
     key: "github" as const,
     label: "GitHub",
     icon: SiGithub,
-     color: "#7C3AED",
+    color: "#7C3AED",
+    oauth: false,
     instruction: [
       "1. Go to github.com/settings/tokens → Generate new token (classic)",
       "2. Select scopes: repo, read:org",
@@ -62,6 +57,7 @@ const PLATFORMS = [
     label: "Email",
     icon: SiGmail,
     color: "#EA4335",
+    oauth: false,
     instruction: [
       "1. Configure an IMAP-capable email address for Cortex",
       "2. Ensure IMAP access is enabled (Gmail: App Passwords → IMAP)",
@@ -79,6 +75,15 @@ export function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
+  const [slackConnected, setSlackConnected] = useState(false);
+
+  // Detect OAuth success/error from URL params (after Slack install redirect).
+  const urlParams = useMemo(() => {
+    if (typeof window === "undefined") return new URLSearchParams();
+    return new URLSearchParams(window.location.search);
+  }, []);
+  const oauthSuccess = urlParams.get("oauth_success");
+  const oauthError = urlParams.get("oauth_error");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,9 +100,31 @@ export function AgentsPage() {
     }
   }, []);
 
+  // Check Slack bot token status.
+  const checkSlackStatus = useCallback(async () => {
+    try {
+      const status = await fetchSlackBotStatus(collection);
+      setSlackConnected(status.connected);
+    } catch {
+      setSlackConnected(false);
+    }
+  }, [collection]);
+
   useEffect(() => {
     void load();
-  }, [load]);
+    void checkSlackStatus();
+  }, [load, checkSlackStatus]);
+
+  // Clean up OAuth params from URL after processing.
+  useEffect(() => {
+    if (oauthSuccess || oauthError) {
+      window.history.replaceState({}, "", window.location.pathname);
+      // Re-check Slack status after a successful OAuth flow.
+      if (oauthSuccess === "slack") {
+        void checkSlackStatus();
+      }
+    }
+  }, [oauthSuccess, oauthError, checkSlackStatus]);
 
   const handleCreate = async (agentName: string, roleDefault: string) => {
     await createAgent({ collection, agentName, roleDefault });
@@ -116,6 +143,10 @@ export function AgentsPage() {
   ) => {
     await deployAgent({ agentId, platform, config });
     await load();
+    // Re-check Slack status after deploying to Slack.
+    if (platform === "slack") {
+      void checkSlackStatus();
+    }
   };
 
   if (loading) return <LoadingState rows={3} />;
@@ -163,6 +194,8 @@ export function AgentsPage() {
               key={agent.agent_id}
               agent={agent}
               onDeploy={handleDeploy}
+              slackConnected={slackConnected}
+              collection={collection}
             />
           ))}
         </div>
@@ -281,6 +314,8 @@ function CreateAgentForm({
 function AgentCard({
   agent,
   onDeploy,
+  slackConnected,
+  collection,
 }: {
   agent: Agent;
   onDeploy: (
@@ -288,6 +323,8 @@ function AgentCard({
     platform: "slack" | "github" | "email",
     config: Record<string, unknown>
   ) => Promise<void>;
+  slackConnected: boolean;
+  collection?: string;
 }) {
   const [deployingPlatform, setDeployingPlatform] = useState<string | null>(null);
   const [token, setToken] = useState("");
@@ -408,21 +445,38 @@ function AgentCard({
               const Icon = platform.icon;
               const isDeployed = deployedPlatforms.has(platform.key);
               const isExpanded = deployingPlatform === platform.key;
-
+              // For Slack: show as "ready" when bot token is installed via OAuth
+              const isSlackReady = platform.key === "slack" && slackConnected && !isDeployed;
 
               return (
                 <button
                   key={platform.key}
                   type="button"
                   onClick={() => {
-                    if (!isDeployed) {
-                      setDeployingPlatform(
-                        isExpanded ? null : platform.key
-                      );
-                      setToken("");
+                    if (isDeployed) return;
+
+                    // Slack OAuth: redirect to install if bot not yet installed,
+                    // otherwise deploy directly (bot token is on the server).
+                    if (platform.key === "slack" && platform.oauth && !isDeployed) {
+                      if (!slackConnected) {
+                        window.location.href = buildSlackInstallUrl(collection);
+                        return;
+                      }
+                      // Bot is installed — deploy directly with empty config;
+                      // the server looks up the bot token from the OAuth store.
+                      setDeployingPlatform(platform.key);
                       setDeployError(null);
                       setDeploySuccess(null);
+                      void onDeploy(agent.agent_id, "slack", {});
+                      return;
                     }
+
+                    setDeployingPlatform(
+                      isExpanded ? null : platform.key
+                    );
+                    setToken("");
+                    setDeployError(null);
+                    setDeploySuccess(null);
                   }}
                   disabled={isDeployed}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border p-3 text-[12px] font-medium transition-all duration-200 ${
@@ -430,19 +484,28 @@ function AgentCard({
                       ? "border-[#10B981]/20 bg-[#10B981]/[0.03] text-[#10B981] cursor-default"
                       : isExpanded
                         ? "border-[#171717]/20 bg-[#171717]/[0.03] shadow-sm"
-                        : "border-black/[0.065] hover:border-black/[0.12] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
+                        : isSlackReady
+                          ? "border-[#E01E5A]/20 bg-[#E01E5A]/[0.03] text-[#E01E5A]"
+                          : "border-black/[0.065] hover:border-black/[0.12] hover:shadow-[0_2px_8px_rgba(0,0,0,0.04)]"
                   }`}
                 >
                   <Icon size={20} color={isDeployed ? "#10B981" : platform.color} />
                   <span>{platform.label}</span>
                   {isDeployed && <CheckCircle2 className="h-3.5 w-3.5" />}
+                  {isSlackReady && <ExternalLink className="h-3 w-3" />}
                 </button>
               );
             })}
           </div>
+          {/* Slack: show status message when bot is installed but not yet deployed to this agent */}
+          {slackConnected && !deployedPlatforms.has("slack") && (
+            <p className="mt-2 text-[11px] text-[#10B981]">
+              Slack bot installed — click "Slack" above to deploy this agent.
+            </p>
+          )}
         </div>
 
-        {/* Deploy Panel — step-by-step instructions + one input */}
+        {/* Deploy Panel — step-by-step instructions + one input (non-OAuth platforms only) */}
         {deployingPlatform && (
           <DeployPanel
             platform={PLATFORMS.find((p) => p.key === deployingPlatform)!}
@@ -505,23 +568,25 @@ function DeployPanel({
         </button>
       </div>
 
-      <ol className="space-y-1.5">
-        {platform.instruction.map((line, i) => (
-          <li key={i} className="text-[12px] text-[#6B6B6B] leading-relaxed">
-            {line}
-          </li>
-        ))}
-      </ol>
+      {platform.instruction && (
+        <ol className="space-y-1.5">
+          {platform.instruction.map((line, i) => (
+            <li key={i} className="text-[12px] text-[#6B6B6B] leading-relaxed">
+              {line}
+            </li>
+          ))}
+        </ol>
+      )}
 
       <div>
         <label className="block mb-1 text-[12px] font-medium text-[#6B6B6B]">
-          {platform.inputLabel}
+          {platform.inputLabel ?? "Value"}
         </label>
         <input
           type="text"
           value={token}
           onChange={(e) => setToken(e.target.value)}
-          placeholder={platform.inputPlaceholder}
+          placeholder={platform.inputPlaceholder ?? "Enter value"}
           className="w-full rounded-xl border border-black/[0.08] bg-white px-4 py-3 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-2 focus:ring-[#171717]/5"
           autoFocus
         />
@@ -533,7 +598,7 @@ function DeployPanel({
       <button
         type="button"
         onClick={onDeploy}
-        disabled={!token.trim() || loading}
+        disabled={(platform.inputLabel !== undefined && !token.trim()) || loading}
         className={`w-full ${loading ? "btn-green" : "btn-orange"}`}
       >
         {loading ? (
