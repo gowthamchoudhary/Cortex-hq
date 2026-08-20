@@ -973,6 +973,19 @@ def oauth_start(provider: str) -> Any:
         from flask import redirect
         return redirect(auth_url)
 
+    if provider == "github":
+        client_id = os.environ.get("GITHUB_OAUTH_CLIENT_ID")
+        if not client_id:
+            return _error_response("GITHUB_OAUTH_CLIENT_ID is not configured", 503)
+        scopes = "repo read:org"
+        auth_url = (
+            f"https://github.com/login/oauth/authorize?"
+            f"client_id={client_id}&redirect_uri={callback_url}"
+            f"&scope={scopes}"
+        )
+        from flask import redirect
+        return redirect(auth_url)
+
     if provider == "slack":
         client_id = os.environ.get("SLACK_OAUTH_CLIENT_ID")
         if not client_id:
@@ -1020,6 +1033,8 @@ def oauth_callback(provider: str) -> Any:
         return _handle_gmail_callback(code, collection, frontend_base, target_page)
     if provider == "slack":
         return _handle_slack_callback(code, collection, frontend_base, target_page)
+    if provider == "github":
+        return _handle_github_callback(code, collection, frontend_base, target_page)
 
     from flask import redirect
     return redirect(f"{frontend_base}/app/{target_page}?oauth_error=unsupported_provider")
@@ -1147,6 +1162,66 @@ def _handle_slack_callback(code: str, collection: str, frontend_base: str, targe
         )
 
     return redirect(f"{frontend_base}/app/{target_page}?oauth_success=slack")
+
+
+def _handle_github_callback(code: str, collection: str, frontend_base: str, target_page: str = "sources") -> Any:
+    """Exchange GitHub authorization code for an access token."""
+    from flask import redirect
+
+    client_id = os.environ.get("GITHUB_OAUTH_CLIENT_ID", "")
+    client_secret = os.environ.get("GITHUB_OAUTH_CLIENT_SECRET", "")
+    if not client_id or not client_secret:
+        return redirect(f"{frontend_base}/app/{target_page}?oauth_error=missing_github_credentials")
+
+    import httpx
+    token_resp = httpx.post(
+        "https://github.com/login/oauth/access_token",
+        json={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "code": code,
+        },
+        headers={"Accept": "application/json"},
+        timeout=15,
+    )
+    token_resp.raise_for_status()
+    token_data = token_resp.json()
+
+    if token_data.get("error"):
+        return redirect(
+            f"{frontend_base}/app/{target_page}?oauth_error={token_data['error_description'] or token_data['error']}"
+        )
+
+    access_token = token_data.get("access_token", "")
+    if not access_token:
+        return redirect(f"{frontend_base}/app/{target_page}?oauth_error=no_token")
+
+    # Fetch the authenticated user's login to store as metadata.
+    login = ""
+    try:
+        user_resp = httpx.get(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"Bearer {access_token}",
+                "Accept": "application/json",
+            },
+            timeout=10,
+        )
+        user_resp.raise_for_status()
+        login = user_resp.json().get("login") or ""
+    except Exception:  # noqa: BLE001
+        pass
+
+    from oauth.tokens import store_token
+    store_token(
+        collection=collection,
+        provider="github",
+        access_token=access_token,
+        scopes="repo read:org",
+        token_type="user",
+    )
+
+    return redirect(f"{frontend_base}/app/{target_page}?oauth_success=github")
 
 
 @app.get("/api/oauth/status/<provider>")
