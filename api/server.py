@@ -798,7 +798,19 @@ def ingest() -> Any:
             role_default="admin",
         )
     except Exception as exc:  # noqa: BLE001
-        return _error_response(f"Ingestion failed: {exc}", 500)
+        msg = str(exc)
+        if "GROQ_API_KEY" in msg or "OPENAI_API_KEY" in msg:
+            return _error_response(
+                "Ingestion requires an LLM API key. "
+                "Add GROQ_API_KEY (free at console.groq.com/keys) or "
+                "OPENAI_API_KEY to your Render environment variables.",
+                503,
+            )
+        if "Gmail OAuth token not found" in msg or "Slack OAuth token not found" in msg:
+            return _error_response(msg, 400)
+        if "No GitHub token found" in msg:
+            return _error_response(msg, 400)
+        return _error_response(f"Ingestion failed: {msg}", 500)
     finally:
         if source_path:
             try:
