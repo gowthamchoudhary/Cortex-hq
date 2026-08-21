@@ -315,18 +315,31 @@ export function SourcesPage() {
         </div>
       )}
 
-      {/* File Upload Fallback */}
-      <div className="flex items-center gap-4 rounded-2xl border-2 border-dashed border-black/[0.08] bg-white p-6 hover:border-black/[0.15] hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)] transition-all duration-200">
-        <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F5F3F0]">
-          <Upload className="h-5 w-5 text-[#6B6B6B]" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <p className="text-[14px] font-semibold text-[#171717]">Upload a file</p>
-          <p className="text-[12px] text-[#6B6B6B] mt-0.5">
-            Gmail .zip, Slack .zip, or any document (PDF, TXT, DOCX, CSV, JSON)
-          </p>
-        </div>
-      </div>
+      {/* File Upload */}
+      <FileUploadZone
+        disabled={ingesting}
+        onFileSelected={async (file, sourceType) => {
+          setIngesting(true);
+          setIngestType(sourceType);
+          setIngestResult(null);
+          setJobProgress(null);
+          try {
+            const response = await ingestSource({
+              collection,
+              sourceType,
+              file,
+            });
+            void pollJob(response.job_id);
+          } catch (err) {
+            setIngestResult({
+              ok: false,
+              message: err instanceof Error ? err.message : "Ingestion failed.",
+            });
+            setIngesting(false);
+            setIngestType(null);
+          }
+        }}
+      />
 
       {/* Live Ingestion Progress */}
       {ingesting && jobProgress && (
@@ -526,6 +539,85 @@ function IngestionProgress({
           <p className="text-[11px] text-[#6B6B6B]">Merges</p>
         </div>
       </div>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* File Upload Zone — drag-and-drop or click to upload                        */
+/* -------------------------------------------------------------------------- */
+
+function FileUploadZone({
+  disabled,
+  onFileSelected,
+}: {
+  disabled: boolean;
+  onFileSelected: (file: File, sourceType: "gmail-export" | "slack-export" | "document-upload") => void;
+}) {
+  const [dragOver, setDragOver] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const handleFile = (file: File) => {
+    if (disabled) return;
+    const name = file.name.toLowerCase();
+    let sourceType: "gmail-export" | "slack-export" | "document-upload" = "document-upload";
+    if (name.endsWith(".zip")) {
+      // Detect Gmail vs Slack zip by checking for common patterns
+      // Gmail zips typically contain MBOX files, Slack exports have channel dirs
+      sourceType = "gmail-export"; // default to gmail; user can clarify if wrong
+    } else if (name.endsWith(".mbox")) {
+      sourceType = "gmail-export";
+    }
+    onFileSelected(file, sourceType);
+  };
+
+  return (
+    <div
+      className={`relative flex items-center gap-4 rounded-2xl border-2 border-dashed p-6 transition-all duration-200 ${
+        dragOver
+          ? "border-[#F59E0B] bg-[#F59E0B]/5 shadow-[0_2px_12px_rgba(245,158,11,0.1)]"
+          : disabled
+          ? "border-black/[0.06] bg-black/[0.02] opacity-60"
+          : "border-black/[0.08] bg-white hover:border-black/[0.15] hover:shadow-[0_2px_12px_rgba(0,0,0,0.04)]"
+      }`}
+      onDragOver={(e) => {
+        e.preventDefault();
+        if (!disabled) setDragOver(true);
+      }}
+      onDragLeave={() => setDragOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setDragOver(false);
+        const file = e.dataTransfer.files[0];
+        if (file) handleFile(file);
+      }}
+      onClick={() => !disabled && inputRef.current?.click()}
+    >
+      <input
+        ref={inputRef}
+        type="file"
+        className="hidden"
+        accept=".zip,.mbox,.json,.jsonl,.txt,.md,.csv,.pdf,.docx"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleFile(file);
+          e.target.value = "";
+        }}
+      />
+      <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-[#F5F3F0]">
+        <Upload className="h-5 w-5 text-[#6B6B6B]" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-[14px] font-semibold text-[#171717]">
+          {dragOver ? "Drop file here" : "Upload a file"}
+        </p>
+        <p className="text-[12px] text-[#6B6B6B] mt-0.5">
+          Gmail .zip, Slack .zip, or any document (PDF, TXT, DOCX, CSV, JSON)
+        </p>
+      </div>
+      {dragOver && (
+        <div className="absolute inset-0 rounded-2xl border-2 border-[#F59E0B] pointer-events-none" />
+      )}
     </div>
   );
 }
