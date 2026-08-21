@@ -106,12 +106,24 @@ def to_plain_data(value: Any) -> Any:
 
 def provider_config(provider: str, model: str | None) -> tuple[str, str, str]:
     if provider == "auto":
-        provider = "groq" if os.environ.get("GROQ_API_KEY") else "openai"
+        # Check both single and multi-key env vars for Groq
+        has_groq = bool(os.environ.get("GROQ_API_KEY") or os.environ.get("GROQ_API_KEYS"))
+        provider = "groq" if has_groq else "openai"
 
     if provider == "groq":
+        # Use key pool for multi-key rotation if available
+        try:
+            from extraction.key_pool import get_key_pool
+            pool = get_key_pool()
+            if pool.is_configured:
+                api_key = pool.next()
+                return GROQ_CHAT_ENDPOINT, api_key, model or os.environ.get("GROQ_MODEL", DEFAULT_MODEL)
+        except (ImportError, RuntimeError):
+            pass
+        # Fallback to single GROQ_API_KEY
         api_key = os.environ.get("GROQ_API_KEY")
         if not api_key:
-            raise RuntimeError("GROQ_API_KEY is required.")
+            raise RuntimeError("GROQ_API_KEYS or GROQ_API_KEY is required.")
         return GROQ_CHAT_ENDPOINT, api_key, model or os.environ.get("GROQ_MODEL", DEFAULT_MODEL)
 
     if provider == "openai":
