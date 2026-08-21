@@ -562,12 +562,11 @@ function FileUploadZone({
     const name = file.name.toLowerCase();
     let sourceType: "gmail-export" | "slack-export" | "document-upload" = "document-upload";
     if (name.endsWith(".zip")) {
-      // Detect Gmail vs Slack zip by checking for common patterns
-      // Gmail zips typically contain MBOX files, Slack exports have channel dirs
-      sourceType = "gmail-export"; // default to gmail; user can clarify if wrong
+      sourceType = "gmail-export"; // default to gmail; user can clarify
     } else if (name.endsWith(".mbox")) {
       sourceType = "gmail-export";
     }
+    // .json, .jsonl, .txt, .md, .csv, .pdf, .docx → document-upload (generic)
     onFileSelected(file, sourceType);
   };
 
