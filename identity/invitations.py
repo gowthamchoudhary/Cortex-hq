@@ -5,6 +5,8 @@ employee_id)``, which mints a token and returns an ``invite_url``. The employee
 must first verify their work email (``identity.email_verification``); only then
 does ``accept_invitation(token, user_id)`` succeed — it registers the user on
 the brain via ``auth.user_brains`` with the employee's ``cortex_role``.
+
+Data is stored in Supabase Postgres so it survives Render deploys/restarts.
 """
 
 from __future__ import annotations
@@ -14,7 +16,7 @@ import secrets
 import time
 from typing import Any
 
-from identity._store import connect
+from identity._store import get_client, INVITATIONS
 from identity.employee_directory import get_employee
 
 INVITE_TTL_SECONDS = 7 * 24 * 3600  # 7 days
@@ -26,25 +28,19 @@ def _invite_base_url() -> str:
     return os.environ.get("CORTEX_APP_BASE_URL", DEFAULT_APP_BASE_URL).rstrip("/")
 
 
-def _row_to_invitation(row: tuple[Any, ...]) -> dict[str, Any]:
-    token, collection, employee_id, status, created_at, expires_at = row
+def _row_to_invitation(row: dict[str, Any]) -> dict[str, Any]:
     return {
-        "token": token,
-        "collection": collection,
-        "employee_id": employee_id,
-        "status": status,
-        "created_at": created_at,
-        "expires_at": expires_at,
+        "token": row.get("token", ""),
+        "collection": row.get("collection", ""),
+        "employee_id": row.get("employee_id", ""),
+        "status": row.get("status", "pending"),
+        "created_at": row.get("created_at", 0),
+        "expires_at": row.get("expires_at", 0),
     }
 
 
 def create_invitation(collection: str, employee_id: str) -> dict[str, Any]:
-    """Create a pending invite for an employee and return its URL.
-
-    The employee must exist in the directory. The returned URL uses
-    ``CORTEX_APP_BASE_URL`` (default ``http://localhost:8501``) so hosted
-    deployments can point invites at the real app.
-    """
+    """Create a pending invite for an employee and return its URL."""
     if not get_employee(collection, employee_id):
         raise KeyError(
             f"Unknown employee {employee_id!r} in collection {collection!r}; "
@@ -53,16 +49,16 @@ def create_invitation(collection: str, employee_id: str) -> dict[str, Any]:
 
     token = secrets.token_urlsafe(24)
     now = int(time.time())
-    connection = connect()
-    try:
-        connection.execute(
-            "INSERT INTO invitations (token, collection, employee_id, status, created_at, expires_at) "
-            "VALUES (?, ?, ?, 'pending', ?, ?)",
-            (token, str(collection).strip(), str(employee_id).strip(), now, now + INVITE_TTL_SECONDS),
-        )
-        connection.commit()
-    finally:
-        connection.close()
+
+    client = get_client()
+    client.table(INVITATIONS).insert({
+        "token": token,
+        "collection": str(collection).strip(),
+        "employee_id": str(employee_id).strip(),
+        "status": "pending",
+        "created_at": now,
+        "expires_at": now + INVITE_TTL_SECONDS,
+    }).execute()
 
     return {
         "token": token,
@@ -79,32 +75,25 @@ def get_invitation(token: str) -> dict[str, Any] | None:
     """Return invitation details, or None when the token is unknown/expired."""
     if not str(token).strip():
         return None
-    connection = connect()
-    try:
-        row = connection.execute(
-            "SELECT * FROM invitations WHERE token = ?",
-            (str(token).strip(),),
-        ).fetchone()
-    finally:
-        connection.close()
-    if row is None:
+
+    client = get_client()
+    result = (
+        client.table(INVITATIONS)
+        .select("*")
+        .eq("token", str(token).strip())
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
         return None
-    invitation = _row_to_invitation(row)
+    invitation = _row_to_invitation(result.data[0])
     if invitation["expires_at"] < int(time.time()):
         return None
     return invitation
 
 
 def accept_invitation(token: str, user_id: str) -> dict[str, Any]:
-    """Accept an invite: validate, check email verification, grant brain access.
-
-    Returns one of:
-    - ``{"status": "accepted", ...}`` — user registered on the brain.
-    - ``{"status": "verification_required", ...}`` — invite is valid but the
-      employee's work email has not been verified yet.
-    - ``{"status": "failure", "reason": ...}`` — invalid/expired/used token or
-      missing employee record.
-    """
+    """Accept an invite: validate, check email verification, grant brain access."""
     if not str(user_id).strip():
         raise ValueError("user_id must not be empty.")
 
@@ -133,15 +122,10 @@ def accept_invitation(token: str, user_id: str) -> dict[str, Any]:
 
     register_user_brain(str(user_id).strip(), collection, role=employee["cortex_role"])
 
-    connection = connect()
-    try:
-        connection.execute(
-            "UPDATE invitations SET status = 'accepted' WHERE token = ?",
-            (str(token).strip(),),
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    client = get_client()
+    client.table(INVITATIONS).update(
+        {"status": "accepted"}
+    ).eq("token", str(token).strip()).execute()
 
     return {
         "status": "accepted",

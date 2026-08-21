@@ -4,63 +4,26 @@ Agents are lightweight configuration records: which HydraDB collection an
 agent is tied to, and the default role applied to anyone using it. A second
 ``deployments`` table records which platforms (slack, github, email, whatsapp)
 an agent is live on plus each platform's config (bot tokens, webhook secrets).
-Records live in a local SQLite store (``deploy/agents.db``) so no live backend
-is required to define or inspect an agent.
+
+Records are stored in Supabase Postgres so they survive Render
+free-tier deploys/restarts.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
-import sqlite3
 import time
-from pathlib import Path
 from typing import Any
 
-DEPLOY_DIR = Path(__file__).resolve().parent
-DEFAULT_DB_PATH = DEPLOY_DIR / "agents.db"
+from auth.supabase_db import get_db_client, TABLE_AGENTS, TABLE_DEPLOYMENTS
+
 DATABASE_NAME = "hackhydra-track1"
 
 VALID_ROLES = ("admin", "member", "guest")
 VALID_PLATFORMS = ("slack", "github", "email", "whatsapp")
-
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS agents (
-    agent_id     TEXT PRIMARY KEY,
-    agent_name   TEXT NOT NULL,
-    collection   TEXT NOT NULL,
-    role_default TEXT NOT NULL,
-    created_at   INTEGER NOT NULL
-);
-"""
-
-_SCHEMA_DEPLOYMENTS = """
-CREATE TABLE IF NOT EXISTS deployments (
-    agent_id    TEXT NOT NULL,
-    platform    TEXT NOT NULL,
-    config_json TEXT NOT NULL,
-    status      TEXT NOT NULL,
-    deployed_at INTEGER NOT NULL,
-    PRIMARY KEY (agent_id, platform)
-);
-"""
-
-
-def _db_path() -> Path:
-    """Return the agent store path, honoring the CORTEX_AGENTS_DB override."""
-    override = os.environ.get("CORTEX_AGENTS_DB")
-    return Path(override) if override else DEFAULT_DB_PATH
-
-
-def _connect() -> sqlite3.Connection:
-    path = _db_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(str(path))
-    connection.execute(_SCHEMA)
-    connection.execute(_SCHEMA_DEPLOYMENTS)
-    connection.commit()
-    return connection
 
 
 def _slug(value: str) -> str:
@@ -88,117 +51,97 @@ def create_agent(
     agent_name: str,
     role_default: str = "member",
 ) -> dict[str, Any]:
-    """Store an agent config and return the created (or matching) record.
-
-    ``collection`` is the HydraDB collection the agent answers from, and
-    ``role_default`` is the access role applied to anyone using the agent.
-    Creating an agent with a name that already exists updates that agent's
-    config and returns the existing id instead of duplicating it.
-    """
+    """Store an agent config and return the created (or matching) record."""
     if not str(collection).strip():
         raise ValueError("collection must not be empty.")
     if not str(agent_name).strip():
         raise ValueError("agent_name must not be empty.")
     normalized_role = _validate_role(role_default)
 
-    connection = _connect()
-    try:
-        existing = connection.execute(
-            "SELECT agent_id FROM agents WHERE agent_name = ?",
-            (str(agent_name).strip(),),
-        ).fetchone()
-        if existing:
-            agent_id = existing[0]
-            connection.execute(
-                "UPDATE agents SET collection = ?, role_default = ? WHERE agent_id = ?",
-                (str(collection).strip(), normalized_role, agent_id),
-            )
-        else:
-            agent_id = _agent_id(str(agent_name).strip())
-            connection.execute(
-                "INSERT INTO agents (agent_id, agent_name, collection, role_default, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (
-                    agent_id,
-                    str(agent_name).strip(),
-                    str(collection).strip(),
-                    normalized_role,
-                    int(time.time()),
-                ),
-            )
-        connection.commit()
-    finally:
-        connection.close()
+    client = get_db_client()
+    name = str(agent_name).strip()
+
+    # Check if agent with this name already exists
+    existing = (
+        client.table(TABLE_AGENTS)
+        .select("agent_id")
+        .eq("agent_name", name)
+        .limit(1)
+        .execute()
+    )
+
+    if existing.data:
+        agent_id = existing.data[0]["agent_id"]
+        client.table(TABLE_AGENTS).update({
+            "collection": str(collection).strip(),
+            "role_default": normalized_role,
+        }).eq("agent_id", agent_id).execute()
+    else:
+        agent_id = _agent_id(name)
+        client.table(TABLE_AGENTS).insert({
+            "agent_id": agent_id,
+            "agent_name": name,
+            "collection": str(collection).strip(),
+            "role_default": normalized_role,
+            "created_at": int(time.time()),
+        }).execute()
 
     return {
         "agent_id": agent_id,
-        "agent_name": str(agent_name).strip(),
+        "agent_name": name,
         "collection": str(collection).strip(),
         "role_default": normalized_role,
     }
 
 
 def get_agent_chat_endpoint(agent_id: str) -> dict[str, Any]:
-    """Return the parameters needed to call the answer pipeline for an agent.
-
-    The returned dict maps directly onto ``reasoning.answer_question.answer_question``:
-    pass ``database``, ``collection``, and ``role`` as keyword arguments.
-    """
-    connection = _connect()
-    try:
-        row = connection.execute(
-            "SELECT agent_id, agent_name, collection, role_default FROM agents WHERE agent_id = ?",
-            (str(agent_id),),
-        ).fetchone()
-    finally:
-        connection.close()
-
-    if row is None:
+    """Return the parameters needed to call the answer pipeline for an agent."""
+    client = get_db_client()
+    result = (
+        client.table(TABLE_AGENTS)
+        .select("agent_id,agent_name,collection,role_default")
+        .eq("agent_id", str(agent_id))
+        .limit(1)
+        .execute()
+    )
+    if not result.data:
         raise KeyError(f"Unknown agent {agent_id!r}; create it with create_agent() first.")
 
-    agent_id, agent_name, collection, role_default = row
+    row = result.data[0]
     return {
-        "agent_id": agent_id,
-        "agent_name": agent_name,
+        "agent_id": row["agent_id"],
+        "agent_name": row["agent_name"],
         "pipeline": "reasoning.answer_question:answer_question",
         "database": DATABASE_NAME,
-        "collection": collection,
-        "role": role_default,
+        "collection": row["collection"],
+        "role": row["role_default"],
     }
 
 
 def list_agents() -> list[dict[str, Any]]:
-    """Return every agent config, each with its platform deployments.
-
-    Read-only; used by the admin Agents UI. Deployments come from
-    ``get_agent_deployments`` so a single response carries both the agent
-    record and its live/pending platforms.
-    """
-    connection = _connect()
-    try:
-        rows = connection.execute(
-            "SELECT agent_id, agent_name, collection, role_default, created_at "
-            "FROM agents ORDER BY created_at DESC",
-        ).fetchall()
-    finally:
-        connection.close()
+    """Return every agent config, each with its platform deployments."""
+    client = get_db_client()
+    result = (
+        client.table(TABLE_AGENTS)
+        .select("agent_id,agent_name,collection,role_default,created_at")
+        .order("created_at", desc=True)
+        .execute()
+    )
 
     agents: list[dict[str, Any]] = []
-    for agent_id, agent_name, collection, role_default, created_at in rows:
+    for row in result.data:
         try:
-            deployments = get_agent_deployments(agent_id)
+            deployments = get_agent_deployments(row["agent_id"])
         except KeyError:
             deployments = []
-        agents.append(
-            {
-                "agent_id": agent_id,
-                "agent_name": agent_name,
-                "collection": collection,
-                "role_default": role_default,
-                "created_at": created_at,
-                "deployments": deployments,
-            }
-        )
+        agents.append({
+            "agent_id": row["agent_id"],
+            "agent_name": row["agent_name"],
+            "collection": row["collection"],
+            "role_default": row["role_default"],
+            "created_at": row["created_at"],
+            "deployments": deployments,
+        })
     return agents
 
 
@@ -208,18 +151,7 @@ def deploy_agent(
     platform_config: dict[str, Any],
     status: str = "pending",
 ) -> dict[str, Any]:
-    """Record that ``agent_id`` is deployed to ``platform`` with its config.
-
-    ``platform`` is one of ``slack``, ``github``, ``email``, ``whatsapp``.
-    ``platform_config`` holds whatever the adapter needs at runtime (bot
-    tokens, webhook secrets, channel/workspace ids) — stored as JSON, never
-    printed.
-
-    ``status`` starts as ``"pending"``; set it to ``"active"`` once the
-    adapter's webhook has been confirmed reachable (e.g. after the platform's
-    URL-verification handshake succeeds). Re-deploying the same agent+platform
-    upserts the config.
-    """
+    """Record that ``agent_id`` is deployed to ``platform`` with its config."""
     normalized_platform = str(platform).strip().lower()
     if normalized_platform not in VALID_PLATFORMS:
         raise ValueError(
@@ -232,28 +164,14 @@ def deploy_agent(
 
     get_agent_chat_endpoint(agent_id)  # Raises KeyError for unknown agents.
 
-    import json
-
-    connection = _connect()
-    try:
-        connection.execute(
-            "INSERT INTO deployments (agent_id, platform, config_json, status, deployed_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT (agent_id, platform) "
-            "DO UPDATE SET config_json = excluded.config_json, "
-            "                status = excluded.status, "
-            "                deployed_at = excluded.deployed_at",
-            (
-                str(agent_id),
-                normalized_platform,
-                json.dumps(platform_config, sort_keys=True),
-                str(status).strip().lower(),
-                int(time.time()),
-            ),
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    client = get_db_client()
+    client.table(TABLE_DEPLOYMENTS).upsert({
+        "agent_id": str(agent_id),
+        "platform": normalized_platform,
+        "config_json": json.dumps(platform_config, sort_keys=True),
+        "status": str(status).strip().lower(),
+        "deployed_at": int(time.time()),
+    }, on_conflict="agent_id,platform").execute()
 
     return {
         "status": str(status).strip().lower(),
@@ -265,27 +183,24 @@ def deploy_agent(
 
 def get_agent_deployments(agent_id: str) -> list[dict[str, Any]]:
     """Return every platform deployment recorded for ``agent_id``."""
-    import json
-
     get_agent_chat_endpoint(agent_id)  # Raises KeyError for unknown agents.
-    connection = _connect()
-    try:
-        rows = connection.execute(
-            "SELECT platform, config_json, status, deployed_at FROM deployments "
-            "WHERE agent_id = ? ORDER BY platform",
-            (str(agent_id),),
-        ).fetchall()
-    finally:
-        connection.close()
 
+    client = get_db_client()
+    result = (
+        client.table(TABLE_DEPLOYMENTS)
+        .select("platform,config_json,status,deployed_at")
+        .eq("agent_id", str(agent_id))
+        .order("platform")
+        .execute()
+    )
     return [
         {
-            "platform": platform,
-            "config": json.loads(config_json or "{}"),
-            "status": status,
-            "deployed_at": deployed_at,
+            "platform": row["platform"],
+            "config": json.loads(row.get("config_json") or "{}"),
+            "status": row["status"],
+            "deployed_at": row["deployed_at"],
         }
-        for platform, config_json, status, deployed_at in rows
+        for row in result.data
     ]
 
 

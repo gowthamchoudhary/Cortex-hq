@@ -5,6 +5,8 @@ Adapters (Slack, GitHub, email, WhatsApp) hand the runtime a platform identity
 This module maps those to an ``employee_id`` in a collection, so the role used
 for answering is always the employee's ``cortex_role`` from the directory —
 never a direct platform-to-role mapping.
+
+Data is stored in Supabase Postgres so it survives Render deploys/restarts.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ import re
 import time
 from typing import Any
 
-from identity._store import connect
+from identity._store import get_client, EXTERNAL_IDENTITIES
 from identity.employee_directory import get_employee
 
 VALID_PLATFORMS = ("slack", "github", "email", "whatsapp")
@@ -21,12 +23,7 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def _normalize_platform_user_id(platform: str, platform_user_id: str) -> str:
-    """Normalize a platform identity for storage and lookup.
-
-    Email addresses are lowercased; WhatsApp phone numbers are stored
-    E.164-style with a leading ``+`` (matching ``auth.user_brains``). Slack
-    user ids and GitHub usernames are used verbatim.
-    """
+    """Normalize a platform identity for storage and lookup."""
     value = str(platform_user_id).strip()
     if platform == "email":
         value = value.lower()
@@ -46,11 +43,7 @@ def link_external_identity(
     platform: str,
     platform_user_id: str,
 ) -> dict[str, Any]:
-    """Link a platform identity to an employee in ``collection``.
-
-    The employee must already exist in the directory (``register_employee``
-    first). Linking is upserted on ``(collection, platform, platform_user_id)``.
-    """
+    """Link a platform identity to an employee in ``collection``."""
     normalized_platform = str(platform).strip().lower()
     if normalized_platform not in VALID_PLATFORMS:
         raise ValueError(
@@ -63,24 +56,14 @@ def link_external_identity(
         )
     normalized_user_id = _normalize_platform_user_id(normalized_platform, platform_user_id)
 
-    connection = connect()
-    try:
-        connection.execute(
-            "INSERT INTO external_identities (collection, platform, platform_user_id, employee_id, created_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT (collection, platform, platform_user_id) "
-            "DO UPDATE SET employee_id = excluded.employee_id",
-            (
-                str(collection).strip(),
-                normalized_platform,
-                normalized_user_id,
-                str(employee_id).strip(),
-                int(time.time()),
-            ),
-        )
-        connection.commit()
-    finally:
-        connection.close()
+    client = get_client()
+    client.table(EXTERNAL_IDENTITIES).upsert({
+        "collection": str(collection).strip(),
+        "platform": normalized_platform,
+        "platform_user_id": normalized_user_id,
+        "employee_id": str(employee_id).strip(),
+        "created_at": int(time.time()),
+    }, on_conflict="collection,platform,platform_user_id").execute()
 
     return {
         "collection": str(collection).strip(),
@@ -106,16 +89,17 @@ def resolve_platform_user(
     except ValueError:
         return None
 
-    connection = connect()
-    try:
-        row = connection.execute(
-            "SELECT employee_id FROM external_identities "
-            "WHERE collection = ? AND platform = ? AND platform_user_id = ?",
-            (str(collection).strip(), normalized_platform, normalized_user_id),
-        ).fetchone()
-    finally:
-        connection.close()
-    return str(row[0]) if row else None
+    client = get_client()
+    result = (
+        client.table(EXTERNAL_IDENTITIES)
+        .select("employee_id")
+        .eq("collection", str(collection).strip())
+        .eq("platform", normalized_platform)
+        .eq("platform_user_id", normalized_user_id)
+        .limit(1)
+        .execute()
+    )
+    return str(result.data[0]["employee_id"]) if result.data else None
 
 
 def unlink_external_identity(
@@ -131,17 +115,17 @@ def unlink_external_identity(
         )
     normalized_user_id = _normalize_platform_user_id(normalized_platform, platform_user_id)
 
-    connection = connect()
-    try:
-        cursor = connection.execute(
-            "DELETE FROM external_identities "
-            "WHERE collection = ? AND platform = ? AND platform_user_id = ?",
-            (str(collection).strip(), normalized_platform, normalized_user_id),
-        )
-        connection.commit()
-        return cursor.rowcount > 0
-    finally:
-        connection.close()
+    client = get_client()
+    result = (
+        client.table(EXTERNAL_IDENTITIES)
+        .delete()
+        .eq("collection", str(collection).strip())
+        .eq("platform", normalized_platform)
+        .eq("platform_user_id", normalized_user_id)
+        .execute()
+    )
+    deleted_count = len(result.data) if result.data else 0
+    return deleted_count > 0
 
 
 def list_linked_identities(
@@ -149,16 +133,16 @@ def list_linked_identities(
     employee_id: str,
 ) -> list[dict[str, str]]:
     """Return every platform identity linked to ``employee_id``."""
-    connection = connect()
-    try:
-        rows = connection.execute(
-            "SELECT platform, platform_user_id FROM external_identities "
-            "WHERE collection = ? AND employee_id = ? ORDER BY platform",
-            (str(collection).strip(), str(employee_id).strip()),
-        ).fetchall()
-    finally:
-        connection.close()
+    client = get_client()
+    result = (
+        client.table(EXTERNAL_IDENTITIES)
+        .select("platform,platform_user_id")
+        .eq("collection", str(collection).strip())
+        .eq("employee_id", str(employee_id).strip())
+        .order("platform")
+        .execute()
+    )
     return [
-        {"platform": platform, "platform_user_id": platform_user_id}
-        for platform, platform_user_id in rows
+        {"platform": row["platform"], "platform_user_id": row["platform_user_id"]}
+        for row in result.data
     ]
