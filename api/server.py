@@ -731,13 +731,17 @@ def ask() -> Any:
 
 @app.post("/api/ingest")
 def ingest() -> Any:
-    """Ingest a source into a collection. Supports file upload (Gmail/Slack) and GitHub repo."""
+    """Start an ingestion job in the background and return a job_id immediately.
+
+    The actual extraction/resolution pipeline runs in a daemon thread so
+    Gunicorn workers are never blocked or killed by long-running ingestion.
+    The frontend polls ``GET /api/ingest/status/<job_id>`` for progress.
+    """
     user, error = _authenticate()
     if error:
         return error
     collection = _collection_for(user, request.args.get("collection"))
 
-    # Check if this is a multipart file upload (Gmail/Slack)
     source_type = (request.form.get("source_type") or "").strip().lower()
     source_repo = (request.form.get("source_repo") or "").strip()
 
@@ -749,21 +753,23 @@ def ingest() -> Any:
     if source_type not in ("gmail-export", "slack-export", "github-repo", "document-upload", "gmail-live", "slack-live"):
         return _error_response("source_type must be gmail-export, slack-export, github-repo, document-upload, gmail-live, or slack-live", 400)
 
-    import tempfile
-    from ingestion.ingest_pipeline import run_full_ingestion
+    from ingestion.background import start_ingestion_job
 
+    # --- Live OAuth: start background job immediately ---
+    if source_type in ("gmail-live", "slack-live"):
+        # Quick token check before spawning the job
+        from oauth.tokens import get_token
+        token_data = get_token(collection, "gmail" if source_type == "gmail-live" else "slack")
+        if not token_data or not token_data.get("access_token"):
+            provider = "Gmail" if source_type == "gmail-live" else "Slack"
+            return _error_response(f"{provider} OAuth token not found. Connect {provider} first via the Sources page.", 400)
+        job_id = start_ingestion_job(collection, source_type, "", role_default="admin")
+        return jsonify({"ok": True, "job_id": job_id, "status": "queued"})
+
+    # --- File uploads: save to temp, then start background job ---
+    import tempfile
     source_path = None
     try:
-        if source_type in ("gmail-live", "slack-live"):
-            # Live OAuth: no file upload needed; the pipeline fetches via API.
-            result = run_full_ingestion(
-                collection=collection,
-                source_type=source_type,
-                source_path_or_repo="",
-                role_default="admin",
-            )
-            return jsonify({"ok": True, **result})
-
         if source_type in ("gmail-export", "slack-export"):
             uploaded = request.files.get("file")
             if not uploaded or not uploaded.filename:
@@ -781,22 +787,19 @@ def ingest() -> Any:
             uploaded = request.files.get("file")
             if not uploaded or not uploaded.filename:
                 return _error_response("file upload is required for document ingestion", 400)
-            # Read file content as text and run through extraction pipeline
             file_content = uploaded.read()
             suffix = Path(uploaded.filename).suffix.lower() or ".txt"
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix, dir="/tmp")
             tmp.write(file_content)
             tmp.close()
             source_path = tmp.name
-            # For generic docs, use "gmail" as the adapter (treats as generic text source)
             source_type = "gmail-export"
 
-        result = run_full_ingestion(
-            collection=collection,
-            source_type=source_type,
-            source_path_or_repo=source_path,
-            role_default="admin",
-        )
+        job_id = start_ingestion_job(collection, source_type, source_path or "", role_default="admin")
+        # For file uploads, we pass the temp path to the background thread.
+        # The thread owns the file now; don't unlink in finally.
+        source_path = None
+        return jsonify({"ok": True, "job_id": job_id, "status": "queued"})
     except Exception as exc:  # noqa: BLE001
         msg = str(exc)
         if "GROQ_API_KEY" in msg or "OPENAI_API_KEY" in msg:
@@ -820,6 +823,19 @@ def ingest() -> Any:
                 pass
 
     return jsonify({"ok": True, **result})
+
+
+@app.get("/api/ingest/status/<job_id>")
+def ingest_status(job_id: str) -> Any:
+    """Poll the status of a background ingestion job."""
+    user, error = _authenticate()
+    if error:
+        return error
+    from ingestion.background import get_job
+    job = get_job(job_id)
+    if job is None:
+        return _error_response("Job not found", 404)
+    return jsonify({"ok": True, **job})
 
 
 @app.post("/api/agents/create")

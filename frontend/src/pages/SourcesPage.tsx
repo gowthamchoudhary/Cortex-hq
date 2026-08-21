@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   Cable,
   Database,
@@ -8,6 +8,7 @@ import {
   Zap,
   Upload,
   ExternalLink,
+  AlertCircle,
 } from "lucide-react";
 import { SiGmail, SiGithub } from "@icons-pack/react-simple-icons";
 
@@ -28,7 +29,11 @@ function SlackIcon({ size = 22 }: { size?: string | number }) {
   );
 }
 import { fetchSources } from "@/api/sources";
-import { ingestSource } from "@/api/ingest";
+import {
+  ingestSource,
+  pollIngestJob,
+  type IngestJobStatus,
+} from "@/api/ingest";
 import { getOAuthStatus, getOAuthStartUrl, disconnectOAuth } from "@/api/oauth";
 import { PageHeader, EmptyState, ErrorState, LoadingState } from "@/components/shared/states";
 import { useAuth } from "@/auth/AuthContext";
@@ -47,10 +52,12 @@ export function SourcesPage() {
   // Ingestion state
   const [ingesting, setIngesting] = useState(false);
   const [ingestType, setIngestType] = useState<SourceType | null>(null);
+  const [jobProgress, setJobProgress] = useState<IngestJobStatus | null>(null);
   const [ingestResult, setIngestResult] = useState<{
     ok: boolean;
     message: string;
   } | null>(null);
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // GitHub input
   const [showGitHubInput, setShowGitHubInput] = useState(false);
@@ -78,24 +85,27 @@ export function SourcesPage() {
     }
   }, [collection]);
 
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current) clearTimeout(pollRef.current);
+    };
+  }, []);
+
   // Check OAuth status on mount and after redirect
   useEffect(() => {
     void load();
-    // Check for OAuth feedback in URL
     const params = new URLSearchParams(window.location.search);
     const success = params.get("oauth_success");
     const oauthErr = params.get("oauth_error");
     if (success) {
       setOauthFeedback(`${success} connected successfully`);
-      // Clean URL
       window.history.replaceState({}, "", window.location.pathname);
-      // Reload to show updated sources
       setTimeout(() => void load(), 500);
     } else if (oauthErr) {
       setOauthFeedback(`OAuth error: ${oauthErr}`);
       window.history.replaceState({}, "", window.location.pathname);
     }
-    // Check OAuth connection status
     void checkOAuthStatus();
   }, [load, collection]);
 
@@ -114,50 +124,74 @@ export function SourcesPage() {
     }
   };
 
-  const handleLiveIngest = async (sourceType: "gmail-live" | "slack-live") => {
+  const startLiveIngest = async (sourceType: "gmail-live" | "slack-live") => {
     setIngesting(true);
     setIngestType(sourceType);
     setIngestResult(null);
+    setJobProgress(null);
     try {
-      const result = await ingestSource({
+      const response = await ingestSource({
         collection,
         sourceType,
         sourceRepo: "",
       });
-      setIngestResult({
-        ok: true,
-        message: `Ingestion complete: ${result.docs_processed} docs, ${result.entities_found} entities, ${result.merges_made} merges.`,
-      });
-      await load();
+      // Start polling for progress
+      void pollJob(response.job_id);
     } catch (err) {
       setIngestResult({
         ok: false,
         message: err instanceof Error ? err.message : "Ingestion failed.",
       });
-    } finally {
       setIngesting(false);
       setIngestType(null);
     }
   };
 
-  const handleGitHubIngest = async () => {
+  const startGitHubIngest = async () => {
     if (!githubRepo.trim()) return;
     setIngesting(true);
     setIngestType("github-repo");
     setIngestResult(null);
+    setJobProgress(null);
     setShowGitHubInput(false);
     try {
-      const result = await ingestSource({
+      const response = await ingestSource({
         collection,
         sourceType: "github-repo",
         sourceRepo: githubRepo.trim(),
       });
-      setIngestResult({
-        ok: true,
-        message: `Ingestion complete: ${result.docs_processed} docs, ${result.entities_found} entities, ${result.merges_made} merges.`,
-      });
       setGithubRepo("");
-      await load();
+      void pollJob(response.job_id);
+    } catch (err) {
+      setIngestResult({
+        ok: false,
+        message: err instanceof Error ? err.message : "Ingestion failed.",
+      });
+      setIngesting(false);
+      setIngestType(null);
+    }
+  };
+
+  const pollJob = async (jobId: string) => {
+    try {
+      const finalJob = await pollIngestJob(
+        jobId,
+        (job) => setJobProgress(job),
+        2000
+      );
+      if (finalJob.status === "completed" && finalJob.result) {
+        const r = finalJob.result;
+        setIngestResult({
+          ok: true,
+          message: `Ingestion complete: ${r.docs_processed} docs, ${r.entities_found} entities, ${r.merges_made} merges.`,
+        });
+        await load();
+      } else {
+        setIngestResult({
+          ok: false,
+          message: finalJob.error || "Ingestion failed.",
+        });
+      }
     } catch (err) {
       setIngestResult({
         ok: false,
@@ -166,6 +200,7 @@ export function SourcesPage() {
     } finally {
       setIngesting(false);
       setIngestType(null);
+      setJobProgress(null);
     }
   };
 
@@ -214,7 +249,7 @@ export function SourcesPage() {
               setGmailConnected(false);
             });
           }}
-          onSync={() => void handleLiveIngest("gmail-live")}
+          onSync={() => void startLiveIngest("gmail-live")}
         />
         <OAuthConnectButton
           label="Slack"
@@ -230,7 +265,7 @@ export function SourcesPage() {
               setSlackConnected(false);
             });
           }}
-          onSync={() => void handleLiveIngest("slack-live")}
+          onSync={() => void startLiveIngest("slack-live")}
         />
         <OAuthConnectButton
           label="GitHub"
@@ -247,7 +282,6 @@ export function SourcesPage() {
             });
           }}
           onSync={() => {
-            // For GitHub, "sync" means show the repo input if connected
             if (githubConnected) {
               setShowGitHubInput(!showGitHubInput);
             }
@@ -264,7 +298,7 @@ export function SourcesPage() {
             value={githubRepo}
             onChange={(e) => setGithubRepo(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") void handleGitHubIngest();
+              if (e.key === "Enter") void startGitHubIngest();
             }}
             placeholder="Paste repository URL (e.g. facebook/react)"
             className="flex-1 rounded-lg border border-black/[0.08] bg-[#FAFAF9] px-3 py-2 text-[13px] text-[#171717] placeholder:text-[#9A9A9A] outline-none transition-all duration-200 focus:border-[#171717]/20 focus:ring-1 focus:ring-[#171717]/5"
@@ -272,7 +306,7 @@ export function SourcesPage() {
           />
           <button
             type="button"
-            onClick={() => void handleGitHubIngest()}
+            onClick={() => void startGitHubIngest()}
             disabled={!githubRepo.trim()}
             className="btn-orange"
           >
@@ -294,8 +328,13 @@ export function SourcesPage() {
         </div>
       </div>
 
-      {/* Ingestion Progress */}
-      {ingesting && (
+      {/* Live Ingestion Progress */}
+      {ingesting && jobProgress && (
+        <IngestionProgress job={jobProgress} sourceType={ingestType} />
+      )}
+
+      {/* Simple loading state when job hasn't started polling yet */}
+      {ingesting && !jobProgress && (
         <div className="flex items-center gap-3 rounded-2xl p-4 btn-green !cursor-default">
           <Loader2 className="h-5 w-5 shrink-0 animate-spin" />
           <div>
@@ -309,7 +348,7 @@ export function SourcesPage() {
                 : "Processing file…"}
             </p>
             <p className="text-[12px] opacity-80">
-              Extraction, graph building, entity resolution — this may take a few minutes.
+              Starting background ingestion…
             </p>
           </div>
         </div>
@@ -324,10 +363,11 @@ export function SourcesPage() {
               : "border-[#EF4444]/20 bg-[#EF4444]/5"
           }`}
         >
-          <CheckCircle2
-            className="h-5 w-5 shrink-0"
-            style={{ color: ingestResult.ok ? "#10B981" : "#EF4444" }}
-          />
+          {ingestResult.ok ? (
+            <CheckCircle2 className="h-5 w-5 shrink-0 text-[#10B981]" />
+          ) : (
+            <AlertCircle className="h-5 w-5 shrink-0 text-[#EF4444]" />
+          )}
           <p className="text-[13px] text-[#171717]">{ingestResult.message}</p>
         </div>
       )}
@@ -385,6 +425,107 @@ export function SourcesPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/* Ingestion Progress — live job status display                               */
+/* -------------------------------------------------------------------------- */
+
+function IngestionProgress({
+  job,
+  sourceType,
+}: {
+  job: IngestJobStatus;
+  sourceType: SourceType | null;
+}) {
+  const progress = job.progress;
+  const isRunning = job.status === "running";
+  const isFailed = job.status === "failed";
+
+  const sourceLabel =
+    sourceType === "github-repo"
+      ? "Repository"
+      : sourceType === "gmail-live"
+      ? "Gmail"
+      : sourceType === "slack-live"
+      ? "Slack"
+      : "Document";
+
+  return (
+    <div className="rounded-2xl bg-white border border-black/[0.065] shadow-[0_2px_12px_rgba(0,0,0,0.04)] overflow-hidden">
+      {/* Header */}
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-black/[0.04]">
+        {isFailed ? (
+          <AlertCircle className="h-5 w-5 text-[#EF4444] shrink-0" />
+        ) : isRunning ? (
+          <Loader2 className="h-5 w-5 text-[#F59E0B] shrink-0 animate-spin" />
+        ) : (
+          <Loader2 className="h-5 w-5 text-[#6B6B6B] shrink-0" />
+        )}
+        <div className="min-w-0 flex-1">
+          <p className="text-[14px] font-semibold text-[#171717]">
+            {isFailed
+              ? `${sourceLabel} ingestion failed`
+              : `Processing ${sourceLabel.toLowerCase()} data…`}
+          </p>
+          <p className="text-[12px] text-[#6B6B6B] mt-0.5">
+            {progress.message}
+          </p>
+        </div>
+        <span
+          className="text-[11px] font-medium px-2 py-0.5 rounded-lg"
+          style={{
+            background: isFailed
+              ? "rgba(239,68,68,0.1)"
+              : "rgba(245,158,11,0.1)",
+            color: isFailed ? "#EF4444" : "#F59E0B",
+          }}
+        >
+          {isFailed ? "Failed" : isRunning ? "Running" : "Starting…"}
+        </span>
+      </div>
+
+      {/* Progress bar */}
+      {isRunning && (
+        <div className="px-5 py-3 border-b border-black/[0.04]">
+          <div className="h-1.5 rounded-full bg-[#F5F5F4] overflow-hidden">
+            <div
+              className="h-full rounded-full bg-gradient-to-r from-[#F59E0B] to-[#F97316] transition-all duration-500"
+              style={{
+                width: progress.docs_total > 0
+                  ? `${Math.round((progress.docs_processed / progress.docs_total) * 100)}%`
+                  : "30%",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Stats */}
+      <div className="grid grid-cols-3 gap-px bg-black/[0.04]">
+        <div className="bg-white px-5 py-3 text-center">
+          <p className="text-[18px] font-bold text-[#171717]">
+            {progress.docs_processed}
+          </p>
+          <p className="text-[11px] text-[#6B6B6B]">
+            Docs{progress.docs_total > 0 ? ` / ${progress.docs_total}` : ""}
+          </p>
+        </div>
+        <div className="bg-white px-5 py-3 text-center">
+          <p className="text-[18px] font-bold text-[#171717]">
+            {progress.entities_found}
+          </p>
+          <p className="text-[11px] text-[#6B6B6B]">Entities</p>
+        </div>
+        <div className="bg-white px-5 py-3 text-center">
+          <p className="text-[18px] font-bold text-[#171717]">
+            {progress.merges_made}
+          </p>
+          <p className="text-[11px] text-[#6B6B6B]">Merges</p>
+        </div>
+      </div>
     </div>
   );
 }
@@ -473,5 +614,3 @@ function OAuthConnectButton({
     </div>
   );
 }
-
-
