@@ -135,6 +135,7 @@ def _extract_documents(documents: list[Any]) -> tuple[list[dict[str, Any]], list
     results: list[dict[str, Any]] = []
     skipped: list[dict[str, str]] = []
     total = len(documents)
+    print(f"[EXTRACT] Starting extraction of {total} documents")
     for batch_start in range(0, total, EXTRACTION_BATCH_SIZE):
         batch = documents[batch_start:batch_start + EXTRACTION_BATCH_SIZE]
         for document in batch:
@@ -147,16 +148,23 @@ def _extract_documents(documents: list[Any]) -> tuple[list[dict[str, Any]], list
                     retries=EXTRACTION_RETRIES,
                     backoff_seconds=EXTRACTION_BACKOFF_SECONDS,
                 )
+                entities = len(extraction.get("candidate_entities", []))
+                facts = len(extraction.get("candidate_facts", []))
+                relations = len(extraction.get("candidate_relations", []))
+                print(
+                    f"[EXTRACT] source_id={document.source_id} "
+                    f"→ {entities} entities, {facts} facts, {relations} relations"
+                )
                 results.append({"document": asdict(document), "extraction": extraction})
             except Exception as exc:
                 skipped.append({
                     "source_id": document.source_id,
                     "error": str(exc),
                 })
-                print(f"Skipped source_id={document.source_id}: {exc}")
-        # Release batch memory and force GC between batches to keep RSS low.
+                print(f"[EXTRACT] SKIPPED source_id={document.source_id}: {exc}")
         del batch
         gc.collect()
+    print(f"[EXTRACT] Done: {len(results)} extracted, {len(skipped)} skipped")
     return results, skipped
 
 
@@ -165,19 +173,36 @@ def _ingest_graph(
     collection: str,
     access_level: str,
 ) -> dict[str, int]:
+    print(f"[INGEST] Building graph documents from {len(extraction_results)} extractions")
     graph_sources, graph_summary = build_graph_documents(
         extraction_results,
         limit=None,
         default_access_level=access_level,
     )
+    print(
+        f"[INGEST] Graph documents built: {len(graph_sources)} sources, "
+        f"{graph_summary.get('entities_created', 0)} entities, "
+        f"{graph_summary.get('facts_created', 0)} facts, "
+        f"{graph_summary.get('relations_created', 0)} relations, "
+        f"{graph_summary.get('failures', 0)} failures"
+    )
     if not graph_sources:
+        print("[INGEST] WARNING: No graph sources to ingest — extraction may have produced empty results or all docs were skipped")
         return graph_summary
 
+    print(f"[INGEST] Target collection={collection!r}, database={DATABASE_NAME!r}")
     client = HydraDB(token=get_api_key())
     update_metadata_schema(client, DATABASE_NAME)
+    batch_num = 0
     for batch in batched(graph_sources, BATCH_SIZE):
+        batch_num += 1
+        print(f"[INGEST] Ingesting batch {batch_num} with {len(batch)} records into collection {collection!r}...")
         ids = ingest_batch(client, DATABASE_NAME, collection, batch)
-        wait_for_ingestion(client, DATABASE_NAME, collection, ids)
+        print(f"[INGEST] Batch {batch_num} submitted, waiting for ingestion of {len(ids)} records...")
+        statuses = wait_for_ingestion(client, DATABASE_NAME, collection, ids)
+        completed = sum(1 for s in statuses if s.get("indexing_status") == "completed")
+        errored = sum(1 for s in statuses if s.get("indexing_status") == "errored")
+        print(f"[INGEST] Batch {batch_num} done: {completed} completed, {errored} errored")
     return graph_summary
 
 
@@ -222,7 +247,9 @@ def run_full_ingestion(
             supported = ", ".join(sorted(ROLE_TO_ACCESS_LEVEL))
             raise ValueError(f"Unsupported role_default {role_default!r}; choose one of {supported}.")
 
+    print(f"[PIPELINE] Starting ingestion: collection={collection!r}, source_type={normalized_source_type!r}")
     documents = _load_source_documents(normalized_source_type, source_path_or_repo, collection=collection)
+    print(f"[PIPELINE] Loaded {len(documents)} source documents")
     extraction_results, skipped_docs = _extract_documents(documents)
     # Release source documents now that extraction is done.
     del documents

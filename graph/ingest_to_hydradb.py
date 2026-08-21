@@ -180,6 +180,7 @@ def build_graph_documents(
         "failures": 0,
     }
 
+    print(f"[GRAPH] Processing {len(records)} extraction records")
     for record in records:
         document, extraction = extract_document_and_payload(record)
         doc_source_id = str(document.get("source_id") or "")
@@ -193,6 +194,7 @@ def build_graph_documents(
                     break
         if not doc_source_id:
             summary["failures"] += 1
+            print(f"[GRAPH] SKIPPED record (no source_id): document keys={list(document.keys())}, extraction keys={list(extraction.keys())}")
             continue
 
         entity_name_to_id: dict[str, str] = {}
@@ -415,29 +417,46 @@ def update_metadata_schema(client: HydraDB, database: str) -> None:
 
 def ingest_batch(client: HydraDB, database: str, collection: str, batch: list[dict[str, Any]]) -> list[str]:
     app_knowledge, graph_payload = build_ingest_payload(batch, database)
-    response = client.context.ingest(
-        type="knowledge",
-        database=database,
-        collection=collection,
-        upsert=True,
-        app_knowledge=json.dumps(app_knowledge),
-        graph_payload=json.dumps(graph_payload),
-    )
-    print(json.dumps(to_plain_data(response), indent=2, default=str))
+    print(f"[HYDRADB] Ingesting {len(batch)} records into database={database!r}, collection={collection!r}")
+    print(f"[HYDRADB] app_knowledge count={len(app_knowledge)}, graph_payload keys={list(graph_payload.keys())[:5]}...")
+    try:
+        response = client.context.ingest(
+            type="knowledge",
+            database=database,
+            collection=collection,
+            upsert=True,
+            app_knowledge=json.dumps(app_knowledge),
+            graph_payload=json.dumps(graph_payload),
+        )
+        resp_data = to_plain_data(response)
+        print(f"[HYDRADB] Ingest response: {json.dumps(resp_data, indent=2, default=str)[:500]}")
+    except Exception as exc:
+        print(f"[HYDRADB] ERROR during ingest: {exc}")
+        raise
     return [item["id"] for item in batch]
 
 
 def wait_for_ingestion(client: HydraDB, database: str, collection: str, ids: list[str]) -> list[dict[str, Any]]:
+    print(f"[POLL] Waiting for {len(ids)} records in collection={collection!r}...")
     deadline = time.monotonic() + POLL_TIMEOUT_SECONDS
+    poll_count = 0
     while time.monotonic() < deadline:
-        response = client.context.status(database=database, collection=collection, ids=ids)
-        statuses = to_plain_data(response.data.statuses)
-        states = {status["id"]: status["indexing_status"] for status in statuses}
-        print(f"Ingestion status: {states}")
+        poll_count += 1
+        try:
+            response = client.context.status(database=database, collection=collection, ids=ids)
+            statuses = to_plain_data(response.data.statuses)
+            states = {status["id"]: status["indexing_status"] for status in statuses}
+            print(f"[POLL] Poll #{poll_count}: {len(ids)} records — states={dict(list(states.items())[:3])}...")
 
-        if all(state in {"completed", "errored"} for state in states.values()):
-            return statuses
+            if all(state in {"completed", "errored"} for state in states.values()):
+                completed = sum(1 for s in states.values() if s == "completed")
+                errored = sum(1 for s in states.values() if s == "errored")
+                print(f"[POLL] Final: {completed} completed, {errored} errored")
+                return statuses
+        except Exception as exc:
+            print(f"[POLL] Error checking status: {exc}")
         time.sleep(POLL_INTERVAL_SECONDS)
+    print(f"[POLL] TIMEOUT after {POLL_TIMEOUT_SECONDS}s waiting for {len(ids)} records")
     raise TimeoutError(f"Timed out waiting for ingestion of {ids}.")
 
 
