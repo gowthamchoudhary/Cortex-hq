@@ -43,6 +43,7 @@ SOURCE_TYPE_TO_ADAPTER = {
     "slack-export": "slack",
     "slack-live": "slack",
     "github-repo": "github",
+    "document-upload": "auto",  # auto-detect from file content/extension
 }
 # Source types that use live OAuth tokens instead of file uploads.
 LIVE_OAUTH_TYPES = {"gmail-live", "slack-live"}
@@ -117,8 +118,44 @@ def _load_source_documents(source_type: str, source_path_or_repo: str | Path, co
     if source_type == "slack-export":
         return [normalize_slack(record) for record in parse_slack_export(source_path)]
 
+    # document-upload: auto-detect source type from file content/extension
+    if source_type == "document-upload":
+        from ingestion.normalize import load_records, infer_source_type, ADAPTERS
+        from eval.baseline import normalize_json_file as _norm_json, normalize_text_file as _norm_text
+        suffix = source_path.suffix.lower()
+        if suffix in {".json", ".jsonl"}:
+            records = load_records(source_path)
+            if not records:
+                raise ValueError(f"No records found in {source_path}")
+            first = records[0]
+            # If already in RawDocument shape, return directly
+            if {"source", "source_id", "content", "container_id"}.issubset(first):
+                from ingestion.normalize import RawDocument
+                return [
+                    RawDocument(
+                        source=str(r.get("source", "")),
+                        source_id=str(r.get("source_id", "")),
+                        author=str(r.get("author", "")),
+                        timestamp=str(r.get("timestamp", "")),
+                        content=str(r.get("content", "")),
+                        container_id=str(r.get("container_id", "")),
+                        metadata=dict(r.get("metadata") or {}),
+                    )
+                    for r in records
+                ]
+            # Otherwise infer adapter and normalize
+            detected = infer_source_type(source_path, first)
+            adapter = ADAPTERS[detected]
+            return [adapter(record) for record in records]
+        if suffix in {".txt", ".md", ".csv"}:
+            return [_norm_text(source_path, "document")]
+        # Fallback: treat as text
+        return [_norm_text(source_path, "document")]
+
     # Benchmark-format fallback for plain gmail/slack/github/jira inputs.
-    adapter_source = SOURCE_TYPE_TO_ADAPTER[source_type]
+    adapter_source = SOURCE_TYPE_TO_ADAPTER.get(source_type, source_type)
+    if adapter_source == "auto":
+        raise ValueError(f"Cannot auto-detect source type for {source_path!r}")
     if source_path.is_dir():
         return load_documents([(adapter_source, source_path)])
     if source_path.suffix.lower() in {".json", ".jsonl"}:

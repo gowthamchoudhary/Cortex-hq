@@ -795,7 +795,7 @@ def ingest() -> Any:
             tmp.write(file_content)
             tmp.close()
             source_path = tmp.name
-            source_type = "gmail-export"
+            # Keep source_type as 'document-upload' — _load_source_documents handles it
 
         job_id = start_ingestion_job(collection, source_type, source_path or "", role_default="admin")
         # For file uploads, we pass the temp path to the background thread.

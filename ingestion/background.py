@@ -1,31 +1,45 @@
-"""Background ingestion job runner.
+"""Background ingestion job runner with file-based job storage.
 
-Moves the heavy ingestion pipeline out of the synchronous Flask request
-handler so Render's Gunicorn workers don't get killed by timeouts or OOM
-during long-running extraction/resolution passes.
-
-Job lifecycle:
-    1. ``start_ingestion_job()`` creates a job, spawns a daemon thread,
-       and returns a ``job_id`` immediately.
-    2. The background thread runs ``run_full_ingestion()`` and updates the
-       job dict in ``_jobs`` with progress and result.
-    3. The frontend polls ``GET /api/ingest/status/<job_id>`` to display
-       live progress.
+Jobs are persisted to /tmp as JSON files so they survive across Gunicorn
+workers (which don't share in-memory state).  The frontend polls
+``GET /api/ingest/status/<job_id>`` for progress.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any
 
-_jobs: dict[str, dict[str, Any]] = {}
-_lock = threading.Lock()
+JOBS_DIR = Path(__file__).resolve().parents[1] / ".cortex_jobs"
 
 
 def _new_job_id() -> str:
     return f"job-{uuid.uuid4().hex[:12]}"
+
+
+def _job_path(job_id: str) -> Path:
+    JOBS_DIR.mkdir(parents=True, exist_ok=True)
+    return JOBS_DIR / f"{job_id}.json"
+
+
+def _write_job(job: dict[str, Any]) -> None:
+    path = _job_path(job["job_id"])
+    path.write_text(json.dumps(job, default=str), encoding="utf-8")
+
+
+def _read_job(job_id: str) -> dict[str, Any] | None:
+    path = _job_path(job_id)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
 
 
 def start_ingestion_job(
@@ -53,8 +67,7 @@ def start_ingestion_job(
         "result": None,
         "error": None,
     }
-    with _lock:
-        _jobs[job_id] = job
+    _write_job(job)
 
     thread = threading.Thread(
         target=_run_job,
@@ -67,8 +80,7 @@ def start_ingestion_job(
 
 def get_job(job_id: str) -> dict[str, Any] | None:
     """Return the current state of an ingestion job."""
-    with _lock:
-        return dict(_jobs.get(job_id)) if job_id in _jobs else None
+    return _read_job(job_id)
 
 
 def _run_job(
@@ -113,15 +125,22 @@ def _run_job(
             message=user_msg,
             error=user_msg,
         )
+    finally:
+        # Clean up source file if it was a temp upload
+        if source_path_or_repo and os.path.exists(source_path_or_repo):
+            try:
+                os.unlink(source_path_or_repo)
+            except OSError:
+                pass
 
 
 def _update(job_id: str, **fields: Any) -> None:
-    with _lock:
-        if job_id not in _jobs:
-            return
-        job = _jobs[job_id]
-        for key, value in fields.items():
-            if key == "progress" and isinstance(value, dict):
-                job["progress"].update(value)
-            else:
-                job[key] = value
+    job = _read_job(job_id)
+    if job is None:
+        return
+    for key, value in fields.items():
+        if key == "progress" and isinstance(value, dict):
+            job["progress"].update(value)
+        else:
+            job[key] = value
+    _write_job(job)
