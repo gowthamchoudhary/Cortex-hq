@@ -101,8 +101,8 @@ def _run_job(
         msg = str(exc)
         if "GROQ_API_KEY" in msg or "OPENAI_API_KEY" in msg:
             user_msg = (
-                "Missing LLM API key. Add GROQ_API_KEY (free at console.groq.com/keys) "
-                "to your Render environment variables."
+                "Missing LLM API key. Add GROQ_API_KEYS (comma-separated, free at console.groq.com/keys) "
+                "or GROQ_API_KEY to your Render environment variables."
             )
         else:
             user_msg = msg

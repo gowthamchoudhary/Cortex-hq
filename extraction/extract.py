@@ -151,18 +151,20 @@ def load_dotenv(path: str | Path = ".env") -> None:
 def choose_provider(provider: str) -> str:
     if provider != "auto":
         return provider
-    if os.environ.get("GROQ_API_KEY"):
+    from extraction.key_pool import get_key_pool
+    pool = get_key_pool()
+    if pool.is_configured:
         return "groq"
     if os.environ.get("OPENAI_API_KEY"):
         return "openai"
-    raise RuntimeError("Set GROQ_API_KEY or OPENAI_API_KEY in the environment or .env.")
+    raise RuntimeError("Set GROQ_API_KEYS or GROQ_API_KEY (or OPENAI_API_KEY) in the environment or .env.")
 
 
 def provider_config(provider: str) -> tuple[str, str, str]:
     if provider == "groq":
-        api_key = os.environ.get("GROQ_API_KEY")
-        if not api_key:
-            raise RuntimeError("GROQ_API_KEY is required for provider=groq.")
+        from extraction.key_pool import get_key_pool
+        pool = get_key_pool()
+        api_key = pool.next()  # round-robin key selection
         return (
             "https://api.groq.com/openai/v1/chat/completions",
             api_key,
@@ -187,9 +189,11 @@ def get_groq_model() -> str:
 
 
 def list_groq_models(timeout_seconds: int = 30) -> list[str]:
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        raise RuntimeError("GROQ_API_KEY is required to list Groq models.")
+    from extraction.key_pool import get_key_pool
+    pool = get_key_pool()
+    if not pool.is_configured:
+        raise RuntimeError("GROQ_API_KEYS or GROQ_API_KEY is required to list Groq models.")
+    api_key = pool.next()
 
     response = httpx.get(
         GROQ_MODELS_ENDPOINT,
@@ -299,16 +303,59 @@ def chat_completion_json(
         )
         response.raise_for_status()
     except httpx.HTTPStatusError as exc:
-        if exc.response.status_code == 429 and retries > 0:
-            time.sleep(3)
-            return chat_completion_json(
-                provider=provider,
-                messages=messages,
-                timeout_seconds=timeout_seconds,
-                strict_schema=strict_schema,
-                mode=mode,
-                retries=retries - 1,
-            )
+        if exc.response.status_code == 429 and retries > 0 and provider == "groq":
+            # Rate limited: rotate to the NEXT key and retry immediately
+            from extraction.key_pool import get_key_pool
+            pool = get_key_pool()
+            if pool.count > 1:
+                new_key = pool.next()  # get next key in rotation
+                new_endpoint, _, new_model = provider_config(provider)
+                # Log the rotation
+                import logging
+                logging.getLogger(__name__).info(
+                    "429 rate limit — rotating to next Groq key (pool has %d keys)",
+                    pool.count,
+                )
+                # Update the api_key variable for this retry (it's local)
+                # We need to rebuild the request with the new key
+                try:
+                    response = httpx.post(
+                        new_endpoint,
+                        headers={
+                            "Authorization": f"Bearer {new_key}",
+                            "Content-Type": "application/json",
+                            "User-Agent": "cortex-hydradb-extractor/0.1",
+                        },
+                        json=request_body,
+                        timeout=timeout_seconds,
+                    )
+                    response.raise_for_status()
+                except httpx.HTTPStatusError as retry_exc:
+                    # Second key also 429'd: fall through to backoff retry
+                    if retry_exc.response.status_code == 429 and retries > 1:
+                        time.sleep(3)
+                        return chat_completion_json(
+                            provider=provider,
+                            messages=messages,
+                            timeout_seconds=timeout_seconds,
+                            strict_schema=strict_schema,
+                            mode=mode,
+                            retries=retries - 2,
+                        )
+                    raise RuntimeError(
+                        f"{provider} API returned HTTP {retry_exc.response.status_code}: {retry_exc.response.text}"
+                    ) from retry_exc
+            else:
+                # Single key: fall back to backoff
+                time.sleep(3)
+                return chat_completion_json(
+                    provider=provider,
+                    messages=messages,
+                    timeout_seconds=timeout_seconds,
+                    strict_schema=strict_schema,
+                    mode=mode,
+                    retries=retries - 1,
+                )
         if mode == "json_schema" and strict_schema and provider == "groq" and exc.response.status_code == 400:
             return chat_completion_json(
                 provider=provider,

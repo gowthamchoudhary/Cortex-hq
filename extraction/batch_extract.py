@@ -76,10 +76,19 @@ def extract_with_backoff(
         except Exception as exc:
             if attempt >= retries or not is_rate_limit_error(exc):
                 raise
-            sleep_for = backoff_seconds * (2**attempt)
+            # With multiple keys, the 429 retry already rotated keys
+            # inside chat_completion_json.  If we still hit a rate limit
+            # at this level, it means ALL keys are exhausted — use a
+            # shorter backoff since the rotation handled the per-key wait.
+            from extraction.key_pool import get_key_pool
+            pool = get_key_pool()
+            if pool.count > 1:
+                sleep_for = min(backoff_seconds, 2.0)  # cap at 2s with multi-key
+            else:
+                sleep_for = backoff_seconds * (2**attempt)
             print(
-                f"Rate limited on source_id={document.source_id}; "
-                f"retrying in {sleep_for:.1f}s..."
+                f"Rate limited on source_id={document.source_id} "
+                f"(pool has {pool.count} keys); retrying in {sleep_for:.1f}s..."
             )
             time.sleep(sleep_for)
             attempt += 1

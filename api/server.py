@@ -261,7 +261,9 @@ def health() -> Any:
             "hydradb": _hydra_key_status(),
             "supabase": bool(os.environ.get("SUPABASE_URL") and os.environ.get("SUPABASE_ANON_KEY")),
             "reasoning_provider": bool(
-                os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY")
+                os.environ.get("GROQ_API_KEYS")
+                or os.environ.get("GROQ_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
             ),
         }
     )
@@ -805,8 +807,8 @@ def ingest() -> Any:
         if "GROQ_API_KEY" in msg or "OPENAI_API_KEY" in msg:
             return _error_response(
                 "Ingestion requires an LLM API key. "
-                "Add GROQ_API_KEY (free at console.groq.com/keys) or "
-                "OPENAI_API_KEY to your Render environment variables.",
+                "Add GROQ_API_KEYS (comma-separated, free at console.groq.com/keys) or "
+                "GROQ_API_KEY to your Render environment variables.",
                 503,
             )
         if "Gmail OAuth token not found" in msg or "Slack OAuth token not found" in msg:
