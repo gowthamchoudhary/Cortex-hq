@@ -35,7 +35,7 @@ from resolution.entity_resolution import jaro_winkler  # noqa: E402
 
 DATABASE_NAME = "hackhydra-track1"
 PAGE_SIZE = 100
-DEFAULT_MODEL = "llama-3.1-8b-instant"
+DEFAULT_MODEL = "openai/gpt-oss-20b"
 GROQ_CHAT_ENDPOINT = "https://api.groq.com/openai/v1/chat/completions"
 OPENAI_CHAT_ENDPOINT = "https://api.openai.com/v1/chat/completions"
 ENTITY_MATCH_THRESHOLD = 0.75
